@@ -458,15 +458,15 @@ anything ffmpeg decodes) dragged in makes an `audio` layer.
 ### Adding a plugin
 
 ```sh
-mui-cut add ../KORREKT --project demo.cut.json     # a folder
-mui-cut add https://github.com/Matari-Audio/KURV   # or a git URL (cloned to the cache)
+mui-cut add ../my-plugin --project demo.cut.json   # a folder
+mui-cut add https://github.com/you/my-plugin      # or a git URL (cloned to the cache)
 ```
 
 `add` (the editor's **+ Plugin**, MCP `plugin_add`) needs no code in the
 plugin. It reads the crate with `cargo metadata` (a workspace's one plugin
 package is found), tells its framework from its dependencies, finds where
 its editor is made, writes `{"id": package, "kind": "plugin", "source":
-{"plugin": "../KORREKT"}}` into `sources`, and builds and captures it: the
+{"plugin": "../my-plugin"}}` into `sources`, and builds and captures it: the
 Sources panel shows its part tree, named by the editor's surface ids.
 
 The adapter is generated (`src/build.rs`, `src/adapter/`) under the cache
@@ -494,7 +494,7 @@ parameter id or name, `field` `norm` (0..1) or `value` (plain units). The
 plugin's DSP runs as a host runs it (moose and truce `process`, nice-plug
 `activate` then `process`, a plain crate's `mui_audio`), on the manual
 clock, so every generated adapter sounds. A layer's `preset` (a moose
-host state, or a plugin preset file wrapping one, like KURV's `.kurvy`)
+host state, or a plugin preset file wrapping one)
 loads on frame 0. A git source is pulled to its latest by `add`.
 
 Plugins follow MUI's main branch. `media/tools/mui-sync` unpins MUI in a
@@ -649,10 +649,7 @@ The adapter's protocol, for writing one for another plugin, is in
 too: the host's notes on the sample clock, meters and transport shared with
 the editor, and a `patch` of the parameters off their defaults and the notes
 held. A plugin source's `features` turn on the plugin crate's Cargo features
-for it (KURV sounds in its `process-lab` build). `examples/kurv.cut.json`
-(KURV checked out beside this repository) explodes KURV two
-levels deep in 3D while it plays a melody, resizes it, and shows its
-patch.
+for it (e.g. a lab build that enables the DSP).
 
 See `examples/plugin.cut.json`: a flat scene (a keyed knob, a knob dragged
 by a keyed pointer, then exploded and highlighted) and a 3D one (the UI
@@ -975,10 +972,10 @@ same reason.
   brighter than in 2D.
 - Sound: a generated adapter's patch reads modulation routes only from
   `<X> Source` / `<X> Target` / `<X> Amount` parameters (moose, truce);
-  routes a plugin keeps in its private state (KURV's) are not visible to a
+  routes a plugin keeps in its private state are not visible to a
   host, and nice-plug and plain crates report none. `preset` is moose
   only. A plugin's keyboard does not light the notes the host plays unless
-  the plugin draws them from its DSP (KURV lights its pointer's key only);
+  the plugin draws them from its DSP;
   the patch lists them. `serve` opens the device at the project's
   rate when it starts; a rate change needs a restart. The live view's old
   images are not freed in the viewport worker. `plugin_play` to an mp4

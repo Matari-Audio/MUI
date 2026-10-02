@@ -633,7 +633,7 @@ fn solid_png(w: u32, h: u32, rgba: [u8; 4]) -> Vec<u8> {
 }
 
 /// A 3D plugin layer whose one part is dark (opaque or see-through) over a
-/// dark backdrop, exploded, extruded and lit as the KURV example is:
+/// dark backdrop, exploded, extruded and lit as a plugin example is:
 /// nothing behind the part may show through lighter than the part is.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

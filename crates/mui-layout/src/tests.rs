@@ -1024,7 +1024,7 @@ fn min_size_is_the_intrinsic_floor_and_a_scroll_gives_up_its_axis() {
 
 #[test]
 fn min_col_widens_a_hugging_grid_instead_of_squeezing_its_columns() {
-    // A KURV modal: nothing offers it a width, so the grid used to keep its
+    // A synth editor's modal: nothing offers it a width, so the grid used to keep its
     // declared columns at the width of their narrowest content and ignore the
     // minimum entirely. Hugging is not a licence to go under a declared floor.
     let modal = |min: f64| {
@@ -1096,7 +1096,7 @@ fn a_row_shrinks_content_only_down_to_its_min_content() {
     .unwrap();
     assert_eq!(w(&l, "a"), 100.);
 }
-/// KURV's parameter well: a wrapping row, width 100% through padded
+/// A synth's parameter well: a wrapping row, width 100% through padded
 /// columns, in a hugging column beside a fixed port. Measure used to break
 /// the lines at one width and arrange at a narrower one, so a third line
 /// hung below the row's two-line height.
@@ -1162,7 +1162,7 @@ fn a_wrap_row_under_a_flex_share_arranges_the_lines_it_measured() {
         assert!(port.size.width > 23., "{}", port.size.width);
     }
 }
-/// KURV's unison panel: a `min_col` grid and a wrapping row in a flex item.
+/// A synth's unison panel: a `min_col` grid and a wrapping row in a flex item.
 /// The grid can drop columns down to one, so that is its floor: held at its
 /// hugging (all-columns) floor the item overflowed its row, and each
 /// re-measure at a new share moved the floor and the share again, so the
