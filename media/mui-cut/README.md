@@ -786,8 +786,12 @@ announces edits made by someone else.
   contrast (so the web editor could run them too).
 - `src/tools.rs`, `src/mcp.rs`, `src/script.rs`: the agent's CLI pictures
   (`sheet`, `strip`, `diff`), the MCP server and `gen`'s Rhai sandbox.
-- `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport);
-  `worker.js` draws the viewport, one frame in flight at a time, and runs
+- `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport),
+  one ES module per panel: `app.js` boots it, `state.js` holds the shared
+  state, `doc.js`/`patch.js`/`edit.js` the document, its patches, undo and
+  saving; `lists.js`, `sources.js`, `inspector.js`, `viewport.js`,
+  `timeline.js`, `graph.js`, `export.js`, `transport.js`, `sound.js` and
+  `agent.js` the rest. `worker.js` draws the viewport, one frame in flight at a time, and runs
   exports; `mp4.js` muxes them.
 - `src/shutter.rs`: the float shutter, shared by `Offline` and the export.
 - `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
