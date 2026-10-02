@@ -3,6 +3,7 @@ import { begin, changed, end, showError } from './edit.js';
 import { exportMessage } from './export.js';
 import { DRAG_SOURCE, picking, refreshLists, select, setSelection } from './lists.js';
 import { dropSource } from './sources.js';
+import { drawGizmo, gizmoBox, gizmoCursor, gizmoHit, moveGizmo, startGizmo } from './gizmo.js';
 import { $, C, S, cut, pacing, worker } from './state.js';
 
 // ---------- viewport
@@ -77,7 +78,7 @@ function drawOverlay() {
   const k = over.width / S.R.size[0];
   octx.clearRect(0, 0, over.width, over.height);
   const dpr = devicePixelRatio;
-  const selId = S.selection.at(-1);
+  const selId = S.selection.at(-1), box = gizmoBox();
   const marked = drag?.marquee ? marqueeHits(drag.marquee).map(id => [id, 1, C.hover]) : [];
   for (const [id, width, color] of [[hover, 1, C.hover], ...marked, ...S.selection.map(id => [id, 1.5, C.sel])]) {
     const q = S.quads.find(q => q.id === id);
@@ -88,17 +89,20 @@ function drawOverlay() {
     // A dark hairline under the light one keeps it legible on light scenes.
     octx.lineWidth = (width + 2) * dpr; octx.strokeStyle = C.halo; octx.stroke();
     octx.lineWidth = width * dpr; octx.strokeStyle = color; octx.stroke();
-    if (id === selId) for (const [x, y] of q.pts) { // corner squares mark the selection
+    if (id === selId && !box) for (const [x, y] of q.pts) { // corner squares mark the selection
       octx.fillStyle = C.halo; octx.fillRect(x * k - 4 * dpr, y * k - 4 * dpr, 8 * dpr, 8 * dpr);
       octx.fillStyle = C.sel; octx.fillRect(x * k - 3 * dpr, y * k - 3 * dpr, 6 * dpr, 6 * dpr);
     }
   }
+  drawGizmo(octx, k, dpr, perPx());
   if (drag?.marquee) {
     const [[ax, ay], [bx, by]] = drag.marquee;
     octx.fillStyle = C.marquee; octx.fillRect(ax * k, ay * k, (bx - ax) * k, (by - ay) * k);
     octx.lineWidth = dpr; octx.strokeStyle = C.sel; octx.strokeRect(ax * k, ay * k, (bx - ax) * k, (by - ay) * k);
   }
 }
+// Project pixels per CSS pixel of the viewport.
+const perPx = () => S.R.size[0] / (over.clientWidth || 1);
 function toProject(e) {
   const r = over.getBoundingClientRect();
   return [(e.clientX - r.left) / r.width * S.R.size[0], (e.clientY - r.top) / r.height * S.R.size[1]];
@@ -183,7 +187,12 @@ over.onpointerdown = e => {
     over.setPointerCapture(e.pointerId);
     return;
   }
-  const how = picking(e);
+  // A gizmo handle first; then, with several selected, their box moves
+  // them from anywhere inside it.
+  const gh = gizmoHit(p, perPx());
+  if (gh) { drag = { gizmo: startGizmo(gh, p) }; over.setPointerCapture(e.pointerId); begin(); return; }
+  const how = picking(e), box = !id && !how && gizmoBox();
+  if (box && !box.one && inside(p, box.pts)) { drag = { p, items: moveItems(), moved: false }; over.setPointerCapture(e.pointerId); begin(); return; }
   if (!id) {
     // A marquee from empty space: Shift or Ctrl adds what it touches.
     if (!how && S.selection.length) select(null);
@@ -247,6 +256,8 @@ over.onpointermove = e => {
   }
   const p = toProject(e);
   if (!drag) {
+    const gh = !S.interact && gizmoHit(p, perPx());
+    if (gh) { over.style.cursor = gizmoCursor(gh); return; }
     const h = hit(p); if (h !== hover) { hover = h; S.need = true; }
     over.style.cursor = h ? (S.interact ? 'pointer' : 'move') : 'default'; return;
   }
@@ -257,6 +268,7 @@ over.onpointermove = e => {
     changed(); return;
   }
   if (drag.marquee) { drag.marquee[1] = p; drawOverlay(); return; }
+  if (drag.gizmo) { moveGizmo(drag.gizmo, p, { shift: e.shiftKey, alt: e.altKey }); changed(); return; }
   drag.moved = true;
   const d = [p[0] - drag.p[0], p[1] - drag.p[1]];
   for (const it of drag.items) {

@@ -681,6 +681,16 @@ explodes two levels in 3D: panels, then their controls.
   Click a layer to select it (outlined),
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
   changes its value; a parented layer moves in its parent's frame.
+- **Transform gizmo** (2D scenes): the selection's box, one layer's own
+  turned outline or the bounds of several, with scale handles on its
+  corners and edges and a rotate knob above. A rect, ellipse, image or
+  duplicator stretches by `width`/`height`; other layers scale evenly
+  (there is no one-way scale). Shift keeps proportions (and turns in 15°
+  steps), Alt scales about the middle. One layer turns about its own
+  position, several about their box's middle. Each layer's local `x`, `y`,
+  `rotation`, `scale` are written at the playhead through its parent's
+  transform, so children of a turned or scaled parent land where dragged.
+  Several selected move from anywhere inside their box.
 - **Selection**: Shift- or Ctrl-click (in the viewport, the layer list or
   the timeline's labels) adds a layer or takes it out; a drag from empty
   viewport space is a marquee (with Shift or Ctrl it adds); Ctrl+A selects
