@@ -332,40 +332,53 @@ async function loadAssets() {
     // Fonts: every font source, and text layers' fonts named by path.
     .concat((doc.sources ?? []).filter(m => m.kind === 'font').map(m => m.path))
     .concat(doc.scenes.flatMap(s => s.layers).filter(l => l.kind === 'text' && l.font && !doc.sources?.some(m => m.id === l.font)).map(l => l.font));
-  for (const path of files) {
-    if (!path || typeof path !== 'string' || assets.has(path)) continue;
+  await Promise.all(files.filter(p => p && typeof p === 'string' && !assets.has(p)).map(fetchAsset));
+  loadCaptures(); // not waited for: the editor runs while they arrive
+  if (doc) refreshSources();
+  need = true;
+}
+// Plugin captures: every state the project shows that `serve` has (a
+// plugin layer draws a placeholder until then), each manifest after the
+// images it names. `plugin` events name the ones written since.
+async function loadCaptures() {
+  // In the order `serve` named them: nearest the playhead first.
+  const shows = new Set(JSON.parse(cut.plugin_states()));
+  const want = [...captured].filter(p => shows.has(p) && !assets.has(p));
+  await pool(want, 8, async path => {
     assets.add(path);
     try {
       const r = await fetch('/asset/' + path);
-      if (r.ok) worker.postMessage({ type: 'asset', path, bytes: new Uint8Array(await r.arrayBuffer()) });
-    } catch (e) { console.warn(path, e); }
-  }
-  // Plugin captures: every state the project shows, each manifest with
-  // the images it names. A missing one is not captured yet; `serve` sends
-  // `plugin` when it is.
-  for (const path of JSON.parse(cut.plugin_states())) {
-    if (assets.has(path)) continue;
-    try {
-      const r = await fetch('/asset/' + path);
-      if (!r.ok) continue;
+      if (!r.ok) { assets.delete(path); return; }
       const bytes = new Uint8Array(await r.arrayBuffer());
-      cut.add_asset(path, bytes); // for the part trees (`cutParts`, the Sources panel)
       const man = JSON.parse(new TextDecoder().decode(bytes));
+      await Promise.all(man.layers.flatMap(f => [f.src, f.free?.src]).filter(Boolean)
+        .map(s => fetchAsset('.cut-cache/' + s)));
+      cut.add_asset(path, bytes); // for the part trees (`cutParts`, the Sources panel)
       manifests.set(path, man);
-      for (const img of man.layers
-        .flatMap(f => [f.src, f.free?.src]).filter(Boolean).map(s => '.cut-cache/' + s)) {
-        if (assets.has(img)) continue;
-        const ri = await fetch('/asset/' + img);
-        if (!ri.ok) continue;
-        assets.add(img);
-        worker.postMessage({ type: 'asset', path: img, bytes: new Uint8Array(await ri.arrayBuffer()) });
-      }
-      assets.add(path);
       worker.postMessage({ type: 'asset', path, bytes });
-    } catch (e) { console.warn(path, e); }
-  }
+      need = true;
+    } catch (e) { assets.delete(path); console.warn(path, e); }
+  });
   if (doc) refreshSources();
   need = true;
+}
+// The plugin states `serve` has written, by manifest path.
+const captured = new Set();
+// A file sent to the viewport once; a second ask waits for the first.
+const fetching = new Map();
+function fetchAsset(path) {
+  if (!fetching.has(path)) {
+    assets.add(path);
+    fetching.set(path, fetch('/asset/' + path)
+      .then(async r => { if (r.ok) worker.postMessage({ type: 'asset', path, bytes: new Uint8Array(await r.arrayBuffer()) }); })
+      .catch(e => console.warn(path, e)));
+  }
+  return fetching.get(path);
+}
+// `f` over `items`, `n` at a time.
+async function pool(items, n, f) {
+  let i = 0;
+  await Promise.all(Array.from({ length: n }, async () => { while (i < items.length) await f(items[i++]); }));
 }
 
 // ---------- scene and layer lists
@@ -1799,6 +1812,7 @@ function control(m) {
 addEventListener('resize', () => { need = true; });
 
 $('#file').textContent = await (await fetch('/name')).text();
+for (const p of await (await fetch('/captures')).json()) captured.add(p);
 await adopt(await (await fetch('/doc')).json(), 'loaded');
 const events = new EventSource('/events');
 events.addEventListener('doc', e => {
@@ -1811,7 +1825,10 @@ events.onmessage = async () => {
   try { JSON.parse(text); } catch (e) { status('the file on disk has an error: ' + e, true); }
 };
 events.addEventListener('control', e => control(JSON.parse(e.data)));
-// `serve` finished capturing plugin states: fetch the new ones.
-events.addEventListener('plugin', () => loadAssets());
+// `serve` wrote these plugin states (new, or made again): fetch them.
+events.addEventListener('plugin', e => {
+  for (const p of JSON.parse(e.data)) { captured.add(p); assets.delete(p); }
+  loadAssets();
+});
 events.addEventListener('live', e => showLive(JSON.parse(e.data)));
 requestAnimationFrame(loop);

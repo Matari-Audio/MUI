@@ -591,8 +591,15 @@ fn serve_captures_plugin_states_and_tells_the_editor() {
         l.clear();
         assert!(lines.read_line(&mut l).unwrap() > 0, "events closed");
     }
+    // The event names what was written; `/captures` lists it from then on.
+    l.clear();
+    lines.read_line(&mut l).unwrap();
     let p = mui_cut::Project::load(&std::fs::read_to_string(&project).unwrap()).unwrap();
     let key = &p.scenes[0].layers[0].plugin_track(p.fps, p.sample_rate, 0)[0].key;
+    let path = format!("\".cut-cache/{key}.json\"");
+    assert!(l.starts_with("data: [") && l.contains(&path), "{l}");
+    let listed = http(port, "GET /captures HTTP/1.1\r\n\r\n");
+    assert!(listed.contains(&path), "{listed}");
     let got = http(
         port,
         &format!("GET /asset/.cut-cache/{key}.json HTTP/1.1\r\n\r\n"),

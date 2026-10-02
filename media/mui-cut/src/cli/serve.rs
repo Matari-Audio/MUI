@@ -37,6 +37,9 @@ struct Shared {
     state: Mutex<(String, Option<std::time::Instant>)>,
     /// The project text whose plugin states were last captured.
     captured: Mutex<String>,
+    /// The capture running (`mui-cut capture --json`): its stdin, which
+    /// takes the editor's state, for the states nearest the playhead.
+    capturing: Mutex<Option<std::process::ChildStdin>>,
     /// The sound, played as the editor plays (`/transport`).
     live: std::sync::OnceLock<Arc<crate::cli::live::Live>>,
 }
@@ -60,6 +63,7 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
         listeners: Mutex::new(Vec::new()),
         state: Mutex::new(("null".into(), None)),
         captured: Mutex::new(String::new()),
+        capturing: Mutex::new(None),
         live: std::sync::OnceLock::new(),
     });
     let weak = Arc::downgrade(&shared);
@@ -83,9 +87,16 @@ pub fn serve(project: &Path, port: u16, web: PathBuf) -> Result<()> {
     let watch = shared.clone();
     std::thread::spawn(move || {
         loop {
-            watch.capture();
             std::thread::sleep(POLL);
             watch.poll();
+        }
+    });
+    // Captures on their own thread: a long one holds up nothing else.
+    let watch = shared.clone();
+    std::thread::spawn(move || {
+        loop {
+            watch.capture();
+            std::thread::sleep(POLL);
         }
     });
     for stream in listener.incoming().flatten() {
@@ -378,8 +389,10 @@ impl Shared {
     }
 
     /// Capture the plugin states the project as last read or saved shows
-    /// and the cache lacks (on the watcher's thread: a capture holds up
-    /// noticing outside edits, not the editor), then tell the editors.
+    /// and the cache lacks: `mui-cut capture --json`, which makes them in
+    /// the plugin's adapter where it can ([`crate::cli::host::capture_all`]),
+    /// the states nearest the editor's playhead first. Each batch written
+    /// goes to the editors as it lands (`plugin`, the manifests' paths).
     fn capture(&self) {
         let text = self.doc.lock().expect("no panic holds it").text.clone();
         {
@@ -396,12 +409,55 @@ impl Shared {
         if !all.iter().any(|m| m.state().is_some()) {
             return;
         }
-        let mut errs = crate::cli::host::capture_missing(&p, &self.project);
-        errs.extend(crate::cli::host::capture_sources(&p, &self.project));
-        for e in errs {
-            eprintln!("mui-cut: {e}");
+        let child = std::env::current_exe().and_then(|exe| {
+            std::process::Command::new(exe)
+                .arg("capture")
+                .arg(&self.project)
+                .arg("--json")
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .spawn()
+        });
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => return eprintln!("mui-cut: capture: {e}"),
+        };
+        let state = self.state.lock().expect("no panic holds it").0.clone();
+        let mut stdin = child.stdin.take();
+        if let Some(w) = &mut stdin {
+            let _ = writeln!(w, "{state}");
         }
-        self.broadcast(b"event: plugin\ndata: ready\n\n");
+        *self.capturing.lock().expect("no panic holds it") = stdin;
+        let out = child.stdout.take().map(BufReader::new);
+        // Only its JSON lines: whatever else a plugin prints is not news.
+        for line in out
+            .into_iter()
+            .flat_map(std::io::BufRead::lines)
+            .map_while(std::result::Result::ok)
+        {
+            if line.starts_with('[') {
+                self.broadcast(format!("event: plugin\ndata: {line}\n\n").as_bytes());
+            }
+        }
+        *self.capturing.lock().expect("no panic holds it") = None;
+        let _ = child.wait();
+    }
+
+    /// The plugin states the project shows that the cache has, as the
+    /// paths the editor fetches, nearest its playhead first.
+    fn captures(&self) -> Vec<String> {
+        let dir = self.project.parent().unwrap_or(Path::new("."));
+        let text = self.doc.lock().expect("no panic holds it").text.clone();
+        let state = self.state.lock().expect("no panic holds it").0.clone();
+        let at = serde_json::from_str(&state)
+            .ok()
+            .and_then(|v| crate::cli::host::playhead(&v));
+        Project::load(&text)
+            .map(|p| crate::cli::host::by_playhead(&p, at))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|path| dir.join(path).is_file())
+            .collect()
     }
 
     /// One SSE message to every open editor, dropping the gone ones.
@@ -517,6 +573,9 @@ impl Shared {
                 // Compact, so it is one SSE data line.
                 let one = v.to_string();
                 if method == "PUT" {
+                    if let Some(w) = &mut *self.capturing.lock().expect("no panic holds it") {
+                        let _ = writeln!(w, "{one}");
+                    }
                     *self.state.lock().expect("no panic holds it") =
                         (one, Some(std::time::Instant::now()));
                 } else {
@@ -637,6 +696,12 @@ impl Shared {
                     ),
                 }
                 .map_err(io)
+            }
+            // The plugin states the editor can fetch now; `plugin` events
+            // name the ones written after.
+            ("GET", "/captures") => {
+                let body = json!(self.captures()).to_string();
+                respond(stream, "200 OK", "application/json", body.as_bytes()).map_err(io)
             }
             ("GET", "/name") => {
                 let name = self
