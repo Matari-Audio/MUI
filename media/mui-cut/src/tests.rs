@@ -1222,7 +1222,11 @@ fn plugin_layers_are_checked_and_list_their_part_tracks() {
     let p = one_layer(
         r#"{"id":"p","kind":"plugin","source":{"bin":"a"},"parts":{"tl.audio/tl.audio.plot":{"z":-60}}}"#,
     );
-    assert!(p.scenes[0].layers[0].prop("parts.tl.audio/tl.audio.plot.z").is_some());
+    assert!(
+        p.scenes[0].layers[0]
+            .prop("parts.tl.audio/tl.audio.plot.z")
+            .is_some()
+    );
 }
 
 /// A capture of a 200x100 UI: a background and two parts, `a` left, `b` right.

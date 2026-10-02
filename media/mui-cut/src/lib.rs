@@ -1612,10 +1612,7 @@ impl Project {
                                 "{at}.explode_stagger: layer `{id}`: seconds, 0 or more"
                             ));
                         }
-                        if let Some(p) = parts
-                            .keys()
-                            .find(|p| p.split('/').any(str::is_empty))
-                        {
+                        if let Some(p) = parts.keys().find(|p| p.split('/').any(str::is_empty)) {
                             return Err(format!(
                                 "{at}.parts: layer `{id}`: part path `{p}` must be surface ids joined by `/`"
                             ));
