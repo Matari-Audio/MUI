@@ -3,6 +3,7 @@ import { begin, changed, end, showError } from './edit.js';
 import { exportMessage } from './export.js';
 import { DRAG_SOURCE, picking, refreshLists, select, setSelection } from './lists.js';
 import { dropSource } from './sources.js';
+import { boundsOf, clearGuides, drawGuides, snapMove, snapPoint, targets } from './snap.js';
 import { drawGizmo, gizmoBox, gizmoCursor, gizmoHit, moveGizmo, startGizmo } from './gizmo.js';
 import { $, C, S, cut, pacing, worker } from './state.js';
 
@@ -95,6 +96,7 @@ function drawOverlay() {
     }
   }
   drawGizmo(octx, k, dpr, perPx());
+  if (drag) drawGuides(octx, k, dpr);
   if (drag?.marquee) {
     const [[ax, ay], [bx, by]] = drag.marquee;
     octx.fillStyle = C.marquee; octx.fillRect(ax * k, ay * k, (bx - ax) * k, (by - ay) * k);
@@ -190,9 +192,9 @@ over.onpointerdown = e => {
   // A gizmo handle first; then, with several selected, their box moves
   // them from anywhere inside it.
   const gh = gizmoHit(p, perPx());
-  if (gh) { drag = { gizmo: startGizmo(gh, p) }; over.setPointerCapture(e.pointerId); begin(); return; }
+  if (gh) { drag = { gizmo: startGizmo(gh, p), snap: targets(S.selection, perPx()) }; over.setPointerCapture(e.pointerId); begin(); return; }
   const how = picking(e), box = !id && !how && gizmoBox();
-  if (box && !box.one && inside(p, box.pts)) { drag = { p, items: moveItems(), moved: false }; over.setPointerCapture(e.pointerId); begin(); return; }
+  if (box && !box.one && inside(p, box.pts)) { drag = moving(p); over.setPointerCapture(e.pointerId); begin(); return; }
   if (!id) {
     // A marquee from empty space: Shift or Ctrl adds what it touches.
     if (!how && S.selection.length) select(null);
@@ -206,7 +208,7 @@ over.onpointerdown = e => {
   if (how) { select(id, 'toggle'); if (!S.selection.includes(id)) return; }
   else if (!S.selection.includes(id)) select(id);
   else collapse = id;
-  drag = { p, items: moveItems(), collapse, moved: false };
+  drag = { ...moving(p), collapse };
   over.setPointerCapture(e.pointerId);
   begin();
 };
@@ -227,6 +229,8 @@ function partLin(l, part) {
   const k = now(l, 'scale') || 1;
   return pq?.ui ? pq.ui.slice(0, 4) : [k, 0, 0, k];
 }
+// A move from `p`: what it drags, the bounds it snaps and what to.
+const moving = p => ({ p, items: moveItems(), moved: false, b0: boundsOf(S.selection), snap: targets(S.selection, perPx()) });
 // What a move drags: each selected part, and each selected layer that no
 // selected ancestor carries already, with where it starts.
 function moveItems() {
@@ -268,9 +272,17 @@ over.onpointermove = e => {
     changed(); return;
   }
   if (drag.marquee) { drag.marquee[1] = p; drawOverlay(); return; }
-  if (drag.gizmo) { moveGizmo(drag.gizmo, p, { shift: e.shiftKey, alt: e.altKey }); changed(); return; }
+  const free = e.ctrlKey || e.metaKey;
+  if (drag.gizmo) {
+    // A scale handle on an upright box: the edges it drags snap.
+    const g = drag.gizmo, h = g.h, upright = Math.abs(g.box.a) < 1e-6;
+    const q = h.turn || !upright ? p
+      : snapPoint(drag.snap, p, [h.at[0] + p[0] - g.p0[0], h.at[1] + p[1] - g.p0[1]], [h.u !== 0.5, h.v !== 0.5], free);
+    moveGizmo(g, q, { shift: e.shiftKey, alt: e.altKey });
+    changed(); drawOverlay(); return;
+  }
   drag.moved = true;
-  const d = [p[0] - drag.p[0], p[1] - drag.p[1]];
+  const d = snapMove(drag.snap, drag.b0, [p[0] - drag.p[0], p[1] - drag.p[1]], free);
   for (const it of drag.items) {
     const [dx, dy] = unmap(it.lin, d);
     setValue(it.l, it.px + 'x', round(it.x0 + dx));
@@ -287,6 +299,7 @@ over.onpointerup = () => {
   }
   const was = drag;
   drag = null;
+  clearGuides(); drawOverlay();
   if (was?.marquee) { setSelection([...was.keep, ...marqueeHits(was.marquee)]); return; }
   end();
   if (was?.collapse && !was.moved) select(was.collapse);

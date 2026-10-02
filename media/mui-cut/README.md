@@ -691,6 +691,10 @@ explodes two levels in 3D: panels, then their controls.
   `rotation`, `scale` are written at the playhead through its parent's
   transform, so children of a turned or scaled parent land where dragged.
   Several selected move from anywhere inside their box.
+- **Snapping** (header **Snap**, on by default): while moving, or scaling
+  an upright box, the selection's edges and middle catch on other layers'
+  edges and middles and the canvas's edges and middle within 6 screen
+  pixels; dashed guides show the lines caught on. Hold Ctrl to drag freely.
 - **Align and distribute** (header): line the selected layers' outlines
   up on their bounds' left, centre, right, top, middle or bottom (one
   layer, or with **Canvas** on, on the frame's), or even out the gaps
