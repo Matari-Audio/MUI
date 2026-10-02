@@ -411,7 +411,7 @@ impl Rt {
             )
             .create_view(&wgpu::TextureViewDescriptor::default());
         Ok(Self {
-            globals: buffer("mui-stage-rt globals", 30 * 16, uniform),
+            globals: buffer("mui-stage-rt globals", 32 * 16, uniform),
             insts: buffer(
                 "mui-stage-rt instances",
                 u64::from(MAX_INSTANCES) * size_of::<Inst>() as u64,
@@ -1231,8 +1231,8 @@ fn relief_scale(m: &mui_stage::Material) -> [f32; 4] {
 }
 
 /// The shader's globals (see `Globals` in rt.wgsl).
-fn globals(s: &Shot, t: f64, w: u32, h: u32, done: u32, spp: u32, bounces: u32) -> [f32; 120] {
-    let mut g = [0f32; 120];
+fn globals(s: &Shot, t: f64, w: u32, h: u32, done: u32, spp: u32, bounces: u32) -> [f32; 128] {
+    let mut g = [0f32; 128];
     let cam = &s.camera;
     let [right, up, fwd] = cam.basis();
     let ty = (cam.fov.to_radians() * 0.5).tan();
@@ -1308,6 +1308,11 @@ fn globals(s: &Shot, t: f64, w: u32, h: u32, done: u32, spp: u32, bounces: u32) 
         g[51] = k.drift[0];
         g[52..55].copy_from_slice(&k.sun_color);
         g[55] = k.drift[1];
+        if let Some(a) = &k.atmosphere {
+            g[43] = 2.;
+            g[120..124].copy_from_slice(&a.uniform());
+            g[124] = mui_stage::sky::SUN * a.intensity;
+        }
     }
     g
 }

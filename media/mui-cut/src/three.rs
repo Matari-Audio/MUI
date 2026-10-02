@@ -84,17 +84,26 @@ fn is_zero(a: &Anim<f64>) -> bool {
 }
 
 /// A sunlit sky behind everything (over the scene's background, under an
-/// environment shown as the background): a gradient from `horizon` to
-/// `zenith`, the sun `elevation` degrees up and `azimuth` degrees right of
-/// straight into the scene, and procedural clouds over `cover` (0..1) of
-/// it, a layer overhead and a sea below the horizon, lit from the sun and
-/// drifting right `wind` cloud widths a second. Glass refracts and reflects
-/// it. `intensity` scales all its light. mui-stage only: Blender shows the
-/// background colour.
+/// environment shown as the background): the sun `elevation` degrees up
+/// and `azimuth` degrees right of straight into the scene, and procedural
+/// clouds over `cover` (0..1) of it, a layer overhead (and with the
+/// gradient a sea below the horizon), lit from the sun and drifting right
+/// `wind` cloud widths a second. Glass refracts and reflects it.
+/// `intensity` scales all its light.
+///
+/// `model` `gradient` (the default) runs from `horizon` to `zenith`, lit
+/// by `sun`. `physical` is the air itself scattering sunlight (Rayleigh,
+/// Mie and ozone): blue overhead, paler at the horizon, the sun reddening
+/// as it sets and twilight after, all from `elevation`; `turbidity` hazes
+/// it (1 pure air, 2 a clear day, 10 hazy), `ozone` (1 the earth's) deepens
+/// twilight's blue, `ground_albedo` lights the air from below and colours
+/// the ground under the horizon, `altitude` is the eye's height in metres.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = crate::vars::bindable)]
 pub struct Sky {
+    #[serde(default, skip_serializing_if = "crate::is_default")]
+    pub model: SkyModel,
     #[serde(default = "elevation")]
     pub elevation: Anim<f64>,
     #[serde(default = "zero", skip_serializing_if = "is_zero")]
@@ -111,6 +120,27 @@ pub struct Sky {
     pub sun: Anim<Rgba>,
     #[serde(default = "one", skip_serializing_if = "is_one")]
     pub intensity: Anim<f64>,
+    #[serde(default = "turbidity", skip_serializing_if = "is_turbidity")]
+    pub turbidity: Anim<f64>,
+    #[serde(default = "one_f", skip_serializing_if = "is_one_f")]
+    pub ozone: f64,
+    #[serde(default = "albedo", skip_serializing_if = "is_albedo")]
+    pub ground_albedo: f64,
+    #[serde(default, skip_serializing_if = "is_zero_f")]
+    pub altitude: f64,
+}
+
+/// How a [`Sky`] is coloured.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum SkyModel {
+    /// The artist's gradient from `horizon` to `zenith`.
+    #[default]
+    Gradient,
+    /// Sunlight scattered by the air.
+    Physical,
 }
 fn elevation() -> Anim<f64> {
     Anim::Value(25.)
@@ -130,24 +160,71 @@ fn horizon() -> Anim<Rgba> {
 fn sun() -> Anim<Rgba> {
     Anim::Value(Rgba([0xff, 0xf1, 0xdc, 255]))
 }
+fn turbidity() -> Anim<f64> {
+    Anim::Value(2.)
+}
+fn is_turbidity(a: &Anim<f64>) -> bool {
+    *a == turbidity()
+}
+fn one_f() -> f64 {
+    1.
+}
+fn is_one_f(v: &f64) -> bool {
+    *v == 1.
+}
+fn albedo() -> f64 {
+    0.3
+}
+fn is_albedo(v: &f64) -> bool {
+    *v == 0.3
+}
+fn is_zero_f(v: &f64) -> bool {
+    *v == 0.
+}
 
 impl Sky {
-    /// The sky at `t`, as mui-stage takes it.
-    pub fn at(&self, t: f64) -> mui_stage::Sky {
-        let k = self.intensity.at(t).max(0.) as f32;
-        let lin = |a: &Anim<Rgba>| crate::gpu3d::linear(a.at(t)).map(|c| c * k);
+    /// Toward the sun at `t`, mui-stage's world (y up, z toward the viewer).
+    pub fn sun_dir(&self, t: f64) -> [f32; 3] {
         let (el, az) = (
             self.elevation.at(t).to_radians(),
             self.azimuth.at(t).to_radians(),
         );
+        [az.sin() * el.cos(), el.sin(), -az.cos() * el.cos()].map(|v| v as f32)
+    }
+
+    /// The air of a physical sky at `t`.
+    pub fn air(&self, t: f64) -> mui_stage::Atmosphere {
+        mui_stage::Atmosphere {
+            turbidity: self.turbidity.at(t).clamp(1., 32.) as f32,
+            ozone: self.ozone.max(0.) as f32,
+            altitude: self.altitude.clamp(0., 50_000.) as f32,
+            ground_albedo: self.ground_albedo.clamp(0., 1.) as f32,
+            intensity: self.intensity.at(t).max(0.) as f32,
+        }
+    }
+
+    fn physical(&self) -> bool {
+        self.model == SkyModel::Physical
+    }
+
+    /// The sky at `t`, as mui-stage takes it.
+    pub fn at(&self, t: f64) -> mui_stage::Sky {
+        let cover = self.cover.at(t).clamp(0., 1.) as f32;
+        let drift = [(self.wind * t) as f32, 0.];
+        if self.physical() {
+            return mui_stage::Sky::physical(self.sun_dir(t), self.air(t), cover, drift);
+        }
+        let k = self.intensity.at(t).max(0.) as f32;
+        let lin = |a: &Anim<Rgba>| crate::gpu3d::linear(a.at(t)).map(|c| c * k);
         mui_stage::Sky {
-            sun: [az.sin() * el.cos(), el.sin(), -az.cos() * el.cos()].map(|v| v as f32),
+            sun: self.sun_dir(t),
             zenith: lin(&self.zenith),
             horizon: lin(&self.horizon),
             // Sunlight is brighter than any sky: the disc and lit cloud.
             sun_color: lin(&self.sun).map(|c| c * 2.6),
-            cover: self.cover.at(t).clamp(0., 1.) as f32,
-            drift: [(self.wind * t) as f32, 0.],
+            cover,
+            drift,
+            atmosphere: None,
         }
     }
 }

@@ -34,6 +34,7 @@ use wgpu::util::DeviceExt;
 
 pub mod env;
 mod math;
+pub mod sky;
 pub use env::EnvImage;
 pub use math::{Mat4, disc, halton, sample};
 
@@ -143,7 +144,7 @@ pub const MAX_LIGHTS: usize = 4;
 /// floor.
 const SLOTS: usize = 2 * (MAX_PLANES + MAX_MODELS) + 1;
 /// `Globals` in `stage.wgsl`, in floats.
-const GLOBALS: usize = 272;
+const GLOBALS: usize = 280;
 /// The environment a shot may name without uploading it: the built-in
 /// neutral studio ([`EnvImage::studio`]).
 pub const STUDIO: &str = "studio";
@@ -659,6 +660,51 @@ pub struct Sky {
     pub cover: f32,
     /// How far the clouds have drifted, in cloud widths (x, z).
     pub drift: [f32; 2],
+    /// A physical sky: this air scatters the sun's light (see [`sky`]),
+    /// and `zenith`, `horizon` and `sun_color` only light the clouds
+    /// ([`Sky::physical`] sets them from it). `None` is the gradient.
+    pub atmosphere: Option<Atmosphere>,
+}
+impl Default for Sky {
+    /// The gradient: a clear blue day, the sun 25 degrees up ahead.
+    fn default() -> Self {
+        Self {
+            sun: [0., 0.42, -0.91],
+            zenith: [0.04, 0.15, 0.48],
+            horizon: [0.62, 0.74, 0.85],
+            sun_color: [2.6, 2.3, 1.9],
+            cover: 0.,
+            drift: [0.; 2],
+            atmosphere: None,
+        }
+    }
+}
+
+/// The air of a physical [`Sky`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Atmosphere {
+    /// Haze: 1 pure air, 2 a clear day (Blender's dust density 1), 10 a
+    /// hazy one.
+    pub turbidity: f32,
+    /// Ozone density, 1 the earth's: it takes orange out of twilight.
+    pub ozone: f32,
+    /// The eye's height above sea level, metres.
+    pub altitude: f32,
+    /// How much light the ground reflects, 0..1.
+    pub ground_albedo: f32,
+    /// Times the sun's light ([`sky::SUN`]).
+    pub intensity: f32,
+}
+impl Default for Atmosphere {
+    fn default() -> Self {
+        Self {
+            turbidity: 2.,
+            ozone: 1.,
+            altitude: 0.,
+            ground_albedo: 0.3,
+            intensity: 1.,
+        }
+    }
 }
 
 /// Ground-truth ambient occlusion: a half-resolution screen-space pass
@@ -2210,6 +2256,11 @@ impl Stage {
             g[267] = k.drift[0];
             g[268..271].copy_from_slice(&k.sun_color);
             g[271] = k.drift[1];
+            if let Some(a) = &k.atmosphere {
+                g[259] = 2.;
+                g[272..276].copy_from_slice(&a.uniform());
+                g[276] = sky::SUN * a.intensity;
+            }
         }
         let ao = s.ao.filter(|a| a.strength > 0. && a.radius > 0.);
         if let Some(a) = ao {

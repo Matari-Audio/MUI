@@ -1045,6 +1045,45 @@ fn a_sky_is_seen_behind_a_3d_scene() {
     assert!(hi - lo > 20, "clouds across it: {lo}..{hi}");
 }
 
+/// A `physical` sky: it fits the schema and round-trips, its sun keyed
+/// from below the horizon to noon, and draws a sunrise as one is: orange
+/// low toward the sun at dawn, blue overhead by day.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_physical_sky_draws_a_sunrise() {
+    let src = r##"{"size":[320,180],"fps":30,"scenes":[{"name":"a","duration":2,"mode":"3d",
+        "background":"#000000","layers":[{"id":"cam","kind":"camera","rx":-8}],
+        "sky":{"model":"physical","elevation":[{"t":0,"v":1},{"t":1,"v":60}],
+        "cover":0,"turbidity":2.5,"ozone":1,"ground_albedo":0.2,"altitude":300}}]}"##;
+    let doc: serde_json::Value = serde_json::from_str(src).unwrap();
+    let v = jsonschema::validator_for(&Project::json_schema()).unwrap();
+    let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
+    assert!(errs.is_empty(), "{errs:?}");
+    let p = Project::load(src).unwrap();
+    assert_eq!(Project::load(&p.to_json()).unwrap().scenes, p.scenes);
+    let sky = |t: f64| eval(&p, &p.scenes[0], t).view.unwrap().sky.unwrap();
+    let a = sky(0.).atmosphere.expect("physical");
+    assert!((a.turbidity - 2.5).abs() < 1e-6 && (a.altitude - 300.).abs() < 1e-3);
+    // The sun's light reddens toward the horizon.
+    let (dawn, noon) = (sky(0.).sun_color, sky(1.).sun_color);
+    assert!(
+        dawn[0] / dawn[2] > 3. * noon[0] / noon[2],
+        "{dawn:?} {noon:?}"
+    );
+    let Some(mut g) = offline(&p, Engine::Classic) else {
+        return;
+    };
+    let at =
+        |px: &[u8], x: usize, y: usize| [0, 1, 2].map(|c| i32::from(px[(y * 320 + x) * 4 + c]));
+    // Dawn: the camera looks into the scene, toward the rising sun.
+    let px = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
+    let low = at(&px, 40, 120);
+    assert!(low[0] > low[2] + 30, "orange toward the dawn: {low:?}");
+    let px = frame(&mut g, &[eval(&p, &p.scenes[0], 1.)]);
+    let top = at(&px, 160, 5);
+    assert!(top[2] > top[0] + 30, "blue overhead by day: {top:?}");
+}
+
 /// A scene's `bloom`: the sun in frame glows into the sky round it.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

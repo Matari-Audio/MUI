@@ -347,6 +347,7 @@ fn the_shaders_have_the_stage_sky_and_validate() {
     use wgpu::naga::{front::wgsl, valid};
     let (tracer, filter, composite) = sources().unwrap();
     assert!(tracer.contains("fn sky_seen(") && !tracer.contains("{{SKY}}"));
+    assert!(tracer.contains("fn atmosphere("), "the physical sky too");
     assert!(filter.contains("fn denoise(") && composite.contains("fn fs_composite("));
     // Every module parses and validates, with no GPU: CI checks the WGSL
     // the ray-query tests cannot run there.

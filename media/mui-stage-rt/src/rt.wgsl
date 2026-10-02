@@ -58,6 +58,9 @@ struct Globals {
     sky2: vec4f,
     sky3: vec4f,
     lights: array<Light, 4>,
+    // A physical sky's air, as mui-stage packs it.
+    sky4: vec4f,
+    sky5: vec4f,
 };
 
 // An instance: what it is and what it is made of.
