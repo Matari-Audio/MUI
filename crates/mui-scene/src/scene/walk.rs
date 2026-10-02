@@ -1362,7 +1362,7 @@ mod tests {
     #[test]
     fn a_baseline_row_taller_than_its_text_keeps_the_letters_in_their_frames() {
         let root = row([
-            text("Kurv").text_size(22.).id("title"),
+            text("Synth").text_size(22.).id("title"),
             text("v1.0").text_size(11.).id("ver"),
             block(80., 40.).id("btn"),
         ])

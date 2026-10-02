@@ -7,7 +7,7 @@
 //!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
 //!     mui-cut fmt    demo.cut.json
 //!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
-//!     mui-cut add    ../KORREKT [--project demo.cut.json]
+//!     mui-cut add    ../my-plugin [--project demo.cut.json]
 #![forbid(unsafe_code)]
 
 mod audio;

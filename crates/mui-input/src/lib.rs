@@ -2,7 +2,7 @@
 //!
 //! This is the part of an immediate-mode toolkit that is genuinely load-bearing
 //! and is not drawing: deciding *what is under the pointer* and *what that
-//! means*. In KURV's editor, `ui.painter()` is called 204 times and
+//! means*. In a synth plugin's editor, `ui.painter()` is called 204 times and
 //! `ui.interact()` 19 -- the painter is replaceable by Vello, this is not.
 //!
 //! Two pieces, deliberately separate:
@@ -369,7 +369,7 @@ impl Hit {
 }
 
 /// How much of a drag a gesture keeps while the fine modifier is held.
-/// KURV's `FINE_DRAG_SCALE`: a tenth, which is the difference between
+/// A synth editor's fine-drag scale: a tenth, which is the difference between
 /// "somewhere near 3 kHz" and "3 kHz".
 pub const FINE_DRAG: f64 = 0.1;
 

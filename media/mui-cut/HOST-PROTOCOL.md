@@ -10,7 +10,6 @@ implements everything below around three callbacks: `audio` (the DSP), `edit`
 - `media/mui-cut/src/adapter/moose.rs` is the generated adapter for any moose
   plugin (`{"plugin": folder}` sources, `mui-cut add`): its real editor,
   headless, and its real DSP, through `mui_motion_bridge::run_headless_with`.
-  KURV runs through it.
 
 Protocol version: `hello.version` = 1.
 
@@ -80,7 +79,7 @@ frames a pure function of the command list.
 {"op": "set", "id": "Cutoff", "field": "value", "value": 1200.0}
 ```
 
-The adapter defines `id` and `field`. KURV takes a parameter id (number) or
+The adapter defines `id` and `field`. The moose adapter takes a parameter id (number) or
 name/short name, with `field` either `value`/`plain` (plain units) or `norm`
 (0..1). The synth fixture takes `id` as a panel and `field` as a control
 name, with a 0..1 value. The command is acked with `edit`, or answered with
@@ -89,13 +88,13 @@ name, with a 0..1 value. The command is acked with `edit`, or answered with
 ### Presets
 
 ```json
-{"op": "preset", "path": "presets/Everything.kurvy"}
+{"op": "preset", "path": "presets/Everything.preset"}
 ```
 
 Loads a preset or saved state (a path relative to the project) as a host's
 state load does. The moose adapter finds the moose state envelope (`OAST`) in
 the file: at its start it is a host's saved state (plain values); inside a
-plugin's own preset format (a `.kurvy` wraps it) its values are normalized,
+plugin's own preset format (a preset file that wraps it) its values are normalized,
 as the editor saved them. Values and `#[persist]` state apply at once, custom
 state before the next audio block. An adapter without presets answers `error`.
 
@@ -147,7 +146,7 @@ only lists changed ones.
 ## The patch (`scene.patch`, optional)
 
 ```json
-{"plugin": "KURV",
+{"plugin": "Synth",
  "params": [{"id": 12, "name": "Cutoff", "group": "Filter", "value": 1200.0, "text": "1.20 kHz", "norm": 0.61,
              "automated": true, "modulated": false}],
  "routes": [{"source": "LFO 01", "target": "Cutoff", "depth": 0.4, "live": 0.13}],

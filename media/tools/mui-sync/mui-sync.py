@@ -12,9 +12,9 @@ For each plugin repository (a folder, or a crate inside a repository):
    "Follow MUI main" (never merged here); red: the compile errors are
    reported, since they are API drift to fix, not to pin away.
 
-    media/tools/mui-sync/mui-sync.py ../KURV ../KORREKT ../relay/plugin
-    media/tools/mui-sync/mui-sync.py --dry-run ../KURV   # check, no push or PR
-    media/tools/mui-sync/mui-sync.py --check ../KURV ../VOLT
+    media/tools/mui-sync/mui-sync.py ../synth ../app ../relay/plugin
+    media/tools/mui-sync/mui-sync.py --dry-run ../synth   # check, no push or PR
+    media/tools/mui-sync/mui-sync.py --check ../synth ../app
 
 `--check` is the guard: it exits 1 if any Cargo.toml in the given repos
 pins a MUI git dependency to a `rev` (plugins follow main; the lock file

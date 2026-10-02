@@ -161,7 +161,7 @@ single `fs_hybrid` entry point. Do not assume an sRGB attachment works
 without further changes.
 
 The native window host is winit, NOT a completed CLAP/VST3/AU parent-window host.
-No KURV or BUFFR product source or real-time audio transport was changed. Parley
+No downstream plugin source or real-time audio transport was changed. Parley
 restoration from the initial audit remains separate unfinished work.
 
 ## Run the native checks
