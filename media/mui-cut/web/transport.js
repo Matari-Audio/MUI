@@ -6,7 +6,7 @@ import { refreshInspector, updateInspector } from './inspector.js';
 import { deleteSelected, duplicateSelected, refreshLists, select, selectAll } from './lists.js';
 import { transport } from './sound.js';
 import { $, S, clock, pacing } from './state.js';
-import { drawTimeline } from './timeline.js';
+import { drawTimeline, fitView, trimToPlayhead } from './timeline.js';
 import { groupSelected, precompose, ungroupSelected } from './tree.js';
 import { BEAUTY_MAX, beauty, drawViewport, refining } from './viewport.js';
 
@@ -45,6 +45,8 @@ addEventListener('keydown', e => {
   else if (mod && e.shiftKey && e.key.toLowerCase() === 'c') { e.preventDefault(); precompose(); }
   else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); if (e.shiftKey) ungroupSelected(); else groupSelected(); }
   else if (e.key === 'Escape') select(null);
+  else if (e.altKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) { e.preventDefault(); trimToPlayhead(e.code === 'BracketLeft' ? 'start' : 'end'); }
+  else if (!mod && !e.altKey && e.key.toLowerCase() === 'f') fitView();
   else if (e.key.toLowerCase() === 'k' && layer()) edit(() => toggleKey(layer(), S.prop));
 });
 // The header's variant switcher: hidden for a project without variants.
@@ -78,12 +80,13 @@ export function loop(ms) {
   }
   if (!$('#hud').hidden) drawHud();
   if (S.need && S.doc) {
-    S.need = false;
+    S.need = false; S.tlNeed = false;
     beauty.n = 0;
     if (!drawViewport()) S.need = true;
     drawTimeline(); drawGraph(); updateInspector();
     $('#time').textContent = `${S.t.toFixed(2)} s  ·  f${Math.round(S.t * S.R.fps)}`;
   }
+  else if (S.tlNeed && S.doc) { S.tlNeed = false; drawTimeline(); drawGraph(); }
   else if (S.doc && !S.drawing && beauty.n > 0 && beauty.n < BEAUTY_MAX && refining()) drawViewport();
   report(ms);
   requestAnimationFrame(loop);

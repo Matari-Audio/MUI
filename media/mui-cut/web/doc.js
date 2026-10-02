@@ -16,6 +16,25 @@ export function roots(ls) {
   });
 }
 export const isKeys = v => Array.isArray(v);
+// Every key list in a layer (or any object), found in its JSON: `{p, keys}`
+// with `p` a path as `getp` takes it (`x`, `animators.0.offset`,
+// `effects.1.radius`, `parts.osc.y`). Cheap: no engine call.
+export function tracks(o) {
+  const out = [];
+  const walk = (o, path) => {
+    for (const [k, v] of Object.entries(o)) {
+      const p = path ? `${path}.${k}` : k;
+      if (Array.isArray(v)) {
+        if (v.length && v.every(x => x !== null && typeof x === 'object' && 't' in x && 'v' in x)) out.push({ p, keys: v });
+        else v.forEach((x, i) => { if (x !== null && typeof x === 'object') walk(x, `${p}.${i}`); });
+      } else if (v !== null && typeof v === 'object' && !('var' in v)) walk(v, p);
+    }
+  };
+  walk(o, '');
+  return out;
+}
+// Seconds without float noise (frame times stay as `snap` makes them).
+export const tidy = x => Math.round(x * 1e6) / 1e6;
 // `{"var": ...}`: a value a variable decides; the inspector shows it, the
 // Variables panel changes it.
 export const isBind = v => v !== null && typeof v === 'object' && !Array.isArray(v) && 'var' in v;

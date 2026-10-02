@@ -1,7 +1,7 @@
 import { getp, insertKey, isKeys, keyAt, layer, numPaths, round, setp, snap } from './doc.js';
 import { begin, changed, edit, end } from './edit.js';
 import { $, C, S, cut } from './state.js';
-import { LABEL, playhead, short } from './timeline.js';
+import { LABEL, pan, playhead, short, startPan, ticks, timeAt, trackW, view, wheel, xAt } from './timeline.js';
 import { refresh } from './transport.js';
 
 // ---------- graph editor
@@ -36,10 +36,10 @@ export function drawGraph() {
     sel0.replaceChildren(...nums.map(p => new Option(short(p) + (isKeys(getp(l, p)) ? ' ◆' : ''), p, false, p === S.prop)));
   }
   if (!l) { c.fillStyle = C.text; c.fillText('Select a layer to see its curves.', LABEL, h / 2); return; }
-  const dur = S.R.scenes[S.si].duration, n = Math.max(2, Math.round(w - LABEL - 12));
-  const samples = cut.sample(S.si, l.id, S.prop, 0, dur, n);
+  const v = view(), n = Math.max(2, Math.round(trackW(w) / 2));
+  const samples = cut.sample(S.si, l.id, S.prop, v.t0, v.t1, n);
   const keys = gKeys();
-  if (!grDrag || !S.range) {
+  if (!grDrag || grDrag.pan || !S.range) {
     let lo = Infinity, hi = -Infinity;
     const see = v => { lo = Math.min(lo, v); hi = Math.max(hi, v); };
     samples.forEach(see);
@@ -47,19 +47,19 @@ export function drawGraph() {
     if (!(hi - lo > 1e-6)) { lo -= 1; hi += 1; }
     const pad = (hi - lo) * 0.12; S.range = [lo - pad, hi + pad];
   }
-  // The same time axis as the timeline above it, so keys line up.
-  const gx = time => LABEL + time / dur * (w - LABEL - 12);
+  // The same time view as the timeline above it, so keys line up.
+  const gx = time => xAt(time, w);
   const gy = v => 10 + (S.range[1] - v) / (S.range[1] - S.range[0]) * (h - 20);
-  // Grid: seconds, and four value lines with their numbers.
+  // Grid: the ruler's labelled times, and four value lines with their numbers.
   c.fillStyle = C.grid;
-  for (let s = 0; s <= dur + 1e-9; s += 0.5) c.fillRect(gx(s), 0, 1, h);
+  for (const t of ticks(w)) if (t.major) c.fillRect(Math.round(gx(t.t)), 0, 1, h);
   for (let i = 0; i <= 4; i++) {
     const v = S.range[0] + (S.range[1] - S.range[0]) * i / 4;
     c.fillStyle = C.grid; c.fillRect(LABEL, gy(v), w - LABEL - 12, 1);
     c.fillStyle = C.gridText; c.fillText(Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2), 8, gy(v));
   }
   c.beginPath();
-  samples.forEach((v, i) => { const x = gx(i / (n - 1) * dur); i ? c.lineTo(x, gy(v)) : c.moveTo(x, gy(v)); });
+  samples.forEach((s, i) => { const x = gx(v.t0 + i / (n - 1) * (v.t1 - v.t0)); i ? c.lineTo(x, gy(s)) : c.moveTo(x, gy(s)); });
   c.strokeStyle = C.curve; c.lineWidth = 1.5; c.stroke();
   if (!keys) { c.fillStyle = C.text; c.fillText(`${S.prop} is a plain value: press ◆ in the inspector to animate it.`, LABEL + 8, 14); }
   keys?.forEach((k, i) => {
@@ -77,8 +77,10 @@ export function drawGraph() {
     c.fillStyle = C.halo; c.fillRect(gx(k.t) - s - 1, gy(k.v) - s - 1, 2 * s + 2, 2 * s + 2);
     c.fillStyle = picked ? C.picked : C.key; c.fillRect(gx(k.t) - s, gy(k.v) - s, 2 * s, 2 * s);
   });
+  c.save(); c.beginPath(); c.rect(LABEL, 0, w - LABEL, h); c.clip();
   playhead(c, gx(S.t), h);
-  gr._map = { gx, gy, tOf: x => (x - LABEL) / (w - LABEL - 12) * dur, vOf: y => S.range[1] - (y - 10) / (h - 20) * (S.range[1] - S.range[0]) };
+  c.restore();
+  gr._map = { gx, gy, tOf: x => timeAt(x, w), vOf: y => S.range[1] - (y - 10) / (h - 20) * (S.range[1] - S.range[0]) };
 }
 function grHit(e) {
   const r = gr.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, m = gr._map, keys = gKeys();
@@ -91,6 +93,7 @@ function grHit(e) {
   return i >= 0 ? { x, y, i } : { x, y };
 }
 gr.onpointerdown = e => {
+  if (e.button === 1) { e.preventDefault(); gr.setPointerCapture(e.pointerId); grDrag = startPan(e, gr); return; }
   const h = grHit(e), keys = gKeys();
   if (h.i === undefined) return;
   gr.setPointerCapture(e.pointerId);
@@ -100,6 +103,7 @@ gr.onpointerdown = e => {
 };
 gr.onpointermove = e => {
   if (!grDrag) return;
+  if (grDrag.pan) { pan(grDrag, e); return; }
   const m = gr._map, r = gr.getBoundingClientRect();
   const time = m.tOf(e.clientX - r.left), v = m.vOf(e.clientY - r.top);
   const keys = gKeys(), k = grDrag.k, i = keys.indexOf(k);
@@ -122,7 +126,8 @@ gr.onpointermove = e => {
   }
   changed();
 };
-gr.onpointerup = () => { if (grDrag) { grDrag = null; end(); } };
+gr.onpointerup = () => { const was = grDrag; grDrag = null; if (was && !was.pan) end(); };
+gr.addEventListener('wheel', e => wheel(e, gr), { passive: false });
 gr.ondblclick = e => {
   const l = layer(), m = gr._map;
   if (!l || !m) return;

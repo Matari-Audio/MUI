@@ -15,6 +15,7 @@ export const C = {
   tick: '#3a3a3a', row: '#181818', rowAlt: '#1c1c1c', rowOn: '#262626',
   curve: '#d4d4d4', key: '#b0b0b0', layerKey: '#6a6a6a', handle: '#7a7a7a',
   handleLine: '#ffffff30', picked: '#ffffff', pickedLine: '#ffffffa0',
+  bar: '#2a2a2a', barOn: '#3a3a3a', barLine: '#444444', barEdge: '#9a9a9a', ruler: '#151515', outside: '#0000004d',
   playhead: '#f2f2f2', hover: '#ffffff70', sel: '#ffffff', halo: '#000000a0', marquee: '#ffffff14', guide: '#ffffffd0',
 };
 
@@ -53,6 +54,10 @@ export const S = {
   sourceList: [],     // the Sources panel's rows: `Cut.sources()`
   framed: undefined,  // the frame at the playhead, once per inspector pass
   range: null,        // the graph's value range
+  // The time view the timeline and the graph share: seconds at the left
+  // and right of their track areas, for scene `si`.
+  view: { t0: 0, t1: 1, si: -1 },
+  tlNeed: false,      // the timeline and graph (only) need a redraw
 };
 
 // Who this editor is in the server's merge reports.

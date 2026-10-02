@@ -812,9 +812,26 @@ explodes two levels in 3D: panels, then their controls.
   "+ deformer" add one. Type a value to set it (same rule as dragging). ◆ adds a key at the playhead, or removes the one
   there; removing the last key turns the property back into a plain value.
   Yellow ◆ = animated, filled = a key sits at the playhead.
-- **Timeline**: drag the ruler to scrub; a row per layer, and for the selected
-  layer a row per animated property. Drag diamonds in time (snapped to frames);
-  a layer-row diamond moves every key of the layer at that time.
+- **Timeline**: one canvas, only the rows in sight drawn, so hundreds of
+  layers scroll and scrub at the display's rate. Rows follow the layer
+  tree (its folds, fold triangles and eyes too); each selected layer opens
+  onto a row per key list (`x`, `a1 offset`, `fx1 radius`, ...). Each layer
+  has a bar over the span it shows, `[start, end)` or the whole scene:
+  drag its body to slide it (`start`, `end` and every key and note of the
+  layer move together, one undo step, so it plays the same, later; keys
+  are in scene time, so a slide must carry them), its ends to trim
+  (`start`/`end` only; trimmed ends show brighter). Alt+[ / Alt+] trim the
+  selected layers' in or out point to the playhead. Several selected bars
+  slide and trim together. Drag the ruler to scrub; drag diamonds in time
+  (a layer-row diamond moves every key of the layer at that time).
+  Everything dragged keeps to the frame grid and snaps, within 6 px, to
+  the playhead, the scene's ends, other keys and other layers' in and out
+  points (hold Ctrl, or switch **Snap** off, to keep to frames only).
+  Ctrl+wheel (or a pinch) zooms about the pointer, Shift+wheel or a
+  sideways swipe pans, the wheel scrolls the rows, a middle-button drag
+  pans; F fits the scene. The ruler's ticks follow the zoom, down to
+  single frames (`1s 12f`). The graph editor below shares the same time
+  view, so its keys line up with the timeline's.
 - **Graph**: the selected property's value over time, sampled from the WASM
   evaluator itself. Drag keys (time and value) and their handles; the
   opposite handle follows to keep the tangent smooth unless Alt is held.
