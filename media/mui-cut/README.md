@@ -205,18 +205,48 @@ left out, it is the default. Lengths are project pixels.
 | `directional_blur` | `length` 40, `angle` 0 (degrees) |
 | `levels` | `tint` #ffffff, `black` 0, `white` 1, `gamma` 1, `saturation` 1, `tint_amount` 0 |
 | `plasma` | `color_a`, `color_b`, `scale` 120, `speed` 1: a generator |
+| `glow` | `mode` (`bloom`/`outer`/`inner`/`neon`), `color` #ffffff, `threshold` 0.6, `knee` 0.2, `radius` 32, `intensity` 1, `tint` 0, `falloff` 0.5 |
+| `light_wrap` | `radius` 24, `intensity` 1: layers only |
+| `glass` | `tint` #ffffff, `frost` 12, `refraction` 18, `bevel` 24, `dispersion` 0, `tint_amount` 0.08, `saturation` 1.2, `highlight` 0.6, `light_angle` -50, `shadow` 0.25, `grain` 0.02: layers only |
 
 - A **generator** (`plasma`) ignores the colours under it and draws a field
   from position and time; the layer's shape, antialiasing and opacity are its
   mask. A "shader layer" (✦ in the editor) is a rect whose stack starts with
   one.
+- **Glow** works in linear light and blurs through a pyramid (each level
+  half the last, down and back up, in half floats), so its falloff is wide
+  and soft at any `radius`, with no rings; the result is dithered.
+  `mode` is a plain string, not keyable; left out, `bloom`.
+  - `bloom`: what is brighter than `threshold` (0..1, eased in over
+    `knee`) spreads and adds light; on a scene, the classic camera bloom.
+  - `outer` / `inner`: a glow from the shape's edge, behind it or inside
+    it; `intensity` 1 is full strength at the edge.
+  - `neon`: half a tight core, half a wide halo, the tube burning white.
+  - `tint` 0 glows in the source's own colour, 1 in `color` (`inner` is
+    always `color`). `falloff` 0.5 weighs every scale alike (a long tail);
+    more is wider and hazier, less tighter. `radius` keys smoothly.
+- **Backdrop effects** (`light_wrap`, `glass`) read what is composited under
+  their layer so far, so they go on layers (a scene's stack refuses them).
+  `light_wrap` screens the backdrop's blur over the layer's edges, as when
+  a cut-out sits in a lit shot. `glass` draws its layer's shape (its
+  coverage; its colours are not drawn) as a pane: what is under it blurred
+  by `frost`, bent through a rounded edge `bevel` pixels deep (`refraction`
+  pixels at the edge, negative to bend the other way; `dispersion` splits
+  the colours), `saturation` and `tint` / `tint_amount`, a rim and an inner
+  shadow lit from `light_angle` (degrees, 0 from the right, -90 from
+  above), and `grain`. In 3D a layer's stack runs in its own texture, with
+  nothing under it: glass there is its tint and rim.
 - Effects are deterministic: noise is hashed from the pixel, the effect's
   `seed` and the output frame number, never the clock. The subframes of a
   motion-blurred frame share their frame's grain; displacement moves with
   `t`, so it blurs.
 - The CPU renderer (`--cpu`, or a browser without WebGPU) draws without
-  effects and says so.
-- `examples/effects.cut.json` uses every one.
+  effects and says so; a `glass` layer draws there as its `tint` at
+  `tint_amount` (at least a sixth), a clear pane rather than its fill.
+- `examples/effects.cut.json` uses the first eight;
+  `examples/looks2d.cut.json` animates glow, light wrap and glass. The
+  editor's effect picker has them as looks too: Soft bloom, Neon, Outer
+  glow, Frosted glass, Liquid glass.
 
 ### Variables and variants
 
@@ -919,7 +949,9 @@ announces edits made by someone else.
 - `src/pool.rs`: the frame-parallel CPU export.
 - `src/fx.rs`, `src/fx/`: the effect schema (`EFFECTS`), evaluation, and
   the GPU passes: one WGSL file per effect after a shared `prelude.wgsl`,
-  ping-ponged between textures behind `GpuCanvas::draw`.
+  ping-ponged between textures behind `GpuCanvas::draw`; `glow`,
+  `light_wrap` and `glass` also run `pyramid_down`/`pyramid_up.wgsl`, and
+  the backdrop ones read the frame composited so far.
 - `src/vars.rs`: variables, variants and binding resolution, on the JSON
   before it becomes a `Project`.
 - `src/encode.rs`: the ffmpeg encoder plan (codec, VAAPI trial, container).
@@ -936,7 +968,7 @@ announces edits made by someone else.
   state, `doc.js`/`patch.js`/`edit.js` the document, its patches, undo and
   saving; `lists.js`, `sources.js`, `inspector.js`, `viewport.js`,
   `timeline.js`, `graph.js`, `export.js`, `transport.js`, `sound.js` and
-  `agent.js` the rest. `worker.js` draws the viewport, one frame in flight at a time, and runs
+  `agent.js` the rest; `looks.js` the effect picker's looks. `worker.js` draws the viewport, one frame in flight at a time, and runs
   exports; `mp4.js` muxes them.
 - `src/shutter.rs`: the float shutter, shared by `Offline` and the export.
 - `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
