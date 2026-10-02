@@ -1,5 +1,5 @@
-import { getp, numPaths, scene, selectedLayers, tidy, tracks } from './doc.js';
-import { begin, changed, edit, end } from './edit.js';
+import { deleteKey, getp, insertKey, isKeys, keyAt, layer, numPaths, round, scene, selectedLayers, setp, tidy, tracks } from './doc.js';
+import { begin, changed, edit, end, status } from './edit.js';
 import { picking, refreshLists, select } from './lists.js';
 import { snapOn } from './snap.js';
 import { drawSound } from './sound.js';
@@ -37,7 +37,12 @@ export function setView(t0, t1) {
 }
 export function zoomAt(time, k) { const v = view(); setView(time - (time - v.t0) * k, time + (v.t1 - time) * k); }
 const panBy = dt => { const v = view(); setView(v.t0 + dt, v.t1 + dt); };
-export const fitView = (t0 = 0, t1 = dur()) => { const pad = Math.max((t1 - t0) * 0.04, 2 * frame()); setView(t0 - pad, t1 + pad); };
+export const fitView = (t0 = 0, t1 = dur()) => { const pad = Math.max((t1 - t0) * 0.04, 0.25); setView(t0 - pad, t1 + pad); };
+// F: the selected keys framed, else the whole scene.
+export function frameKeys() {
+  const ts = S.selKeys.map(s => s.k.t);
+  if (ts.length) fitView(Math.min(...ts), Math.max(...ts)); else fitView();
+}
 // The wheel over a time axis: Ctrl (or a pinch) zooms about the pointer,
 // Shift or a sideways swipe pans; a plain wheel goes to `scroll` (the
 // timeline's rows), else pans too.
@@ -117,7 +122,7 @@ export function drawTimeline() {
   scrollY = Math.max(0, Math.min(scrollY, rows.length * ROW - (h - RULER) + 8));
   const c = tctx; c.setTransform(dpr, 0, 0, dpr, 0, 0); c.clearRect(0, 0, w, h);
   c.font = '11px Inter, sans-serif'; c.textBaseline = 'middle';
-  const d = dur(), tk = ticks(w), picked = new Set(S.selKey ? [S.selKey.k] : []);
+  const d = dur(), tk = ticks(w), picked = new Set(S.selKeys.map(s => s.k));
   const first = Math.floor(scrollY / ROW), last = Math.min(rows.length, Math.ceil((scrollY + h - RULER) / ROW));
   // The track area: rows, the scene's ends shaded past, a line a second.
   c.save(); c.beginPath(); c.rect(LABEL, RULER, w - LABEL, h - RULER); c.clip();
@@ -156,6 +161,11 @@ export function drawTimeline() {
   c.fillStyle = C.handleLine;
   for (const m of markers()) c.fillRect(Math.round(xAt(m.t, w)), RULER, 1, h - RULER);
   if (snapLine != null) { c.fillStyle = C.guide; c.fillRect(Math.round(xAt(snapLine, w)), RULER, 1, h - RULER); }
+  if (drag?.box) {
+    const [x0, y0, x1, y1] = drag.box;
+    c.fillStyle = C.marquee; c.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+    c.strokeStyle = C.sel; c.lineWidth = 1; c.strokeRect(Math.min(x0, x1) + .5, Math.min(y0, y1) + .5, Math.abs(x1 - x0), Math.abs(y1 - y0));
+  }
   c.restore();
   // The label column: fold triangle, kind, name, eye; key lists indented.
   c.save(); c.beginPath(); c.rect(0, RULER, LABEL, h - RULER); c.clip();
@@ -283,18 +293,29 @@ tl.onpointerdown = e => {
     const l = h.row.l;
     if (h.twist) { setFolded(l.id, !isFolded(l.id)); refreshLists(); return; }
     if (h.eye) { edit(() => { if (l.hidden) delete l.hidden; else l.hidden = true; }); return; }
+    // Shift/Ctrl on a key list's name adds its keys to the selection (and
+    // its curve to the graph), or takes them out.
+    if (h.row.p && picking(e)) { pickKeys(rowKeys(h.row), 'toggle'); return; }
     select(l.id, h.row.p ? undefined : picking(e));
     if (h.row.p && numPaths(l).includes(h.row.p)) S.prop = h.row.p;
     refresh(); return;
   }
   if (h.zone === 'key') {
-    // A layer-row diamond carries every key of the layer at that time.
+    // A layer-row diamond stands for every key of the layer at that time.
+    // A click picks it (Shift/Ctrl adds or takes out); a drag moves every
+    // picked key, Alt held at the press scales their times about the
+    // playhead.
     const group = h.row.p ? [h.key] : rowKeys(h.row).filter(k => Math.abs(k.k.t - h.key.k.t) < 1e-9);
-    select(h.row.l.id);
-    S.selKey = h.key; if (numPaths(h.row.l).includes(h.key.p)) S.prop = h.key.p;
-    const skip = new Set(group.map(k => k.k));
-    drag = { keys: group.map(k => ({ ...k, t0: k.k.t })), grab: h.key.k.t, x0: h.x, targets: snapTargets(skip) };
-    begin(); refresh(); return;
+    const had = isPicked(group), keep = S.selKeys;
+    if (!S.selection.includes(h.row.l.id)) { select(h.row.l.id); S.selKeys = keep; }
+    if (picking(e)) { pickKeys(group, 'toggle'); if (had) return; }
+    else if (!had) pickKeys(group);
+    // The one clicked is the primary: the graph follows it.
+    S.selKeys = [...S.selKeys.filter(s => s.k !== h.key.k), h.key];
+    if (h.key.l === layer() && numPaths(h.row.l).includes(h.key.p)) S.prop = h.key.p;
+    const skip = new Set(S.selKeys.map(s => s.k));
+    drag = { keys: S.selKeys.map(k => ({ ...k, t0: k.k.t })), grab: h.key.k.t, x0: h.x, scale: e.altKey, targets: snapTargets(skip) };
+    begin(); S.need = true; return;
   }
   if (h.zone === 'start' || h.zone === 'end' || h.zone === 'bar') {
     const ls = barLayers(h.row.l, e);
@@ -305,8 +326,34 @@ tl.onpointerdown = e => {
       targets: snapTargets(h.zone === 'bar' ? skip : new Set(), all) };
     begin(); refresh(); return;
   }
-  if (h.zone === 'track' || h.zone === 'empty') { drag = { scrub: true, targets: snapTargets(new Set(), new Set(), false) }; scrub(h.x, e); }
+  // From empty track: a box that picks the keys it holds (Shift/Ctrl
+  // adds to the picked ones).
+  if ((h.zone === 'track' || h.zone === 'empty') && h.x >= LABEL) {
+    drag = { box: [h.x, h.y, h.x, h.y], keep: picking(e) ? S.selKeys : [] };
+    S.selKeys = [...drag.keep]; S.need = true;
+  }
 };
+const isPicked = ks => ks.every(k => S.selKeys.some(s => s.k === k.k));
+// `ks` the picked keys, or (`how` 'toggle') added to them or taken out.
+function pickKeys(ks, how) {
+  const on = new Set(ks.map(k => k.k));
+  if (how !== 'toggle') S.selKeys = [...ks];
+  else if (isPicked(ks)) S.selKeys = S.selKeys.filter(s => !on.has(s.k));
+  else S.selKeys = [...S.selKeys.filter(s => !on.has(s.k)), ...ks];
+  S.need = true;
+}
+// The keys inside box [x0, y0, x1, y1] (canvas pixels): on a layer row,
+// every key of the layer at a time inside it.
+function boxKeys([x0, y0, x1, y1]) {
+  const [ax, bx, ay, by] = [Math.min(x0, x1), Math.max(x0, x1), Math.min(y0, y1), Math.max(y0, y1)], out = new Map();
+  rows.forEach((r, i) => {
+    const y = RULER + i * ROW - scrollY + ROW / 2;
+    if (y < ay || y > by) return;
+    // A key on a layer row and its list's row is one key.
+    for (const k of rowKeys(r)) { const x = xAt(k.k.t); if (x >= ax && x <= bx) out.set(k.k, k); }
+  });
+  return [...out.values()];
+}
 function scrub(x, e) {
   const t = snapDelta([0], timeAt(x), drag.targets, e.ctrlKey || e.metaKey);
   seek(Math.max(0, Math.min(dur(), t)));
@@ -325,11 +372,19 @@ tl.onpointermove = e => {
     drag.marker.t = tidy(Math.max(0, Math.min(dur(), t)));
     changed(); return;
   }
+  if (drag.box) { drag.box[2] = x; drag.box[3] = e.clientY - tl.getBoundingClientRect().top; S.tlNeed = true; return; }
   if (drag.keys) {
-    const d = snapDelta([drag.grab], timeAt(x) - timeAt(drag.x0), drag.targets, free);
-    const lists = new Set();
-    for (const { l, p, k, t0 } of drag.keys) { k.t = tidy(Math.max(0, t0 + d)); lists.add(getp(l, p)); }
-    for (const ks of lists) ks.sort((a, b) => a.t - b.t);
+    const fps = S.R.fps, P = S.t, G = drag.grab, lists = new Set();
+    let d = snapDelta([G], timeAt(x) - timeAt(drag.x0), drag.targets, free);
+    d = Math.max(d, -Math.min(...drag.keys.map(k => k.t0)));
+    // Alt: about the playhead, each key's distance from it times the
+    // grabbed key's.
+    const f = drag.scale && Math.abs(G - P) > 1e-9 ? Math.max(0, (G + d - P) / (G - P)) : null;
+    for (const { l, p, k, t0 } of drag.keys) {
+      k.t = f === null ? tidy(t0 + d) : tidy(Math.max(0, Math.round((P + (t0 - P) * f) * fps) / fps));
+      lists.add(getp(l, p));
+    }
+    for (const ks of lists) if (isKeys(ks)) ks.sort((a, b) => a.t - b.t);
     changed(); return;
   }
   drag.moved = true;
@@ -363,6 +418,7 @@ tl.onpointermove = e => {
 tl.onpointerup = () => {
   const was = drag;
   drag = null; snapLine = null; S.tlNeed = true;
+  if (was?.box) { pickKeys([...was.keep, ...boxKeys(was.box).filter(k => !was.keep.some(s => s.k === k.k))]); return; }
   if (!was || was.pan || was.scrub) return;
   if (was.marker) markers().sort((a, b) => a.t - b.t);
   end();
@@ -423,3 +479,61 @@ export function trimToPlayhead(side) {
   });
 }
 new ResizeObserver(() => { S.tlNeed = true; }).observe(wrap);
+
+// ---------- the picked keys: delete, copy and paste at the playhead, ease
+export function deleteKeys() {
+  if (!S.selKeys.length) return false;
+  const ks = S.selKeys;
+  edit(() => { for (const s of ks) deleteKey(s); S.selKeys = []; });
+  return true;
+}
+// Ctrl+C: the picked keys, times from the first. Ctrl+V puts them at the
+// playhead: on the selected layer when they came from one layer and it
+// has those properties, else back on their own layers; a key on the same
+// frame is replaced.
+let clip = null;
+export function copyKeys() {
+  if (!S.selKeys.length) return false;
+  const t0 = Math.min(...S.selKeys.map(s => s.k.t));
+  clip = S.selKeys.map(({ l, p, k }) => ({ id: l.id, p, k: structuredClone(k), dt: k.t - t0 }));
+  status(`copied ${clip.length} key${clip.length > 1 ? 's' : ''}`);
+  return true;
+}
+export function pasteKeys() {
+  if (!clip) return false;
+  // Onto the selected layer when it has every property the keys are of.
+  const to = layer(), one = new Set(clip.map(c => c.id)).size === 1 && to && clip.every(c => getp(to, c.p) !== undefined) ? to : null;
+  const t = Math.round(S.t * S.R.fps) / S.R.fps, put = [];
+  edit(() => {
+    for (const c of clip) {
+      const l = one ?? scene().layers.find(o => o.id === c.id);
+      if (!l) continue;
+      let keys = getp(l, c.p);
+      if (!isKeys(keys)) { try { setp(l, c.p, keys = []); } catch { continue; } }
+      const k = { ...structuredClone(c.k), t: tidy(t + c.dt) }, i = keyAt(keys, k.t);
+      if (i >= 0) keys.splice(i, 1, k); else insertKey(keys, k);
+      put.push({ l, p: c.p, k });
+    }
+    S.selKeys = put;
+  });
+  return true;
+}
+// F9, easy ease: each picked key a bezier with flat handles a third of
+// the way to its neighbours (the default handles), in and out; a linear
+// key before it turns bezier with a handle along its line, so only the
+// picked key's side eases.
+export function easeKeys() {
+  if (!S.selKeys.length) return;
+  edit(() => {
+    for (const { l, p, k } of S.selKeys) {
+      const keys = getp(l, p);
+      if (!isKeys(keys)) continue;
+      k.interp = 'bezier'; delete k.in; delete k.out;
+      const prev = keys[keys.indexOf(k) - 1];
+      if (prev?.interp === 'linear' && typeof prev.v === 'number') {
+        prev.interp = 'bezier';
+        prev.out = [round((k.t - prev.t) / 3), round((k.v - prev.v) / 3)];
+      }
+    }
+  });
+}

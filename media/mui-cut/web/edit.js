@@ -103,7 +103,13 @@ export async function adopt(m, why) {
   if (both.length) notice(m.by === me ? `your edit replaced a newer change to ${where(both)}` : `${who(m.by)} changed ${where(both)} too; the later edit wins`);
   S.si = Math.min(S.si, S.doc.scenes.length - 1);
   S.selection = S.selection.filter(id => scene().layers.some(l => l.id === id.split('#')[0]));
-  if (S.selKey && !(scene().layers.includes(S.selKey.l) && getp(S.selKey.l, S.selKey.p)?.includes?.(S.selKey.k))) S.selKey = null;
+  // Picked keys found again (a merge may have put new objects in place):
+  // the same layer, list and time.
+  S.selKeys = S.selKeys.flatMap(s => {
+    const l = scene().layers.find(o => o.id === s.l.id), keys = l && getp(l, s.p);
+    const k = Array.isArray(keys) && (keys.includes(s.k) ? s.k : keys.find(k => Math.abs(k.t - s.k.t) < 1e-6));
+    return k ? [{ l, p: s.p, k }] : [];
+  });
   S.need = true;
   await loadAssets();
   if (why) status(why);

@@ -822,24 +822,37 @@ explodes two levels in 3D: panels, then their controls.
   are in scene time, so a slide must carry them), its ends to trim
   (`start`/`end` only; trimmed ends show brighter). Alt+[ / Alt+] trim the
   selected layers' in or out point to the playhead. Several selected bars
-  slide and trim together. Drag the ruler to scrub; drag diamonds in time
-  (a layer-row diamond moves every key of the layer at that time).
+  slide and trim together. Drag the ruler to scrub.
+  **Keys**: click a diamond to pick it (a layer-row diamond stands for
+  every key of the layer at that time), Shift/Ctrl-click to add or take
+  out, Shift/Ctrl-click a key list's name for all its keys, or drag a box
+  from empty track across any rows. Dragging a picked key moves every
+  picked key; Alt held at the press scales their timing about the
+  playhead instead. Ctrl+C copies the picked keys, Ctrl+V pastes them at
+  the playhead (onto the selected layer when they came from one layer and
+  it has those properties, else back on their own layers). F9 eases the
+  picked keys (bezier, flat handles; a linear key before one turns bezier
+  along its line). Delete removes them.
   Everything dragged keeps to the frame grid and snaps, within 6 px, to
   the playhead, markers, the scene's ends, other keys and other layers'
   in and out points (hold Ctrl, or switch **Snap** off, to keep to frames only).
   Ctrl+wheel (or a pinch) zooms about the pointer, Shift+wheel or a
   sideways swipe pans, the wheel scrolls the rows, a middle-button drag
-  pans; F fits the scene.
+  pans; F fits the picked keys (else the scene).
   **Markers** (`scene.markers`) are flags on the ruler: M adds one at the
   playhead, drag one to move it, double-click it to name it, click it and
   Delete to remove it; drags of anything snap to them too. The ruler's ticks follow the zoom, down to
   single frames (`1s 12f`). The graph editor below shares the same time
   view, so its keys line up with the timeline's.
-- **Graph**: the selected property's value over time, sampled from the WASM
-  evaluator itself. Drag keys (time and value) and their handles; the
-  opposite handle follows to keep the tangent smooth unless Alt is held.
-  Double-click to add a key. Hold / Linear / Bezier / Reset handles act on the
-  selected key.
+- **Graph**: the graphed property's value over time, sampled from the WASM
+  evaluator itself, plus the curve of every key list a picked key is on,
+  each in its own colour with a legend (several curves are each fitted to
+  the height; the numbers are the first's). Drag keys (time and value) and
+  their handles (every key's with one curve, the picked keys' with
+  several); the opposite handle follows to keep the tangent smooth unless
+  Alt is held. Click picks a key, Shift/Ctrl-click takes one out.
+  Double-click adds a key to the graphed property. Hold / Linear / Bezier /
+  Reset handles act on every picked key.
 - **Export** (header): renders every scene at project size in the viewport's
   worker and saves an MP4. On WebGPU each frame goes through the same shutter
   as `render --mb` (motion-blur samples in the dialog), effects included; on
@@ -1063,7 +1076,7 @@ same reason.
 
 - The panels are HTML/canvas 2D, not MUI widgets; only the viewport is drawn
   by MUI/Vello.
-- No zoom or pan in the timeline and graph; one property at a time in the graph.
+- The graph has no box select; pick keys in the timeline for that.
 - Images are PNG only; text is Inter only, and breaks only at `\n` (no wrap
   to `width`).
 - SVG and Lottie keep solid fills and strokes, group opacity and transforms;

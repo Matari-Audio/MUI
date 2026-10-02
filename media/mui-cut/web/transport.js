@@ -1,12 +1,12 @@
 import { report } from './agent.js';
-import { deleteKey, layer, snap, toggleKey } from './doc.js';
+import { layer, snap, toggleKey } from './doc.js';
 import { edit, load, noticeEffects, showError } from './edit.js';
 import { drawGraph } from './graph.js';
 import { refreshInspector, updateInspector } from './inspector.js';
 import { deleteSelected, duplicateSelected, refreshLists, select, selectAll } from './lists.js';
 import { transport } from './sound.js';
 import { $, S, clock, pacing } from './state.js';
-import { addMarker, deleteMarker, drawTimeline, fitView, trimToPlayhead } from './timeline.js';
+import { addMarker, copyKeys, deleteKeys, deleteMarker, drawTimeline, easeKeys, frameKeys, pasteKeys, trimToPlayhead } from './timeline.js';
 import { groupSelected, precompose, ungroupSelected } from './tree.js';
 import { BEAUTY_MAX, beauty, drawViewport, refining } from './viewport.js';
 
@@ -39,15 +39,18 @@ addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') seek(snap(Math.max(0, Math.min(S.R.scenes[S.si].duration, S.t + (e.key === 'ArrowRight' ? 1 : -1) / S.R.fps))));
   else if (e.key === 'Home') seek(0);
   else if ((e.key === 'Delete' || e.key === 'Backspace') && deleteMarker()) { /* the picked marker */ }
-  else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selKey) edit(() => deleteKey(S.selKey));
+  else if ((e.key === 'Delete' || e.key === 'Backspace') && deleteKeys()) { /* the picked keys */ }
   else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
   else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); }
   else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === 'c') { e.preventDefault(); precompose(); }
   else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); if (e.shiftKey) ungroupSelected(); else groupSelected(); }
-  else if (e.key === 'Escape') select(null);
+  else if (e.key === 'Escape') { S.selKeys = []; select(null); }
   else if (e.altKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) { e.preventDefault(); trimToPlayhead(e.code === 'BracketLeft' ? 'start' : 'end'); }
-  else if (!mod && !e.altKey && e.key.toLowerCase() === 'f') fitView();
+  else if (!mod && !e.altKey && e.key.toLowerCase() === 'f') frameKeys();
+  else if (e.key === 'F9') { e.preventDefault(); easeKeys(); }
+  else if (mod && !e.shiftKey && e.key.toLowerCase() === 'c') { if (copyKeys()) e.preventDefault(); }
+  else if (mod && !e.shiftKey && e.key.toLowerCase() === 'v') { if (pasteKeys()) e.preventDefault(); }
   else if (!mod && !e.altKey && e.key.toLowerCase() === 'm') addMarker();
   else if (e.key.toLowerCase() === 'k' && layer()) edit(() => toggleKey(layer(), S.prop));
 });
