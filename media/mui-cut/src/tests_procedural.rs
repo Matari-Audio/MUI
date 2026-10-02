@@ -200,3 +200,86 @@ fn an_effector_weighs_copies_by_place_and_sweeps() {
         [0., 0., 0., 100., 50., 0., 0., 0., 0.]
     );
 }
+
+#[test]
+fn distance_order_ripples_and_stagger_ease_spreads_delays() {
+    // A 3x3 grid, 1 s stagger, ranked by distance from the middle: the
+    // centre goes first, the four edges together, then the four corners.
+    let delays = |extra: &str| -> Vec<f64> {
+        let p = scene_of(&format!(
+            r##"{{"id":"d","kind":"duplicator","count":9,"columns":3,"spacing_x":10,"spacing_y":10,
+                "animators":[{{"stagger":1{extra},"y":[{{"t":0,"v":0,"interp":"linear"}},{{"t":100,"v":100}}]}}]}}"##
+        ));
+        // y = t - delay at t = 50: each copy's delay.
+        let fx = p.scenes[0].layers[0].at(50.).fx;
+        fx.iter()
+            .map(|f| ((50. - f.y) * 1e6).round() / 1e6)
+            .collect()
+    };
+    let d = 8. / 2f64.sqrt(); // an edge: distance 10 of the corners' 10 sqrt 2, times 8
+    let d = (d * 1e6).round() / 1e6;
+    assert_eq!(
+        delays(r#","order":"distance""#),
+        [8., d, 8., d, 0., d, 8., d, 8.]
+    );
+    // From an effector's centre instead: the top-left copy first.
+    let tl = delays(r#","order":"distance","falloff":{"x":-10,"y":-10,"radius":1000}"#);
+    assert_eq!((tl[0], tl[8]), (0., 8.));
+    // Eased: the last rank still waits 8 s, the middle ones less (`in`).
+    let lin = delays("");
+    let eased = delays(r#","stagger_ease":"in""#);
+    assert_eq!((eased[0], eased[8]), (0., 8.));
+    assert_eq!(lin[4], 4.);
+    assert_eq!(eased[4], 2.);
+}
+
+#[test]
+fn a_group_staggers_its_children_one_after_another() {
+    // Three squares under a group with a cascade: each child rises in on
+    // its own clock, 0.5 s behind the one before.
+    let p = scene_of(
+        r##"{"id":"g","kind":"group","x":200,"y":100,
+             "animators":[{"stagger":0.5,"y":60,"opacity":0,
+                           "amount":[{"t":0,"v":1,"interp":"linear"},{"t":0.5,"v":0}]}]},
+            {"id":"a","kind":"rect","parent":"g","x":-100,"width":20,"height":20},
+            {"id":"b","kind":"rect","parent":"g","width":20,"height":20},
+            {"id":"c","kind":"rect","parent":"g","x":100,"width":20,"height":20}"##,
+    );
+    let f = eval(&p, &p.scenes[0], 0.5);
+    let y = |id: &str| f.layers.iter().find(|l| l.id == id).unwrap().y;
+    let o = |id: &str| f.layers.iter().find(|l| l.id == id).unwrap().opacity;
+    // At 0.5 s: `a` has landed, `b` just starts, `c` waits.
+    assert_eq!((y("a"), o("a")), (100., 1.));
+    assert_eq!((y("b"), o("b")), (160., 0.));
+    assert_eq!((y("c"), o("c")), (160., 0.));
+    let f = eval(&p, &p.scenes[0], 0.75);
+    let y = |id: &str| f.layers.iter().find(|l| l.id == id).unwrap().y;
+    assert!(y("b") > 100. && y("b") < 160. && y("c") == 160.);
+    // Drawn: at 0.5 s only `a` shows.
+    let px = px(&p, 0.5);
+    assert_eq!(at(&px, 100, 100), [255; 4]);
+    assert_eq!(at(&px, 200, 160), [0, 0, 0, 255]);
+    // The group's animator props are listed, so they key in the editor.
+    let props: Vec<String> = p.scenes[0].layers[0]
+        .props()
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+    assert!(
+        props.contains(&"animators.0.stagger".to_owned()),
+        "{props:?}"
+    );
+}
+
+#[test]
+fn the_group_presets_build_and_round_trip() {
+    for name in ["cascade_children", "ripple"] {
+        let a = Animator::preset(name, 0.2, 0.6).unwrap();
+        let back: Animator = serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+        assert_eq!(a, back);
+    }
+    assert_eq!(
+        Animator::preset("ripple", 0., 1.).unwrap().order,
+        Order::Distance
+    );
+}

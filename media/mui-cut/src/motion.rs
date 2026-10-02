@@ -63,6 +63,11 @@ pub enum Order {
     Reverse,
     /// A shuffle fixed by `seed`: the same every frame and every render.
     Random,
+    /// Nearest first, from the effector's centre (`falloff`), else the
+    /// layer's origin: a unit's rank is its distance, scaled so the
+    /// farthest is last, so units equally far start together (a ripple).
+    /// Text glyphs have no place: forward.
+    Distance,
 }
 
 fn z() -> Anim<f64> {
@@ -118,6 +123,11 @@ pub struct Animator {
     /// Seconds each rank waits after the one before it.
     #[serde(default = "z", skip_serializing_if = "is_z")]
     pub stagger: Anim<f64>,
+    /// How the stagger's delays spread over the ranks: `linear` evenly;
+    /// `in` bunches the first ranks together and spaces the last, `out`
+    /// the reverse. The last rank still waits `(n - 1) * stagger`.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub stagger_ease: Ease,
     #[serde(default = "z", skip_serializing_if = "is_z")]
     pub x: Anim<f64>,
     #[serde(default = "z", skip_serializing_if = "is_z")]
@@ -305,8 +315,10 @@ impl Animator {
 
     /// A classic setup as JSON-ready data, keyed over `[t0, t0 + dur]`:
     /// `typewriter` (characters appear one by one), `cascade` (characters
-    /// rise and fade in, one after another), `cascade_out` (its exit) or `pop` (copies or glyphs scale
-    /// up from nothing in a random order).
+    /// rise and fade in, one after another), `cascade_out` (its exit), `pop` (copies or glyphs scale
+    /// up from nothing in a random order), `cascade_children` (a group's
+    /// children rise in one after another) or `ripple` (units pop in
+    /// nearest the effector's centre first).
     pub fn preset(name: &str, t0: f64, dur: f64) -> Option<Self> {
         use crate::{Interp, Key};
         let keys = |a: f64, b: f64, interp: Interp| {
@@ -352,6 +364,28 @@ impl Animator {
                 opacity: z(),
                 ..Self::default()
             },
+            // On a group: each child rises in after the one before.
+            "cascade_children" => Self {
+                amount: keys(1., 0., Interp::Bezier),
+                stagger: Anim::Value(0.12),
+                y: Anim::Value(60.),
+                opacity: z(),
+                ..Self::default()
+            },
+            // Units pop in as a ripple from the effector's centre reaches
+            // them (its field covers everything; drag the centre).
+            "ripple" => Self {
+                order: Order::Distance,
+                amount: keys(1., 0., Interp::Bezier),
+                stagger: Anim::Value(0.05),
+                scale: z(),
+                falloff: Some(Effector {
+                    radius: Anim::Value(4000.),
+                    softness: z(),
+                    ..serde_json::from_str("{}").expect("every field has a default")
+                }),
+                ..Self::default()
+            },
             "pop" => Self {
                 order: Order::Random,
                 amount: keys(1., 0., Interp::Bezier),
@@ -363,15 +397,57 @@ impl Animator {
         })
     }
 
+    /// Each unit's rank, 0..n-1 (fractional for `distance`), at `t`.
+    fn ranks(&self, n: usize, t: f64, pos: &[[f64; 2]]) -> Vec<f64> {
+        if self.order != Order::Distance || pos.len() != n {
+            let order = match self.order {
+                Order::Distance => Order::Forward,
+                o => o,
+            };
+            return ranks(order, self.seed, n)
+                .into_iter()
+                .map(|r| r as f64)
+                .collect();
+        }
+        let c = self
+            .falloff
+            .as_ref()
+            .map_or([0., 0.], |e| [e.x.at(t), e.y.at(t)]);
+        let d: Vec<f64> = pos
+            .iter()
+            .map(|p| (p[0] - c[0]).hypot(p[1] - c[1]))
+            .collect();
+        let max = d.iter().copied().fold(0., f64::max);
+        d.iter()
+            .map(|&d| {
+                if max > 0. {
+                    d / max * (n - 1) as f64
+                } else {
+                    0.
+                }
+            })
+            .collect()
+    }
+
+    /// Seconds rank `r` of `n` waits at `t`.
+    fn delay(&self, r: f64, n: usize, t: f64) -> f64 {
+        let s = self.stagger.at(t);
+        if self.stagger_ease == Ease::Linear || n < 2 {
+            return r * s;
+        }
+        let last = (n - 1) as f64;
+        ease(self.stagger_ease, r / last) * last * s
+    }
+
     /// Each unit's weight at `t`, `n` units at `pos` (or none: text).
     fn weights(&self, n: usize, t: f64, pos: &[[f64; 2]]) -> Vec<f64> {
-        let ranks = ranks(self.order, self.seed, n);
+        let ranks = self.ranks(n, t, pos);
         ranks
             .iter()
             .enumerate()
             .map(|(u, &r)| {
-                let t = t - r as f64 * self.stagger.at(t);
-                let (lo, hi) = (r as f64 / n as f64, (r + 1) as f64 / n as f64);
+                let t = t - self.delay(r, n, t);
+                let (lo, hi) = (r / n as f64, (r + 1.) / n as f64);
                 let off = self.offset.at(t);
                 let (mut s, mut e) = (self.start.at(t) + off, self.end.at(t) + off);
                 if s > e {
@@ -395,13 +471,7 @@ impl Animator {
                         }
                     }
                 };
-                let w = match self.ease {
-                    Ease::Linear => w,
-                    Ease::In => w * w,
-                    Ease::Out => 1. - (1. - w) * (1. - w),
-                    Ease::InOut => w * w * (3. - 2. * w),
-                    Ease::Step => f64::from(u8::from(w >= 0.5)),
-                };
+                let w = ease(self.ease, w);
                 let field = match (&self.falloff, pos.get(u)) {
                     (Some(e), Some(&p)) => e.weight(p, t),
                     _ => 1.,
@@ -412,10 +482,21 @@ impl Animator {
     }
 }
 
-/// Unit `u`'s rank in `order`.
+/// `w` (0..1) through `e`.
+fn ease(e: Ease, w: f64) -> f64 {
+    match e {
+        Ease::Linear => w,
+        Ease::In => w * w,
+        Ease::Out => 1. - (1. - w) * (1. - w),
+        Ease::InOut => w * w * (3. - 2. * w),
+        Ease::Step => f64::from(u8::from(w >= 0.5)),
+    }
+}
+
+/// Unit `u`'s rank in `order` (`distance` is not ranked here).
 fn ranks(order: Order, seed: u32, n: usize) -> Vec<usize> {
     match order {
-        Order::Forward => (0..n).collect(),
+        Order::Forward | Order::Distance => (0..n).collect(),
         Order::Reverse => (0..n).rev().collect(),
         Order::Random => {
             let mut by: Vec<usize> = (0..n).collect();
@@ -487,14 +568,14 @@ pub(crate) fn apply_to(
         let units = unit_of(a.by);
         let n = units.iter().max().map_or(0, |m| m + 1);
         let w = a.weights(n, t, pos);
-        let ranks = ranks(a.order, a.seed, n);
+        let ranks = a.ranks(n, t, pos);
         for (f, &u) in fx.iter_mut().zip(&units) {
             let w = w[u];
             if w == 0. {
                 continue;
             }
             // The unit's own clock, as its weight used.
-            let t = t - ranks[u] as f64 * a.stagger.at(t);
+            let t = t - a.delay(ranks[u], n, t);
             // -1..1, fixed per unit, property and seed.
             let r =
                 |k: u64| (hash(a.seed, u as u64 * 8 + k) >> 11) as f64 / (1u64 << 52) as f64 - 1.;
@@ -936,4 +1017,51 @@ pub(crate) fn check_source(s: &crate::Scene, l: &crate::Layer) -> Result<(), Str
         ));
     }
     Ok(())
+}
+
+/// Every animator property by path on a layer (`animators.0.x`,
+/// `animators.0.falloff.radius`, `animators.0.fill`).
+pub(crate) fn props(animators: &[Animator]) -> Vec<(String, crate::Prop<'_>)> {
+    let mut out = Vec::new();
+    for (i, a) in animators.iter().enumerate() {
+        for (n, v) in a.nums() {
+            out.push((format!("animators.{i}.{n}"), crate::Prop::Num(v)));
+        }
+        out.push((format!("animators.{i}.fill"), crate::Prop::Color(&a.fill)));
+    }
+    out
+}
+
+/// Groups with animators: their units are their child layers, in scene
+/// order, each placed (for effectors and `distance`) at its own offset in
+/// the group. The offsets go onto the children's own transforms before
+/// parenting composes them, so a child's subtree follows it.
+pub(crate) fn group_units(scene: &crate::Scene, layers: &mut [crate::Drawn], t: f64) {
+    for (g, l) in scene.layers.iter().enumerate() {
+        if !matches!(l.kind, crate::Kind::Group) || l.animators.is_empty() {
+            continue;
+        }
+        let kids: Vec<usize> = (0..scene.layers.len())
+            .filter(|&c| c != g && scene.layers[c].parent == l.id)
+            .collect();
+        let n = kids.len();
+        let pos: Vec<[f64; 2]> = kids.iter().map(|&c| [layers[c].x, layers[c].y]).collect();
+        let fx = apply_to(
+            &l.animators,
+            n,
+            &|e| layers[kids[e]].fill,
+            t,
+            |_| (0..n).collect(),
+            &pos,
+        );
+        for (&c, f) in kids.iter().zip(fx) {
+            let d = &mut layers[c];
+            d.x += f.x;
+            d.y += f.y;
+            d.rotation += f.rotation;
+            d.scale *= f.scale;
+            d.opacity *= f.opacity;
+            d.fill = f.fill;
+        }
+    }
 }

@@ -281,8 +281,8 @@ have no meaning for a colour).
 
 ### Animators: per-glyph and per-copy motion
 
-`"animators": [...]` on a `text` or `duplicator` layer moves each glyph or
-copy on its own (After Effects' text animators, Cavalry's stagger). Every
+`"animators": [...]` on a `text`, `duplicator` or `group` layer moves each
+glyph, copy or child layer on its own (After Effects' text animators, Cavalry's stagger). Every
 number in one is keyable, and `mui-cut eval` lists the result per glyph or
 copy as `fx`.
 
@@ -295,8 +295,13 @@ copy as `fx`.
 
 - **Units**: `by` is `char`, `word` or `line` for text (spaces go with the
   word before them, newlines are not glyphs); a duplicator's units are its
-  copies. `order` ranks them `forward`, `reverse` or `random` (a shuffle
-  fixed by `seed`).
+  copies; a group's are its child layers (those whose `parent` it is), in
+  scene order, so a stagger plays separate layers one after another. A
+  child's offsets go onto its own transform before parenting, so what is
+  parented under it follows. `order` ranks them `forward`, `reverse`,
+  `random` (a shuffle fixed by `seed`) or `distance` (nearest first, from
+  the effector's centre or else the layer's origin; units equally far share
+  a rank, so a stagger ripples out; text falls back to `forward`).
 - **Selection**: unit `r` of `n` spans `[r/n, (r+1)/n]`; the range is
   `[start + offset, end + offset]`. `shape` `square` weighs a unit by how
   much of it the range covers; `ramp_up`, `ramp_down`, `triangle`, `round`
@@ -305,6 +310,9 @@ copy as `fx`.
   nothing, the typewriter's cut). `amount` multiplies it.
 - **Stagger**: each rank reads the whole animator (range, amount, values)
   at `t - rank * stagger`, so one set of keys plays unit after unit.
+  `stagger_ease` (`linear`, `in`, `out`, `in_out`, `step`) spreads those
+  delays unevenly: rank `r` of `n` waits `ease(r / (n - 1)) * (n - 1) *
+  stagger`, the last rank as long as before.
 - **Effector**: `"falloff": {"shape": "sphere", "x": 0, "y": 0, "radius":
   200, "softness": 100, "invert": false}` weighs each unit by where it
   sits, in the layer's own pixels around its origin (a copy's slot, a
@@ -331,7 +339,11 @@ copy as `fx`.
   towards its colour by its alpha. Animators stack in order.
 - **Presets** (the inspector's "+ animator"): `typewriter` (step ease,
   `start` 0 to 1, opacity 0), `cascade` (`amount` 1 to 0 with a 0.04 s
-  stagger, y 40, opacity 0), `pop` (random order, scale 0).
+  stagger, y 40, opacity 0), `pop` (random order, scale 0); on a group,
+  "Cascade children" (the cascade with a 0.12 s stagger: each child rises
+  in after the one before) and "Ripple from point" (on a duplicator or a
+  group: `distance` order from an effector at the origin, each unit
+  popping in as the ripple reaches it).
 
 ### Duplicators
 

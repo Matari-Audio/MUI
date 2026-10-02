@@ -877,6 +877,9 @@ impl Layer {
                         num(n, a);
                     }
                 }
+                if let Kind::Group = self.kind {
+                    out.extend(motion::props(&self.animators));
+                }
                 return out;
             }
             Kind::Model { .. } => {
@@ -980,12 +983,7 @@ impl Layer {
             out.push(("stroke".into(), Color(&self.stroke)));
         }
         if matches!(self.kind, Kind::Text { .. } | Kind::Duplicator { .. }) {
-            for (i, a) in self.animators.iter().enumerate() {
-                for (n, a) in a.nums() {
-                    out.push((format!("animators.{i}.{n}"), Num(a)));
-                }
-                out.push((format!("animators.{i}.fill"), Color(&a.fill)));
-            }
+            out.extend(motion::props(&self.animators));
         }
         if vector {
             for (i, d) in self.deformers.iter().enumerate() {
@@ -1432,6 +1430,7 @@ fn eval_in(project: &Project, scene: &Scene, t: f64, depth: usize) -> Frame {
         .iter()
         .map(|l| l.eval_at(t, project.fps, project.sample_rate))
         .collect();
+    motion::group_units(scene, &mut layers, t);
     place::compose(scene, &mut layers);
     for d in &mut layers {
         if let Kind::Text { font, .. } = &mut d.kind {
