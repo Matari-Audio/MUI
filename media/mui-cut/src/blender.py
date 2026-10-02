@@ -390,6 +390,7 @@ SOCKETS = (
     ("transmission", "Transmission Weight"),
     ("ior", "IOR"),
     ("dispersion", "Dispersion"),  # not in Blender 5.2's Principled BSDF
+    ("emission", "Emission Strength"),
 )
 
 
@@ -411,6 +412,13 @@ def surface(m, mats, slab):
     for k, name in SOCKETS:
         if k in first and name in bsdf.inputs:
             key_socket(bsdf.inputs[name], ((t, v[k]) for t, v in mats))
+    if "emission" in first and "Emission Color" in bsdf.inputs:
+        # It gives off its own colour.
+        base = bsdf.inputs["Base Color"]
+        if base.is_linked:
+            Lk.new(base.links[0].from_socket, bsdf.inputs["Emission Color"])
+        else:
+            bsdf.inputs["Emission Color"].default_value = base.default_value
     if "tint" in first:
         mix = N.new("ShaderNodeMix")
         mix.data_type = "RGBA"

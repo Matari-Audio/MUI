@@ -299,6 +299,10 @@ pub struct Material {
     pub ribbed: Relief,
     pub hammered: Relief,
     pub ripple: Relief,
+    /// The surface gives off its own colour, this times as bright as white
+    /// light on it would leave it, lit or in the dark: above 1 it feeds the
+    /// bloom. Opaque faces and models; glass ignores it.
+    pub emission: f32,
 }
 
 /// A pattern pressed into a glass face (see [`Material::ribbed`]).
@@ -330,6 +334,7 @@ impl Material {
         ribbed: Relief::NONE,
         hammered: Relief::NONE,
         ripple: Relief::NONE,
+        emission: 0.,
     };
     /// Whether it is drawn as glass.
     pub fn glass(&self) -> bool {
@@ -2412,7 +2417,12 @@ impl Stage {
                     m.tint[2].clamp(0., 1.),
                     f32::from(u8::from(slab)),
                 ],
-                [m.print.clamp(0., 1.), m.bevel.max(0.), 0., 0.],
+                [
+                    m.print.clamp(0., 1.),
+                    m.bevel.max(0.),
+                    0.,
+                    m.emission.max(0.),
+                ],
                 // A relief with no size is none.
                 [relief(m.ribbed), relief(m.hammered), relief(m.ripple), 0.],
                 [

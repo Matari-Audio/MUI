@@ -385,6 +385,11 @@ pub struct Material {
     /// to crossfade one into another.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub texture: Option<Texture>,
+    /// The layer gives off its own colour, this times as bright as white
+    /// light on it: lit or in the dark, above 1 feeding the bloom (a screen,
+    /// a lamp's shade). Opaque surfaces; glass ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission: Option<Anim<f64>>,
 }
 
 /// Patterns pressed into a glass face (see [`Material::texture`]).
@@ -446,6 +451,8 @@ pub struct Surface {
     pub hammered: Option<[f64; 2]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ripple: Option<[f64; 2]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emission: Option<f64>,
 }
 
 impl Material {
@@ -461,6 +468,7 @@ impl Material {
             ("dispersion", &self.dispersion),
             ("print", &self.print),
             ("bevel", &self.bevel),
+            ("emission", &self.emission),
         ]
         .into_iter()
         .filter_map(|(n, a)| a.as_ref().map(|a| (format!("material.{n}"), Num(a))))
@@ -498,6 +506,7 @@ impl Material {
             tint: self.tint.as_ref().map(|a| a.at(t)),
             print: num(&self.print).map(|v| v.clamp(0., 1.)),
             bevel: num(&self.bevel).map(|v| v.max(0.)),
+            emission: num(&self.emission).map(|v| v.max(0.)),
             ..self.reliefs_at(t)
         }
     }
@@ -538,6 +547,7 @@ impl Surface {
             ribbed: relief(self.ribbed, base.ribbed),
             hammered: relief(self.hammered, base.hammered),
             ripple: relief(self.ripple, base.ripple),
+            emission: f(self.emission, base.emission),
         }
     }
     /// `under` with the fields this sets replaced: a part's surface over
@@ -556,6 +566,7 @@ impl Surface {
             ribbed: self.ribbed.or(under.ribbed),
             hammered: self.hammered.or(under.hammered),
             ripple: self.ripple.or(under.ripple),
+            emission: self.emission.or(under.emission),
         }
     }
     /// Drawn as glass.

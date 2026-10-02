@@ -90,7 +90,7 @@ struct Draw {
     // a: 1 on a slab (light leaves parallel to how it came), 0 on a solid.
     tint: vec4f,
     // Glass: x print (the layer's dark is clear, its light is ink), y the
-    // bevel in world units.
+    // bevel in world units. w: emission, the colour given off (any surface).
     glass2: vec4f,
     // Glass pressed with a relief: the steepest slope of its reeds,
     // hammered dimples and ripples, and (`glass4`) their sizes.
@@ -666,6 +666,7 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
 
 @fragment fn fs_front(i: Cap) -> Out {
     var c = textureSample(tex, samp, i.uv);
+    let glow = c.rgb * d.glass2.w;
     let n = face_normal(i.world);
     var weight = vec3f(0.);
     let metal = d.flags.y;
@@ -677,6 +678,7 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
         c = vec4f(c.rgb * (1. - metal) * shade(i.world, n, d.flags.x, 0.).diffuse
             + weight * spec_fallback(reflect(-v, n), rough) * c.a, c.a);
     }
+    c = vec4f(c.rgb + glow, c.a);
     let o = mirrored(vec4f(c.rgb * d.size.w, c.a) * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
     return out_spec(o, i.world, n, weight * d.size.w, rough);
@@ -809,6 +811,7 @@ struct MeshV {
         c = base * (1. - metal) * (0.3 + 0.7 * ndl)
             + f0 * pow(max(dot(n, h), 0.), shine) * ndl * (shine + 8.) / 25.;
     }
+    c += base * d.glass2.w;
     let o = mirrored(vec4f(c, 1.) * d.edge.a * albedo.a, i.world);
     if (o.a < 0.004) { discard; }
     return out_spec(o, i.world, n, weight, rough);

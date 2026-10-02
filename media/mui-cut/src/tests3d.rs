@@ -1166,3 +1166,35 @@ fn bloom_makes_a_sun_in_frame_glow() {
         "glow round the sun: {bloomed} against {plain}"
     );
 }
+
+/// `material.emission`: a face in the dark gives off its own colour, and
+/// past 1 brighter than it (a model as well).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_emissive_face_glows_in_the_dark() {
+    let px = |emission: &str| {
+        let p = scene3d(&format!(
+            r##"{{"id":"amb","kind":"light","light":"ambient","intensity":0.02}},
+            {{"id":"r","kind":"rect","x":320,"y":180,"width":200,"height":120,"fill":"#4080c0",
+              "material":{{"roughness":1{emission}}}}}"##
+        ));
+        let mut g = offline(&p, Engine::Classic)?;
+        let f = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
+        let i = (180 * 640 + 320) * 4;
+        Some([f[i], f[i + 1], f[i + 2]])
+    };
+    let (Some(dark), Some(lit), Some(hot)) =
+        (px(""), px(r#","emission":1"#), px(r#","emission":4"#))
+    else {
+        return;
+    };
+    assert!(dark.iter().all(|&c| c < 30), "{dark:?}");
+    // Its own sRGB colour, give or take the dim ambient on top.
+    assert!(
+        lit.iter()
+            .zip([0x40, 0x80, 0xc0])
+            .all(|(&c, w)| c >= w && c < w + 24),
+        "{lit:?}"
+    );
+    assert!(hot[2] == 255 && hot[0] > lit[0] + 40, "{hot:?}");
+}
