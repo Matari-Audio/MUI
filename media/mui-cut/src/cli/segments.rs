@@ -16,6 +16,13 @@ pub fn base_key(p: &Project, project: &Path, settings: &str) -> Fnv {
     let mut h = Fnv::default();
     let _ = write!(h, "{}|{settings}|", env!("CARGO_PKG_VERSION"));
     let dir = project.parent().unwrap_or(Path::new("."));
+    // In a plugin's adapter, its layer draws from this build, not from
+    // manifests: the build's stamp stands for what it draws.
+    if crate::inproc::here()
+        && let Some(m) = std::env::current_exe().and_then(std::fs::metadata).ok()
+    {
+        let _ = write!(h, "{}|{:?}|", m.len(), m.modified().ok());
+    }
     for s in &p.scenes {
         for l in &s.layers {
             let file = match &l.kind {

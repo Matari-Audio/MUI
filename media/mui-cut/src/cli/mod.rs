@@ -1,13 +1,15 @@
 //! `mui-cut`: render, look at, tidy and serve a `*.cut.json` project.
 //!
-//!     mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--renderer R]
-//!     mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
-//!     mui-cut still  stage3d.cut.json --t 3 -o f.png --quality beauty [--samples 64]
-//!     mui-cut render promo.cut.json -o out/{name}.mp4 --variants all
-//!     mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
-//!     mui-cut fmt    demo.cut.json
-//!     mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
-//!     mui-cut add    ../KORREKT [--project demo.cut.json]
+//! ```text
+//! mui-cut render demo.cut.json -o out.mp4 [--scene NAME] [--mb N] [--size WxH] [--renderer R]
+//! mui-cut still  demo.cut.json --t 1.5 -o f.png [--scene NAME] [--size WxH] [--renderer R]
+//! mui-cut still  stage3d.cut.json --t 3 -o f.png --quality beauty [--samples 64]
+//! mui-cut render promo.cut.json -o out/{name}.mp4 --variants all
+//! mui-cut eval   demo.cut.json --t 1.5 [--scene NAME]
+//! mui-cut fmt    demo.cut.json
+//! mui-cut serve  demo.cut.json [--port 8740] [--web DIR]
+//! mui-cut add    ../KORREKT [--project demo.cut.json]
+//! ```
 
 mod audio;
 mod build;
