@@ -536,7 +536,8 @@ any parent's does, layer by layer: overlapping children each fade, they
 are not flattened first), so a group at opacity 0 hides its subtree. Its
 properties are `x`, `y`, `scale`, `rotation`, `opacity` (and `z`, `rx`,
 `ry` in 3D). To group layers in the editor, add a group layer and
-reparent each child to it (`Cut.reparent`), which keeps them in place.
+reparent each child to it (`Cut.reparent`), which keeps them in place;
+the editor's Ctrl+G does both.
 
 ### In and out points
 
@@ -776,11 +777,18 @@ explodes two levels in 3D: panels, then their controls.
   component layer (`show`) at its spot in the plugin (on the scene's
   whole plugin layer, if there is one). Clicking a row selects the layer
   or part that shows it, and selecting in the viewport highlights the row.
-- **Scenes / Layers** (left): switch scene, add a scene, add a rect, ellipse
-  or text, reorder or delete layers. Children nest under their parents:
-  drag a layer onto another to parent it, onto the list's empty space to
-  unparent it (or pick `parent` in the inspector); either keeps it where
-  it is. Deleting a parent hands its children to its own parent.
+- **Scenes / Layers** (left): switch scene, add a scene, add a layer of
+  any kind, reorder or delete layers. The layers are a tree, children
+  under their parents: ▾/▸ folds a branch (kept per project in the
+  browser, and shared with the timeline), the eye hides a layer and its
+  subtree (`hidden`). Drag a layer onto another's middle to parent it,
+  onto its top or bottom edge to put it (with its subtree) above or below
+  it among that layer's siblings, onto the list's empty space to unparent
+  it (or pick `parent` in the inspector); all keep it where it is.
+  Ctrl+G groups the selection: a `group` at the middle of their outlines,
+  under their common parent, the layers moved into it where they are;
+  Ctrl+Shift+G ungroups (the children go to the group's parent, the
+  group goes). Deleting a parent hands its children to its own parent.
 - **Reset to default** (inspector): a part back where the plugin puts it;
   a layer's transform keys and offsets cleared (to the frame's middle, or
   onto its parent), and a plugin's explode and part offsets. Undoable.

@@ -114,6 +114,17 @@ h2 .twist { border: 0; background: transparent; padding: 0 4px 0 0; color: var(-
 .tree .empty { color: var(--muted); padding: 2px 4px 6px 20px; }
 #left.drop { box-shadow: inset 0 0 0 1px var(--muted); }
 .list button.drop-on { border-color: var(--muted); }
+.list button.drop-above { box-shadow: inset 0 2px 0 var(--ink); }
+.list button.drop-below { box-shadow: inset 0 -2px 0 var(--ink); }
+/* Layer rows: fold triangle, kind, name, and the eye at the right. */
+#layers button[data-layer] { display: flex; align-items: center; }
+#layers .name { overflow: hidden; text-overflow: ellipsis; }
+#layers .twist { flex: 0 0 12px; color: var(--muted); text-align: center; }
+#layers .eye { margin-left: auto; padding-left: 6px; display: grid; place-items: center; color: var(--muted); opacity: .45; }
+#layers button:hover .eye, #layers button.off .eye { opacity: 1; }
+#layers .eye svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.2; }
+#layers .eye circle { fill: currentColor; stroke: none; }
+#layers button.off { color: var(--muted); font-style: italic; }
 #layers { min-height: 40px; padding-bottom: 16px; }
 
 /* Gutters: thin handles on the panels' edges, over everything. */
