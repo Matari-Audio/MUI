@@ -241,6 +241,19 @@ pub struct Scene {
     /// Run over the whole frame, after every layer.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub effects: Vec<fx::Effect>,
+    /// Named times on the scene's timeline, for people and agents to cue
+    /// to; nothing draws them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<Marker>,
+}
+
+/// A named time in a scene.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct Marker {
+    /// Seconds from the scene's start.
+    pub t: f64,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
 }
 
 impl Scene {

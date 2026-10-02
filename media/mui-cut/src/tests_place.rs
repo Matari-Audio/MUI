@@ -778,3 +778,22 @@ fn layers_show_between_start_and_end() {
         assert!(Project::load(&json).unwrap_err().contains("end"), "{bad}");
     }
 }
+
+/// Markers are data: they load and save one a line, as written.
+#[test]
+fn markers_round_trip() {
+    let json = r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,
+        "markers":[{"t":1.5,"name":"drop"},{"t":0.25}]}]}"#;
+    let p = Project::load(json).unwrap();
+    let m = &p.scenes[0].markers;
+    assert_eq!(
+        (m[0].t, m[0].name.as_str(), m[1].name.as_str()),
+        (1.5, "drop", "")
+    );
+    let saved = p.to_json();
+    assert!(
+        saved.contains(r#"{ "t": 1.5, "name": "drop" },"#),
+        "{saved}"
+    );
+    assert_eq!(Project::load(&saved).unwrap().to_json(), saved);
+}

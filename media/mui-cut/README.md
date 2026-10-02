@@ -136,7 +136,9 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
 ```
 
 - **Scenes** play in order; `t` in a key is seconds from the scene's start.
-  `background` defaults to `#101014`.
+  `background` defaults to `#101014`. `markers`, `[{"t": 1.5, "name":
+  "drop"}]`, are named times on the scene's timeline (the editor shows
+  them; nothing renders them).
 - **Layers** paint bottom first (later layers are on top). `id` is unique in
   its scene. `kind` is one of:
 
