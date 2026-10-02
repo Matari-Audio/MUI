@@ -122,3 +122,11 @@ h2 .twist { border: 0; background: transparent; padding: 0 4px 0 0; color: var(-
 .gutter[data-gutter="left"] { top: 40px; bottom: var(--bottom); left: calc(var(--left) - 3px); width: 6px; cursor: col-resize; }
 .gutter[data-gutter="right"] { top: 40px; bottom: var(--bottom); right: calc(var(--right) - 3px); width: 6px; cursor: col-resize; }
 .gutter[data-gutter="bottom"] { left: 0; right: 0; bottom: calc(var(--bottom) - 3px); height: 6px; cursor: row-resize; }
+
+/* The align bar in the header: icon buttons, then toggles. */
+#tools { display: flex; align-items: center; gap: 2px; margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--line); }
+#tools button[data-align] { width: 26px; height: 24px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; color: var(--muted); }
+#tools button[data-align]:hover { color: var(--hi); border-color: var(--line); }
+#tools svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
+#tools svg rect { fill: currentColor; stroke: none; opacity: .85; }
+#tools #align-canvas { margin-left: 6px; }

@@ -691,6 +691,11 @@ explodes two levels in 3D: panels, then their controls.
   `rotation`, `scale` are written at the playhead through its parent's
   transform, so children of a turned or scaled parent land where dragged.
   Several selected move from anywhere inside their box.
+- **Align and distribute** (header): line the selected layers' outlines
+  up on their bounds' left, centre, right, top, middle or bottom (one
+  layer, or with **Canvas** on, on the frame's), or even out the gaps
+  between three or more across or down. Alt+A/H/D, Alt+W/V/S, and
+  Alt+Shift+H/V.
 - **Selection**: Shift- or Ctrl-click (in the viewport, the layer list or
   the timeline's labels) adds a layer or takes it out; a drag from empty
   viewport space is a marquee (with Shift or Ctrl it adds); Ctrl+A selects
@@ -757,7 +762,7 @@ explodes two levels in 3D: panels, then their controls.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
   selected key (else the selected layers), arrows step a frame, Ctrl+Z /
   Ctrl+Shift+Z undo / redo, Ctrl+A select all, Ctrl+D duplicate, Esc
-  deselect.
+  deselect, Alt+A/H/D/W/V/S align, Alt+Shift+H/V distribute.
 
 Every finished gesture is PUT to the server, which validates it, writes the
 canonical JSON atomically and remembers what it wrote, so the watcher only

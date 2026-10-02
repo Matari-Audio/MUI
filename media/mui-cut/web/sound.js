@@ -105,7 +105,7 @@ $('#keys-toggle').onclick = async () => {
   } catch (e) { console.warn('MIDI', e); }
 };
 addEventListener('keydown', e => {
-  if (!keysOn || e.repeat || e.ctrlKey || e.metaKey || e.target.closest('input, select, textarea')) return;
+  if (!keysOn || e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.target.closest('input, select, textarea')) return;
   const k = e.key.toLowerCase(), i = KEYMAP.indexOf(k);
   if (k === 'z' || k === 'x') { octave = Math.max(24, Math.min(96, octave + (k === 'z' ? -12 : 12))); drawKeys(); }
   else if (i >= 0) playKey(octave + i, true);

@@ -127,6 +127,17 @@ export function moveGizmo(g, p, { shift, alt }) {
   }
 }
 
+// Each of `ls` moved by its project-pixel delta in `ds`, through its
+// parent's evaluated transform.
+export function shiftBy(ls, ds) {
+  const frame = JSON.parse(cut.frame(S.si, S.t) || 'null');
+  ls.forEach((l, i) => {
+    const p = l.parent && frame?.layers.find(d => d.id === l.parent);
+    const [dx, dy] = p ? rot(-rad(p.rotation), [ds[i][0] / (p.scale || 1e-9), ds[i][1] / (p.scale || 1e-9)]) : ds[i];
+    if (dx) setValue(l, 'x', round(now(l, 'x') + dx));
+    if (dy) setValue(l, 'y', round(now(l, 'y') + dy));
+  });
+}
 // The box, its handles and the rotate knob, over the selection outlines.
 export function drawGizmo(c, k, dpr, px) {
   const b = gizmoBox();
