@@ -805,7 +805,7 @@ fn render_one(
 ) -> Result<()> {
     let scenes: Vec<&Scene> = match args.get("scene") {
         Some(_) => vec![scene(p, args)?],
-        None => p.scenes.iter().collect(),
+        None => p.shots(),
     };
     let (w, h) = size(p, args)?;
     let r = settings(p, args)?;

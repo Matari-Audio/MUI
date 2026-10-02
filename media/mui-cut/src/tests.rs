@@ -1765,3 +1765,33 @@ fn a_glass_texture_keys_and_reaches_the_stage() {
         "b has the layer's"
     );
 }
+
+/// On the GPU a comp is one layer: its effects run over its scene's
+/// layers together (the per-layer offscreen pass), and its scene's
+/// background stays out.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn comp_effects_run_over_the_whole_scene() {
+    let p = Project::load(
+        r##"{"size":[160,90],"fps":30,"scenes":[
+            {"name":"a","duration":1,"background":"#000000","layers":[
+              {"id":"c","kind":"comp","scene":"b","x":80,"y":45,
+               "effects":[{"type":"levels","tint":"#ff0000","tint_amount":1}]}]},
+            {"name":"b","duration":1,"background":"#00ff00","layers":[
+              {"id":"l","kind":"rect","x":70,"y":45,"width":20,"height":20},
+              {"id":"r","kind":"rect","x":90,"y":45,"width":20,"height":20}]}]}"##,
+    )
+    .unwrap();
+    let f = eval(&p, &p.scenes[0], 0.);
+    let Some(img) = gpu_frames(&[vec![f]]).map(|mut v| v.remove(0)) else {
+        return;
+    };
+    for x in [70, 90] {
+        assert!(
+            near(px(&img, x, 45), [255, 0, 0, 255], 2),
+            "{:?}",
+            px(&img, x, 45)
+        );
+    }
+    assert_eq!(px(&img, 10, 10), [0, 0, 0, 255]);
+}
