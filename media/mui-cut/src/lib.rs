@@ -1480,7 +1480,7 @@ fn eval_in(project: &Project, scene: &Scene, t: f64, depth: usize) -> Frame {
             })
             .collect();
     }
-    motion::instance(scene, &mut layers, three);
+    motion::instance(scene, &mut layers, t, three);
     let view = three.then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,

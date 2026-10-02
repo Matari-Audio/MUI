@@ -289,7 +289,8 @@ copy as `fx`.
 ```json
 { "by": "char", "shape": "square", "ease": "linear", "order": "forward", "seed": 0,
   "start": 0, "end": 1, "offset": 0, "amount": 1, "stagger": 0,
-  "x": 0, "y": 0, "scale": 1, "rotation": 0, "opacity": 1, "tracking": 0, "fill": "#ffffff00" }
+  "x": 0, "y": 0, "scale": 1, "rotation": 0, "opacity": 1, "tracking": 0, "fill": "#ffffff00",
+  "jitter_x": 0, "jitter_y": 0, "jitter_rotation": 0, "jitter_scale": 0, "jitter_opacity": 0, "jitter_hue": 0 }
 ```
 
 - **Units**: `by` is `char`, `word` or `line` for text (spaces go with the
@@ -304,6 +305,14 @@ copy as `fx`.
   nothing, the typewriter's cut). `amount` multiplies it.
 - **Stagger**: each rank reads the whole animator (range, amount, values)
   at `t - rank * stagger`, so one set of keys plays unit after unit.
+- **Jitter**: `jitter_x`, `jitter_y` (pixels), `jitter_rotation`
+  (degrees), `jitter_scale` (a fraction) move, turn and scale each unit
+  by its own random amount up to that either way; `jitter_opacity` (a
+  fraction) fades it by up to that, and `jitter_hue` (degrees) turns its
+  fill's hue either way. The randomness is fixed per unit by `seed`, the
+  same every frame and render, and scaled by the unit's weight, so keying
+  `amount` fades it in. On instanced copies the hue turns each copied
+  layer's own fill.
 - **Values** are what a fully selected unit becomes: `x`, `y` and `rotation`
   are added (layer pixels, degrees), `scale` and `opacity` scale towards
   their value, `tracking` adds advance after the glyph, and `fill` tints

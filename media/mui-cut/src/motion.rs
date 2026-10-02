@@ -134,12 +134,45 @@ pub struct Animator {
     /// Tint towards this colour; its alpha is the tint's strength.
     #[serde(default = "clear", skip_serializing_if = "is_clear")]
     pub fill: Anim<Rgba>,
+    /// Per-unit randomness, fixed by `seed` (the same every frame and
+    /// render) and scaled by the unit's weight: each unit moves up to
+    /// `jitter_x`/`jitter_y` pixels and turns up to `jitter_rotation`
+    /// degrees either way, scales by up to `jitter_scale` (a fraction)
+    /// either way, fades by up to `jitter_opacity` (a fraction) and shifts
+    /// its fill's hue by up to `jitter_hue` degrees either way.
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub jitter_x: Anim<f64>,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub jitter_y: Anim<f64>,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub jitter_rotation: Anim<f64>,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub jitter_scale: Anim<f64>,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub jitter_opacity: Anim<f64>,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub jitter_hue: Anim<f64>,
 }
 
 /// The numeric properties of an [`Animator`], by JSON name.
-pub const ANIMATOR_PROPS: [&str; 11] = [
-    "start", "end", "offset", "amount", "stagger", "x", "y", "scale", "rotation", "opacity",
+pub const ANIMATOR_PROPS: [&str; 17] = [
+    "start",
+    "end",
+    "offset",
+    "amount",
+    "stagger",
+    "x",
+    "y",
+    "scale",
+    "rotation",
+    "opacity",
     "tracking",
+    "jitter_x",
+    "jitter_y",
+    "jitter_rotation",
+    "jitter_scale",
+    "jitter_opacity",
+    "jitter_hue",
 ];
 
 /// The serde defaults: selects everything, changes nothing.
@@ -163,6 +196,12 @@ impl Animator {
             "rotation" => &self.rotation,
             "opacity" => &self.opacity,
             "tracking" => &self.tracking,
+            "jitter_x" => &self.jitter_x,
+            "jitter_y" => &self.jitter_y,
+            "jitter_rotation" => &self.jitter_rotation,
+            "jitter_scale" => &self.jitter_scale,
+            "jitter_opacity" => &self.jitter_opacity,
+            "jitter_hue" => &self.jitter_hue,
             _ => return None,
         })
     }
@@ -319,18 +358,28 @@ pub fn apply(
     t: f64,
     unit_of: impl Fn(Unit) -> Vec<usize>,
 ) -> Vec<Fx> {
-    let mut fx = vec![
-        Fx {
+    apply_to(animators, elements, &|_| fill, t, unit_of)
+}
+
+/// [`apply`] with each element's own base fill.
+pub(crate) fn apply_to(
+    animators: &[Animator],
+    elements: usize,
+    fill: &dyn Fn(usize) -> Rgba,
+    t: f64,
+    unit_of: impl Fn(Unit) -> Vec<usize>,
+) -> Vec<Fx> {
+    let mut fx: Vec<Fx> = (0..elements)
+        .map(|e| Fx {
             x: 0.,
             y: 0.,
             scale: 1.,
             rotation: 0.,
             opacity: 1.,
             tracking: 0.,
-            fill,
-        };
-        elements
-    ];
+            fill: fill(e),
+        })
+        .collect();
     for a in animators {
         let units = unit_of(a.by);
         let n = units.iter().max().map_or(0, |m| m + 1);
@@ -343,11 +392,16 @@ pub fn apply(
             }
             // The unit's own clock, as its weight used.
             let t = t - ranks[u] as f64 * a.stagger.at(t);
-            f.x += w * a.x.at(t);
-            f.y += w * a.y.at(t);
+            // -1..1, fixed per unit, property and seed.
+            let r =
+                |k: u64| (hash(a.seed, u as u64 * 8 + k) >> 11) as f64 / (1u64 << 52) as f64 - 1.;
+            f.x += w * (a.x.at(t) + r(0) * a.jitter_x.at(t));
+            f.y += w * (a.y.at(t) + r(1) * a.jitter_y.at(t));
             f.scale *= 1. + w * (a.scale.at(t) - 1.);
-            f.rotation += w * a.rotation.at(t);
+            f.scale *= (1. + w * r(2) * a.jitter_scale.at(t)).max(0.);
+            f.rotation += w * (a.rotation.at(t) + r(3) * a.jitter_rotation.at(t));
             f.opacity *= (1. + w * (a.opacity.at(t) - 1.)).clamp(0., 1.);
+            f.opacity *= (1. - w * 0.5 * (r(4) + 1.) * a.jitter_opacity.at(t)).clamp(0., 1.);
             f.tracking += w * a.tracking.at(t);
             let tint = a.fill.at(t);
             let k = w * f64::from(tint.0[3]) / 255.;
@@ -356,9 +410,42 @@ pub fn apply(
                 &Rgba([tint.0[0], tint.0[1], tint.0[2], f.fill.0[3]]),
                 k,
             );
+            let hue = w * r(5) * a.jitter_hue.at(t);
+            if hue != 0. {
+                f.fill = hue_shift(f.fill, hue);
+            }
         }
     }
     fx
+}
+
+/// `c` with its hue turned by `deg` degrees (HSV; lightness and alpha kept).
+fn hue_shift(c: Rgba, deg: f64) -> Rgba {
+    let [r, g, b, a] = c.0.map(|v| f64::from(v) / 255.);
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let d = max - min;
+    if d <= 0. {
+        return c;
+    }
+    let h = if max == r {
+        ((g - b) / d).rem_euclid(6.)
+    } else if max == g {
+        (b - r) / d + 2.
+    } else {
+        (r - g) / d + 4.
+    };
+    let h = (h * 60. + deg).rem_euclid(360.) / 60.;
+    let x = d * (1. - (h.rem_euclid(2.) - 1.).abs());
+    let (r, g, b) = match h as u32 {
+        0 => (d, x, 0.),
+        1 => (x, d, 0.),
+        2 => (0., d, x),
+        3 => (0., x, d),
+        4 => (x, 0., d),
+        _ => (d, 0., x),
+    };
+    let byte = |v: f64| ((v + min) * 255.).round().clamp(0., 255.) as u8;
+    Rgba([byte(r), byte(g), byte(b), (a * 255.).round() as u8])
 }
 
 /// Each char's unit index (newlines skipped: they are not glyphs) for `by`.
@@ -597,7 +684,7 @@ fn subtree(scene: &crate::Scene, s: usize, skip: &[usize]) -> Vec<usize> {
 /// (ids `dup/copy/layer`). Hiding sources then draw nothing themselves. A
 /// duplicator whose source holds another one runs after it, so copies of
 /// copies nest.
-pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], three: bool) {
+pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], t: f64, three: bool) {
     use crate::{Kind, place::Xf};
     let src = |i: usize| match &scene.layers[i].kind {
         Kind::Duplicator { source, .. } if !source.is_empty() => {
@@ -668,6 +755,19 @@ pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], three:
                         )
                     })
                     .collect();
+                // Tints and hue jitter recolour each copied layer from its
+                // own fill.
+                let m = members.len().max(1);
+                let animators = &scene.layers[i].animators;
+                let fills = animators
+                    .iter()
+                    .any(|a| !is_clear(&a.fill) || !is_z(&a.jitter_hue))
+                    .then(|| {
+                        let n = slots.len() * m;
+                        apply_to(animators, n, &|e| members[e % m].fill, t, |_| {
+                            (0..n).map(|e| e / m).collect()
+                        })
+                    });
                 for (c, ((p, turn), f)) in slots.iter().zip(&layers[i].fx).enumerate() {
                     if f.opacity <= 0. || f.scale == 0. {
                         continue;
@@ -680,8 +780,11 @@ pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], three:
                         opacity: f.opacity,
                         ..Xf::FRAME
                     });
-                    for m in &members {
+                    for (mi, m) in members.iter().enumerate() {
                         let mut d = (*m).clone();
+                        if let Some(fills) = &fills {
+                            d.fill = fills[c * members.len() + mi].fill;
+                        }
                         crate::place::rebase(&mut d, &from, &copy, three);
                         d.opacity = d.opacity.min(1.);
                         d.id = format!("{}/{c}/{}", layers[i].id, m.id);

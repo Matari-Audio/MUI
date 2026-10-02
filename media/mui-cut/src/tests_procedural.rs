@@ -103,3 +103,42 @@ fn instanced_copies_take_their_animators_and_nest() {
             .is_empty()
     );
 }
+
+#[test]
+fn jitter_is_seeded_bounded_and_recolours_instances() {
+    let row = |seed: u32| {
+        scene_of(&format!(
+            r##"{{"id":"d","kind":"duplicator","layout":"linear","count":40,"spacing_x":0,"x":200,"y":100,"fill":"#ff0000",
+                "animators":[{{"seed":{seed},"jitter_x":10,"jitter_rotation":30,"jitter_scale":0.5,"jitter_opacity":1,"jitter_hue":120}}]}}"##
+        ))
+    };
+    let fx = |p: &Project| p.scenes[0].layers[0].at(0.).fx;
+    let (a, b) = (fx(&row(1)), fx(&row(2)));
+    // The same every time, another shuffle with another seed.
+    assert_eq!(a, fx(&row(1)));
+    assert_ne!(a, b);
+    for f in &a {
+        assert!(f.x.abs() <= 10. && f.rotation.abs() <= 30.);
+        assert!((0.5..=1.5).contains(&f.scale) && (0. ..=1.).contains(&f.opacity));
+        assert_eq!(f.y, 0.);
+    }
+    // Spread both ways, and hues round red both ways (red stays the max
+    // or turns towards green or blue).
+    assert!(a.iter().any(|f| f.x < -5.) && a.iter().any(|f| f.x > 5.));
+    assert!(a.iter().any(|f| f.fill.0[1] > 100) && a.iter().any(|f| f.fill.0[2] > 100));
+    // An instanced copy is recoloured from its own fill.
+    let p = scene_of(
+        r##"{"id":"s","kind":"rect","width":20,"height":20,"fill":"#00ff00"},
+            {"id":"d","kind":"duplicator","source":"s","count":1,"x":200,"y":100,
+             "animators":[{"jitter_hue":120,"seed":3}]}"##,
+    );
+    let d = &eval(&p, &p.scenes[0], 0.).layers[1];
+    let f = d.comp[0].fill.0;
+    assert_ne!(f, [0, 255, 0, 255]);
+    // Turned, not faded: still fully saturated and opaque.
+    assert_eq!(
+        (f[..3].iter().max(), f[..3].iter().min(), f[3]),
+        (Some(&255), Some(&0), 255)
+    );
+    assert_eq!(at(&px(&p, 0.), 200, 100), f);
+}
