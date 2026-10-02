@@ -932,7 +932,7 @@ fn one(
     path: &BezPath,
     transform: Affine,
 ) -> Result<(), Error> {
-    if let Paint::Vector { vector, fit } = &p.paint {
+    if let Paint::Vector { vector, fit, .. } = &p.paint {
         return vector_paint(canvas, vector, *fit, path, transform);
     }
     // Needs the list before it; see `backdrop`. A caller without one (a
@@ -1392,6 +1392,7 @@ mod snapshot {
         struct Source {
             requests: std::sync::Mutex<Vec<(u32, u32)>>,
             images: [mui_scene::Image; 2],
+            revision: std::sync::atomic::AtomicU64,
         }
         impl mui_scene::RasterSource for Source {
             fn prepared_image(
@@ -1406,19 +1407,23 @@ mod snapshot {
                     .find(|i| i.width == width && i.height == height)
                     .cloned())
             }
+            fn revision(&self) -> u64 {
+                self.revision.load(std::sync::atomic::Ordering::Acquire)
+            }
             fn retained_bytes(&self) -> usize {
                 0
             }
         }
         let source = Arc::new(Source {
             requests: std::sync::Mutex::new(Vec::new()),
+            revision: std::sync::atomic::AtomicU64::new(0),
             images: [(20, 15), (40, 30)].map(|(w, h)| {
                 mui_scene::Image::rgba(w, h, [255, 0, 0, 128].repeat((w * h) as usize)).unwrap()
             }),
         });
         let vector = Arc::new(mui_scene::Vector::filtered(10., 10., source.clone()).unwrap());
         let scene = resolve(
-            &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector, Fit::Fill)))
+            &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector.clone(), Fit::Fill)))
                 .offered(Size::new(20., 15.)),
         )
         .unwrap();
@@ -1444,6 +1449,18 @@ mod snapshot {
             assert_eq!(center.a, 128);
         }
         assert_eq!(*source.requests.lock().unwrap(), [(20, 15), (40, 30)]);
+        source
+            .revision
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        let ready_scene = resolve(
+            &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector, Fit::Fill)))
+                .offered(Size::new(20., 15.)),
+        )
+        .unwrap();
+        assert_ne!(
+            scene.paint, ready_scene.paint,
+            "ready pixels on same vector Arc must invalidate retained GPU paint"
+        );
         #[cfg(feature = "gpu-effects")]
         {
             let mut encoded = vello::Scene::new();
