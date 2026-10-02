@@ -151,9 +151,11 @@ struct Motion {
     /// Whole layer, from and back to its own values: `fade_in`,
     /// `fade_out`, `rise_in` / `rise_out` (fade while moving up by
     /// `distance`), `slide_in` / `slide_out` (from / to `dir`), `pop_in` /
-    /// `pop_out` (scale with a little overshoot). Per glyph (text) or copy
-    /// (duplicator), as an animator: `typewriter`, `cascade` (rise in one
-    /// after another), `cascade_out`, `pop` (random order).
+    /// `pop_out` (scale with a little overshoot). Per glyph (text), copy
+    /// (duplicator) or child (group), as an animator: `typewriter`,
+    /// `cascade` (rise in one after another), `cascade_out`, `pop` (random
+    /// order), `cascade_children` (a group's children, slower), `ripple`
+    /// (nearest the origin first).
     preset: String,
     /// Start, seconds into the scene.
     t: f64,
@@ -534,7 +536,7 @@ fn tools() -> Vec<Value> {
         tool::<KeyArgs>("key", "Add or replace one keyframe on a layer property."),
         tool::<Motion>(
             "motion",
-            "Key a named motion onto a layer: fade_in/out, rise_in/out, slide_in/out, pop_in/out (the whole layer, eased, back to its own values) or typewriter, cascade, cascade_out, pop (per glyph or copy).",
+            "Key a named motion onto a layer: fade_in/out, rise_in/out, slide_in/out, pop_in/out (the whole layer, eased, back to its own values) or typewriter, cascade, cascade_out, pop, cascade_children, ripple (per glyph, copy or group child).",
         ),
         tool::<Batch>(
             "batch",
@@ -1714,11 +1716,14 @@ fn motion(layer: &mut serde_json::Map<String, Value>, m: &Motion, fps: f64) -> R
     let t1 = grid(t0 + d);
     let name = m.preset.as_str();
     // Per glyph / per copy: an animator, as the editor's presets.
-    if matches!(name, "typewriter" | "cascade" | "cascade_out" | "pop") {
+    if matches!(
+        name,
+        "typewriter" | "cascade" | "cascade_out" | "pop" | "cascade_children" | "ripple"
+    ) {
         let kind = layer.get("kind").and_then(Value::as_str).unwrap_or("");
-        if !matches!(kind, "text" | "duplicator") {
+        if !matches!(kind, "text" | "duplicator" | "group") {
             return Err(format!(
-                "`{name}` moves glyphs or copies: the layer is a {kind}, not text or a duplicator"
+                "`{name}` moves glyphs, copies or children: the layer is a {kind}, not text, a duplicator or a group"
             ));
         }
         let mut a = crate::Animator::preset(name, t0, d).ok_or("no such preset")?;
@@ -1824,7 +1829,9 @@ fn motion(layer: &mut serde_json::Map<String, Value>, m: &Motion, fps: f64) -> R
                         "typewriter",
                         "cascade",
                         "cascade_out",
-                        "pop"
+                        "pop",
+                        "cascade_children",
+                        "ripple"
                     ]
                 )
             ));
@@ -2254,7 +2261,7 @@ mod tests {
     fn motion_errors_say_what_would_work() {
         let mut l = layer(json!({"id": "l", "kind": "rect"}));
         let e = motion(&mut l, &mo("cascade", 0., 1.), 30.).unwrap_err();
-        assert!(e.contains("not text or a duplicator"), "{e}");
+        assert!(e.contains("not text, a duplicator or a group"), "{e}");
         let e = motion(&mut l, &mo("fade_inn", 0., 1.), 30.).unwrap_err();
         assert!(e.contains("did you mean `fade_in`"), "{e}");
         let mut m = mo("slide_in", 0., 1.);
