@@ -33,7 +33,7 @@
           "x": [
             {
               "t": 0.0,
-              "v": 372.0,
+              "v": 588.0,
               "interp": "bezier"
             },
             {
@@ -78,7 +78,7 @@
             },
             {
               "t": 11.9833,
-              "v": 1176.0,
+              "v": 1152.0,
               "interp": "hold"
             },
             {
@@ -120,7 +120,7 @@
           "y": [
             {
               "t": 0.0,
-              "v": 712.0,
+              "v": 652.0,
               "interp": "bezier"
             },
             {
@@ -150,22 +150,22 @@
             },
             {
               "t": 8.0,
-              "v": 568.0,
+              "v": 592.0,
               "interp": "bezier"
             },
             {
               "t": 9.9833,
-              "v": 568.0,
+              "v": 592.0,
               "interp": "hold"
             },
             {
               "t": 10.0,
-              "v": 388.0,
+              "v": 400.0,
               "interp": "bezier"
             },
             {
               "t": 11.9833,
-              "v": 388.0,
+              "v": 400.0,
               "interp": "hold"
             },
             {
@@ -180,12 +180,12 @@
             },
             {
               "t": 14.0,
-              "v": 424.0,
+              "v": 448.0,
               "interp": "bezier"
             },
             {
               "t": 15.9833,
-              "v": 424.0,
+              "v": 448.0,
               "interp": "hold"
             },
             {
@@ -294,12 +294,12 @@
           "distance": [
             {
               "t": 0.0,
-              "v": 980,
+              "v": 2300,
               "interp": "bezier"
             },
             {
               "t": 3.7,
-              "v": 860,
+              "v": 1080,
               "interp": "bezier"
             },
             {
@@ -324,22 +324,22 @@
             },
             {
               "t": 8.0,
-              "v": 2000,
+              "v": 2350,
               "interp": "bezier"
             },
             {
               "t": 9.9833,
-              "v": 1900,
+              "v": 2200,
               "interp": "hold"
             },
             {
               "t": 10.0,
-              "v": 860,
+              "v": 1250,
               "interp": "bezier"
             },
             {
               "t": 11.9833,
-              "v": 820,
+              "v": 1150,
               "interp": "hold"
             },
             {
@@ -354,12 +354,12 @@
             },
             {
               "t": 14.0,
-              "v": 900,
+              "v": 1250,
               "interp": "bezier"
             },
             {
               "t": 15.9833,
-              "v": 840,
+              "v": 1120,
               "interp": "hold"
             },
             {
@@ -381,12 +381,12 @@
           "rx": [
             {
               "t": 0.0,
-              "v": 9,
+              "v": 7,
               "interp": "bezier"
             },
             {
               "t": 3.7,
-              "v": 6,
+              "v": 5,
               "interp": "bezier"
             },
             {
@@ -411,22 +411,22 @@
             },
             {
               "t": 8.0,
-              "v": -8,
+              "v": -11,
               "interp": "bezier"
             },
             {
               "t": 9.9833,
-              "v": -6,
+              "v": -9,
               "interp": "hold"
             },
             {
               "t": 10.0,
-              "v": -4,
+              "v": -7,
               "interp": "bezier"
             },
             {
               "t": 11.9833,
-              "v": -3,
+              "v": -5,
               "interp": "hold"
             },
             {
@@ -441,12 +441,12 @@
             },
             {
               "t": 14.0,
-              "v": -3,
+              "v": -6,
               "interp": "bezier"
             },
             {
               "t": 15.9833,
-              "v": -3,
+              "v": -5,
               "interp": "hold"
             },
             {
@@ -468,12 +468,12 @@
           "ry": [
             {
               "t": 0.0,
-              "v": 28,
+              "v": 34,
               "interp": "bezier"
             },
             {
               "t": 3.7,
-              "v": 15,
+              "v": 17,
               "interp": "bezier"
             },
             {
@@ -498,22 +498,22 @@
             },
             {
               "t": 8.0,
-              "v": 18,
+              "v": 22,
               "interp": "bezier"
             },
             {
               "t": 9.9833,
-              "v": 11,
+              "v": 14,
               "interp": "hold"
             },
             {
               "t": 10.0,
-              "v": -24,
+              "v": -32,
               "interp": "bezier"
             },
             {
               "t": 11.9833,
-              "v": -18,
+              "v": -22,
               "interp": "hold"
             },
             {
@@ -528,12 +528,12 @@
             },
             {
               "t": 14.0,
-              "v": 6,
+              "v": 14,
               "interp": "bezier"
             },
             {
               "t": 15.9833,
-              "v": 2,
+              "v": 8,
               "interp": "hold"
             },
             {
@@ -642,12 +642,12 @@
           "aperture": [
             {
               "t": 0.0,
-              "v": 22,
+              "v": 7,
               "interp": "bezier"
             },
             {
               "t": 3.7,
-              "v": 20,
+              "v": 16,
               "interp": "bezier"
             },
             {
@@ -682,12 +682,12 @@
             },
             {
               "t": 10.0,
-              "v": 16,
+              "v": 11,
               "interp": "bezier"
             },
             {
               "t": 11.9833,
-              "v": 16,
+              "v": 11,
               "interp": "hold"
             },
             {
@@ -702,12 +702,12 @@
             },
             {
               "t": 14.0,
-              "v": 12,
+              "v": 10,
               "interp": "bezier"
             },
             {
               "t": 15.9833,
-              "v": 12,
+              "v": 10,
               "interp": "hold"
             },
             {
@@ -757,17 +757,17 @@
           "intensity": [
             {
               "t": 0,
-              "v": 1.0499999999999998,
+              "v": 1.3299999999999998,
               "interp": "bezier"
             },
             {
               "t": 1.0,
-              "v": 1.5,
+              "v": 1.9,
               "interp": "bezier"
             },
             {
               "t": 4.0,
-              "v": 1.5,
+              "v": 1.9,
               "interp": "bezier",
               "out": [
                 0.12,
@@ -776,52 +776,52 @@
             },
             {
               "t": 4.5,
-              "v": 0.45,
+              "v": 0.7,
               "interp": "bezier"
             },
             {
               "t": 6.5,
-              "v": 0.45,
+              "v": 0.7,
               "interp": "bezier"
             },
             {
               "t": 7.9,
-              "v": 1.7999999999999998,
+              "v": 2.28,
               "interp": "bezier"
             },
             {
               "t": 8.0,
-              "v": 2.6,
+              "v": 3.0,
               "interp": "bezier"
             },
             {
               "t": 8.5,
-              "v": 1.5,
+              "v": 1.9,
               "interp": "bezier"
             },
             {
               "t": 16.0,
-              "v": 1.5,
+              "v": 1.9,
               "interp": "bezier"
             },
             {
               "t": 16.06,
-              "v": 2.6,
+              "v": 3.0,
               "interp": "bezier"
             },
             {
               "t": 16.9,
-              "v": 1.5,
+              "v": 1.9,
               "interp": "bezier"
             },
             {
               "t": 19.2,
-              "v": 1.5,
+              "v": 1.9,
               "interp": "bezier"
             },
             {
               "t": 20.0,
-              "v": 0.44999999999999996,
+              "v": 0.57,
               "interp": "bezier"
             }
           ],
@@ -832,88 +832,6 @@
           "kind": "light",
           "type": "ambient",
           "fill": "#8fa0c4",
-          "intensity": [
-            {
-              "t": 0,
-              "v": 0.21,
-              "interp": "bezier"
-            },
-            {
-              "t": 1.0,
-              "v": 0.3,
-              "interp": "bezier"
-            },
-            {
-              "t": 4.0,
-              "v": 0.3,
-              "interp": "bezier",
-              "out": [
-                0.12,
-                0
-              ]
-            },
-            {
-              "t": 4.5,
-              "v": 0.2,
-              "interp": "bezier"
-            },
-            {
-              "t": 6.5,
-              "v": 0.2,
-              "interp": "bezier"
-            },
-            {
-              "t": 7.9,
-              "v": 0.36,
-              "interp": "bezier"
-            },
-            {
-              "t": 8.0,
-              "v": 0.45,
-              "interp": "bezier"
-            },
-            {
-              "t": 8.5,
-              "v": 0.3,
-              "interp": "bezier"
-            },
-            {
-              "t": 16.0,
-              "v": 0.3,
-              "interp": "bezier"
-            },
-            {
-              "t": 16.06,
-              "v": 0.45,
-              "interp": "bezier"
-            },
-            {
-              "t": 16.9,
-              "v": 0.3,
-              "interp": "bezier"
-            },
-            {
-              "t": 19.2,
-              "v": 0.3,
-              "interp": "bezier"
-            },
-            {
-              "t": 20.0,
-              "v": 0.09,
-              "interp": "bezier"
-            }
-          ]
-        },
-        {
-          "id": "pool-red",
-          "kind": "light",
-          "type": "point",
-          "fill": "#ff1547",
-          "x": 120.0,
-          "y": 120.0,
-          "z": -500.0,
-          "range": 1900.0,
-          "softness": 3.0,
           "intensity": [
             {
               "t": 0,
@@ -936,12 +854,12 @@
             },
             {
               "t": 4.5,
-              "v": 0.35,
+              "v": 0.32,
               "interp": "bezier"
             },
             {
               "t": 6.5,
-              "v": 0.35,
+              "v": 0.32,
               "interp": "bezier"
             },
             {
@@ -951,7 +869,7 @@
             },
             {
               "t": 8.0,
-              "v": 1.3,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
@@ -966,7 +884,7 @@
             },
             {
               "t": 16.06,
-              "v": 1.3,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
@@ -982,6 +900,178 @@
             {
               "t": 20.0,
               "v": 0.135,
+              "interp": "bezier"
+            }
+          ]
+        },
+        {
+          "id": "rim",
+          "kind": "light",
+          "fill": "#9fd8ff",
+          "rx": 24.0,
+          "ry": [
+            {
+              "t": 0,
+              "v": 160.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 150.0,
+              "interp": "bezier"
+            }
+          ],
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.84,
+              "interp": "bezier"
+            },
+            {
+              "t": 1.0,
+              "v": 1.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": 1.2,
+              "interp": "bezier",
+              "out": [
+                0.12,
+                0
+              ]
+            },
+            {
+              "t": 4.5,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.5,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9,
+              "v": 1.44,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 2.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.5,
+              "v": 1.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 1.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.06,
+              "v": 2.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.9,
+              "v": 1.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.2,
+              "v": 1.2,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.36,
+              "interp": "bezier"
+            }
+          ],
+          "softness": 2.0
+        },
+        {
+          "id": "pool-red",
+          "kind": "light",
+          "type": "point",
+          "fill": "#ff1547",
+          "x": 120.0,
+          "y": 120.0,
+          "z": -500.0,
+          "range": 1900.0,
+          "softness": 3.0,
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.5599999999999999,
+              "interp": "bezier"
+            },
+            {
+              "t": 1.0,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": 0.8,
+              "interp": "bezier",
+              "out": [
+                0.12,
+                0
+              ]
+            },
+            {
+              "t": 4.5,
+              "v": 0.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.5,
+              "v": 0.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9,
+              "v": 0.96,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 1.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.5,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.06,
+              "v": 1.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.9,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.2,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.24,
               "interp": "bezier"
             }
           ]
@@ -999,17 +1089,17 @@
           "intensity": [
             {
               "t": 0,
-              "v": 0.315,
+              "v": 0.5599999999999999,
               "interp": "bezier"
             },
             {
               "t": 1.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 4.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier",
               "out": [
                 0.12,
@@ -1018,52 +1108,52 @@
             },
             {
               "t": 4.5,
-              "v": 0.35,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
               "t": 6.5,
-              "v": 0.35,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
               "t": 7.9,
-              "v": 0.54,
+              "v": 0.96,
               "interp": "bezier"
             },
             {
               "t": 8.0,
-              "v": 1.3,
+              "v": 1.8,
               "interp": "bezier"
             },
             {
               "t": 8.5,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 16.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 16.06,
-              "v": 1.3,
+              "v": 1.8,
               "interp": "bezier"
             },
             {
               "t": 16.9,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 19.2,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 20.0,
-              "v": 0.135,
+              "v": 0.24,
               "interp": "bezier"
             }
           ]
@@ -1081,17 +1171,17 @@
           "intensity": [
             {
               "t": 0,
-              "v": 0.315,
+              "v": 0.5599999999999999,
               "interp": "bezier"
             },
             {
               "t": 1.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 4.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier",
               "out": [
                 0.12,
@@ -1100,52 +1190,52 @@
             },
             {
               "t": 4.5,
-              "v": 0.35,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
               "t": 6.5,
-              "v": 0.35,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
               "t": 7.9,
-              "v": 0.54,
+              "v": 0.96,
               "interp": "bezier"
             },
             {
               "t": 8.0,
-              "v": 1.3,
+              "v": 1.8,
               "interp": "bezier"
             },
             {
               "t": 8.5,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 16.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 16.06,
-              "v": 1.3,
+              "v": 1.8,
               "interp": "bezier"
             },
             {
               "t": 16.9,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 19.2,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 20.0,
-              "v": 0.135,
+              "v": 0.24,
               "interp": "bezier"
             }
           ]
@@ -1163,17 +1253,17 @@
           "intensity": [
             {
               "t": 0,
-              "v": 0.315,
+              "v": 0.5599999999999999,
               "interp": "bezier"
             },
             {
               "t": 1.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 4.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier",
               "out": [
                 0.12,
@@ -1182,52 +1272,52 @@
             },
             {
               "t": 4.5,
-              "v": 0.35,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
               "t": 6.5,
-              "v": 0.35,
+              "v": 0.6,
               "interp": "bezier"
             },
             {
               "t": 7.9,
-              "v": 0.54,
+              "v": 0.96,
               "interp": "bezier"
             },
             {
               "t": 8.0,
-              "v": 1.3,
+              "v": 1.8,
               "interp": "bezier"
             },
             {
               "t": 8.5,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 16.0,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 16.06,
-              "v": 1.3,
+              "v": 1.8,
               "interp": "bezier"
             },
             {
               "t": 16.9,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 19.2,
-              "v": 0.45,
+              "v": 0.8,
               "interp": "bezier"
             },
             {
               "t": 20.0,
-              "v": 0.135,
+              "v": 0.24,
               "interp": "bezier"
             }
           ]
@@ -1236,21 +1326,6 @@
           "id": "music",
           "kind": "audio",
           "path": "buffr-music.wav"
-        },
-        {
-          "id": "haze",
-          "kind": "image",
-          "width": 1920.0,
-          "height": 1080.0,
-          "path": "media/haze.png",
-          "x": 960.0,
-          "y": 420.0,
-          "z": 2400.0,
-          "scale": 3.4,
-          "cast_shadows": false,
-          "material": {
-            "roughness": 1.0
-          }
         },
         {
           "id": "buffr",
@@ -3333,7 +3408,7 @@
           "y": 520.0,
           "scale": 1.2,
           "extrude": 8.0,
-          "edge": "#4a4f5c",
+          "edge": "#7c8598",
           "material": {
             "roughness": 0.3,
             "bevel": 4.0,
@@ -3595,20 +3670,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 0.5,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 0.95,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -3671,9 +3746,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 0.5,
@@ -3682,7 +3757,7 @@
             },
             {
               "t": 0.8,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -3719,9 +3794,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 0.54,
@@ -3730,7 +3805,7 @@
             },
             {
               "t": 0.84,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -3767,9 +3842,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 0.58,
@@ -3778,7 +3853,7 @@
             },
             {
               "t": 0.88,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -3815,9 +3890,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 0.62,
@@ -3826,7 +3901,7 @@
             },
             {
               "t": 0.92,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -3865,20 +3940,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 2.1,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 2.55,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -3941,9 +4016,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 2.1,
@@ -3952,7 +4027,7 @@
             },
             {
               "t": 2.4,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -3989,9 +4064,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 2.14,
@@ -4000,7 +4075,7 @@
             },
             {
               "t": 2.44,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4037,9 +4112,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 2.18,
@@ -4048,7 +4123,7 @@
             },
             {
               "t": 2.48,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4085,9 +4160,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 2.22,
@@ -4096,7 +4171,7 @@
             },
             {
               "t": 2.52,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4135,20 +4210,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 4.55,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 5.0,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -4211,9 +4286,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 4.55,
@@ -4222,7 +4297,7 @@
             },
             {
               "t": 4.85,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4259,9 +4334,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 4.59,
@@ -4270,7 +4345,7 @@
             },
             {
               "t": 4.89,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4307,9 +4382,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 4.63,
@@ -4318,7 +4393,7 @@
             },
             {
               "t": 4.93,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4355,9 +4430,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 4.67,
@@ -4366,7 +4441,7 @@
             },
             {
               "t": 4.97,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4405,20 +4480,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 8.2,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 8.65,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -4481,9 +4556,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 8.2,
@@ -4492,7 +4567,7 @@
             },
             {
               "t": 8.5,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4529,9 +4604,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 8.24,
@@ -4540,7 +4615,7 @@
             },
             {
               "t": 8.54,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4577,9 +4652,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 8.28,
@@ -4588,7 +4663,7 @@
             },
             {
               "t": 8.58,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4625,9 +4700,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 8.32,
@@ -4636,7 +4711,7 @@
             },
             {
               "t": 8.62,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4675,20 +4750,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 10.1,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 10.55,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -4751,9 +4826,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 10.1,
@@ -4762,7 +4837,7 @@
             },
             {
               "t": 10.4,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4799,9 +4874,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 10.14,
@@ -4810,7 +4885,7 @@
             },
             {
               "t": 10.44,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4847,9 +4922,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 10.18,
@@ -4858,7 +4933,7 @@
             },
             {
               "t": 10.48,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4895,9 +4970,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 10.22,
@@ -4906,7 +4981,7 @@
             },
             {
               "t": 10.52,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -4945,20 +5020,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 12.1,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 12.55,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -5021,9 +5096,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 12.1,
@@ -5032,7 +5107,7 @@
             },
             {
               "t": 12.4,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5069,9 +5144,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 12.14,
@@ -5080,7 +5155,7 @@
             },
             {
               "t": 12.44,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5117,9 +5192,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 12.18,
@@ -5128,7 +5203,7 @@
             },
             {
               "t": 12.48,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5165,9 +5240,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 12.22,
@@ -5176,7 +5251,7 @@
             },
             {
               "t": 12.52,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5215,20 +5290,20 @@
           "font": "Barlow",
           "align": "left",
           "overlay": true,
-          "x": 150.0,
+          "x": 140.0,
           "y": [
             {
               "t": 14.2,
-              "v": 980.0,
+              "v": 972.0,
               "interp": "bezier"
             },
             {
               "t": 14.65,
-              "v": 968.0,
+              "v": 960.0,
               "interp": "bezier"
             }
           ],
-          "font_size": 50.0,
+          "font_size": 64.0,
           "fill": "#f7f6f2",
           "tracking": 0.4,
           "opacity": [
@@ -5291,9 +5366,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ff1547",
-          "x": 164.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 158.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 14.2,
@@ -5302,7 +5377,7 @@
             },
             {
               "t": 14.5,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5339,9 +5414,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#ffea00",
-          "x": 196.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 198.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 14.24,
@@ -5350,7 +5425,7 @@
             },
             {
               "t": 14.54,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5387,9 +5462,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#05ff74",
-          "x": 228.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 238.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 14.28,
@@ -5398,7 +5473,7 @@
             },
             {
               "t": 14.58,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5435,9 +5510,9 @@
           "kind": "rect",
           "overlay": true,
           "fill": "#00deff",
-          "x": 260.0,
-          "y": 920.5,
-          "height": 4.0,
+          "x": 278.0,
+          "y": 899.2,
+          "height": 5.0,
           "width": [
             {
               "t": 14.32,
@@ -5446,7 +5521,7 @@
             },
             {
               "t": 14.62,
-              "v": 28.0,
+              "v": 34.0,
               "interp": "bezier"
             }
           ],
@@ -5644,7 +5719,60 @@
         }
       ],
       "environment": {
-        "intensity": 0.35
+        "hdri": "media/studio.hdr",
+        "background": true,
+        "intensity": [
+          {
+            "t": 0,
+            "v": 0.3,
+            "interp": "bezier"
+          },
+          {
+            "t": 4.0,
+            "v": 0.3,
+            "interp": "bezier"
+          },
+          {
+            "t": 4.5,
+            "v": 0.16,
+            "interp": "bezier"
+          },
+          {
+            "t": 7.6,
+            "v": 0.24,
+            "interp": "bezier"
+          },
+          {
+            "t": 8.0,
+            "v": 0.5,
+            "interp": "bezier"
+          },
+          {
+            "t": 8.8,
+            "v": 0.4,
+            "interp": "bezier"
+          },
+          {
+            "t": 16.0,
+            "v": 0.36,
+            "interp": "bezier"
+          },
+          {
+            "t": 16.15,
+            "v": 0.3,
+            "interp": "bezier"
+          },
+          {
+            "t": 16.9,
+            "v": 0.05,
+            "interp": "bezier"
+          },
+          {
+            "t": 20.0,
+            "v": 0.03,
+            "interp": "bezier"
+          }
+        ]
       },
       "ground": {
         "y": 1042.0,
@@ -5654,17 +5782,17 @@
         "contact": 0.7
       },
       "fog": {
-        "color": "#0d0a14",
-        "near": 2200.0,
-        "far": 7500.0
+        "color": "#140f1f",
+        "near": 3200.0,
+        "far": 11000.0
       },
       "ao": {
         "strength": 0.8,
         "radius": 40.0
       },
       "bloom": {
-        "strength": 0.75,
-        "threshold": 0.78
+        "strength": 0.9,
+        "threshold": 0.7
       },
       "effects": [
         {

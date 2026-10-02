@@ -69,28 +69,12 @@ def rgb(h):
 
 
 def paint():
-    """The atmosphere, painted once: a haze wall with BUFFR's colours
-    fanning up through it (behind everything, in 3D), light shafts over
-    the shot, and two sheets of dust that drift through them."""
+    """The atmosphere, painted once: light shafts over the shot, and two
+    sheets of dust that drift through them."""
     rng = np.random.default_rng(7)
     w, h = 1920, 1080
     y, x = np.mgrid[0:h, 0:w].astype(np.float32)
     u, v = x / w - 0.5, y / h
-
-    # Haze: a dark studio, its floor glow warm, the brand's colours as
-    # broad beams fanning up from below the horizon.
-    img = np.zeros((h, w, 3), np.float32)
-    img += rgb("#0c0a12") * (0.6 + 0.4 * v[..., None])
-    for i, c in enumerate(RAINBOW):
-        angle = (i - 1.5) * 0.17
-        d = u - angle * (1.05 - v)  # beams lean out as they rise
-        beam = np.exp(-(d / (0.05 + 0.10 * (1 - v))) ** 2) * (0.25 + 0.75 * v) ** 1.6
-        img += rgb(c) * beam[..., None] * 0.30
-    glow = np.exp(-((u / 0.42) ** 2) - (((v - 1.0) / 0.35) ** 2))
-    img += rgb("#ffb27a") * glow[..., None] * 0.10
-    lo = np.kron(rng.random((h // 60 + 1, w // 60 + 1)), np.ones((60, 60)))[:h, :w]
-    img *= (0.88 + 0.24 * lo[..., None]).astype(np.float32)
-    save(img, None, "haze.png")
 
     # Shafts: soft diagonal light from the top corners, brand-tinted, alpha
     # only where the light is.
@@ -118,6 +102,43 @@ def paint():
             disc = np.clip(1.6 - q, 0, 1) if big else np.exp(-q * 2)  # bokeh: flat discs
             a[y0:y1, x0:x1] = np.maximum(a[y0:y1, x0:x1], disc * peak)
         save(np.ones((h, w, 3), np.float32) * rgb("#fff3e6"), a, name)
+
+
+def studio():
+    """The room, as an equirectangular HDR the camera sees behind it and
+    every surface is lit and mirrored by: a dark stage, BUFFR's colours as
+    four tall softboxes behind the editor with a warm horizon under them,
+    a white softbox overhead and cool and warm strips either side, so the
+    glass and the bevels catch light from every angle. Looking into the
+    scene is u = 0.25 (mui-stage: u = 0.5 + atan2(z, x) / 2 pi)."""
+    w, h = 1024, 512
+    y, x = np.mgrid[0:h, 0:w].astype(np.float32)
+    u, v = (x + 0.5) / w, (y + 0.5) / h
+    du = lambda c: (u - c + 0.5) % 1.0 - 0.5  # wrapped distance in u
+    up = np.clip((0.5 - v) / 0.5, 0, 1)  # 0 at the horizon, 1 overhead
+    img = rgb("#0a0710") * (0.5 + 0.6 * up[..., None]) * 0.3
+    img[v > 0.5] = rgb("#050408") * 0.5
+    hz = np.exp(-((v - 0.5) / 0.022) ** 2) * np.exp(-(du(0.25) / 0.16) ** 2)
+    img += rgb("#ff9a5c") * hz[..., None] * 0.5
+    for i, c in enumerate(RAINBOW):
+        d = du(0.25 + (i - 1.5) * 0.055)
+        box = np.exp(-(d / 0.012) ** 6) * np.exp(-((v - 0.34) / 0.13) ** 6)
+        glow = np.exp(-(d / 0.05) ** 2) * np.exp(-((v - 0.36) / 0.22) ** 2)
+        img += rgb(c) * (box * 3.2 + glow * 0.35)[..., None]
+    top = np.exp(-(du(0.25) / 0.16) ** 6) * np.exp(-((v - 0.07) / 0.05) ** 6)
+    img += np.float32(4.0) * top[..., None]
+    for c, at, k in [("#7fd4ff", 0.0, 1.6), ("#ffc78a", 0.5, 1.4)]:
+        strip = np.exp(-(du(at) / 0.02) ** 6) * np.exp(-((v - 0.4) / 0.2) ** 6)
+        img += rgb(c) * strip[..., None] * k
+    back = np.exp(-(du(0.75) / 0.12) ** 4) * np.exp(-((v - 0.38) / 0.15) ** 4)
+    img += rgb("#ffe6cc") * back[..., None] * 0.8
+    # Radiance RGBE, flat scanlines.
+    m = img.max(axis=2)
+    e = np.where(m > 1e-32, np.floor(np.log2(np.maximum(m, 1e-32))) + 1, -128)
+    sc = np.where(m > 1e-32, 256.0 / np.exp2(e), 0.0)
+    rgbe = np.dstack([np.clip(img * sc[..., None], 0, 255), np.clip(e + 128, 0, 255)]).astype(np.uint8)
+    head = f"#?RADIANCE\nFORMAT=32-bit_rle_rgbe\n\n-Y {h} +X {w}\n".encode()
+    (HERE / "media" / "studio.hdr").write_bytes(head + rgbe.tobytes())
 
 
 def save(color, alpha, name):
@@ -189,7 +210,7 @@ BACKDROP = keys((0, 1.0), (STOP, 1.0), (5.0, 0.4), (7.6, 0.4), (DROP, 1.0),
 SEL = ((420, 250), (900, 250), 14.15, 14.75)
 
 # The hit turns it to glass, printed (its dark clear, its light as ink),
-# so the haze and the brand's colours come through it; then it goes.
+# so the room and the brand's colours come through it; then it goes.
 GLASS = keys((0, 0.0), (HIT - 0.05, 0.0), (HIT + 0.5, 0.92))
 
 
@@ -224,7 +245,7 @@ def buffr():
         "y": BY,
         "scale": BS,
         "extrude": 8.0,
-        "edge": "#4a4f5c",
+        "edge": "#7c8598",
         "material": {"roughness": 0.3, "bevel": 4.0, "transmission": GLASS,
                      "print": 1.0, "ior": 1.5, "dispersion": 1.2, "thickness": 8.0},
     }
@@ -240,8 +261,8 @@ def camera():
     shots = [
         # 1: low and close over the lanes as the idea is played, drifting
         # with the playhead as the notes land
-        (0.0, 150, 520, 0, 980, 9, 28, 26, 22),
-        (STOP - 0.3, 440, 505, 0, 860, 6, 15, 26, 20),
+        (0.0, 330, 470, 0, 2300, 7, 34, 26, 7),
+        (STOP - 0.3, 440, 505, 0, 1080, 5, 17, 26, 16),
         # 2: the tape stop: it comes apart; the camera swings round to see
         # the plates in depth
         (STOP + 0.25, 560, 420, -60, 1500, 4, 6, 28, 12),
@@ -250,17 +271,17 @@ def camera():
         (7.3, 640, 380, -200, 1650, -6, -30, 28, 10),
         (DROP - E, 640, 380, -60, 1900, -6, -20, 28, 8),
         # 4: the drop: the hero, welded
-        (DROP, 640, 400, 0, 2000, -8, 18, 30, 5),
-        (10.0 - E, 640, 400, 0, 1900, -6, 11, 30, 5),
+        (DROP, 640, 420, 0, 2350, -11, 22, 30, 5),
+        (10.0 - E, 640, 420, 0, 2200, -9, 14, 30, 5),
         # 5: along the waveform it is recording
-        (10.0, 520, 250, 0, 860, -4, -24, 26, 16),
-        (12.0 - E, 820, 250, 0, 820, -3, -18, 26, 16),
+        (10.0, 520, 260, 0, 1250, -7, -32, 26, 11),
+        (12.0 - E, 800, 260, 0, 1150, -5, -22, 26, 11),
         # 6: in depth: the plates apart, from the side
         (12.0, 640, 380, -140, 1900, -10, 38, 30, 9),
         (14.0 - E, 640, 380, -160, 1800, -7, 28, 30, 9),
         # 7: the hand selects the moment
-        (14.0, 650, 280, 0, 900, -3, 6, 26, 12),
-        (HIT - E, 700, 280, 0, 840, -3, 2, 26, 12),
+        (14.0, 650, 300, 0, 1250, -6, 14, 26, 10),
+        (HIT - E, 700, 300, 0, 1120, -5, 8, 26, 10),
         # 8: the hit: glass, a sweep, then it goes back into the dark
         (HIT, 640, 360, 0, 1750, -12, -26, 30, 6),
         (17.4, 640, 380, 0, 2500, -8, -8, 30, 4),
@@ -296,14 +317,16 @@ def lights():
     def pool(id_, color, x, y, z):
         return {"id": id_, "kind": "light", "type": "point", "fill": BRAND[color],
                 "x": x, "y": y, "z": z, "range": 1900.0, "softness": 3.0,
-                "intensity": pulse(0.45, 0.35, 1.3)}
+                "intensity": pulse(0.8, 0.6, 1.8)}
 
     return [
         {"id": "key", "kind": "light", "fill": "#fff1e2", "rx": 18.0,
          "ry": keys((0, -40.0), (STOP, -30.0), (DROP, -24.0), (DUR, -18.0)),
-         "intensity": pulse(1.5, 0.45, 2.6), "softness": 3.0},
+         "intensity": pulse(1.9, 0.7, 3.0), "softness": 3.0},
         {"id": "fill", "kind": "light", "type": "ambient", "fill": "#8fa0c4",
-         "intensity": pulse(0.3, 0.2, 0.45)},
+         "intensity": pulse(0.45, 0.32, 0.6)},
+        {"id": "rim", "kind": "light", "fill": "#9fd8ff", "rx": 24.0,
+         "ry": keys((0, 160.0), (DUR, 150.0)), "intensity": pulse(1.2, 0.8, 2.2), "softness": 2.0},
         pool("pool-red", "red", 120.0, 120.0, -500.0),
         pool("pool-yellow", "yellow", 960.0, -260.0, -200.0),
         pool("pool-green", "green", 260.0, 1180.0, -400.0),
@@ -312,15 +335,12 @@ def lights():
 
 
 def atmosphere():
-    """The haze wall far behind; over the shot, the shafts breathing with
-    the music and two sheets of dust drifting at different speeds."""
+    """Over the shot, the shafts breathing with the music and two sheets
+    of dust drifting at different speeds."""
     beat = [key(0, 0.18), key(STOP, 0.22), key(STOP + 0.4, 0.42), key(7.8, 0.5),
             key(DROP, 0.75), key(DROP + 0.6, 0.32), key(HIT, 0.32), key(HIT + 0.1, 0.7),
             key(HIT + 1.2, 0.2), key(DUR, 0.0)]
     return [
-        {"id": "haze", "kind": "image", "width": 1920.0, "height": 1080.0, "path": "media/haze.png",
-         "x": 960.0, "y": 420.0, "z": 2400.0, "scale": 3.4, "cast_shadows": False,
-         "material": {"roughness": 1.0}},
         {"id": "shafts", "kind": "image", "width": 1920.0, "height": 1080.0, "path": "media/shafts.png", "overlay": True,
          "x": [key(0, 900.0), key(DUR, 1020.0)], "y": 540.0, "scale": 1.12, "opacity": beat},
         {"id": "dust-far", "kind": "image", "width": 1920.0, "height": 1080.0, "path": "media/dust-far.png", "overlay": True,
@@ -338,10 +358,10 @@ def atmosphere():
 # ---------------------------------------------------------------- words
 FONT = "Barlow"
 FONT_REG = "BarlowRegular"
-LX, LY = 150.0, 968.0  # the lower third: left, on a soft dark band
+LX, LY = 140.0, 960.0  # the lower third: left, on a soft dark band
 
 
-def caption(id_, text, t0, t1, size=50.0):
+def caption(id_, text, t0, t1, size=64.0):
     """A lower-third line: BUFFR's four colours draw in as a rule, the
     words rise in crisp behind it, and both go together."""
     show = [key(0, 0.0, "hold"), key(t0, 0.0), key(t0 + 0.3, 1.0), key(t1 - 0.22, 1.0), key(t1, 0.0, "hold")]
@@ -355,8 +375,8 @@ def caption(id_, text, t0, t1, size=50.0):
         t = t0 + 0.04 * i
         out.append({
             "id": f"{id_}-rule{i}", "kind": "rect", "overlay": True, "fill": c,
-            "x": LX + 14 + i * 32, "y": LY - size * 0.95, "height": 4.0,
-            "width": [key(t, 0.0), key(t + 0.3, 28.0)], "opacity": show,
+            "x": LX + 18 + i * 40, "y": LY - size * 0.95, "height": 5.0,
+            "width": [key(t, 0.0), key(t + 0.3, 34.0)], "opacity": show,
         })
     return out
 
@@ -414,13 +434,18 @@ def project():
             "layers": [
                 camera(), *lights(),
                 {"id": "music", "kind": "audio", "path": "buffr-music.wav"},
-                *atmosphere()[:1], buffr(), *atmosphere()[1:], *words(), *end_card(),
+                buffr(), *atmosphere(), *words(), *end_card(),
             ],
-            "environment": {"intensity": 0.35},
+            "environment": {"hdri": "media/studio.hdr", "background": True,
+                            # The room dims as the tape stops, opens on the
+                            # drop, and goes dark for the end card.
+                            "intensity": keys((0, 0.3), (STOP, 0.3), (STOP + 0.5, 0.16), (7.6, 0.24),
+                                              (DROP, 0.5), (DROP + 0.8, 0.4), (HIT, 0.36), (HIT + 0.15, 0.3),
+                                              (HIT + 0.9, 0.05), (DUR, 0.03))},
             "ground": {"y": FLOOR, "color": "#0a0910", "radius": 3000.0, "reflect": 0.5, "contact": 0.7},
-            "fog": {"color": "#0d0a14", "near": 2200.0, "far": 7500.0},
+            "fog": {"color": "#140f1f", "near": 3200.0, "far": 11000.0},
             "ao": {"strength": 0.8, "radius": 40.0},
-            "bloom": {"strength": 0.75, "threshold": 0.78},
+            "bloom": {"strength": 0.9, "threshold": 0.7},
             "effects": [
                 {"type": "levels", "black": 0.015, "gamma": 0.96, "saturation": 1.12,
                  "tint": "#ffd9b8", "tint_amount": 0.06},
@@ -433,6 +458,7 @@ def project():
 
 if __name__ == "__main__":
     paint()
+    studio()
     out = HERE / "buffr.cut.json"
     out.write_text(json.dumps(project(), indent=2) + "\n")
     print(f"wrote {out}, buffr-music.wav and media/ ({len(NOTES)} notes)")
