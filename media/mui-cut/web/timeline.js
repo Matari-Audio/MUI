@@ -479,6 +479,12 @@ export function trimToPlayhead(side) {
   });
 }
 new ResizeObserver(() => { S.tlNeed = true; }).observe(wrap);
+// For the end-to-end test: canvas x of a time, canvas y of a row's middle
+// (a layer's, or one of its key lists') or null when it is not shown.
+tl._map = {
+  x: time => xAt(time),
+  y: (id, p) => { const i = rows.findIndex(r => r.l.id === id && (r.p ?? null) === (p ?? null)); return i < 0 ? null : RULER + i * ROW - scrollY + ROW / 2; },
+};
 
 // ---------- the picked keys: delete, copy and paste at the playhead, ease
 export function deleteKeys() {
