@@ -136,7 +136,9 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
 ```
 
 - **Scenes** play in order; `t` in a key is seconds from the scene's start.
-  `background` defaults to `#101014`.
+  `background` defaults to `#101014`. `markers`, `[{"t": 1.5, "name":
+  "drop"}]`, are named times on the scene's timeline (the editor shows
+  them; nothing renders them).
 - **Layers** paint bottom first (later layers are on top). `id` is unique in
   its scene. `kind` is one of:
 
@@ -149,6 +151,8 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   | `duplicator` | `shape` (`rect`/`ellipse`/`path`), `d`, `layout` (`grid`/`radial`/`linear`/`path`), `along`, `orient` | `count` copies, see below |
   | `svg` | `path` | an SVG file as vectors, centred |
   | `lottie` | `path`, `speed` (1), `loop` (true) | a Lottie JSON file, centred, playing |
+  | `group` | | nothing: layers attach to it with `parent` (see Groups) |
+  | `comp` | `scene` | another scene of the project, as one layer (see Comps) |
 
   See `examples/showcase.cut.json` for every one of them.
 - **Properties**, each either a plain value or a key list:
@@ -173,7 +177,7 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   | `spacing_x`, `spacing_y` | 120 | duplicator grid and line |
   | `ring_radius` | 200 | duplicator radial |
   | `path_offset` | 0 | duplicator along a path, 0..1 of its length |
-  | `time` | 0 | lottie: seconds into the file at the scene's start |
+  | `time` | 0 | lottie, model, audio: seconds into the file at the layer's `start` |
 
   A property left out is its default, and a save leaves defaults out.
 
@@ -522,6 +526,57 @@ every key stays exact. Reparent, reset and the 2D switch run in every
 variant: what they change is written resolved (into the file, and into a
 variant's `scene/layer` override where its result differs), and bindings
 they do not touch stay.
+
+### Groups
+
+A `group` layer draws nothing (in 2D, 3D and Blender); it is a node other
+layers attach to with `parent`, so they move, turn, scale and fade
+together. Groups nest. Its `opacity` multiplies into every descendant (as
+any parent's does, layer by layer: overlapping children each fade, they
+are not flattened first), so a group at opacity 0 hides its subtree. Its
+properties are `x`, `y`, `scale`, `rotation`, `opacity` (and `z`, `rx`,
+`ry` in 3D). To group layers in the editor, add a group layer and
+reparent each child to it (`Cut.reparent`), which keeps them in place.
+
+### In and out points
+
+`"start": 1.5, "end": 4` shows a layer only for scene times
+`start <= t < end` (either left out: from the scene's start, to its end);
+`"hidden": true` switches it off altogether (the editor's eye). Off, a
+layer draws nothing and counts as opacity 0, so everything parented under
+it (a group's subtree) is off too; an audio layer is silent. These are the
+only rules:
+
+- Keys stay in scene time. Moving `start` trims the layer; it does not
+  slide its keys (move those with the keys, as the timeline does).
+- What plays runs on its own clock from `start`: a comp's scene, a
+  Lottie, a model's animation and an audio file begin at their first
+  frame at `start` (plus `time`, which still offsets and remaps them).
+
+### Comps
+
+`{"id": "intro", "kind": "comp", "scene": "logo"}` draws scene `logo` as
+one layer (a precomp). The scene's frame (the project's size) is centred
+on the layer's `x`, `y` (`x: 640, y: 360` in a 1280x720 project puts it
+where it would be on its own), then moved, turned, scaled and faded like
+any layer; it can be parented, grouped and nested in other comps.
+
+- **Time.** The scene plays from the layer's `start` (0 without one), plus
+  `time` (keyable: keys on it offset or remap the clock). Its keys keep
+  their own scene's times.
+- **What draws.** The scene's layers that draw; not its background (a comp
+  is clear where its layers are not), cameras, lights, models, audio or
+  scene `effects`. Its layers' own `effects` do not run either; put
+  effects on the comp layer, where they run over all of its layers
+  together (on the GPU, in the layer's own offscreen pass).
+- **3D.** A 3D scene comps flat: its layers' 2D placement, no camera.
+  A comp in a 3D scene lays its layers as slabs on its own plane (its
+  effects do not run there).
+- **Shots.** A scene some scene comps is not a shot: `render` (and the
+  editor's soundtrack, `/mix.wav`) plays the others back to back. Render
+  a comped scene on its own with `--scene`.
+- **Loading** refuses a comp of a scene that is not there and a cycle
+  (`a` comps `b` comps `a`).
 
 ### Plugin layers
 
@@ -1035,5 +1090,8 @@ same reason.
   light strength is matched to mui-stage at the nearest subject the light
   faces, so inverse-square falloff differs elsewhere; metals mirror the
   plain world (no HDRI). `serve`, `open` and `retarget` do not use it.
+- Comps: not clipped to their scene's frame (layers outside it still
+  show); the comped scene's sound is not mixed; in the viewport they are
+  picked as one box, their layers not separately.
 - The browser CPU fallback is single-threaded: wasm threads need
   cross-origin isolation, which `serve` does not set up.
