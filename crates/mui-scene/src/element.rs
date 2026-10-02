@@ -351,6 +351,14 @@ pub struct Extras {
     /// A string this text node is at least as wide as, whatever it currently
     /// says. See [`Styled::reserve`].
     pub reserve: Option<String>,
+    /// Additional strings measured in the same font. See [`Styled::reserve_all`].
+    pub reserve_all: Option<Arc<[String]>>,
+    /// Supplemental accessible help, separate from the control's name.
+    pub description: Option<Arc<str>>,
+    /// Human-readable value with units, alongside a numeric slider value.
+    pub value_description: Option<Arc<str>>,
+    /// Explicit minimum keyboard/accessibility step for a numeric control.
+    pub numeric_step: Option<f64>,
     /// Shown after the pointer rests on the node.
     pub tip: Option<Arc<str>>,
     /// The spring this node's paint chases when its declared style changes.
@@ -398,6 +406,10 @@ pub struct Memo {
 impl Extras {
     const NONE: Self = Self {
         reserve: None,
+        reserve_all: None,
+        description: None,
+        value_description: None,
+        numeric_step: None,
         tip: None,
         transition: None,
         layout_transition: None,
@@ -960,6 +972,35 @@ pub trait Styled: Paints {
     /// ```
     fn reserve(mut self, s: impl Into<String>) -> Self {
         self.element_mut().extras_mut().reserve = Some(s.into());
+        self
+    }
+    /// Reserve the widest of several strings, measured with this node's font,
+    /// size and variation axes. Unlike counting characters, this works with
+    /// proportional glyphs and unit changes. The current text remains a floor.
+    /// A shared `Arc<[String]>` can be reused without copying the samples.
+    /// This supplements [`Styled::reserve`]; it does not replace it.
+    fn reserve_all(mut self, samples: impl Into<Arc<[String]>>) -> Self {
+        self.element_mut().extras_mut().reserve_all = Some(samples.into());
+        self
+    }
+    /// Supplemental accessible help. Unlike a tooltip this is available
+    /// without hovering, and does not replace the concise accessible name.
+    fn described(mut self, description: impl Into<Arc<str>>) -> Self {
+        self.element_mut().extras_mut().description = Some(description.into());
+        self
+    }
+    /// A slider's value in user-facing units (for example `"440 Hz"`).
+    /// Numeric bounds and actions stay on its [`A11y::Slider`] role.
+    fn value_description(mut self, value: impl Into<Arc<str>>) -> Self {
+        self.element_mut().extras_mut().value_description = Some(value.into());
+        self
+    }
+    /// Minimum arrow-key and accessibility increment for a numeric control.
+    /// Positive finite values override the default hundredth of the range.
+    /// Invalid values clear the override. Pointer dragging stays continuous.
+    fn numeric_step(mut self, step: f64) -> Self {
+        self.element_mut().extras_mut().numeric_step =
+            (step.is_finite() && step > 0.0).then_some(step);
         self
     }
     /// Declare what this node looks like while hovered, pressed or focused,

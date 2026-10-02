@@ -521,6 +521,16 @@ impl Ui {
         let id: Id = id.into();
         let id = id.as_str();
         let mut response = self.interaction.get(id);
+        if self.disabled_target(id) {
+            // A release may close a custom control's bookkeeping even when
+            // the target was disabled on that frame. Never turn it into an
+            // activation or expose stale motion/keys.
+            return Response {
+                released: response.released,
+                button: response.button.filter(|_| response.released),
+                ..Response::default()
+            };
+        }
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
             .keys(id)
@@ -616,7 +626,10 @@ impl Ui {
                         _ => None,
                     })
                     .unwrap_or(value);
-                let step = crate::widgets::step(&(min..=max)) * sign;
+                let step = surface.numeric_step.map_or_else(
+                    || crate::widgets::step(&(min..=max)),
+                    |step| step.copysign(max - min),
+                ) * sign;
                 self.request_action(SemanticAction::SetValue {
                     id,
                     value: value + step,

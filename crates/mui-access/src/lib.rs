@@ -130,7 +130,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
             n.set_max_numeric_value(*max);
             // The arrow keys' step, a hundredth of the range, which is what
             // the runtime's `Increment` and `Decrement` take. Unsigned here.
-            n.set_numeric_value_step(((max - min) / 100.0).abs());
+            n.set_numeric_value_step(s.numeric_step.unwrap_or(((max - min) / 100.0).abs()));
             if !s.disabled {
                 n.add_action(Action::SetValue);
                 n.add_action(Action::Increment);
@@ -169,6 +169,14 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
     let name = sem.label.as_deref().or(s.text_value.as_deref());
     if let Some(name) = name.or_else(|| control.then(|| s.key.as_str())) {
         n.set_label(name);
+    }
+    if let Some(description) = &s.description {
+        n.set_description(&**description);
+    }
+    if matches!(sem.role, A11y::Slider { .. })
+        && let Some(value) = &s.value_description
+    {
+        n.set_value(&**value);
     }
     let f = s.frame;
     n.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
@@ -366,6 +374,9 @@ fn tree_hash(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> u64 {
         s.parent.as_deref().hash(&mut h);
         (s.focusable, s.disabled).hash(&mut h);
         s.text_value.as_deref().hash(&mut h);
+        s.description.as_deref().hash(&mut h);
+        s.value_description.as_deref().hash(&mut h);
+        s.numeric_step.map(f64::to_bits).hash(&mut h);
         let Some(sem) = &s.semantics else {
             0u8.hash(&mut h);
             continue;
@@ -402,6 +413,58 @@ fn tree_hash(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> u64 {
 mod tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn descriptions_formatted_values_and_steps_reach_the_platform_and_invalidate() {
+        let scene = |description: &str, value: &str, step: f64| {
+            resolve(&SceneSpec::new(
+                block(80., 24.)
+                    .a11y(A11y::Slider {
+                        value: 0.5,
+                        min: 0.,
+                        max: 1.,
+                    })
+                    .named("Frequency")
+                    .described(description)
+                    .value_description(value)
+                    .numeric_step(step)
+                    .focusable()
+                    .id("frequency"),
+            ))
+            .unwrap()
+        };
+        let mut publisher = Publisher::default();
+        let first = scene("Oscillator pitch", "440 Hz", 0.1);
+        let update = publisher.update(&first, Some("frequency"), 1.0);
+        let node = &update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == node_id("frequency"))
+            .unwrap()
+            .1;
+        assert_eq!(node.label(), Some("Frequency"));
+        assert_eq!(node.description(), Some("Oscillator pitch"));
+        assert_eq!(node.value(), Some("440 Hz"));
+        assert_eq!(node.numeric_value_step(), Some(0.1));
+        assert!(
+            publisher
+                .update(&first, Some("frequency"), 1.0)
+                .nodes
+                .is_empty()
+        );
+        for changed in [
+            scene("Changed help", "440 Hz", 0.1),
+            scene("Changed help", "880 Hz", 0.1),
+            scene("Changed help", "880 Hz", 0.2),
+        ] {
+            assert!(
+                !publisher
+                    .update(&changed, Some("frequency"), 1.0)
+                    .nodes
+                    .is_empty()
+            );
+        }
+    }
 
     #[test]
     fn an_unnamed_surface_changing_sends_no_tree() {

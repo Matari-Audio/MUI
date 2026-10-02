@@ -55,6 +55,10 @@ for boolean regions. Borders and parallel shells follow the resulting outline.
 See the [shape-layout guide](docs/shape-layout.md) for the full contracts and
 composable examples; the browser playground supports a smaller, explicit subset.
 
+See the [complete-controls guide](docs/SEMANTIC-CONTROLS.md) for default focus
+states, measured readouts, metadata-backed parameter controls, and intrinsic
+settings/groups with accessible names and descriptions.
+
 ## One frame
 
 ```rust

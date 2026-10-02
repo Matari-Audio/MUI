@@ -232,6 +232,12 @@ pub struct ResolvedSurface {
     /// Current authored text, used as the accessible name unless explicitly
     /// overridden by semantics. Live readout updates change this too.
     pub text_value: Option<Arc<str>>,
+    /// Supplemental accessible help, independent of the name and tooltip.
+    pub description: Option<Arc<str>>,
+    /// A slider's formatted value, alongside its numeric range.
+    pub value_description: Option<Arc<str>>,
+    /// Minimum keyboard/accessibility increment; absent uses one hundredth.
+    pub numeric_step: Option<f64>,
     /// The nearest clipping ancestor's frame, for hit-testing.
     ///
     /// This is kept as a rectangle for compatibility with the input adapter.

@@ -51,6 +51,27 @@ impl<C, E: IntoEl> From<Response<C, E>> for El {
     }
 }
 
+impl<E> Response<bool, E> {
+    /// Run an action when this response changed, retaining the element for
+    /// composition. Buttons report activation here; value controls report an
+    /// edit. The runtime coalesces activation sources to one change per frame.
+    /// Like reading `changed`, this runs during tree construction.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let mut saved = false;
+    /// let action = button(&mut ui, "save", "Save").on_change(|| saved = true);
+    /// assert!(!saved);
+    /// ```
+    pub fn on_change(self, action: impl FnOnce()) -> Self {
+        if self.changed {
+            action();
+        }
+        self
+    }
+}
+
 /// `$name(args)` on a `Response`, applied to its `el` as `$method(args)`.
 macro_rules! forward {
     ($out:ty, $conv:path: $($name:ident($($a:ident: $t:ty),*);)*) => {$(
@@ -78,12 +99,17 @@ impl<C> Response<C, Control> {
         variant(v: Variant);
         role(r: Role);
         value_text(s: impl Into<String>);
+        described(s: impl Into<Arc<str>>);
+        step(step: f64);
+        value_reserve(s: impl Into<String>);
+        value_reserve_all(samples: impl Into<Arc<[String]>>);
         px(px: impl Px);
     }
 }
 impl<C> Response<C, El> {
     forward! { El, std::convert::identity:
         size(w: impl Into<Len>, h: impl Into<Len>);
+        described(s: impl Into<Arc<str>>);
     }
 }
 /// The common element verbs on any response; a control is finished first,
@@ -120,6 +146,7 @@ impl<C, E: IntoEl> Response<C, E> {
 
 mod bins;
 mod color_picker;
+mod composition;
 mod controls;
 mod curve;
 mod grapheme;
@@ -130,6 +157,7 @@ pub mod visualization;
 
 pub use bins::{BinAxis, BinEdit, Bins, bins, bins_hover};
 pub use color_picker::{ColorFormat, OklchPicker, PickerShape, oklch_picker};
+pub use composition::{Setting, group, setting};
 pub(crate) use controls::step;
 pub use controls::{Control, Variant, button, drag_value, knob, slider, stepped, toggle};
 pub use curve::{CurveEdit, curve};
