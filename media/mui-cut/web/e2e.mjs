@@ -350,7 +350,9 @@ try {
   await js(`(c => { c.checked = true; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-look="ao"]'))`); await sleep(800);
   check(read().scenes[0].ao, 'and back on');
   await js(`document.querySelector('#layers button:last-child').click()`); await sleep(400);
-  check(await js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'distance')`), 'the camera\'s distance is in the graph');
+  const hasDistance = () => js(`[...document.querySelector('#graph-prop').options].some(o => o.value === 'distance')`);
+  for (let i = 0; i < 50 && !(await hasDistance()); i++) await sleep(100);
+  check(await hasDistance(), 'the camera\'s distance is in the graph');
   const notice = await js(`document.querySelector('#notice').hidden ? '' : document.querySelector('#notice').textContent`);
   check(backend === 'WebGPU' ? notice === '' : /flat/.test(notice), `3D draws ${notice || 'in 3D'}`);
   await shot('editor-3d.png');
@@ -382,6 +384,38 @@ try {
     await shot('editor-3d-beauty.png');
     await click('#beauty');
   }
+  // The scene's Look: a physical sky turned on, its sun dragged on the
+  // dial, the sky lighting the scene in place of the environment, and the
+  // project's glass mode; a slab takes a glass material from its preset.
+  const set = async (sel, v) => { await js(`(s => { s.value = ${JSON.stringify(v)}; s.dispatchEvent(new Event('change')); })(document.querySelector(${JSON.stringify(sel)}))`); await sleep(800); };
+  const tick = async (sel, on) => { await js(`(c => { c.checked = ${on}; c.dispatchEvent(new Event('change')); })(document.querySelector(${JSON.stringify(sel)}))`); await sleep(800); };
+  await click('#scenes button:nth-child(1)'); await sleep(500);
+  if (read().scenes[0].sky) await tick('[data-look="sky"]', false);
+  await tick('[data-look="sky"]', true);
+  check(read().scenes[0].sky?.model === 'physical', 'the Look section adds a physical sky');
+  await js(`document.querySelector('[data-sun-dial]').scrollIntoView({ block: 'center' })`); await sleep(200);
+  const [dx, dy, dw] = await js(`(r => [r.left, r.top, r.width])(document.querySelector('[data-sun-dial]').getBoundingClientRect())`);
+  // From overhead out to the right on the horizon ring: the sun sets due right.
+  await drag(dx + dw / 2, dy + dw / 2, dx + dw / 2 + dw * 0.4, dy + dw / 2);
+  const sky = read().scenes[0].sky;
+  check(Math.abs(sky.elevation) <= 3 && Math.abs(sky.azimuth - 90) <= 3, `the sun dial sets the sun (${sky.elevation}°, ${sky.azimuth}°)`);
+  await set('[data-look="lit"]', 'sky');
+  check(!read().scenes[0].environment && read().scenes[0].sky, 'the sky lights the scene in place of the environment');
+  await set('[data-look="glass"]', 'rt-path');
+  await set('[data-look="glass_samples"]', '64');
+  check(read().render?.glass === 'rt-path' && read().render.glass_samples === 64, 'the project\'s glass mode and samples');
+  await shot('editor-3d-look.png');
+  await set('[data-look="glass"]', 'raster');
+  check(!read().render, 'raster glass leaves the file as it was');
+  const slab = read().scenes[0].layers.find(l => ['rect', 'ellipse', 'text'].includes(l.kind) && !l.material);
+  await click(`#layers [data-layer="${slab.id}"]`);
+  for (let i = 0; i < 50 && !(await js(`!!document.querySelector('[data-adder="+ material"]')`)); i++) await sleep(100);
+  await set('[data-adder="+ material"]', 'frosted glass');
+  const mat = read().scenes[0].layers.find(l => l.id === slab.id).material;
+  check(mat?.transmission === 1 && mat.roughness === 0.35, 'a slab takes a frosted glass material');
+  check(await js(`[...document.querySelectorAll('#inspector .section span')].some(s => s.textContent === 'Material') && !!document.querySelector('[data-prop="material.roughness"]')`), 'its material shows as keyable rows');
+  await js(`document.querySelector('#right').scrollTop = 1e6`); await sleep(200);
+  await shot('editor-3d-material.png');
   // A 3D scene's effects run on the 3D pass: levels with no saturation
   // greys a red card on WebGPU (in 3D) and WebGL2 (flat, as before); the
   // CPU draws it red, without effects.
@@ -799,6 +833,65 @@ try {
     await drag(dx0, dy, dx1, dy, true);
     check(lay('b').x.map(k => k.t).join() === '2,3' && lay('a').rotation.map(k => k.t).join() === '0.5,3', `dragging a picked key moves every picked key (${lay('b').x.map(k => k.t)} / ${lay('a').rotation.map(k => k.t)})`);
     await shot('editor-timeline.png');
+  }
+  // Procedural: the instancing duplicator's source, the effector gizmo,
+  // group animator presets and behaviours.
+  {
+    writeFileSync(file, readFileSync(join(here, '../examples/procedural.cut.json'), 'utf8')); await sleep(1500);
+    const lay = id => read().scenes[0].layers.find(l => l.id === id);
+    const row = id => `#layers button[data-layer="${id}"]`;
+    const pick = async id => { await js(`document.querySelector('${row(id)}').click()`); await sleep(400); };
+    const [ex, ey] = await rect('#overlay');
+    const [ew] = await js(`(r => [r.width])(document.querySelector('#overlay').getBoundingClientRect())`);
+    const at2d = ([x, y]) => [ex + x * ew / 1280, ey + y * ew / 1280];
+    const pull = async ([x0, y0], [x1, y1]) => {
+      await mouse('mousePressed', x0, y0);
+      for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8); await sleep(20); }
+      await mouse('mouseReleased', x1, y1); await sleep(700);
+    };
+    await js(`import('/transport.js').then(m => m.seek(2))`); await sleep(400);
+    await pick('array');
+    check(await js(`document.querySelector('[data-source]')?.value`) === 'tile', 'the duplicator shows its source');
+    const ef = await js('cutEffectors()');
+    check(ef.length === 1 && ef[0].i === 0, `the effector is in the viewport (${JSON.stringify(ef)})`);
+    await shot('editor-procedural.png');
+    // The radius knob: dragged 60 px out, the radius grows by 60.
+    const r0 = lay('array').animators[0].falloff.radius;
+    const [kx, ky] = ef[0].knob;
+    await pull(at2d([kx, ky]), at2d([kx + 60, ky]));
+    const r1 = lay('array').animators[0].falloff.radius;
+    check(Math.abs(r1 - r0 - 60) < 3, `dragging the radius knob sets the radius (${r0} to ${r1})`);
+    // The centre: dragged 100 px down, keyed at the playhead.
+    const [cx, cy] = (await js('cutEffectors()'))[0].c;
+    await pull(at2d([cx, cy]), at2d([cx, cy + 100]));
+    const fy = lay('array').animators[0].falloff.y, k2 = fy.find(k => Math.abs(k.t - 2) < 1e-6);
+    check(k2 && Math.abs((await js('cutEffectors()'))[0].c[1] - (cy + 100)) < 3, `dragging the centre keys it at the playhead (${JSON.stringify(fy)})`);
+    await key('z', 'KeyZ', 2); await key('z', 'KeyZ', 2);
+    check(lay('array').animators[0].falloff.radius === r0, 'undo takes the drags back');
+    // An effector switched on for the second animator; its order offers distance.
+    await js(`(c => { c.checked = true; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-effector="1"]'))`); await sleep(600);
+    check(JSON.stringify(lay('array').animators[1].falloff) === '{}' && (await js('cutEffectors()')).length === 2, 'an animator gets an effector');
+    check(await js(`[...document.querySelectorAll('#inspector [data-prop^="animators.1.falloff."]')].length`) === 4, 'its numbers show as keyable rows');
+    check(await js(`[...document.querySelectorAll('#inspector [data-prop^="animators.0.jitter_"]')].length`) === 6, 'the jitter rows show');
+    // Back to a shape: the shape field returns.
+    await js(`(s => { s.value = ''; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-source]'))`); await sleep(600);
+    check(lay('array').source === undefined && await js(`[...document.querySelectorAll('#inspector label')].some(l => l.textContent === 'shape')`), 'clearing the source makes copies of a shape again');
+    await key('z', 'KeyZ', 2);
+    check(lay('array').source === 'tile', 'and undo brings the source back');
+    // A group: Cascade children, and a wiggle.
+    await pick('words');
+    const opts = await js(`[...document.querySelector('[data-adder="+ animator"]').options].map(o => o.textContent).join()`);
+    check(opts.includes('Cascade children') && opts.includes('Ripple from point'), `a group offers its presets (${opts})`);
+    await js(`(s => { s.value = 'cascade_children'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-adder="+ animator"]'))`); await sleep(600);
+    check(lay('words').animators.length === 2 && lay('words').animators[1].stagger === 0.12, 'Cascade children lands on the group');
+    await js(`(s => { s.value = 'wiggle'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-adder="+ behaviour"]'))`); await sleep(600);
+    const bs = lay('words').behaviours;
+    check(bs.length === 4 && bs[2].prop === 'x' && bs[3].prop === 'y', `Wiggle adds behaviours (${JSON.stringify(bs)})`);
+    await js(`(s => { s.value = 'scale'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-behaviour-prop="2"]'))`); await sleep(600);
+    check(lay('words').behaviours[2].prop === 'scale', 'a behaviour\'s property changes');
+    check(await js(`!!document.querySelector('#inspector [data-prop="behaviours.3.amount"]')`), 'its amount is a keyable row');
+    await js(`document.querySelector('#right').scrollTop = 1e6`); await sleep(200);
+    await shot('editor-behaviours.png');
   }
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();

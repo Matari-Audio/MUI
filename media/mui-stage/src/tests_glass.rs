@@ -589,6 +589,7 @@ fn cloudy(drift: f32) -> Sky {
         sun_color: [2.6, 2.4, 2.1],
         cover: 0.5,
         drift: [drift, 0.],
+        ..Sky::default()
     }
 }
 
@@ -743,6 +744,7 @@ fn glass_bends_the_sky_in_from_beyond_the_frame() {
         sun_color: [1.; 3],
         cover: 0.,
         drift: [0.; 2],
+        ..Sky::default()
     };
     let camera = Camera::front(240., 40.);
     let render = |stage: &mut Stage, glass: bool| {

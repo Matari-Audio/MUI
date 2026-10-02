@@ -136,7 +136,7 @@ pub fn text(
 }
 
 /// Where copy `i` of `n` sits and how it turns (degrees).
-fn slots(l: &Drawn, layout: Layout, along: &str, orient: bool) -> Vec<(KPoint, f64)> {
+pub(crate) fn slots(l: &Drawn, layout: Layout, along: &str, orient: bool) -> Vec<(KPoint, f64)> {
     let n = l.count;
     let [sx, sy] = l.spacing;
     let centred = |i: usize, n: usize| i as f64 - (n as f64 - 1.) / 2.;

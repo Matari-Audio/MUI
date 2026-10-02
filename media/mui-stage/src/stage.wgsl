@@ -56,6 +56,10 @@ struct Globals {
     sky1: vec4f,
     sky2: vec4f,
     sky3: vec4f,
+    // A physical sky (sky0.w 2): dust (Mie) and ozone density, the eye's
+    // height in km, the ground's albedo; sky5.x the sun's irradiance.
+    sky4: vec4f,
+    sky5: vec4f,
 };
 // env2.z: 1 in a beauty sample (rays jitter per sample); env2.w: the last
 // mip level of the scene colour chain (`aux` in the SSR and glass passes).
@@ -86,7 +90,7 @@ struct Draw {
     // a: 1 on a slab (light leaves parallel to how it came), 0 on a solid.
     tint: vec4f,
     // Glass: x print (the layer's dark is clear, its light is ink), y the
-    // bevel in world units.
+    // bevel in world units. w: emission, the colour given off (any surface).
     glass2: vec4f,
     // Glass pressed with a relief: the steepest slope of its reeds,
     // hammered dimples and ripples, and (`glass4`) their sizes.
@@ -267,6 +271,8 @@ fn contact(world: vec3f) -> f32 {
 // --- the environment --------------------------------------------------
 
 fn env_on() -> bool { return g.env.w > 0.5; }
+// The environment is the sky's light, baked (`Sky::light`).
+fn sky_lights() -> bool { return g.env.w > 1.5; }
 // A world direction as the image sees it, turned by the rotation.
 fn env_dir(d: vec3f) -> vec3f {
     return vec3f(g.env.y * d.x - g.env.z * d.z, d.y, g.env.z * d.x + g.env.y * d.z);
@@ -277,7 +283,13 @@ fn env_uv(d: vec3f) -> vec2f {
 // Light arriving along -d, blurred for `rough`.
 fn env_radiance(d: vec3f, rough: f32) -> vec3f {
     let lod = clamp(rough, 0., 1.) * g.env2.y;
-    return textureSampleLevel(env_map, env_samp, env_uv(env_dir(d)), lod).rgb * g.env.x;
+    let baked = textureSampleLevel(env_map, env_samp, env_uv(env_dir(d)), lod).rgb * g.env.x;
+    // The sky's own light: a near mirror sees the sky itself, its clouds
+    // and its sun, which the bake leaves out.
+    if (sky_lights() && rough < 0.3) {
+        return mix(sky_spec(d, rough), baked, smoothstep(0.05, 0.3, rough));
+    }
+    return baked;
 }
 // What a white Lambertian surface facing `n` reflects of the environment.
 fn env_irradiance(n: vec3f) -> vec3f {
@@ -409,6 +421,96 @@ fn cloud_density(p: vec2f) -> f32 {
     let cut = mix(0.66, 0.3, g.sky1.w);
     return smoothstep(cut, cut + 0.16, n);
 }
+// The physical sky (`sky.rs`, which the tests hold this to): single
+// scattering through Rayleigh, Mie and ozone, kilometres from the earth's
+// centre, the earth's shadow cutting the sun off for twilight.
+fn sky_physical() -> bool { return g.sky0.w > 1.5; }
+const SKY_PI: f32 = 3.14159265;
+const EARTH: f32 = 6360.;
+const AIR_TOP: f32 = 6460.;
+const RAYLEIGH: vec3f = vec3f(5.802e-3, 13.558e-3, 33.1e-3);
+const OZONE: vec3f = vec3f(0.650e-3, 1.881e-3, 0.085e-3);
+// Near and far crossings of the sphere of radius `r`; x > y when none.
+fn sphere_hit(o: vec3f, d: vec3f, r: f32) -> vec2f {
+    let b = dot(o, d);
+    let h = b * b - (dot(o, o) - r * r);
+    if (h < 0.) { return vec2f(1., -1.); }
+    return vec2f(-b - sqrt(h), -b + sqrt(h));
+}
+fn air_density(h: f32) -> vec3f {
+    return vec3f(exp(-h / 8.), exp(-h / 1.2), max(1. - abs(h - 25.) / 15., 0.));
+}
+fn air_extinction(k: vec3f) -> vec3f {
+    return RAYLEIGH * k.x + 4.4e-3 * g.sky4.x * k.y + OZONE * g.sky4.y * k.z;
+}
+// Optical depth from `p` to the sun; x < 0 where the earth is in the way.
+fn depth_to_sun(p: vec3f, sun: vec3f) -> vec3f {
+    let e = sphere_hit(p, sun, EARTH);
+    if (e.x <= e.y && e.x > 0.) { return vec3f(-1.); }
+    let far = sphere_hit(p, sun, AIR_TOP).y;
+    let ds = far / 6.;
+    var od = vec3f(0.);
+    for (var i = 0; i < 6; i++) {
+        let q = p + sun * ((f32(i) + 0.5) * ds);
+        od += air_extinction(air_density(length(q) - EARTH)) * ds;
+    }
+    return od;
+}
+fn air_eye() -> vec3f { return vec3f(0., EARTH + clamp(g.sky4.z, 0.001, 50.), 0.); }
+// Radiance along unit `d`, without the sun's disc.
+fn atmosphere(d: vec3f) -> vec3f {
+    let sun = g.sky0.xyz;
+    let o = air_eye();
+    let top = sphere_hit(o, d, AIR_TOP);
+    var far = top.y;
+    let e = sphere_hit(o, d, EARTH);
+    let ground = e.x <= e.y && e.x > 0.;
+    if (ground) { far = e.x; }
+    let mu = dot(d, sun);
+    let pr = 3. / (16. * SKY_PI) * (1. + mu * mu);
+    let mg = 0.8;
+    let pm = 3. / (8. * SKY_PI) * (1. - mg * mg) * (1. + mu * mu)
+        / ((2. + mg * mg) * pow(max(1. + mg * mg - 2. * mg * mu, 1e-4), 1.5));
+    let mie = 3.996e-3 * g.sky4.x;
+    var od = vec3f(0.);
+    var sum = vec3f(0.);
+    for (var i = 0; i < 16; i++) {
+        let t0 = f32(i * i) / 256. * far;
+        let t1 = f32((i + 1) * (i + 1)) / 256. * far;
+        let ds = t1 - t0;
+        let p = o + d * (0.5 * (t0 + t1));
+        let r = length(p);
+        let k = air_density(r - EARTH);
+        let step = air_extinction(k) * ds;
+        let mid = od + 0.5 * step;
+        od += step;
+        let sr = RAYLEIGH * k.x;
+        let sm = mie * k.y;
+        let ol = depth_to_sun(p, sun);
+        if (ol.x >= 0.) {
+            sum += exp(-(mid + ol)) * (sr * pr + sm * pm) * ds;
+        }
+        let up = dot(p, sun) / r;
+        let lit = smoothstep(-0.3, 0.2, up) * (0.3 + 0.7 * max(up, 0.)) * (1. + g.sky4.w);
+        sum += exp(-mid) * (sr + sm) * ds * lit / (4. * SKY_PI);
+    }
+    if (ground) {
+        let p = o + d * e.x;
+        let n = p / EARTH;
+        let ol = depth_to_sun(p, sun);
+        let lit = select(exp(-ol), vec3f(0.), ol.x < 0.);
+        let ns = dot(n, sun);
+        sum += exp(-od) * (lit * max(ns, 0.) + 0.15 * smoothstep(-0.3, 0.2, ns)) * g.sky4.w / SKY_PI;
+    }
+    return sum * g.sky5.x;
+}
+// The sun's disc along `d`: its edge a little soft, darker at its limb.
+fn sun_disc(d: vec3f) -> vec3f {
+    let r = acos(clamp(dot(d, g.sky0.xyz), -1., 1.)) / 0.00467;
+    let limb = 1. - vec3f(0.397, 0.503, 0.652) * (1. - sqrt(max(1. - r * r, 0.)));
+    return limb * (1. - smoothstep(0.9, 1.05, r));
+}
+
 // Radiance along `d`: the gradient, the sun, and the clouds on a layer
 // above (a sea of them below the horizon), lit from the sun.
 fn sky(d: vec3f) -> vec3f { return sky_seen(d, 1.); }
@@ -426,17 +528,24 @@ fn sky_seen(d: vec3f, disc: f32) -> vec3f {
     let up = d.y;
     let h = 1. - clamp(abs(up), 0., 1.);
     let mu = max(dot(d, sun), 0.);
-    var c = mix(g.sky1.rgb, g.sky2.rgb, pow(h, 6.));
-    // Below the horizon the haze darkens toward the ground.
-    c = select(c, mix(g.sky2.rgb, g.sky2.rgb * 0.55 + g.sky1.rgb * 0.15, smoothstep(0., 0.5, -up)), up < 0.);
-    c += sunc * (0.06 * pow(mu, 4.) + 0.12 * pow(mu, 16.) * h + 0.35 * pow(mu, 64.));
+    let physical = sky_physical();
+    var c: vec3f;
+    if (physical) {
+        c = atmosphere(d);
+    } else {
+        c = mix(g.sky1.rgb, g.sky2.rgb, pow(h, 6.));
+        // Below the horizon the haze darkens toward the ground.
+        c = select(c, mix(g.sky2.rgb, g.sky2.rgb * 0.55 + g.sky1.rgb * 0.15, smoothstep(0., 0.5, -up)), up < 0.);
+        c += sunc * (0.06 * pow(mu, 4.) + 0.12 * pow(mu, 16.) * h + 0.35 * pow(mu, 64.));
+    }
     // The layer, curved over like the sky's dome: farther toward the
     // horizon, so smaller and hazier there, but not flattened to streaks.
     let y = abs(up) * 0.8 + 0.15;
     let below = up < 0.;
     let drift = vec2f(g.sky2.w, g.sky3.w);
     let p = d.xz / y * select(0.5, 0.4, below) + drift + select(vec2f(0.), vec2f(17.3, -41.9), below);
-    let dens = cloud_density(p);
+    // A physical sky has ground below its horizon, not a sea of cloud.
+    let dens = select(cloud_density(p), 0., below && physical);
     if (dens > 0.001) {
         // Thinner toward the sun: march a little that way through the layer.
         let toward = normalize(vec2f(sun.x, sun.z) + vec2f(1e-4)) * 0.18;
@@ -451,7 +560,13 @@ fn sky_seen(d: vec3f, disc: f32) -> vec3f {
         c = mix(c, cloud, dens * fade);
     }
     // The disc, over the clouds only where they are thin.
-    c += sunc * 30. * disc * smoothstep(0.99996, 0.99999, mu) * (1. - dens);
+    if (physical) {
+        // ponytail: 60 times its light, not the real ~46000 (pi over the
+        // disc's solid angle), which no half float or bloom survives.
+        c += sunc * 60. * disc * sun_disc(d) * (1. - dens);
+    } else {
+        c += sunc * 30. * disc * smoothstep(0.99996, 0.99999, mu) * (1. - dens);
+    }
     return c;
 }
 
@@ -538,11 +653,20 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
     if (below < -0.5) { return vec4f(0.); }
     let r = length(world.xz) / d.mirror.w;
     let f = d.mirror.y * exp(-max(below, 0.) / d.mirror.z);
-    return vec4f(mix(g.floor.rgb * c.a, c.rgb, f), c.a) * exp(-r * r);
+    // The floor round the reflection, lit as `fs_floor` lights it where
+    // the eye meets it: a dim floor at dusk keeps its reflections dim.
+    var floor = g.floor.rgb;
+    if (lit_shot()) {
+        let k = clamp((g.eye.y - d.mirror.x) / max(g.eye.y - world.y, 1e-4), 0., 1.);
+        let p = g.eye.xyz + (world - g.eye.xyz) * k;
+        floor *= shade(p, vec3f(0., 1., 0.), 1., 0.).diffuse;
+    }
+    return vec4f(mix(floor * c.a, c.rgb, f), c.a) * exp(-r * r);
 }
 
 @fragment fn fs_front(i: Cap) -> Out {
     var c = textureSample(tex, samp, i.uv);
+    let glow = c.rgb * d.glass2.w;
     let n = face_normal(i.world);
     var weight = vec3f(0.);
     let metal = d.flags.y;
@@ -554,6 +678,7 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
         c = vec4f(c.rgb * (1. - metal) * shade(i.world, n, d.flags.x, 0.).diffuse
             + weight * spec_fallback(reflect(-v, n), rough) * c.a, c.a);
     }
+    c = vec4f(c.rgb + glow, c.a);
     let o = mirrored(vec4f(c.rgb * d.size.w, c.a) * d.edge.a, i.world);
     if (o.a < 0.004) { discard; }
     return out_spec(o, i.world, n, weight * d.size.w, rough);
@@ -686,6 +811,7 @@ struct MeshV {
         c = base * (1. - metal) * (0.3 + 0.7 * ndl)
             + f0 * pow(max(dot(n, h), 0.), shine) * ndl * (shine + 8.) / 25.;
     }
+    c += base * d.glass2.w;
     let o = mirrored(vec4f(c, 1.) * d.edge.a * albedo.a, i.world);
     if (o.a < 0.004) { discard; }
     return out_spec(o, i.world, n, weight, rough);
@@ -1589,5 +1715,8 @@ fn srgb(c: vec3f) -> vec3f {
     var o = srgb(select(c, aces(c), post.film.x > 0.5));
     let px = i.uv * g.time_res.yz;
     o += (hash2(px + fract(post.lens.w * 7.31) * 1000.) - 0.5) * post.lens.z;
+    // A sky's smooth gradients would band in 8 bits: a triangular dither of
+    // one step breaks them up.
+    if (sky_on()) { o += (hash2(px) - hash2(px + vec2f(57.3, 11.9))) / 255.; }
     return vec4f(clamp(o, vec3f(0.), vec3f(1.)), 1.);
 }

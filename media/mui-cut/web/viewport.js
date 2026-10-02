@@ -5,6 +5,7 @@ import { DRAG_SOURCE, picking, refreshLists, select, setSelection } from './list
 import { dropSource } from './sources.js';
 import { boundsOf, clearGuides, drawGuides, snapMove, snapPoint, targets } from './snap.js';
 import { drawGizmo, gizmoBox, gizmoCursor, gizmoHit, moveGizmo, startGizmo } from './gizmo.js';
+import { drawEffectors, effectorHit, moveEffector } from './procedural.js';
 import { $, C, S, cut, pacing, worker } from './state.js';
 import { refresh } from './transport.js';
 import { openComp } from './tree.js';
@@ -98,6 +99,7 @@ function drawOverlay() {
     }
   }
   drawGizmo(octx, k, dpr, perPx());
+  drawEffectors(octx, k, dpr);
   if (drag) drawGuides(octx, k, dpr);
   if (drag?.marquee) {
     const [[ax, ay], [bx, by]] = drag.marquee;
@@ -191,8 +193,10 @@ over.onpointerdown = e => {
     over.setPointerCapture(e.pointerId);
     return;
   }
-  // A gizmo handle first; then, with several selected, their box moves
-  // them from anywhere inside it.
+  // An effector's handle, then a gizmo handle; then, with several
+  // selected, their box moves them from anywhere inside it.
+  const eh = effectorHit(p, perPx());
+  if (eh) { drag = { effector: eh }; over.setPointerCapture(e.pointerId); begin(); return; }
   const gh = gizmoHit(p, perPx());
   if (gh) { drag = { gizmo: startGizmo(gh, p), snap: targets(S.selection, perPx()) }; over.setPointerCapture(e.pointerId); begin(); return; }
   const how = picking(e), box = !id && !how && gizmoBox();
@@ -262,6 +266,8 @@ over.onpointermove = e => {
   }
   const p = toProject(e);
   if (!drag) {
+    const eh = !S.interact && effectorHit(p, perPx());
+    if (eh) { over.style.cursor = eh.radius ? 'ew-resize' : 'move'; return; }
     const gh = !S.interact && gizmoHit(p, perPx());
     if (gh) { over.style.cursor = gizmoCursor(gh); return; }
     const h = hit(p); if (h !== hover) { hover = h; S.need = true; }
@@ -274,6 +280,7 @@ over.onpointermove = e => {
     changed(); return;
   }
   if (drag.marquee) { drag.marquee[1] = p; drawOverlay(); return; }
+  if (drag.effector) { moveEffector(drag.effector, p); changed(); drawOverlay(); return; }
   const free = e.ctrlKey || e.metaKey;
   if (drag.gizmo) {
     // A scale handle on an upright box: the edges it drags snap.

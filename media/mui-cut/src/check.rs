@@ -349,7 +349,12 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                     && !used.contains(k)
                     && !matches!(
                         k.as_str(),
-                        "id" | "name" | "parent" | "kind" | "animators" | "deformers"
+                        "id" | "name"
+                            | "parent"
+                            | "kind"
+                            | "animators"
+                            | "deformers"
+                            | "behaviours"
                     )
                     && !(three
                         && matches!(k.as_str(), "cast_shadows" | "receive_shadows" | "overlay"))
@@ -394,6 +399,18 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                 unknown(out, ra, &props_of(&animator), &ap, at);
                 for (k, v) in ra.as_object().into_iter().flatten() {
                     keys_fields(out, v, &key, &format!("{ap}.{k}"), at);
+                }
+            }
+            for (bi, rb) in rl["behaviours"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let bp = format!("{lp}.behaviours[{bi}]");
+                unknown(out, rb, &props_of(&def("Behaviour")), &bp, at);
+                for (k, v) in rb.as_object().into_iter().flatten() {
+                    keys_fields(out, v, &key, &format!("{bp}.{k}"), at);
                 }
             }
             for (di, rd) in rl["deformers"].as_array().into_iter().flatten().enumerate() {
@@ -877,9 +894,11 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             );
         }
     }
+    // A duplicator's hidden source draws as its copies.
+    let instanced = crate::motion::instanced(s);
     for (i, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{i}]");
-        if !seen[i] && !matches!(l.kind, Kind::Group) {
+        if !seen[i] && !matches!(l.kind, Kind::Group) && !instanced[i] {
             out.add(
                 Severity::Warning,
                 "never_visible",
@@ -1277,7 +1296,8 @@ mod tests {
         let v = jsonschema::validator_for(&schema).unwrap();
         let effects = include_str!("../examples/effects.cut.json");
         let looks = include_str!("../examples/looks2d.cut.json");
-        for src in [DEMO, SHOWCASE, effects, looks, PLUGIN] {
+        let procedural = include_str!("../examples/procedural.cut.json");
+        for src in [DEMO, SHOWCASE, effects, looks, PLUGIN, procedural] {
             let doc: Value = serde_json::from_str(src).unwrap();
             let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errs.is_empty(), "{errs:?}");

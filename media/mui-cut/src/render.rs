@@ -326,6 +326,7 @@ impl Assets {
                 layout,
                 along,
                 orient,
+                ..
             } => vector::duplicator(l, *shape, d, *layout, along, *orient),
             // A missing file draws nothing (the CLI warns when it loads).
             Kind::Svg { path } => self.svgs.get(path).map(|p| p.to_vec()).unwrap_or_default(),
@@ -516,6 +517,31 @@ impl Assets {
                 out.scenes.extend(inner.scenes);
                 return Ok(());
             }
+            // Instanced copies paint like a comp's layers; its quad is
+            // their bounds (a point at its pivot with none).
+            Kind::Duplicator { source, .. } if !source.is_empty() => {
+                let mut inner = Layers {
+                    scenes: Vec::new(),
+                    quads: Vec::new(),
+                    parts: Vec::new(),
+                };
+                for k in &l.comp {
+                    self.layer(k, size, &mut inner)?;
+                }
+                let pts = inner.quads.iter().flat_map(|q| q.pts);
+                let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+                for [x, y] in pts {
+                    (lo, hi) = ([lo[0].min(x), lo[1].min(y)], [hi[0].max(x), hi[1].max(y)]);
+                }
+                out.quads.push(if lo[0] <= hi[0] {
+                    let place = Affine::translate((lo[0], lo[1]));
+                    quad(l.id.clone(), place, hi[0] - lo[0], hi[1] - lo[1])
+                } else {
+                    quad(l.id.clone(), at, 0., 0.)
+                });
+                out.scenes.extend(inner.scenes);
+                return Ok(());
+            }
             _ => {}
         }
         if let Some(p) = &l.plugin {
@@ -584,6 +610,9 @@ impl Assets {
         match &l.kind {
             Kind::Group => return Vec::new(),
             Kind::Comp { .. } => return l.comp.iter().flat_map(|k| self.slabs(k)).collect(),
+            Kind::Duplicator { source, .. } if !source.is_empty() => {
+                return l.comp.iter().flat_map(|k| self.slabs(k)).collect();
+            }
             _ => {}
         }
         let Some(p) = &l.plugin else {

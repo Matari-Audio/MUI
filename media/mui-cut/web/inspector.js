@@ -5,15 +5,16 @@ import { LOOKS } from './looks.js';
 import { $, FX, S, VECTOR, cut } from './state.js';
 import { refresh } from './transport.js';
 import { compable, ungroupSelected } from './tree.js';
+import { layerLook, materialHeader, sceneLook } from './look.js';
 
 // ---------- inspector
-function field(label, input, keyBtn) {
+export function field(label, input, keyBtn) {
   const l = document.createElement('label'); l.textContent = label;
   const box = $('#inspector');
   box.append(l, input);
   if (keyBtn) box.append(keyBtn); else input.classList.add('wide');
 }
-function input(value, onchange, type = 'text') {
+export function input(value, onchange, type = 'text') {
   const i = document.createElement(type === 'area' ? 'textarea' : 'input');
   if (type !== 'area') i.type = type;
   i.value = value;
@@ -21,7 +22,7 @@ function input(value, onchange, type = 'text') {
   i.onchange = () => onchange(i.value);
   return i;
 }
-function choice(value, options, onchange) {
+export function choice(value, options, onchange) {
   const s = document.createElement('select');
   s.replaceChildren(...options.map(o => new Option(o, o, false, o === String(value))));
   s.onchange = () => onchange(s.value);
@@ -29,7 +30,7 @@ function choice(value, options, onchange) {
 }
 // A full-width header over an animator's or deformer's rows, with its
 // settings and a remove button.
-function section(title, controls, remove) {
+export function section(title, controls, remove) {
   const h = document.createElement('div'); h.className = 'section';
   const n = document.createElement('span'); n.textContent = title;
   const x = document.createElement('button'); x.textContent = '×'; x.title = 'Remove'; x.onclick = remove;
@@ -93,8 +94,16 @@ function kindFields(l) {
     field('level stagger', st);
   }
   if (l.kind === 'duplicator') {
-    field('shape', choice(l.shape ?? 'rect', ['rect', 'ellipse', 'path'], v => set('shape', v, 'rect')));
-    if (l.shape === 'path') field('d', input(l.d ?? '', v => set('d', v, ''), 'area'));
+    // Instance another layer (and its subtree) instead of a shape.
+    const src = choice(l.source ?? '', ['', ...scene().layers.filter(o => o !== l).map(o => o.id)], v => set('source', v, ''));
+    src.options[0].textContent = '(a shape)'; src.dataset.source = ''; src.title = 'A layer (a group with its children) drawn at every copy';
+    field('source', src);
+    if (l.source) {
+      const c = document.createElement('input'); c.type = 'checkbox'; c.checked = !!l.show_source; c.dataset.showSource = '';
+      c.title = 'Keep drawing the source where it is too'; c.onchange = () => set('show_source', c.checked, false);
+      field('show source', c);
+    } else field('shape', choice(l.shape ?? 'rect', ['rect', 'ellipse', 'path'], v => set('shape', v, 'rect')));
+    if (!l.source && l.shape === 'path') field('d', input(l.d ?? '', v => set('d', v, ''), 'area'));
     field('layout', choice(l.layout ?? 'grid', ['grid', 'radial', 'linear', 'path'], v => set('layout', v, 'grid')));
     if (l.layout === 'path') field('along', input(l.along ?? '', v => set('along', v, ''), 'area'));
     field('orient', choice(l.orient ?? false, ['false', 'true'], v => set('orient', v === 'true', false)));
@@ -117,51 +126,51 @@ function groupHeader(l, group, i) {
     if (l.kind === 'text') c.push(choice(item.by ?? 'char', ['char', 'word', 'line'], v => set('by', v, 'char')));
     c.push(choice(item.shape ?? 'square', ['square', 'ramp_up', 'ramp_down', 'triangle', 'round', 'smooth'], v => set('shape', v, 'square')));
     c.push(choice(item.ease ?? 'linear', ['linear', 'in', 'out', 'in_out', 'step'], v => set('ease', v, 'linear')));
-    c.push(choice(item.order ?? 'forward', ['forward', 'reverse', 'random'], v => set('order', v, 'forward')));
-    if (item.order === 'random') { const s = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); s.title = 'seed'; c.push(s); }
+    const order = choice(item.order ?? 'forward', ['forward', 'reverse', 'random', ...(l.kind === 'text' ? [] : ['distance'])], v => set('order', v, 'forward'));
+    order.title = 'Order: distance ranks by distance from the effector (or the origin)'; c.push(order);
+    const se = choice(item.stagger_ease ?? 'linear', ['linear', 'in', 'out', 'in_out', 'step'], v => set('stagger_ease', v, 'linear'));
+    se.title = 'Stagger ease: how the delays spread over the ranks'; se.dataset.staggerEase = ''; c.push(se);
+    const s = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); s.title = 'Seed: the random order and jitter'; c.push(s);
     section(`Animator ${i + 1}`, c, remove);
+    if (l.kind !== 'text') {
+      // The effector: a field over the copies or children, drawn (and
+      // dragged) in the viewport.
+      const on = document.createElement('input'); on.type = 'checkbox'; on.checked = !!item.falloff; on.dataset.effector = String(i);
+      on.title = 'A spatial effector: weigh units by where they sit (drag its centre and radius in the viewport)';
+      on.onchange = () => set('falloff', on.checked ? {} : undefined, undefined);
+      field('effector', on);
+      if (item.falloff) {
+        const f = item.falloff, fset = (k, v, d) => edit(() => { if (v === d) delete f[k]; else f[k] = v; });
+        const sh = choice(f.shape ?? 'sphere', ['sphere', 'box', 'linear'], v => fset('shape', v, 'sphere')); sh.dataset.effectorShape = String(i);
+        field('field', sh);
+        const inv = document.createElement('input'); inv.type = 'checkbox'; inv.checked = !!f.invert; inv.onchange = () => fset('invert', inv.checked, false);
+        field('invert', inv);
+      }
+    }
+  } else if (group === 'behaviours') {
+    const p = choice(item.prop, BEHAVE, v => set('prop', v, undefined)); p.dataset.behaviourProp = String(i); p.title = 'The property it moves';
+    const k = choice(item.kind ?? 'wiggle', ['wiggle', 'oscillate'], v => set('kind', v, 'wiggle')); k.dataset.behaviourKind = String(i);
+    const c = [p, k];
+    if ((item.kind ?? 'wiggle') === 'wiggle') { const sd = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); sd.title = 'seed'; c.push(sd); }
+    section(`Behaviour ${i + 1}`, c, remove);
   } else {
     const c = [];
     if (item.kind === 'noise') { const s = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); s.title = 'seed'; c.push(s); }
     section(`${item.kind} ${i + 1}`, c, remove);
   }
 }
-function adder(label, options, add) {
-  const s = choice('', ['', ...options], v => { if (v) add(v); });
+// What a behaviour moves (motion.rs BEHAVIOUR_PROPS).
+const BEHAVE = ['x', 'y', 'z', 'scale', 'rotation', 'rx', 'ry', 'opacity', 'width', 'height', 'radius', 'font_size', 'tracking', 'stroke_width', 'path_offset', 'ring_radius'];
+// Options are values, or `[value, label]`.
+export function adder(label, options, add) {
+  const s = choice('', ['', ...options.map(o => [o].flat()[0])], v => { if (v) add(v); });
   s.options[0].textContent = label;
+  options.forEach((o, i) => { if (Array.isArray(o)) s.options[i + 1].textContent = o[1]; });
   s.classList.add('wide'); s.dataset.adder = label;
   const box = $('#inspector'); box.append(document.createElement('span'), s);
 }
-// A 3D scene's environment light and ambient occlusion, each switched on by
-// its box. Keyed or bound numbers show read-only; edit those in the JSON.
-function sceneLook(s) {
-  const toggle = (label, key, fresh) => {
-    const c = document.createElement('input'); c.type = 'checkbox';
-    c.checked = !!s[key]; c.dataset.look = key;
-    c.onchange = () => edit(() => { if (c.checked) s[key] = fresh(); else delete s[key]; });
-    field(label, c);
-    return s[key];
-  };
-  const num = (o, k, dflt, label) => {
-    const v = o[k] ?? dflt, fixed = typeof v === 'number';
-    const i = lock(input(fixed ? v : 'keyed', x => edit(() => { o[k] = Number(x); }), fixed ? 'number' : 'text'), v);
-    if (!fixed) i.disabled = true;
-    field(label, i);
-  };
-  const e = toggle('environment', 'environment', () => ({}));
-  if (e) {
-    field('hdri', input(e.hdri ?? '', v => edit(() => { if (v) e.hdri = v; else delete e.hdri; loadAssets(); })));
-    num(e, 'intensity', 1, 'intensity');
-    num(e, 'rotation', 0, 'rotation');
-    const b = document.createElement('input'); b.type = 'checkbox';
-    b.checked = !!e.background; b.onchange = () => edit(() => { e.background = b.checked; });
-    field('env background', b);
-  }
-  const a = toggle('occlusion', 'ao', () => ({}));
-  if (a) { num(a, 'strength', 1, 'ao strength'); num(a, 'radius', 60, 'ao radius'); }
-}
 // A bound field shows its value and stays read-only.
-function lock(i, v) {
+export function lock(i, v) {
   if (!isBind(v) && !(isKeys(v) && v.some(k => isBind(k.v)))) return i;
   i.disabled = true;
   i.title = `bound to the variable \`${(isBind(v) ? v : v.find(k => isBind(k.v)).v).var}\``;
@@ -253,11 +262,12 @@ export function refreshInspector() {
   const mine = p => S.selPart ? p.startsWith(`parts.${S.selPart}.`) : !p.startsWith('parts.');
   for (const { p, v } of propsOf(l).filter(r => mine(r.p))) {
     const parts = p.split('.');
-    const g = parts.length > 1 ? parts.slice(0, 2).join('.') : '';
+    const g = parts[0] === 'material' ? 'material' : parts.length > 1 ? parts.slice(0, 2).join('.') : '';
     if (g !== group) {
       group = g;
       if (parts[0] === 'parts') section(`Part ${S.selPart}`, [], () => edit(() => { delete l.parts[S.selPart]; if (!Object.keys(l.parts).length) delete l.parts; S.selPart = null; S.selKey = null; }));
       else if (parts[0] === 'params') { const q = l.params[+parts[1]]; section(`${q.id} · ${q.field}`, [], () => edit(() => { l.params.splice(+parts[1], 1); if (!l.params.length) delete l.params; S.selKey = null; })); }
+      else if (g === 'material') materialHeader(l);
       else if (g) groupHeader(l, parts[0], +parts[1]);
     }
     const color = typeof v === 'string';
@@ -268,12 +278,21 @@ export function refreshInspector() {
     k.className = 'key'; k.textContent = '◆'; k.dataset.key = p;
     k.title = 'Add or remove a key at the playhead';
     k.onclick = () => { edit(() => toggleKey(l, p)); if (!color) S.prop = p; refresh(); };
-    field(parts.at(-1), i, k);
+    // Below an animator or behaviour, its own name (`falloff.x`).
+    field(parts.length > 2 && g ? parts.slice(2).join('.') : parts.at(-1), i, k);
   }
-  if (l.kind === 'text' || l.kind === 'duplicator') adder('+ animator', ['plain', 'typewriter', 'cascade', 'pop'], v => edit(() => {
+  const presets = { text: ['plain', 'typewriter', 'cascade', 'pop'], duplicator: ['plain', 'cascade', 'pop', ['ripple', 'Ripple from point']],
+    group: ['plain', ['cascade_children', 'Cascade children'], 'pop', ['ripple', 'Ripple from point']] }[l.kind];
+  if (presets) adder('+ animator', presets, v => edit(() => {
     const a = v === 'plain' ? {} : JSON.parse(cut.preset(v, snap(S.t), 1));
     (l.animators ??= []).push(a);
   }));
+  adder('+ behaviour', [['wiggle', 'Wiggle'], ['oscillate', 'Oscillate']], v => edit(() => {
+    // Wiggle: the position wanders; oscillate: it bobs up and down.
+    const add = v === 'wiggle' ? [{ prop: 'x', amount: 20, freq: 1.5 }, { prop: 'y', amount: 20, freq: 1.5 }] : [{ prop: 'y', kind: 'oscillate', amount: 20 }];
+    (l.behaviours ??= []).push(...add);
+  }));
+  if (!S.selPart) layerLook(l, scene());
   if (VECTOR.includes(l.kind)) adder('+ deformer', ['noise', 'twist', 'bend', 'wave'], v => edit(() => { (l.deformers ??= []).push({ kind: v }); }));
   fxSection(l, () => frameNow()?.layers.find(d => d.id === l.id)?.effects ?? []);
   updateInspector();
