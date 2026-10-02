@@ -856,13 +856,27 @@ impl<'a> Walk<'a> {
         // One scratch string for the whole walk: a path is O(depth) bytes and
         // formatting a fresh one per node was the walk's largest single cost.
         let mark = path.len();
+        // Underlays use normal ancestor clipping and surface order, but
+        // precede all foreground siblings regardless of declaration order.
+        let children_at = self.i;
+        let mut at = children_at;
+        for (j, child) in n.children().iter().enumerate() {
+            if child.is_underlay() {
+                self.i = at;
+                path.truncate(mark);
+                super::push_index(path, j);
+                self.node(child, path, bg, inner)?;
+            }
+            at += self.tree.sizes[at];
+        }
+        self.i = children_at;
         let mut sticky = Vec::new();
         for (j, c) in n.children().iter().enumerate() {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
             super::push_index(path, j);
-            if c.payload().carve.is_some() {
-                // Already spent: it shaped the outline instead of painting.
+            if c.is_underlay() || c.payload().carve.is_some() {
+                // Underlays already painted; carves shaped the outline.
                 self.i += self.tree.sizes[self.i];
                 continue;
             }
@@ -1015,6 +1029,60 @@ mod tests {
     use super::super::*;
     use crate::Paint;
     use crate::prelude::*;
+
+    #[test]
+    fn underlay_follows_foreground_geometry_and_keeps_paint_clip_and_hit_order() {
+        let spec = |width| {
+            SceneSpec::new(
+                stack([
+                    block(width, 40.).fill(Role::Primary).id("foreground"),
+                    block(Len::Pct(100.), Len::Pct(100.))
+                        .fill(Role::Raised)
+                        .push(
+                            block(Len::Container(100.), 10.)
+                                .offset(-3., 4.)
+                                .fill(Role::Danger)
+                                .id("decoration-child"),
+                        )
+                        .underlay()
+                        .id("background"),
+                ])
+                .pad(4.)
+                .radius(8.)
+                .clip()
+                .id("composition"),
+            )
+        };
+        let mut cache = TextState::default();
+        for width in [120., 180.] {
+            let scene = cache.resolve(&spec(width)).unwrap();
+            assert_eq!(scene.layout.size, Size::new(width + 8., 48.));
+            assert_eq!(
+                scene.layout.frame("background"),
+                scene.layout.frame("foreground")
+            );
+            let decoration = scene.layout.frame("decoration-child").unwrap();
+            assert_eq!(
+                (decoration.x, decoration.size.width),
+                (1., width),
+                "final parent width drives decoration measurement"
+            );
+            let layers: Vec<_> = scene.paint.iter().map(|p| (&*p.key, p.layer)).collect();
+            let at = |key, layer| layers.iter().position(|p| *p == (key, layer)).unwrap();
+            assert!(at("composition", Layer::Clip) < at("background", Layer::Fill));
+            assert!(at("background", Layer::Fill) < at("foreground", Layer::Fill));
+            assert!(at("foreground", Layer::Fill) < at("composition", Layer::Unclip));
+            let parent_clip = scene.surface("composition").unwrap().bounds;
+            assert_eq!(scene.surface("background").unwrap().clip, parent_clip);
+            assert_eq!(scene.surface("decoration-child").unwrap().clip, parent_clip);
+            let surfaces: Vec<_> = scene.surfaces().map(|s| &*s.key).collect();
+            assert!(
+                surfaces.iter().position(|k| *k == "background").unwrap()
+                    < surfaces.iter().position(|k| *k == "foreground").unwrap(),
+                "foreground keeps topmost hit ownership"
+            );
+        }
+    }
 
     /// Paths are local: two same-sized buttons paint one outline `Arc`, each
     /// at its own offset, and a button that only moved keeps it -- its

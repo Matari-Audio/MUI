@@ -766,6 +766,47 @@ pub(crate) fn measure_uncached<'a, P>(
         ),
         None => (size, floor),
     };
+    // Decorations receive the real foreground-derived box, never an
+    // intrinsic offer that could make them size their own foreground.
+    let decoration_box = [
+        Some((size.width - padding.horizontal()).max(0.0)),
+        Some((size.height - padding.vertical()).max(0.0)),
+    ];
+    for (index, child) in node.children().iter().enumerate() {
+        if !child.is_underlay() {
+            continue;
+        }
+        let (ax, ay) = child.anchor.unwrap_or(cell_default(node));
+        let promise = [
+            offer(
+                child,
+                false,
+                decoration_box[0],
+                decoration_box[0],
+                ax == Align::Stretch,
+            ),
+            offer(
+                child,
+                true,
+                decoration_box[1],
+                decoration_box[1],
+                ay == Align::Stretch,
+            ),
+        ];
+        let was = std::mem::replace(&mut pass.redo, true);
+        let measured = measure(
+            child,
+            here,
+            promise,
+            decoration_box[0],
+            decoration_box,
+            depth + 1,
+            pass,
+        );
+        pass.redo = was;
+        children[index] = measured?;
+        children[index].index = index;
+    }
     // A squeezed flex row re-measures its fluid items, which is the one
     // chance a `fits` inside one gets to pick against its real share.
     // Percentage-like widths and aspect ratios resolve from a flex ancestor's
