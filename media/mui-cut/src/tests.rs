@@ -889,8 +889,10 @@ fn effect_modes_and_backdrops_are_checked() {
     assert!(load(r#"{"type":"glow","mode":"neon"}"#, "").is_ok());
     assert!(load(r#"{"type":"glow","mode":"sparkle"}"#, "").is_err());
     assert!(load(r#"{"type":"blur","mode":"outer"}"#, "").is_err());
-    let e = load("", r#"{"type":"light_wrap"}"#).unwrap_err();
+    assert!(load(r#"{"type":"glass"}"#, "").is_ok());
+    let e = load("", r#"{"type":"glass"}"#).unwrap_err();
     assert!(e.contains("goes on a layer"), "{e}");
+    assert!(load("", r#"{"type":"light_wrap"}"#).is_err());
     // Left out, the mode is the first; it survives a save.
     let p = load(r#"{"type":"glow"},{"type":"glow","mode":"inner"}"#, "").unwrap();
     let f = eval(&p, &p.scenes[0], 0.);
@@ -924,6 +926,53 @@ fn light_wrap_lights_the_edges_from_behind() {
     assert!(edge > 60, "edge {edge}");
     assert!(mid < 20 && edge > mid + 50, "middle {mid}");
     assert_eq!(px(wrap, 10, 10), [255; 4], "the backdrop is untouched");
+}
+
+/// Glass shows what is under it: as it is with every term off, frosted,
+/// refracted from past its edge, and lit on the side facing the light.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn glass_shows_the_backdrop_through_its_shape() {
+    let off = r#""frost":0,"refraction":0,"tint_amount":0,"saturation":1,"highlight":0,"shadow":0,"grain":0"#;
+    let pane = |stripe: f64, fx: &str| {
+        frame_of(
+            "#000000",
+            &format!(
+                r##"{{"id":"bar","kind":"rect","x":{stripe},"y":45,"width":6,"height":90,"fill":"#ffffff"}},
+                {{"id":"pane","kind":"rect","x":80,"y":45,"width":40,"height":40,"effects":[{{"type":"glass",{fx}}}]}}"##
+            ),
+        )
+    };
+    let Some(out) = gpu_frames(&[
+        vec![pane(80., off)],
+        vec![pane(80., &format!(r#"{off},"frost":6"#))],
+        vec![pane(105., off)],
+        vec![pane(105., &format!(r#"{off},"refraction":12,"bevel":10"#))],
+        vec![pane(
+            -20.,
+            &format!(r#"{off},"highlight":1,"light_angle":0"#),
+        )],
+    ]) else {
+        return;
+    };
+    // Every term off: the pane is clear, the stripe under it sharp.
+    assert!(
+        near(px(&out[0], 80, 45), [255; 4], 2),
+        "{:?}",
+        px(&out[0], 80, 45)
+    );
+    assert!(px(&out[0], 70, 45)[0] < 3, "{:?}", px(&out[0], 70, 45));
+    // Frosted: the stripe spreads under the pane, and only there.
+    let (mid, side) = (px(&out[1], 80, 45)[0], px(&out[1], 88, 45)[0]);
+    assert!(mid < 250 && side > 30, "mid {mid} side {side}");
+    assert_eq!(px(&out[1], 80, 10), [255; 4]);
+    assert!(px(&out[1], 88, 10)[0] < 3);
+    // Refraction: just inside the right edge shows the stripe beyond it.
+    assert!(px(&out[2], 98, 45)[0] < 3);
+    assert!(px(&out[3], 98, 45)[0] > 60, "{:?}", px(&out[3], 98, 45));
+    // Lit from the right: a rim there, little on the left.
+    let (right, left) = (px(&out[4], 99, 45)[0], px(&out[4], 60, 45)[0]);
+    assert!(right > 60 && right > left + 30, "right {right} left {left}");
 }
 
 /// Grain is deterministic: the same frame is the same pixels in two renders,

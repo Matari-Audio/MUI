@@ -217,6 +217,26 @@ pub const EFFECTS: &[Def] = &[
         backdrop: true,
         params: &[num("radius", 24., 0., 500.), num("intensity", 1., 0., 4.)],
     },
+    Def {
+        name: "glass",
+        about: "backdrop glass: what is under the layer, inside its shape, frosted, refracted through a bevelled edge, tinted, with a rim light and an inner shadow",
+        passes: 2 * PYRAMID_PASSES + 1,
+        modes: &[],
+        backdrop: true,
+        params: &[
+            color("tint", [255, 255, 255, 255]),
+            num("frost", 12., 0., 200.),
+            num("refraction", 18., -200., 200.),
+            num("bevel", 24., 0., 400.),
+            num("dispersion", 0., 0., 1.),
+            num("tint_amount", 0.08, 0., 1.),
+            num("saturation", 1.2, 0., 4.),
+            num("highlight", 0.6, 0., 2.),
+            num("light_angle", -50., -360., 360.),
+            num("shadow", 0.25, 0., 1.),
+            num("grain", 0.02, 0., 1.),
+        ],
+    },
 ];
 
 /// Levels of the blur pyramid (`glow`, `light_wrap`, `glass`): each half the

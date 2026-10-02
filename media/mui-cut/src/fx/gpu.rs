@@ -52,6 +52,7 @@ fn source(name: &str) -> Option<&'static str> {
         "plasma" => module!("plasma.wgsl"),
         "glow" => module!("glow.wgsl"),
         "light_wrap" => module!("light_wrap.wgsl"),
+        "glass" => module!("glass.wgsl"),
         _ => return None,
     })
 }
@@ -65,6 +66,8 @@ struct Targets {
     sizes: Vec<[u32; 2]>,
     down: Vec<wgpu::TextureView>,
     up: Vec<wgpu::TextureView>,
+    /// Glass's second pyramid result: its shape blurred over the bevel.
+    edge: wgpu::TextureView,
 }
 
 pub(crate) struct Passes {
@@ -245,6 +248,7 @@ impl Passes {
         };
         let down = sizes.iter().map(level).collect();
         let up = sizes.iter().map(level).collect();
+        let edge = level(&sizes[0]);
         self.targets = Some(Targets {
             size,
             textures,
@@ -252,6 +256,7 @@ impl Passes {
             sizes,
             down,
             up,
+            edge,
         });
     }
 
@@ -408,6 +413,29 @@ impl Passes {
                     let up0 = self.targets.as_ref().expect("prepared").up[0].clone();
                     self.pyramid(enc, h, [&from, &under], &[0., 0., 0., 0., 5.], &w, &up0);
                     vec![from, up0]
+                }
+                "glass" => {
+                    let t = self.targets.as_ref().expect("prepared");
+                    let (up0, edge) = (t.up[0].clone(), t.edge.clone());
+                    let n = self.levels();
+                    let none = self.none.clone();
+                    self.pyramid(
+                        enc,
+                        h,
+                        [&from, &none],
+                        &[0., 0., 0., 0., 6.],
+                        &focus(px("bevel"), n),
+                        &edge,
+                    );
+                    self.pyramid(
+                        enc,
+                        h,
+                        [&under, &none],
+                        &[0., 0., 0., 0., 7.],
+                        &focus(px("frost"), n),
+                        &up0,
+                    );
+                    vec![from, under, up0, edge]
                 }
                 _ => {
                     for pass in 0..EFFECTS[i].passes {
