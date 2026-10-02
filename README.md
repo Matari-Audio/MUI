@@ -191,7 +191,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `stepped(&ui, id, &mut v, &range)` | the arrow, Page and Home/End keys of a slider, for a control of your own |
 | `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Edits `env` in place; `changed` is a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
 | `bins(&mut ui, "spectrum", &mut Bins { authored: &mut levels, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. Edits the levels and the selection in place, as `curve` does; `changed` is a `BinEdit` saying what. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
-| `.a11y(A11y::Button)`, `.named("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.a11y(A11y::Image).named("BUFFR logo")` is a picture with alt text; unlabelled, it is decoration |
+| `.a11y(A11y::Button)`, `.named("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.a11y(A11y::Image).named("Company logo")` is a picture with alt text; unlabelled, it is decoration |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
 | `Palette::from_seed(accent, Mode::Dark)` | a whole palette from one colour: brand roles around the seed's hue, greys tinted by it, signal hues left alone. Every role clears 3:1 on the background and the surface |
@@ -213,8 +213,7 @@ a row of controls fills its column unless told otherwise.
 
 ## A plugin editor shell
 
-Kurv, Matari's synth, is not ported to MUI yet (see [ROADMAP.md](ROADMAP.md));
-this is the shape its editor is heading for. A header, a scrolling parameter
+This is the shape of a synth plugin's editor. A header, a scrolling parameter
 list, a response curve and a status bar are forty-six lines, twenty-one of
 them the tree itself, and not one coordinate:
 
@@ -242,7 +241,7 @@ let curve = canvas(|size| {
 
 let root = col![
     row![
-        title("Kurv"),
+        title("Synth"),
         text_input(&mut ui, "preset", &mut preset).el.w(140),
         spacer(),
         toggle(&mut ui, "bypass", "Bypass", &mut bypass).into_el().tip("Bypass"),
@@ -279,7 +278,7 @@ use mui::prelude::*;
 
 let editor = || {
     col![
-        row![title("Kurv"), spacer(), caption("v1.0")].baseline(),
+        row![title("Synth"), spacer(), caption("v1.0")].baseline(),
         // Three tabs, fluid between 64 and 120 px, wrapping when they run out.
         row(["Osc", "Filter", "Env"].map(|n| {
             row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad((0.0, 8.0))
@@ -519,6 +518,6 @@ global allocator, which the library itself forbids.
 ```
 
 Formatting, tests, clippy with warnings denied, and a wasm check of the
-library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
+library crates. `BENCHMARKS.md` is the frame budget of a synth-sized scene
 on `vello_cpu` and `GpuRenderer`, reproduced by
 `cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.

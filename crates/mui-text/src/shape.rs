@@ -549,8 +549,8 @@ mod tests {
 
     #[test]
     fn variable_weight_reaches_the_shaper_and_outline() {
-        let regular = text_run(&[inter()], "KURV", 24., &[Weight::REGULAR.axis()], 0.05).unwrap();
-        let bold = text_run(&[inter()], "KURV", 24., &[Weight::BOLD.axis()], 0.05).unwrap();
+        let regular = text_run(&[inter()], "SYNTH", 24., &[Weight::REGULAR.axis()], 0.05).unwrap();
+        let bold = text_run(&[inter()], "SYNTH", 24., &[Weight::BOLD.axis()], 0.05).unwrap();
         assert_ne!(regular.path, bold.path, "the wght axis was ignored");
     }
 

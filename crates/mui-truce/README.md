@@ -125,7 +125,7 @@ pluginval --strictness-level 5 --validate "target/bundles/MUI Gain.vst3"
   IID as `0x2A654303, 0xEF764E3C, 0xA8E8C6F3, 0xDBAE0F77`. The SDK's IID is
   `0x2A654303, 0xEF764E3D, 0x95B5FE83, 0x730EF6D0`. This is upstream too.
 
-Kurv vendors truce with both fixes (`vendor/truce-clap-6.3.0`: `state_load`
+A downstream plugin can vendor truce with both fixes (`vendor/truce-clap-6.3.0`: `state_load`
 sets `needs_rescan` and calls `request_callback`; `vendor/truce-vst3-6.3.0`:
 the SDK IID). MUI does not vendor 12k lines of wrapper for two one-line
 fixes in an example; they belong upstream.

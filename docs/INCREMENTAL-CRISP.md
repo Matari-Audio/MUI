@@ -145,7 +145,7 @@ Sources consulted (primary documentation, accessed 2026-09-19):
 ## Acceptance gates still required
 
 Run rustfmt, workspace tests, Clippy, WASM, Naga ABI validation, native whole-vs-tile
-pixel contracts, then real KURV scenes with CPU/GPU p95/p99, memory/upload/submission
+pixel contracts, then real plugin-editor scenes with CPU/GPU p95/p99, memory/upload/submission
 counters and audio load. Include integrated GPUs, fractional scaling and mobile
 where applicable. No reciprocal-CPU-time FPS, no software-GPU performance ranking,
 and no publication until native conformance passes.

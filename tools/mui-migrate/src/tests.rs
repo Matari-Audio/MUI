@@ -139,7 +139,7 @@ fn tuple_fields() {
     let out = run("use mui::widgets::knob;\nfn f() { let (el, c) = knob(ui, id, \"G\", &mut v, r); }\n");
     assert!(out.text.contains("let Response { el, changed: c } = knob("));
     assert!(out.warnings.iter().any(|(_, w)| w.contains("`Response`")));
-    // KURV's own `button` (imported from elsewhere) is not the widget.
+    // A plugin's own `button` (imported from elsewhere) is not the widget.
     let own = "use mui2::prelude::*;\nuse super::controls::button;\nfn f() { let (a, b) = button(ui, id, \"x\", accent); }\n";
     check(own, own);
 }
@@ -468,7 +468,7 @@ fn retype_needs_a_mui_target() {
         &with_prelude("fn f(p: &mut Input) { let pl = Plate { center, half: Point::new(w, h) }; let mut input = Input::default(); input.wheel = if n == 1 { Point::new(0.0, 30.0) } else if n == 2 { super::Point::default() } else { Point::ZERO }; p.wheel = Point::ZERO; }\n"),
         &with_prelude("fn f(p: &mut Input) { let pl = Plate { center, half: Vec2::new(w, h) }; let mut input = Input::default(); input.wheel = if n == 1 { Vec2::new(0.0, 30.0) } else if n == 2 { super::Vec2::default() } else { Vec2::ZERO }; p.wheel = Vec2::ZERO; }\n"),
     );
-    // KURV's gallery: `Input` through a test module's `use super::{Input}`, and
+    // A plugin's gallery: `Input` through a test module's `use super::{Input}`, and
     // the variable passed to a call before the write.
     check(
         "use mui2::prelude::{Input, Point};\nmod tests {\n    use super::{Input, Point};\n    fn t() { let mut input = Input::default(); ui.frame(root, input, 1.0); input.wheel = if n == 1 { Point::new(0.0, 30.0) } else { Point::default() }; }\n    fn u() { let mut input = super::Input::default(); input.wheel = super::Point::ZERO; }\n}\n",

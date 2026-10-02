@@ -282,13 +282,13 @@ public function and a test behind it.
       `vst3 validator`: truce-clap 6.3 never requests a value rescan after a
       state load, and truce-vst3 6.3 declares the wrong
       `IProcessContextRequirements` IID. Both are one-line upstream fixes
-      (Kurv vendors them); see `crates/mui-truce/README.md`.
+      (a downstream plugin vendors them); see `crates/mui-truce/README.md`.
 - [x] Keyboard value stepping: a focused slider or knob steps on the arrow,
       Page and Home/End keys, bracketed as one edit.
 - [ ] The text cache keeps exactly what the last resolve used, with no byte
       budget; `mui_vello::Cache` never evicts a font while its renderer lives.
 - [ ] No fuzzing or property campaigns over layout, welding or text input.
-- [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
+- [ ] A shipping synth rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
 - [ ] Classic `vello` (the GPU path since `vello_hybrid` was dropped)
       re-measured on Windows: the switch was made on Linux numbers only.
@@ -317,6 +317,6 @@ public function and a test behind it.
 
 ## Order
 
-Kurv first: everything above is guesswork until a shipping editor uses it,
+A shipping editor first: everything above is guesswork until a shipping editor uses it,
 and it is the only item left that can change the DSL. Then the Windows
 re-measure, before any renderer decision is locked in.
