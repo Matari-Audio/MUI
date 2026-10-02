@@ -10,13 +10,17 @@
   --ink: #e6e6e6;
   --muted: #8a8a8a;
   --hi: #ffffff;
+  /* Panel sizes: panels.js moves them with the gutters. */
+  --left: 240px;
+  --right: 270px;
+  --bottom: 380px;
   font: 12px Inter, ui-sans-serif, system-ui, sans-serif;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
   background: var(--bg); color: var(--ink); overflow: hidden;
-  display: grid; grid-template: 40px minmax(0, 1fr) 380px / 240px minmax(0, 1fr) 270px;
+  display: grid; grid-template: 40px minmax(0, 1fr) var(--bottom) / var(--left) minmax(0, 1fr) var(--right);
   grid-template-areas: "top top top" "left stage right" "bottom bottom bottom";
 }
 header { grid-area: top; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--line); background: var(--panel); }
@@ -72,12 +76,13 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 #keys button { width: 16px; height: 22px; padding: 0; font-size: 0; border-radius: 2px; background: #d8d8dc; }
 #keys button.black { background: #202024; }
 #keys button.down { background: var(--accent, #8b7cff); }
-#bottom { grid-area: bottom; display: grid; grid-template-rows: 30px minmax(0, 1fr) 28px 190px; border-top: 1px solid var(--line); background: var(--panel); min-height: 0; }
+#bottom { grid-area: bottom; display: grid; grid-template-rows: 30px minmax(0, 2fr) 28px minmax(0, 3fr); border-top: 1px solid var(--line); background: var(--panel); min-height: 0; }
 .transport, .graph-bar { display: flex; align-items: center; gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--line); }
 .graph-bar { border-top: 1px solid var(--line); }
+#hint { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #tl-wrap { overflow-y: auto; overflow-x: hidden; min-height: 0; }
 #timeline, #graph { display: block; width: 100%; }
-#graph { height: 190px; }
+#graph { height: 100%; min-height: 0; }
 #orbit.on, #interact.on { background: var(--raised); border-color: var(--strong); color: var(--hi); }
 
 #export-dialog, #plugin-dialog { background: var(--raised); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 16px 18px; min-width: 320px; }
@@ -110,3 +115,18 @@ h2 .twist { border: 0; background: transparent; padding: 0 4px 0 0; color: var(-
 #left.drop { box-shadow: inset 0 0 0 1px var(--muted); }
 .list button.drop-on { border-color: var(--muted); }
 #layers { min-height: 40px; padding-bottom: 16px; }
+
+/* Gutters: thin handles on the panels' edges, over everything. */
+.gutter { position: fixed; z-index: 5; touch-action: none; }
+.gutter:hover, .gutter.on { background: #ffffff1c; }
+.gutter[data-gutter="left"] { top: 40px; bottom: var(--bottom); left: calc(var(--left) - 3px); width: 6px; cursor: col-resize; }
+.gutter[data-gutter="right"] { top: 40px; bottom: var(--bottom); right: calc(var(--right) - 3px); width: 6px; cursor: col-resize; }
+.gutter[data-gutter="bottom"] { left: 0; right: 0; bottom: calc(var(--bottom) - 3px); height: 6px; cursor: row-resize; }
+
+/* The align bar in the header: icon buttons, then toggles. */
+#tools { display: flex; align-items: center; gap: 2px; margin-left: 12px; padding-left: 12px; border-left: 1px solid var(--line); }
+#tools button[data-align] { width: 26px; height: 24px; padding: 0; display: grid; place-items: center; border-color: transparent; background: transparent; color: var(--muted); }
+#tools button[data-align]:hover { color: var(--hi); border-color: var(--line); }
+#tools svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
+#tools svg rect { fill: currentColor; stroke: none; opacity: .85; }
+#tools #align-canvas { margin-left: 6px; }

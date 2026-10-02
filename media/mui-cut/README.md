@@ -735,7 +735,37 @@ explodes two levels in 3D: panels, then their controls.
   frames/s, dropped frames and frame time p50/p95.
   Click a layer to select it (outlined),
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
-  changes its value.
+  changes its value; a parented layer moves in its parent's frame.
+- **Transform gizmo** (2D scenes): the selection's box, one layer's own
+  turned outline or the bounds of several, with scale handles on its
+  corners and edges and a rotate knob above. A rect, ellipse, image or
+  duplicator stretches by `width`/`height`; other layers scale evenly
+  (there is no one-way scale). Shift keeps proportions (and turns in 15°
+  steps), Alt scales about the middle. One layer turns about its own
+  position, several about their box's middle. Each layer's local `x`, `y`,
+  `rotation`, `scale` are written at the playhead through its parent's
+  transform, so children of a turned or scaled parent land where dragged.
+  Several selected move from anywhere inside their box.
+- **Snapping** (header **Snap**, on by default): while moving, or scaling
+  an upright box, the selection's edges and middle catch on other layers'
+  edges and middles and the canvas's edges and middle within 6 screen
+  pixels; dashed guides show the lines caught on. Hold Ctrl to drag freely.
+- **Align and distribute** (header): line the selected layers' outlines
+  up on their bounds' left, centre, right, top, middle or bottom (one
+  layer, or with **Canvas** on, on the frame's), or even out the gaps
+  between three or more across or down. Alt+A/H/D, Alt+W/V/S, and
+  Alt+Shift+H/V.
+- **Selection**: Shift- or Ctrl-click (in the viewport, the layer list or
+  the timeline's labels) adds a layer or takes it out; a drag from empty
+  viewport space is a marquee (with Shift or Ctrl it adds); Ctrl+A selects
+  the scene's layers, Esc none. The last picked is the primary: the
+  inspector's layer settings and the graph follow it. With several layers
+  the inspector lists the properties they share, "mixed" where they differ;
+  an edit or ◆ applies to all. Drag, Delete, Ctrl+D (duplicate, in place)
+  and ▲/▼ act on the whole selection, each one undo step.
+- **Panels**: drag the gutters between the left column, the viewport, the
+  inspector and the timeline to resize them; double-click a gutter for its
+  default. The sizes are kept in the browser (localStorage).
 - **Sources** (left, collapsible): every source the project uses or has
   imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON,
   `.glb` or `.ttf`/`.otf` files on the left panel) copies files to `media/` beside the
@@ -789,7 +819,9 @@ explodes two levels in 3D: panels, then their controls.
   A bound property shows its value, read-only, and names the variable.
   Export renders the variant on screen.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
-  selected key, arrows step a frame, Ctrl+Z / Ctrl+Shift+Z undo / redo.
+  selected key (else the selected layers), arrows step a frame, Ctrl+Z /
+  Ctrl+Shift+Z undo / redo, Ctrl+A select all, Ctrl+D duplicate, Esc
+  deselect, Alt+A/H/D/W/V/S align, Alt+Shift+H/V distribute.
 
 Every finished gesture is PUT to the server, which validates it, writes the
 canonical JSON atomically and remembers what it wrote, so the watcher only
@@ -841,8 +873,12 @@ announces edits made by someone else.
   contrast (so the web editor could run them too).
 - `src/tools.rs`, `src/mcp.rs`, `src/script.rs`: the agent's CLI pictures
   (`sheet`, `strip`, `diff`), the MCP server and `gen`'s Rhai sandbox.
-- `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport);
-  `worker.js` draws the viewport, one frame in flight at a time, and runs
+- `web/`: the editor shell (HTML/CSS/JS panels around the WASM viewport),
+  one ES module per panel: `app.js` boots it, `state.js` holds the shared
+  state, `doc.js`/`patch.js`/`edit.js` the document, its patches, undo and
+  saving; `lists.js`, `sources.js`, `inspector.js`, `viewport.js`,
+  `timeline.js`, `graph.js`, `export.js`, `transport.js`, `sound.js` and
+  `agent.js` the rest. `worker.js` draws the viewport, one frame in flight at a time, and runs
   exports; `mp4.js` muxes them.
 - `src/shutter.rs`: the float shutter, shared by `Offline` and the export.
 - `web/e2e.mjs`: the editor in headless Chrome over CDP, and its playback
