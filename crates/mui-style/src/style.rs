@@ -285,6 +285,9 @@ pub enum Paint {
     Vector {
         vector: Arc<crate::Vector>,
         fit: Fit,
+        /// Snapshot readiness now, so retained rendering compares against the
+        /// previous frame rather than both sides reading a live generation.
+        revision: u64,
     },
 }
 impl Paint {
@@ -319,6 +322,7 @@ impl Fill {
             Self::Vector(vector, fit) => Paint::Vector {
                 vector: vector.clone(),
                 fit: *fit,
+                revision: vector.raster_source().map_or(0, |s| s.revision()),
             },
             Self::Gradient(g) => Paint::Gradient {
                 kind: g.kind,
@@ -338,7 +342,7 @@ impl Fill {
             Some(Paint::Solid(c)) => Fill::Color(f(c)),
             // Pixels are not a role: a hover tint has nothing to map here.
             Some(Paint::Image { image, fit }) => Fill::Image(image, fit),
-            Some(Paint::Vector { vector, fit }) => Fill::Vector(vector, fit),
+            Some(Paint::Vector { vector, fit, .. }) => Fill::Vector(vector, fit),
             Some(Paint::Gradient { kind, stops }) => Gradient {
                 kind,
                 stops: stops

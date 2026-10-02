@@ -19,6 +19,10 @@ pub trait RasterSource: std::fmt::Debug + Send + Sync {
     fn wake_pending(&self) -> bool {
         false
     }
+    /// Changes when a prepared image or terminal error is installed.
+    fn revision(&self) -> u64 {
+        0
+    }
     fn retained_bytes(&self) -> usize;
 }
 
