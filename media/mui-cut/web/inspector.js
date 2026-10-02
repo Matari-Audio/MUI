@@ -4,15 +4,16 @@ import { parentTo } from './lists.js';
 import { $, FX, S, VECTOR, cut } from './state.js';
 import { refresh } from './transport.js';
 import { compable, ungroupSelected } from './tree.js';
+import { layerLook, materialHeader, sceneLook } from './look.js';
 
 // ---------- inspector
-function field(label, input, keyBtn) {
+export function field(label, input, keyBtn) {
   const l = document.createElement('label'); l.textContent = label;
   const box = $('#inspector');
   box.append(l, input);
   if (keyBtn) box.append(keyBtn); else input.classList.add('wide');
 }
-function input(value, onchange, type = 'text') {
+export function input(value, onchange, type = 'text') {
   const i = document.createElement(type === 'area' ? 'textarea' : 'input');
   if (type !== 'area') i.type = type;
   i.value = value;
@@ -20,7 +21,7 @@ function input(value, onchange, type = 'text') {
   i.onchange = () => onchange(i.value);
   return i;
 }
-function choice(value, options, onchange) {
+export function choice(value, options, onchange) {
   const s = document.createElement('select');
   s.replaceChildren(...options.map(o => new Option(o, o, false, o === String(value))));
   s.onchange = () => onchange(s.value);
@@ -28,7 +29,7 @@ function choice(value, options, onchange) {
 }
 // A full-width header over an animator's or deformer's rows, with its
 // settings and a remove button.
-function section(title, controls, remove) {
+export function section(title, controls, remove) {
   const h = document.createElement('div'); h.className = 'section';
   const n = document.createElement('span'); n.textContent = title;
   const x = document.createElement('button'); x.textContent = '×'; x.title = 'Remove'; x.onclick = remove;
@@ -125,42 +126,14 @@ function groupHeader(l, group, i) {
     section(`${item.kind} ${i + 1}`, c, remove);
   }
 }
-function adder(label, options, add) {
+export function adder(label, options, add) {
   const s = choice('', ['', ...options], v => { if (v) add(v); });
   s.options[0].textContent = label;
   s.classList.add('wide'); s.dataset.adder = label;
   const box = $('#inspector'); box.append(document.createElement('span'), s);
 }
-// A 3D scene's environment light and ambient occlusion, each switched on by
-// its box. Keyed or bound numbers show read-only; edit those in the JSON.
-function sceneLook(s) {
-  const toggle = (label, key, fresh) => {
-    const c = document.createElement('input'); c.type = 'checkbox';
-    c.checked = !!s[key]; c.dataset.look = key;
-    c.onchange = () => edit(() => { if (c.checked) s[key] = fresh(); else delete s[key]; });
-    field(label, c);
-    return s[key];
-  };
-  const num = (o, k, dflt, label) => {
-    const v = o[k] ?? dflt, fixed = typeof v === 'number';
-    const i = lock(input(fixed ? v : 'keyed', x => edit(() => { o[k] = Number(x); }), fixed ? 'number' : 'text'), v);
-    if (!fixed) i.disabled = true;
-    field(label, i);
-  };
-  const e = toggle('environment', 'environment', () => ({}));
-  if (e) {
-    field('hdri', input(e.hdri ?? '', v => edit(() => { if (v) e.hdri = v; else delete e.hdri; loadAssets(); })));
-    num(e, 'intensity', 1, 'intensity');
-    num(e, 'rotation', 0, 'rotation');
-    const b = document.createElement('input'); b.type = 'checkbox';
-    b.checked = !!e.background; b.onchange = () => edit(() => { e.background = b.checked; });
-    field('env background', b);
-  }
-  const a = toggle('occlusion', 'ao', () => ({}));
-  if (a) { num(a, 'strength', 1, 'ao strength'); num(a, 'radius', 60, 'ao radius'); }
-}
 // A bound field shows its value and stays read-only.
-function lock(i, v) {
+export function lock(i, v) {
   if (!isBind(v) && !(isKeys(v) && v.some(k => isBind(k.v)))) return i;
   i.disabled = true;
   i.title = `bound to the variable \`${(isBind(v) ? v : v.find(k => isBind(k.v)).v).var}\``;
@@ -252,11 +225,12 @@ export function refreshInspector() {
   const mine = p => S.selPart ? p.startsWith(`parts.${S.selPart}.`) : !p.startsWith('parts.');
   for (const { p, v } of propsOf(l).filter(r => mine(r.p))) {
     const parts = p.split('.');
-    const g = parts.length > 1 ? parts.slice(0, 2).join('.') : '';
+    const g = parts[0] === 'material' ? 'material' : parts.length > 1 ? parts.slice(0, 2).join('.') : '';
     if (g !== group) {
       group = g;
       if (parts[0] === 'parts') section(`Part ${S.selPart}`, [], () => edit(() => { delete l.parts[S.selPart]; if (!Object.keys(l.parts).length) delete l.parts; S.selPart = null; S.selKey = null; }));
       else if (parts[0] === 'params') { const q = l.params[+parts[1]]; section(`${q.id} · ${q.field}`, [], () => edit(() => { l.params.splice(+parts[1], 1); if (!l.params.length) delete l.params; S.selKey = null; })); }
+      else if (g === 'material') materialHeader(l);
       else if (g) groupHeader(l, parts[0], +parts[1]);
     }
     const color = typeof v === 'string';
@@ -273,6 +247,7 @@ export function refreshInspector() {
     const a = v === 'plain' ? {} : JSON.parse(cut.preset(v, snap(S.t), 1));
     (l.animators ??= []).push(a);
   }));
+  if (!S.selPart) layerLook(l, scene());
   if (VECTOR.includes(l.kind)) adder('+ deformer', ['noise', 'twist', 'bend', 'wave'], v => edit(() => { (l.deformers ??= []).push({ kind: v }); }));
   fxSection(l, () => frameNow()?.layers.find(d => d.id === l.id)?.effects ?? []);
   updateInspector();
