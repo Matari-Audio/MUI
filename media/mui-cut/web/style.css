@@ -82,7 +82,7 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 .graph-bar { border-top: 1px solid var(--line); }
 #hint { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #tl-wrap { position: relative; overflow: hidden; min-height: 0; }
-#timeline, #graph { display: block; width: 100%; }
+#timeline, #graph { display: block; width: 100%; user-select: none; }
 #timeline { position: absolute; inset: 0; height: 100%; touch-action: none; }
 #graph { touch-action: none; }
 #graph { height: 100%; min-height: 0; }
