@@ -8,7 +8,14 @@ const DEMO: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/examples/demo.cut.json"
 
 /// A scratch dir on disk (the target dir), not the RAM-backed /tmp.
 fn scratch(name: &str) -> PathBuf {
-    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join(name);
+    // A folder per checkout: checkouts sharing a target dir would
+    // otherwise clear each other's scratch mid-test.
+    let mut tree = std::hash::DefaultHasher::new();
+    std::hash::Hash::hash(env!("CARGO_MANIFEST_DIR"), &mut tree);
+    let tree = std::hash::Hasher::finish(&tree);
+    let d = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("{tree:016x}"))
+        .join(name);
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
