@@ -791,6 +791,16 @@ fn effects_draw_what_they_say() {
     assert_eq!(px(&db, 50, 45), [0, 0, 0, 255], "not across");
 }
 
+/// One frame of a 160x90 project: `layers` over `background`, at 0.5 s.
+#[cfg(not(target_arch = "wasm32"))]
+fn frame_of(background: &str, layers: &str) -> Frame {
+    let json = format!(
+        r##"{{"size":[160,90],"fps":30,"scenes":[{{"name":"a","duration":2,"background":"{background}","layers":[{layers}]}}]}}"##
+    );
+    let p = Project::load(&json).unwrap();
+    eval(&p, &p.scenes[0], 0.5)
+}
+
 /// Glow: each mode lights where it says, the falloff is smooth (no steps
 /// from 8-bit levels), and the radius keys without jumps.
 #[cfg(not(target_arch = "wasm32"))]
@@ -870,7 +880,7 @@ fn glow_lights_where_its_mode_says() {
 }
 
 #[test]
-fn effect_modes_are_checked() {
+fn effect_modes_and_backdrops_are_checked() {
     let load = |layer: &str, scene: &str| {
         Project::load(&format!(
             r#"{{"size":[64,64],"fps":30,"scenes":[{{"name":"a","duration":1,"layers":[{{"id":"r","kind":"rect","effects":[{layer}]}}],"effects":[{scene}]}}]}}"#
@@ -879,12 +889,41 @@ fn effect_modes_are_checked() {
     assert!(load(r#"{"type":"glow","mode":"neon"}"#, "").is_ok());
     assert!(load(r#"{"type":"glow","mode":"sparkle"}"#, "").is_err());
     assert!(load(r#"{"type":"blur","mode":"outer"}"#, "").is_err());
+    let e = load("", r#"{"type":"light_wrap"}"#).unwrap_err();
+    assert!(e.contains("goes on a layer"), "{e}");
     // Left out, the mode is the first; it survives a save.
     let p = load(r#"{"type":"glow"},{"type":"glow","mode":"inner"}"#, "").unwrap();
     let f = eval(&p, &p.scenes[0], 0.);
     let modes: Vec<_> = f.layers[0].effects.iter().map(|e| e.mode).collect();
     assert_eq!(modes, [Some("bloom"), Some("inner")]);
     assert!(p.to_json().contains(r#""mode": "inner""#));
+}
+
+/// Light wrap: a dark layer over a bright backdrop picks the light up at
+/// its edges, not in its middle.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn light_wrap_lights_the_edges_from_behind() {
+    let sq = |fx: &str| {
+        frame_of(
+            "#ffffff",
+            &format!(
+                r##"{{"id":"sq","kind":"rect","x":80,"y":45,"width":40,"height":40,"fill":"#000000","effects":[{fx}]}}"##
+            ),
+        )
+    };
+    let Some(out) = gpu_frames(&[
+        vec![sq("")],
+        vec![sq(r#"{"type":"light_wrap","radius":3}"#)],
+    ]) else {
+        return;
+    };
+    let (plain, wrap) = (&out[0], &out[1]);
+    assert_eq!(px(plain, 61, 45), [0, 0, 0, 255]);
+    let (edge, mid) = (px(wrap, 61, 45)[0], px(wrap, 80, 45)[0]);
+    assert!(edge > 60, "edge {edge}");
+    assert!(mid < 20 && edge > mid + 50, "middle {mid}");
+    assert_eq!(px(wrap, 10, 10), [255; 4], "the backdrop is untouched");
 }
 
 /// Grain is deterministic: the same frame is the same pixels in two renders,

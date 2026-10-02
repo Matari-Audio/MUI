@@ -209,6 +209,14 @@ pub const EFFECTS: &[Def] = &[
             num("falloff", 0.5, 0., 1.),
         ],
     },
+    Def {
+        name: "light_wrap",
+        about: "the backdrop's light spilling round the layer's edges, as when a shot is lit by what is behind it",
+        passes: PYRAMID_PASSES + 1,
+        modes: &[],
+        backdrop: true,
+        params: &[num("radius", 24., 0., 500.), num("intensity", 1., 0., 4.)],
+    },
 ];
 
 /// Levels of the blur pyramid (`glow`, `light_wrap`, `glass`): each half the

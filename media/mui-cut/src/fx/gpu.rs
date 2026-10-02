@@ -6,8 +6,10 @@
 //! scene's stack on `A` and copies it to the target. The uniforms of every
 //! pass of a frame sit in one buffer at 256-byte dynamic offsets.
 //!
-//! `glow` blurs through a pyramid (each level half the last, down and back
-//! up, in linear light and dithered) for a wide, soft falloff at any radius.
+//! `glow`, `light_wrap` and `glass` blur through a pyramid (each level half
+//! the last, down and back up, in linear light and dithered) for a wide,
+//! soft falloff at any radius; `light_wrap` and `glass` also read `A`, the
+//! frame so far: what is under their layer.
 //!
 //! WGSL modules are plain includes: `prelude.wgsl` (bindings, the `U`
 //! header, noise) then the effect's file, which declares its `Params`. Kept
@@ -49,6 +51,7 @@ fn source(name: &str) -> Option<&'static str> {
         "levels" => module!("levels.wgsl"),
         "plasma" => module!("plasma.wgsl"),
         "glow" => module!("glow.wgsl"),
+        "light_wrap" => module!("light_wrap.wgsl"),
         _ => return None,
     })
 }
@@ -347,12 +350,14 @@ impl Passes {
         pass.draw(0..3, 0..1);
     }
 
-    /// Encode `stack` over texture `src`; the texture holding the result.
+    /// Encode `stack` over texture `src`, a layer's over `backdrop` (what
+    /// is under it); the texture holding the result.
     fn chain(
         &mut self,
         enc: &mut wgpu::CommandEncoder,
         h: Header,
         src: usize,
+        backdrop: Option<usize>,
         stack: &[Fx],
     ) -> usize {
         let mut cur = src;
@@ -362,12 +367,13 @@ impl Passes {
             };
             let dst = if cur == P { Q } else { P };
             let (from, to) = (self.view(cur), self.view(dst));
+            let under = backdrop.map(|b| self.view(b));
+            let under = under.as_ref().unwrap_or(&self.none).clone();
             let num = |k: &str| match fx.values.get(k) {
                 Some(super::Val::Num(v)) => *v as f32,
                 _ => 0.,
             };
             let px = |k: &str| num(k) * h.scale;
-            #[expect(clippy::single_match_else, reason = "more effects join it")]
             let srcs: Vec<wgpu::TextureView> = match fx.kind.as_str() {
                 "glow" => {
                     let mode = EFFECTS[i]
@@ -395,6 +401,12 @@ impl Passes {
                     .concat();
                     self.pyramid(enc, h, [&from, &self.none.clone()], &pre, &w, &up0);
                     params.push(mode as f32);
+                    vec![from, up0]
+                }
+                "light_wrap" => {
+                    let w = focus(px("radius"), self.levels());
+                    let up0 = self.targets.as_ref().expect("prepared").up[0].clone();
+                    self.pyramid(enc, h, [&from, &under], &[0., 0., 0., 0., 5.], &w, &up0);
                     vec![from, up0]
                 }
                 _ => {
@@ -495,7 +507,7 @@ impl Passes {
         target: &wgpu::TextureView,
     ) -> Result<Vec<Quad>, String> {
         let mut enc = encoder(canvas);
-        let mut out = self.chain(&mut enc, h, A, &frame.effects);
+        let mut out = self.chain(&mut enc, h, A, None, &frame.effects);
         let mut quads = Vec::new();
         if !overlays.is_empty() {
             // Back into `A`: an overlay's own stack ping-pongs `P` and `Q`.
@@ -573,7 +585,7 @@ impl Passes {
             }
             quads.extend(canvas.paint(assets, &part(clear, vec![l.clone()]), &lv)?);
             let mut enc = encoder(canvas);
-            let out = self.chain(&mut enc, h, L, &l.effects);
+            let out = self.chain(&mut enc, h, L, Some(A), &l.effects);
             let offset = self.stage(h, 0, &[]);
             self.pass(&mut enc, &self.over, &[&self.view(out)], &av, offset, false);
             self.submit(canvas, enc);
@@ -721,7 +733,7 @@ impl Passes {
                 scale: k as f32,
                 seed: frame.seed,
             };
-            let out = self.chain(&mut enc, h, L, stack);
+            let out = self.chain(&mut enc, h, L, None, stack);
             let t = self.targets.as_ref().expect("prepared");
             copy(&mut enc, &t.textures[out], mid, atlas, at, px);
         }
