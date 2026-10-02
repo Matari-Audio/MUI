@@ -155,14 +155,38 @@ impl Space {
             .iter()
             .map(|c| assets.element(c))
             .collect::<Result<Vec<_>, _>>()?;
-        // Pixels per project pixel: the output's, with headroom for a
-        // closer camera, and more for a scaled-up layer (in octaves, so an
-        // animated scale does not repaint every frame).
+        let cam = &view.camera;
+        let camera = crate::three::stage_camera(frame.size, cam);
+        let vp = camera.view_proj((fw / fh) as f32);
+        let to_px = |m: &Mat4, p: [f32; 3]| {
+            let q = m.project(p);
+            let q = vp.project(q);
+            [
+                (f64::from(q[0]) + 1.) * 0.5 * fw,
+                (1. - f64::from(q[1])) * 0.5 * fh,
+            ]
+        };
+        // Pixels per project pixel: the output's, with headroom, times
+        // how magnified the layer is on screen from this camera (its scale
+        // and its distance), in octaves, so a moving camera or an animated
+        // scale repaints only as it crosses one.
         let base = (out * 1.5).clamp(0.5, 4.);
         let scales: Vec<f64> = layers
             .iter()
             .filter(shown)
-            .map(|l| 2f64.powf(l.scale.abs().log2().ceil().clamp(-2., 2.)))
+            .map(|l| {
+                let m = crate::three::pose(frame.size, l, Mat4::scale(l.scale as f32));
+                let o = to_px(&m, [0., 0., 0.]);
+                let seen = [[1., 0., 0.], [0., 1., 0.]]
+                    .map(|a| {
+                        let p = to_px(&m, a);
+                        (p[0] - o[0]).hypot(p[1] - o[1])
+                    })
+                    .into_iter()
+                    .fold(0., f64::max);
+                let seen = if seen.is_finite() { seen } else { l.scale.abs() };
+                2f64.powf(seen.max(1e-3).log2().ceil().clamp(-2., 2.))
+            })
             .collect();
         let reaches: Vec<f64> = contents
             .iter()
@@ -259,17 +283,6 @@ impl Space {
         let mut planes = Vec::new();
         let mut shown_i = 0;
         let mut quads = Vec::with_capacity(layers.len());
-        let cam = &view.camera;
-        let camera = crate::three::stage_camera(frame.size, cam);
-        let vp = camera.view_proj((fw / fh) as f32);
-        let to_px = |m: &Mat4, p: [f32; 3]| {
-            let q = m.project(p);
-            let q = vp.project(q);
-            [
-                (f64::from(q[0]) + 1.) * 0.5 * fw,
-                (1. - f64::from(q[1])) * 0.5 * fh,
-            ]
-        };
         let marker = |l: &Drawn, id: &str| {
             let [x, y] = to_px(&Mat4::IDENTITY, w([l.x, l.y, l.space.z]));
             let r = 14.;
