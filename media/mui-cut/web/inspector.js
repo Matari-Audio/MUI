@@ -1,4 +1,4 @@
-import { frameNow, getp, isBind, isKeys, keyAt, layer, now, propsOf, round, scene, setValue, snap, toggleKey } from './doc.js';
+import { frameNow, getp, isBind, isKeys, keyAt, layer, now, propsOf, round, scene, selectedLayers, setValue, snap, toggleKey } from './doc.js';
 import { edit, loadAssets, showError } from './edit.js';
 import { parentTo } from './lists.js';
 import { $, FX, S, VECTOR, cut } from './state.js';
@@ -198,6 +198,8 @@ export function refreshInspector() {
     fxSection(s, () => frameNow()?.effects ?? []);
     return;
   }
+  const many = selectedLayers();
+  if (many.length > 1 && !S.selPart) { multiInspector(many); return; }
   $('#insp-title').textContent = S.selPart ? `Part · ${S.selPart}` : `Layer · ${l.kind}`;
   if (!S.selPart) {
     field('id', input(l.id, v => { if (v && !scene().layers.some(o => o.id === v)) edit(() => {
@@ -245,6 +247,37 @@ export function refreshInspector() {
   fxSection(l, () => frameNow()?.layers.find(d => d.id === l.id)?.effects ?? []);
   updateInspector();
 }
+// Several layers: the properties they all have, one field each. An edit
+// sets every one; a field they differ in shows "mixed" until then. ◆ keys
+// them all at the playhead, or takes the key there off all of them.
+function multiInspector(ls) {
+  $('#insp-title').textContent = `${ls.length} layers`;
+  const reset = document.createElement('button');
+  reset.textContent = 'Reset to default'; reset.dataset.reset = '';
+  reset.title = 'Each back to where it was placed: transform keys and offsets cleared';
+  reset.onclick = () => resetSelected();
+  field('layout', reset);
+  const rows = ls.map(l => propsOf(l));
+  const shared = rows.at(-1).filter(r => !r.p.includes('.') && rows.every(rs => rs.some(o => o.p === r.p)));
+  for (const { p, v } of shared) {
+    const color = typeof v === 'string';
+    const i = input('', x => edit(() => { for (const l of ls) setValue(l, p, color ? x : Number(x)); }), color ? 'text' : 'number');
+    i.dataset.prop = p;
+    const k = document.createElement('button');
+    k.className = 'key'; k.textContent = '◆'; k.dataset.key = p;
+    k.title = 'Add or remove a key at the playhead, on every selected layer';
+    const here = l => { const keys = getp(l, p); return isKeys(keys) && keyAt(keys, snap(S.t)) >= 0; };
+    k.onclick = () => {
+      const on = here(ls.at(-1));
+      edit(() => { for (const l of ls) if (here(l) === on) toggleKey(l, p); });
+      if (!color) S.prop = p;
+      refresh();
+    };
+    field(p, i, k);
+  }
+  fxFields = [];
+  updateInspector();
+}
 // An effect stack (a layer's or the scene's): each effect's parameters are
 // properties like any other, typed and keyed from the inspector.
 let fxFields = [];
@@ -287,8 +320,8 @@ function resetSelected() {
   const l = layer();
   if (!l) return;
   if (S.selPart) { edit(() => { (l.parts ??= {})[S.selPart] = {}; S.selKey = null; }); return; }
-  let json;
-  try { json = cut.reset(JSON.stringify(S.doc), S.si, l.id); } catch (e) { showError(String(e)); return; }
+  let json = JSON.stringify(S.doc);
+  try { for (const o of selectedLayers()) json = cut.reset(json, S.si, o.id); } catch (e) { showError(String(e)); return; }
   edit(() => { S.doc = JSON.parse(json); S.selKey = null; });
 }
 // The scene's 2D/3D switch. Into 3D nothing moves: the default camera sees
@@ -311,11 +344,18 @@ export function updateInspector() {
     if (bg?.disabled) bg.value = frameNow()?.background ?? bg.value;
     updateFx(); return;
   }
-  const vals = Object.fromEntries(propsOf(l).map(r => [r.p, r.v]));
+  // With several layers selected, a value they do not share is null.
+  const ls = S.selPart ? [l] : selectedLayers();
+  const vals = {};
+  for (const [n, o] of ls.entries()) for (const { p, v } of propsOf(o)) {
+    const x = typeof v === 'string' ? v : round(v);
+    vals[p] = n === 0 || vals[p] === x ? x : null;
+  }
   for (const i of document.querySelectorAll('#inspector input[data-prop]')) {
     if (document.activeElement === i) continue;
     const v = vals[i.dataset.prop];
-    i.value = typeof v === 'string' ? v : round(v);
+    i.value = v ?? '';
+    i.placeholder = v === null ? 'mixed' : '';
   }
   for (const b of document.querySelectorAll('#inspector [data-key]')) {
     const v = getp(l, b.dataset.key);

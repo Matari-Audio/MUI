@@ -3,7 +3,7 @@ import { deleteKey, layer, snap, toggleKey } from './doc.js';
 import { edit, load, noticeEffects, showError } from './edit.js';
 import { drawGraph } from './graph.js';
 import { refreshInspector, updateInspector } from './inspector.js';
-import { refreshLists } from './lists.js';
+import { deleteSelected, duplicateSelected, refreshLists, select, selectAll } from './lists.js';
 import { transport } from './sound.js';
 import { $, S, clock, pacing } from './state.js';
 import { drawTimeline } from './timeline.js';
@@ -38,6 +38,10 @@ addEventListener('keydown', e => {
   else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') seek(snap(Math.max(0, Math.min(S.R.scenes[S.si].duration, S.t + (e.key === 'ArrowRight' ? 1 : -1) / S.R.fps))));
   else if (e.key === 'Home') seek(0);
   else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selKey) edit(() => deleteKey(S.selKey));
+  else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
+  else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); }
+  else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); }
+  else if (e.key === 'Escape') select(null);
   else if (e.key.toLowerCase() === 'k' && layer()) edit(() => toggleKey(layer(), S.prop));
 });
 // The header's variant switcher: hidden for a project without variants.

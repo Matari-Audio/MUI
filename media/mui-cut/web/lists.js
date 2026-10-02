@@ -1,4 +1,4 @@
-import { getp, isKeys, layer, numPaths, scene } from './doc.js';
+import { getp, isKeys, layer, numPaths, scene, selectedLayers } from './doc.js';
 import { edit, showError, status } from './edit.js';
 import { keyLayer } from './sound.js';
 import { dropSource, refreshSources, sourceOf } from './sources.js';
@@ -21,10 +21,10 @@ export function refreshLists() {
     const b = document.createElement('button');
     b.innerHTML = `<span class="kind">${KIND_ICON[l.kind] ?? '?'}</span>`;
     b.append(l.name || l.id);
-    b.className = l.id === S.sel && !S.selPart ? 'on' : '';
+    b.className = S.selection.includes(l.id) ? 'on' : '';
     b.dataset.layer = l.id;
     b.style.paddingLeft = `${7 + depth * 14}px`;
-    b.onclick = () => select(l.id);
+    b.onclick = e => select(l.id, picking(e));
     b.draggable = true;
     b.ondragstart = e => { e.dataTransfer.setData(DRAG_LAYER, l.id); e.dataTransfer.effectAllowed = 'move'; };
     b.ondragover = e => { if (dragged(e)) { e.preventDefault(); b.classList.add('drop-on'); } };
@@ -47,13 +47,13 @@ export function refreshLists() {
     parts.sort(cmp);
     return [b, ...parts.map(part => {
       const c = document.createElement('button');
-      c.className = 'part' + (l.id === S.sel && part === S.selPart ? ' on' : '');
+      c.className = 'part' + (S.selection.includes(`${l.id}#${part}`) ? ' on' : '');
       c.dataset.part = part; c.dataset.depth = partDepth(part);
       c.style.paddingLeft = `${20 + 14 * (depth + partDepth(part))}px`;
       c.innerHTML = '<span class="kind">└</span>';
       c.append(part.slice(part.lastIndexOf('/') + 1));
       c.title = part;
-      c.onclick = () => select(`${l.id}#${part}`);
+      c.onclick = e => select(`${l.id}#${part}`, picking(e));
       return c;
     }), ...rowsUnder(l.id, depth + 1)];
   });
@@ -81,13 +81,21 @@ export function parentTo(id, parent) {
   edit(() => { S.doc = JSON.parse(json); S.sel = id; S.selPart = null; S.selKey = null; });
 }
 
-// `id` is a layer id, or `layer#part` for a plugin's part: selecting a
-// part tracks it (an empty `parts` entry), so it can be moved and keyed.
-export function select(id) {
-  const hash = id ? id.indexOf('#') : -1;
-  const lid = hash < 0 ? id : id.slice(0, hash), part = hash < 0 ? null : id.slice(hash + 1);
-  if (S.sel !== lid || S.selPart !== part) S.selKey = null;
-  S.sel = lid; S.selPart = part;
+// Shift or Ctrl (Cmd) adds to the selection, or takes out what is in it.
+export const picking = e => e.shiftKey || e.ctrlKey || e.metaKey ? 'toggle' : undefined;
+// `id` is a layer id, or `layer#part` for a plugin's part. `how` 'toggle'
+// adds it to the selection (as the primary) or takes it out; else it is
+// the whole selection (null: nothing).
+export function select(id, how) {
+  if (how === 'toggle' && id) setSelection(S.selection.includes(id) ? S.selection.filter(x => x !== id) : [...S.selection, id]);
+  else setSelection(id ? [id] : []);
+}
+// Selecting a part tracks it (an empty `parts` entry), so it can be moved
+// and keyed. The inspector and graph follow the primary, the last id.
+export function setSelection(ids) {
+  const was = S.selection.at(-1) ?? null;
+  S.selection = [...new Set(ids)];
+  if ((S.selection.at(-1) ?? null) !== was) S.selKey = null;
   const l = layer();
   if (l && S.selPart && !l.parts?.[S.selPart]) edit(() => { (l.parts ??= {})[S.selPart] = {}; });
   const nums = numPaths(l).filter(p => S.selPart ? p.startsWith(`parts.${S.selPart}.`) : !p.startsWith('parts.'));
@@ -129,26 +137,57 @@ document.querySelectorAll('[data-add]').forEach(b => b.onclick = () => edit(() =
   if (name === 'shader') Object.assign(l, { width: w / 2, height: h / 2, effects: [{ type: 'plasma' }] });
   ls.push(l); S.sel = l.id;
 }));
-function moveLayer(d) {
-  const ls = scene().layers, i = ls.findIndex(l => l.id === S.sel), j = i + d;
-  if (i < 0 || j < 0 || j >= ls.length) return;
-  edit(() => { [ls[i], ls[j]] = [ls[j], ls[i]]; });
+// The selected layers one step up or down the paint order, as a block:
+// nothing moves when the first in that direction is at the end.
+function moveLayers(d) {
+  const ls = scene().layers, on = new Set(selectedLayers().map(l => l.id));
+  const idx = ls.map((l, i) => on.has(l.id) ? i : -1).filter(i => i >= 0);
+  if (d > 0) idx.reverse();
+  if (!idx.length || idx[0] + d < 0 || idx[0] + d >= ls.length) return;
+  edit(() => { for (const i of idx) [ls[i], ls[i + d]] = [ls[i + d], ls[i]]; });
 }
-$('#layer-up').onclick = () => moveLayer(1);
-$('#layer-down').onclick = () => moveLayer(-1);
-// Deleting a parent hands its children to its own parent, where they are.
-$('#layer-del').onclick = () => {
-  const l = layer();
-  if (!l) return;
+$('#layer-up').onclick = () => moveLayers(1);
+$('#layer-down').onclick = () => moveLayers(-1);
+// Deleting a parent hands its children to its nearest ancestor that stays,
+// where they are.
+export function deleteSelected() {
+  const doomed = selectedLayers();
+  if (!doomed.length) return;
+  const gone = new Set(doomed.map(l => l.id)), by = new Map(scene().layers.map(l => [l.id, l]));
+  const keeper = l => { let p = l.parent ?? ''; while (p && gone.has(p)) p = by.get(p)?.parent ?? ''; return p; };
   let next = structuredClone(S.doc);
-  for (const o of scene().layers.filter(o => o.parent === l.id)) {
-    try { next = JSON.parse(cut.reparent(JSON.stringify(next), S.si, o.id, l.parent ?? '', S.t)); }
-    catch { const k = next.scenes[S.si].layers.find(k => k.id === o.id); if (l.parent) k.parent = l.parent; else delete k.parent; }
+  for (const o of scene().layers.filter(o => !gone.has(o.id) && gone.has(o.parent))) {
+    const to = keeper(o);
+    try { next = JSON.parse(cut.reparent(JSON.stringify(next), S.si, o.id, to, S.t)); }
+    catch { const k = next.scenes[S.si].layers.find(k => k.id === o.id); if (to) k.parent = to; else delete k.parent; }
   }
   edit(() => {
     S.doc = next;
-    scene().layers = scene().layers.filter(o => o.id !== l.id);
+    scene().layers = scene().layers.filter(o => !gone.has(o.id));
     S.sel = null; S.selKey = null;
   });
-};
+}
+$('#layer-del').onclick = deleteSelected;
+// Copies of the selected layers, each just above its original, selected;
+// a copy of a selected parent's child keeps to the parent's copy.
+export function duplicateSelected() {
+  const ls = selectedLayers();
+  if (!ls.length) return;
+  const all = scene().layers, ids = new Set(all.map(l => l.id)), to = new Map();
+  for (const l of ls) {
+    const stem = l.id.replace(/\d+$/, '') || 'layer';
+    let n = 2; while (ids.has(stem + n)) n++;
+    ids.add(stem + n); to.set(l.id, stem + n);
+  }
+  edit(() => {
+    for (const l of ls) {
+      const c = structuredClone(l);
+      c.id = to.get(l.id);
+      if (to.has(c.parent)) c.parent = to.get(c.parent);
+      all.splice(all.indexOf(l) + 1, 0, c);
+    }
+    S.selection = ls.map(l => to.get(l.id)); S.selKey = null;
+  });
+}
+export const selectAll = () => setSelection(scene().layers.map(l => l.id));
 

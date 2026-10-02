@@ -1,7 +1,7 @@
-import { getp, insertKey, isKeys, keyAt, layer, now, round, scene, setValue, setp, snap } from './doc.js';
+import { getp, insertKey, isKeys, keyAt, now, roots, round, scene, selectedLayers, setValue, setp, snap } from './doc.js';
 import { begin, changed, end, showError } from './edit.js';
 import { exportMessage } from './export.js';
-import { DRAG_SOURCE, refreshLists, select } from './lists.js';
+import { DRAG_SOURCE, picking, refreshLists, select, setSelection } from './lists.js';
 import { dropSource } from './sources.js';
 import { $, C, S, cut, pacing, worker } from './state.js';
 
@@ -77,8 +77,9 @@ function drawOverlay() {
   const k = over.width / S.R.size[0];
   octx.clearRect(0, 0, over.width, over.height);
   const dpr = devicePixelRatio;
-  const selId = S.selPart ? `${S.sel}#${S.selPart}` : S.sel;
-  for (const [id, width, color] of [[hover, 1, C.hover], [selId, 1.5, C.sel]]) {
+  const selId = S.selection.at(-1);
+  const marked = drag?.marquee ? marqueeHits(drag.marquee).map(id => [id, 1, C.hover]) : [];
+  for (const [id, width, color] of [[hover, 1, C.hover], ...marked, ...S.selection.map(id => [id, 1.5, C.sel])]) {
     const q = S.quads.find(q => q.id === id);
     if (!q) continue;
     octx.beginPath();
@@ -91,6 +92,11 @@ function drawOverlay() {
       octx.fillStyle = C.halo; octx.fillRect(x * k - 4 * dpr, y * k - 4 * dpr, 8 * dpr, 8 * dpr);
       octx.fillStyle = C.sel; octx.fillRect(x * k - 3 * dpr, y * k - 3 * dpr, 6 * dpr, 6 * dpr);
     }
+  }
+  if (drag?.marquee) {
+    const [[ax, ay], [bx, by]] = drag.marquee;
+    octx.fillStyle = C.marquee; octx.fillRect(ax * k, ay * k, (bx - ax) * k, (by - ay) * k);
+    octx.lineWidth = dpr; octx.strokeStyle = C.sel; octx.strokeRect(ax * k, ay * k, (bx - ax) * k, (by - ay) * k);
   }
 }
 function toProject(e) {
@@ -177,24 +183,61 @@ over.onpointerdown = e => {
     over.setPointerCapture(e.pointerId);
     return;
   }
-  select(id);
-  if (!id) return;
-  const l = layer();
-  // A part moves in its parent's frame (the plugin's, at the top): the
-  // parent quad's map from UI pixels to project pixels, inverted.
-  const px = S.selPart ? `parts.${S.selPart}.` : '';
-  let lin = [1, 0, 0, 1];
-  if (S.selPart) {
-    const mine = S.quads.filter(q => q.id.startsWith(S.sel + '#')).map(q => q.id.slice(S.sel.length + 1));
-    const parent = mine.filter(o => S.selPart.startsWith(o + '/')).sort((a, b) => b.length - a.length)[0];
-    const pq = S.quads.find(q => q.id === (parent ? `${S.sel}#${parent}` : S.sel));
-    const k = now(l, 'scale') || 1;
-    lin = pq?.ui ? pq.ui.slice(0, 4) : [k, 0, 0, k];
+  const how = picking(e);
+  if (!id) {
+    // A marquee from empty space: Shift or Ctrl adds what it touches.
+    if (!how && S.selection.length) select(null);
+    drag = { marquee: [p, p], keep: [...S.selection] };
+    over.setPointerCapture(e.pointerId);
+    return;
   }
-  drag = { p, l, px, lin, x0: now(l, px + 'x'), y0: now(l, px + 'y') };
+  // A click on what is selected keeps the selection, to move it all; a
+  // click without a drag then selects just that.
+  let collapse = null;
+  if (how) { select(id, 'toggle'); if (!S.selection.includes(id)) return; }
+  else if (!S.selection.includes(id)) select(id);
+  else collapse = id;
+  drag = { p, items: moveItems(), collapse, moved: false };
   over.setPointerCapture(e.pointerId);
   begin();
 };
+// The 2D map of a layer's parent from local offsets to project pixels (a
+// parented layer moves in its parent's frame), from the evaluated frame.
+function parentLin(l, frame) {
+  const p = l.parent && scene().mode !== '3d' && frame?.layers.find(d => d.id === l.parent);
+  if (!p) return [1, 0, 0, 1];
+  const a = p.rotation * Math.PI / 180, k = p.scale;
+  return [k * Math.cos(a), k * Math.sin(a), -k * Math.sin(a), k * Math.cos(a)];
+}
+// A part moves in its parent's frame (the plugin's, at the top): the
+// parent quad's map from UI pixels to project pixels.
+function partLin(l, part) {
+  const mine = S.quads.filter(q => q.id.startsWith(l.id + '#')).map(q => q.id.slice(l.id.length + 1));
+  const parent = mine.filter(o => part.startsWith(o + '/')).sort((a, b) => b.length - a.length)[0];
+  const pq = S.quads.find(q => q.id === (parent ? `${l.id}#${parent}` : l.id));
+  const k = now(l, 'scale') || 1;
+  return pq?.ui ? pq.ui.slice(0, 4) : [k, 0, 0, k];
+}
+// What a move drags: each selected part, and each selected layer that no
+// selected ancestor carries already, with where it starts.
+function moveItems() {
+  const frame = JSON.parse(cut.frame(S.si, S.t) || 'null');
+  const ls = new Set(roots(selectedLayers()));
+  const items = [];
+  for (const id of S.selection) {
+    const i = id.indexOf('#'), l = scene().layers.find(l => l.id === (i < 0 ? id : id.slice(0, i)));
+    if (!l || (i < 0 && !ls.has(l))) continue;
+    const px = i < 0 ? '' : `parts.${id.slice(i + 1)}.`;
+    items.push({ l, px, lin: i < 0 ? parentLin(l, frame) : partLin(l, id.slice(i + 1)), x0: now(l, px + 'x'), y0: now(l, px + 'y') });
+  }
+  return items;
+}
+// Whole layers whose outline meets the marquee.
+function marqueeHits([[ax, ay], [bx, by]]) {
+  const [x0, x1, y0, y1] = [Math.min(ax, bx), Math.max(ax, bx), Math.min(ay, by), Math.max(ay, by)];
+  return S.quads.filter(q => !q.id.includes('#') && q.pts.some(([x]) => x >= x0) && q.pts.some(([x]) => x <= x1)
+    && q.pts.some(([, y]) => y >= y0) && q.pts.some(([, y]) => y <= y1)).map(q => q.id);
+}
 over.onpointermove = e => {
   if (orbit.on) {
     if (!orbit.from) return;
@@ -213,9 +256,14 @@ over.onpointermove = e => {
     pointerKeys(drag.l, drag.last, drag.q ? toUi(drag.q, p) : drag.ui);
     changed(); return;
   }
-  const [dx, dy] = unmap(drag.lin, [p[0] - drag.p[0], p[1] - drag.p[1]]);
-  setValue(drag.l, drag.px + 'x', round(drag.x0 + dx));
-  setValue(drag.l, drag.px + 'y', round(drag.y0 + dy));
+  if (drag.marquee) { drag.marquee[1] = p; drawOverlay(); return; }
+  drag.moved = true;
+  const d = [p[0] - drag.p[0], p[1] - drag.p[1]];
+  for (const it of drag.items) {
+    const [dx, dy] = unmap(it.lin, d);
+    setValue(it.l, it.px + 'x', round(it.x0 + dx));
+    setValue(it.l, it.px + 'y', round(it.y0 + dy));
+  }
   changed();
 };
 over.onpointerup = () => {
@@ -225,7 +273,11 @@ over.onpointerup = () => {
     holdKey(l, 'pointer_down', up, 0);
     changed();
   }
-  drag = null; end();
+  const was = drag;
+  drag = null;
+  if (was?.marquee) { setSelection([...was.keep, ...marqueeHits(was.marquee)]); return; }
+  end();
+  if (was?.collapse && !was.moved) select(was.collapse);
 };
 // A source dragged from the Sources panel lands where it is dropped.
 over.addEventListener('dragover', e => { if (e.dataTransfer.types.includes(DRAG_SOURCE)) e.preventDefault(); });

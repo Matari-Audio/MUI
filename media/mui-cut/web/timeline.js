@@ -1,6 +1,6 @@
 import { getp, isKeys, keyPaths, numPaths, scene, snap } from './doc.js';
 import { begin, changed, end } from './edit.js';
-import { select } from './lists.js';
+import { picking, select } from './lists.js';
 import { drawSound } from './sound.js';
 import { $, C, KIND_ICON, S } from './state.js';
 import { refresh, seek } from './transport.js';
@@ -57,7 +57,7 @@ export function drawTimeline() {
     const on = r.l.id === S.sel && (r.p ? r.p === S.prop : false);
     c.fillStyle = on ? C.rowOn : i % 2 ? C.rowAlt : C.row; c.fillRect(0, y, w, ROW);
     if (on) { c.fillStyle = C.textOn; c.fillRect(0, y, 2, ROW); }
-    c.fillStyle = r.l.id === S.sel && (!r.p || on) ? C.textOn : C.text;
+    c.fillStyle = (r.p ? on : S.selection.includes(r.l.id)) ? C.textOn : C.text;
     if (!r.p) drawSound(c, r.l, y);
     c.fillText(r.p ? `   ${short(r.p)}` : `${KIND_ICON[r.l.kind] ?? ''} ${r.l.name || r.l.id}`, 8, y + ROW / 2);
     for (const key of rowKeys(r)) {
@@ -76,7 +76,7 @@ function tlHit(e) {
 tl.onpointerdown = e => {
   const h = tlHit(e);
   tl.setPointerCapture(e.pointerId);
-  if (h.row && h.x < LABEL) { select(h.row.l.id); if (h.row.p && numPaths(h.row.l).includes(h.row.p)) S.prop = h.row.p; refresh(); return; }
+  if (h.row && h.x < LABEL) { select(h.row.l.id, h.row.p ? undefined : picking(e)); if (h.row.p && numPaths(h.row.l).includes(h.row.p)) S.prop = h.row.p; refresh(); return; }
   if (h.key) {
     // A layer-row diamond carries every key of the layer at that time.
     const group = h.row.p ? [h.key] : rowKeys(h.row).filter(k => Math.abs(k.k.t - h.key.k.t) < 1e-9);

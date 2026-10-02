@@ -3,6 +3,18 @@ import { S, cut } from './state.js';
 // ---------- document helpers
 export const scene = () => S.doc.scenes[S.si];
 export const layer = () => scene()?.layers.find(l => l.id === S.sel) ?? null;
+// The selected whole layers (not parts), in the order picked.
+export const selectedLayers = () => S.selection.filter(id => !id.includes('#'))
+  .map(id => scene()?.layers.find(l => l.id === id)).filter(Boolean);
+// Of `ls`, those with no ancestor in `ls`: moving a parent moves its
+// children already.
+export function roots(ls) {
+  const ids = new Set(ls.map(l => l.id)), by = new Map(scene().layers.map(l => [l.id, l]));
+  return ls.filter(l => {
+    for (let p = l.parent, n = 0; p && n < 64; p = by.get(p)?.parent, n++) if (ids.has(p)) return false;
+    return true;
+  });
+}
 export const isKeys = v => Array.isArray(v);
 // `{"var": ...}`: a value a variable decides; the inspector shows it, the
 // Variables panel changes it.

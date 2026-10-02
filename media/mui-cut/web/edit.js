@@ -102,7 +102,7 @@ export async function adopt(m, why) {
   S.server = m.doc; S.rev = m.rev;
   if (both.length) notice(m.by === me ? `your edit replaced a newer change to ${where(both)}` : `${who(m.by)} changed ${where(both)} too; the later edit wins`);
   S.si = Math.min(S.si, S.doc.scenes.length - 1);
-  if (!layer()) S.sel = null;
+  S.selection = S.selection.filter(id => scene().layers.some(l => l.id === id.split('#')[0]));
   if (S.selKey && !(scene().layers.includes(S.selKey.l) && getp(S.selKey.l, S.selKey.p)?.includes?.(S.selKey.k))) S.selKey = null;
   S.need = true;
   await loadAssets();

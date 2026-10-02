@@ -15,7 +15,7 @@ export const C = {
   tick: '#3a3a3a', row: '#181818', rowAlt: '#1c1c1c', rowOn: '#262626',
   curve: '#d4d4d4', key: '#b0b0b0', layerKey: '#6a6a6a', handle: '#7a7a7a',
   handleLine: '#ffffff30', picked: '#ffffff', pickedLine: '#ffffffa0',
-  playhead: '#f2f2f2', hover: '#ffffff70', sel: '#ffffff', halo: '#000000a0',
+  playhead: '#f2f2f2', hover: '#ffffff70', sel: '#ffffff', halo: '#000000a0', marquee: '#ffffff14',
 };
 
 await init();
@@ -34,8 +34,14 @@ export const S = {
   rev: 0,
   si: 0,              // scene index
   t: 0,               // playhead, seconds into the scene
-  sel: null,          // selected layer id
-  selPart: null,      // with a plugin layer: its selected part id
+  // What is selected: layer ids or `layer#part` ids, in the order picked;
+  // the last is the primary, which the inspector and the graph show.
+  selection: [],
+  // The primary as its layer id and part (null for a whole layer).
+  get sel() { const id = this.selection.at(-1); return id == null ? null : id.split('#')[0]; },
+  set sel(id) { this.selection = id == null ? [] : [id]; },
+  get selPart() { const id = this.selection.at(-1), i = id?.indexOf('#') ?? -1; return i < 0 ? null : id.slice(i + 1); },
+  set selPart(part) { const l = this.sel; if (l != null) this.selection = [...this.selection.slice(0, -1), part ? `${l}#${part}` : l]; },
   prop: 'x',          // property shown in the graph editor
   selKey: null,       // { l, p, k }: the selected key object
   quads: [],          // layer outlines from the last render, project px

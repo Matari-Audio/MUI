@@ -75,6 +75,7 @@ aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 #bottom { grid-area: bottom; display: grid; grid-template-rows: 30px minmax(0, 1fr) 28px 190px; border-top: 1px solid var(--line); background: var(--panel); min-height: 0; }
 .transport, .graph-bar { display: flex; align-items: center; gap: 10px; padding: 0 10px; border-bottom: 1px solid var(--line); }
 .graph-bar { border-top: 1px solid var(--line); }
+#hint { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #tl-wrap { overflow-y: auto; overflow-x: hidden; min-height: 0; }
 #timeline, #graph { display: block; width: 100%; }
 #graph { height: 190px; }

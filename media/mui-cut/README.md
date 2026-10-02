@@ -680,7 +680,15 @@ explodes two levels in 3D: panels, then their controls.
   frames/s, dropped frames and frame time p50/p95.
   Click a layer to select it (outlined),
   drag to move it: an animated `x`/`y` gets a key at the playhead, a plain one
-  changes its value.
+  changes its value; a parented layer moves in its parent's frame.
+- **Selection**: Shift- or Ctrl-click (in the viewport, the layer list or
+  the timeline's labels) adds a layer or takes it out; a drag from empty
+  viewport space is a marquee (with Shift or Ctrl it adds); Ctrl+A selects
+  the scene's layers, Esc none. The last picked is the primary: the
+  inspector's layer settings and the graph follow it. With several layers
+  the inspector lists the properties they share, "mixed" where they differ;
+  an edit or ◆ applies to all. Drag, Delete, Ctrl+D (duplicate, in place)
+  and ▲/▼ act on the whole selection, each one undo step.
 - **Sources** (left, collapsible): every source the project uses or has
   imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON,
   `.glb` or `.ttf`/`.otf` files on the left panel) copies files to `media/` beside the
@@ -734,7 +742,9 @@ explodes two levels in 3D: panels, then their controls.
   A bound property shows its value, read-only, and names the variable.
   Export renders the variant on screen.
 - Keys: Space play/pause, K toggle a key on the graphed property, Delete the
-  selected key, arrows step a frame, Ctrl+Z / Ctrl+Shift+Z undo / redo.
+  selected key (else the selected layers), arrows step a frame, Ctrl+Z /
+  Ctrl+Shift+Z undo / redo, Ctrl+A select all, Ctrl+D duplicate, Esc
+  deselect.
 
 Every finished gesture is PUT to the server, which validates it, writes the
 canonical JSON atomically and remembers what it wrote, so the watcher only
