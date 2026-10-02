@@ -55,11 +55,11 @@ class Sync(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d)
             (d / 'repos/Access').mkdir(parents=True)
-            (d / 'repos/KURV').mkdir()
-            wt = d / 'work/sync-KURV'
+            (d / 'repos/synth').mkdir()
+            wt = d / 'work/sync-synth'
             wt.mkdir(parents=True)
             (wt / 'Cargo.toml').write_text('[dependencies]\na = { path = "../Access" }\nb = { path = "crates/b" }\n')
-            made = sync.siblings(d / 'repos/KURV', wt)
+            made = sync.siblings(d / 'repos/synth', wt)
             self.assertEqual(made, [d / 'work/Access'])
             self.assertEqual((d / 'work/Access').resolve(), (d / 'repos/Access').resolve())
 

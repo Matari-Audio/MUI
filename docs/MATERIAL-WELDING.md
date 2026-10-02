@@ -196,7 +196,7 @@ intended migration route. Full downstream compatibility has not been compiled.
 | 1 | Unified interaction authoring | Semantic activation, keyboard parameter edits, focus scopes, modals and disabled gestures tested across input sources |
 | 2 | Stroke options and transforms | Dash/cap/join vocabulary, affine local paint/hit transforms, hit slop independent of visible edge width |
 | 2 | Host GPU composition slot | Typed capability boundary for meters/refraction/custom passes, with CPU fallback or explicit unsupported response |
-| 2 | Repaint deadlines and dirty scopes | Timers and live values without mandatory full-rate frames; measure real KURV before a retained-layout rewrite |
+| 2 | Repaint deadlines and dirty scopes | Timers and live values without mandatory full-rate frames; measure a real plugin editor before a retained-layout rewrite |
 
 Do not collapse model identities into rack indices or blend semantic meaning with
 paint. The prior `Id::entity(u64)` work remains the recommended stable identity

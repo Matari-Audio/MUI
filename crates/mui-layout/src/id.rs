@@ -1,6 +1,6 @@
 //! [`Id`]: a node's name, composed without touching the heap.
 //!
-//! A synth editor names one node per slot per field -- KURV's shell formatted
+//! A synth editor names one node per slot per field -- one shell formatted
 //! 374 of them every frame with `format!`, which is 374 allocations to build
 //! strings that were identical to last frame's. [`Id`] is the same key space,
 //! a `/`-joined path, held in the value itself until it outgrows the buffer.

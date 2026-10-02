@@ -12,19 +12,19 @@
 
 ## Decision
 
-Aim for order-of-magnitude savings by avoiding repeated work and choosing the appropriate rendering pipeline for the workload. A global renderer substitution alone is not sufficient. Keep the production backend until visual parity, device support, and actual KURV workloads justify changing it.
+Aim for order-of-magnitude savings by avoiding repeated work and choosing the appropriate rendering pipeline for the workload. A global renderer substitution alone is not sufficient. Keep the production backend until visual parity, device support, and actual plugin workloads justify changing it.
 
 Target: a four-core laptop, integrated graphics, 8 GB RAM, 1080p at 60 Hz, with audio running. This target has **not** been validated by the desktop measurements below.
 
 ## Repository and evidence state
 
-The investigation starts from MUI `5942d19` (0.3.2), after the shape/layout integration and first optimization pass. KURV was integrated at `8aa6e8a`, using that MUI revision. MUI's relevant production path was then Vello Hybrid; old GPUI experiments do not describe KURV's active renderer. Current KURV work must be audited separately before changing its pin.
+The investigation starts from MUI `5942d19` (0.3.2), after the shape/layout integration and first optimization pass. A synth plugin was integrated against that MUI revision. MUI's relevant production path was then Vello Hybrid; old GPUI experiments do not describe the plugin's active renderer. Current plugin work must be audited separately before changing its pin.
 
 A temporary research worktree and its raw logs disappeared during this investigation. This persistent branch restores the root-cause fix and the core benchmark improvements. Earlier retention/atlas/readout measurements are explicitly provisional below: they survive in investigation notes, but their original logs and patches are unavailable. New evidence in `rendering-evidence/` is reproducible from this branch. Do not mix those evidence levels.
 
 ## Where the work goes
 
-KURV's host already skips settled idle frames. During animation or interaction it constructs the tree, resolves a complete MUI frame, rebuilds hit-testing/paint data, and re-encodes the scene. Processing queued events can produce multiple resolves before one presentation. Preserving event ordering and gesture edges is essential if these resolves are coalesced.
+The plugin's host already skips settled idle frames. During animation or interaction it constructs the tree, resolves a complete MUI frame, rebuilds hit-testing/paint data, and re-encodes the scene. Processing queued events can produce multiple resolves before one presentation. Preserving event ordering and gesture edges is essential if these resolves are coalesced.
 
 MUI's incremental layout still scans and validates the tree. Cached layout does not mean no tree construction, styling, text-key generation, scene traversal, or paint-list allocation. Paths are converted into Bezier paths every frame; a `PathCache` for this was measured at ~0.08 ms/frame saved on the bench editor and deleted. Hybrid still processes those paths into sparse strips. This distinction matters for thousands of animated curves.
 
@@ -34,7 +34,7 @@ The existing `Ui::set_text` supports a reserved single-line readout without a fu
 
 `Text::eq` compared the identity of the outer font-list allocation. Resolving the same scene builds another list containing the same font objects, so unchanged text was marked unequal. Retained renderers could re-encode static text and damage tracking could repaint unnecessarily.
 
-The fix compares list length and each font object's identity. It retains identity-based font invalidation without comparing complete font files. The regression proves identical consecutive scenes compare equal and newly allocated font data remains unequal. It failed before the fix; all 123 mui-scene tests and doctests pass afterward. This is a correctness fix enabling retention, not a claim that KURV now renders ten times faster.
+The fix compares list length and each font object's identity. It retains identity-based font invalidation without comparing complete font files. The regression proves identical consecutive scenes compare equal and newly allocated font data remains unequal. It failed before the fix; all 123 mui-scene tests and doctests pass afterward. This is a correctness fix enabling retention, not a claim that the plugin now renders ten times faster.
 
 ## Visage: what to learn
 
@@ -75,7 +75,7 @@ Development desktop: Ryzen 7 7800X3D, Radeon RX 6600, RADV Vulkan, Linux 7.3.0-r
 | vello_hybrid cached | 18.749 | 18.749, 18.749, 18.750 |
 | vello (classic) | 1.030 | 1.030, 1.040, 1.009 |
 
-Compute is about **18× faster** than cached Hybrid in this synthetic vector workload. Hybrid spends about 16 ms preparing/encoding paths; caching Bezier conversion alone does not remove that work. This supports investigating a compute or specialized graph path. Pixel-level parity is still outstanding; neither this timing nor the earlier 15× observation proves equal visual quality or end-to-end KURV improvement.
+Compute is about **18× faster** than cached Hybrid in this synthetic vector workload. Hybrid spends about 16 ms preparing/encoding paths; caching Bezier conversion alone does not remove that work. This supports investigating a compute or specialized graph path. Pixel-level parity is still outstanding; neither this timing nor the earlier 15× observation proves equal visual quality or end-to-end plugin improvement.
 
 The default text-heavy fixture tells a different story: static cached Hybrid is 6.251 ms and classic 6.001 ms in one fresh run. Switching backends alone does not deliver a comparable improvement there. These are actual total-frame medians, not sums of phase medians.
 
@@ -94,11 +94,11 @@ These numbers were observed before loss of the temporary directory. They are hyp
 ## Implementation order and acceptance gates
 
 1. Land the text retention correctness fix and keep the corrected benchmark as the baseline.
-2. Instrument actual KURV build/resolve/encode/GPU/present phases, event counts, changed area, allocations, uploads, and audio underruns. Record p50/p95/p99 and memory across long sessions.
+2. Instrument actual plugin build/resolve/encode/GPU/present phases, event counts, changed area, allocations, uploads, and audio underruns. Record p50/p95/p99 and memory across long sessions.
 3. Route reserved readouts through existing local updates. Separate structural/layout changes from paint-only and animation changes. Coalesce presentation work without dropping press/release, text input, automation, or accessibility changes.
 4. Retain static backgrounds, labels, axes and control geometry. Update only changed regions; use full redraw when damage or layer overhead makes it cheaper. Budget retained GPU memory rather than allocating a texture per widget.
 5. Benchmark specialized oscilloscope/spectrum rendering with persistent geometry or sample textures. Reduce display data to pixel resolution while preserving peaks; never alter DSP data to simplify a drawing.
-6. Choose compute versus sparse-strip rendering from equal-content, equal-quality experiments. Check clipping, blending, welding, gradients, images, fallback fonts, scaling, resize, device loss and software fallback before migrating KURV.
+6. Choose compute versus sparse-strip rendering from equal-content, equal-quality experiments. Check clipping, blending, welding, gradients, images, fallback fonts, scaling, resize, device loss and software fallback before migrating the plugin.
 
 Acceptance workloads: idle editor, one knob, many meters, dense spectra/scopes, scrolling, popup, preset change, resize, and multiple windows at scales 1/1.5/2. Run them on the agreed weak laptop with active audio, not only the development desktop. Suggested budgets of 1 ms CPU p95 and 4 ms GPU p95 are goals, not observed results; the 60 Hz frame deadline is 16.67 ms.
 
@@ -114,7 +114,7 @@ MUI_BENCH_SCENE=vectors cargo run -p mui-vello --example bench --features cpu,be
 
 ## Implemented follow-up: adaptive tiled redraws
 
-`TiledEffects` now renders once when most tiles are dirty and an extra full-window target fits the existing tile budget. Guarded copies refresh the persistent tiles; local changes retain the old path. This follows the investigation's full-redraw fallback recommendation. See [repeated measurements and validation](rendering-evidence/tile-adaptive-notes.md). It remains opt-in and does not change KURV's host backend.
+`TiledEffects` now renders once when most tiles are dirty and an extra full-window target fits the existing tile budget. Guarded copies refresh the persistent tiles; local changes retain the old path. This follows the investigation's full-redraw fallback recommendation. See [repeated measurements and validation](rendering-evidence/tile-adaptive-notes.md). It remains opt-in and does not change the plugin host's backend.
 
 ## Uniform border geometry (2026-09-20)
 
@@ -128,7 +128,7 @@ Reproduce with `cargo run -p mui-geometry --release --example uniform_border_ben
 On this development desktop, a 400×260 rounded rectangle with a 2px inside border
 measured **6.218 ms sweep / 0.335 ms offsets (18.58×)**, median of 51 warmed samples.
 The reference gets a 65,536-vertex allowance so it can finish; this benchmark
-measures uncached geometry construction, not GPU time or KURV frame rate.
+measures uncached geometry construction, not GPU time or plugin frame rate.
 The regression check compares coverage with the old sweep across holes and all
 three border alignments. The default-budget welded example also resolves and
 renders in native and WASM playground checks.
