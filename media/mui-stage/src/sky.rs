@@ -2,8 +2,8 @@
 //! (single-scattering Rayleigh, Mie and ozone, after Nishita 1993, with the
 //! earth's shadow for twilight) and the artist's gradient, without clouds
 //! or the sun's disc. The same maths as `atmosphere` and `sky_seen` in
-//! stage.wgsl, which the tests hold to this; it gives the sun's colour
-//! through the air.
+//! stage.wgsl, which the tests hold to this; it bakes the sky that lights a
+//! shot ([`Sky::light`]) and gives the sun's colour through the air.
 //!
 //! Lengths are kilometres, directions the stage's world (y up).
 use crate::{Atmosphere, Sky};
@@ -182,6 +182,47 @@ fn norm(v: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// The sky's radiance along `d` without clouds or the sun's disc: the
+/// physical atmosphere or the gradient, as `sky_seen` draws it.
+pub fn radiance(k: &Sky, d: [f32; 3]) -> [f32; 3] {
+    let d = norm(d);
+    if let Some(a) = &k.atmosphere {
+        return atmosphere(a, k.sun, d);
+    }
+    let sun = norm(k.sun);
+    let up = d[1];
+    let h = 1. - up.abs().clamp(0., 1.);
+    let mu = dot(d, sun).max(0.);
+    let mut c: [f32; 3] = std::array::from_fn(|i| {
+        let a = k.zenith[i] + (k.horizon[i] - k.zenith[i]) * h.powi(6);
+        if up < 0. {
+            let low = k.horizon[i] * 0.55 + k.zenith[i] * 0.15;
+            k.horizon[i] + (low - k.horizon[i]) * smoothstep(0., 0.5, -up)
+        } else {
+            a
+        }
+    });
+    let glow = 0.06 * mu.powi(4) + 0.12 * mu.powi(16) * h + 0.35 * mu.powi(64);
+    c = add(c, scale(k.sun_color, glow));
+    c
+}
+
+/// The sky as it lights a shot: [`radiance`] by direction, `width` by
+/// half that, with the clouds' cover dimming and greying it.
+/// ponytail: cloud cover as a uniform overcast blend, not the clouds'
+/// shapes; bake `sky_seen` on the GPU if a shot needs their light to move.
+pub fn bake(k: &Sky, width: u32) -> crate::EnvImage {
+    let grey = add(
+        scale(add(k.zenith, k.horizon), 0.35),
+        scale(k.sun_color, 0.12),
+    );
+    let cover = k.cover.clamp(0., 1.) * 0.7;
+    crate::EnvImage::from_fn(width, width / 2, |d| {
+        let c = radiance(k, d);
+        std::array::from_fn(|i| c[i] + (grey[i] - c[i]) * cover * smoothstep(-0.1, 0.2, d[1]))
+    })
+}
+
 impl Atmosphere {
     /// Its Mie (dust and droplet) density: turbidity 1 is pure air, 2 a
     /// clear day, as Blender's dust density 1.
@@ -220,6 +261,7 @@ impl Sky {
             cover,
             drift,
             atmosphere: Some(air),
+            light: true,
         }
     }
 }
@@ -366,5 +408,48 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A white card facing the camera, lit only by a physical sky behind
+    /// the camera: its light is the sky's (blue without the sun's lamp),
+    /// dims through twilight, and without `light` the card is unlit.
+    #[test]
+    fn a_sky_lights_the_shot_as_an_environment_does() {
+        use crate::{Camera, Plane, Post, Shot, Stage};
+        use mui_scene::prelude::*;
+        let Ok(mut stage) = Stage::new(32, 32) else {
+            eprintln!("no GPU, skipped");
+            return;
+        };
+        let root = block(16., 16.).radius(0.).fill(Color::srgb(1., 1., 1.));
+        let scene = resolve(&SceneSpec::new(root)).expect("resolves");
+        stage
+            .layer("white", &scene, Size::new(16., 16.), 1.)
+            .unwrap();
+        let mut card = |deg: f32, light: bool| {
+            let e = deg.to_radians();
+            let sky = Sky {
+                light,
+                ..Sky::physical([0., e.sin(), e.cos()], clear(), 0., [0.; 2])
+            };
+            let shot = Shot {
+                planes: vec![Plane::new("white", 400., 400.)],
+                sky: Some(sky),
+                post: Post::NONE,
+                ..Shot::new(Camera::front(100., 30.))
+            };
+            let f = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+            let p = &f.rgba[(16 * 32 + 16) * 4..][..3];
+            [p[0], p[1], p[2]]
+        };
+        let day = card(40., true);
+        assert!(
+            day[2] > day[0] && luma(day) > 0.15 && luma(day) < 0.9,
+            "{day:?}"
+        );
+        let dusk = card(-7., true);
+        assert!(luma(dusk) < 0.5 * luma(day), "{dusk:?} against {day:?}");
+        let unlit = card(40., false);
+        assert!(unlit.iter().all(|v| *v > 0.99), "unlit: {unlit:?}");
     }
 }

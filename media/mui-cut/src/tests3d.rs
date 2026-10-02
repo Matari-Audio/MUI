@@ -1084,6 +1084,50 @@ fn a_physical_sky_draws_a_sunrise() {
     assert!(top[2] > top[0] + 30, "blue overhead by day: {top:?}");
 }
 
+/// A sky's `sun_light`: a shadowing directional lamp along the sun, by
+/// default for the physical sky only, coloured as the sky's sunlight and
+/// gone once the sun has set; `light` defaults with it.
+#[test]
+fn a_physical_skys_sun_is_a_lamp() {
+    let src = |sky: &str| {
+        format!(
+            r##"{{"size":[320,180],"fps":30,"scenes":[{{"name":"a","duration":2,"mode":"3d",
+            "layers":[{{"id":"cam","kind":"camera"}}],"sky":{sky}}}]}}"##
+        )
+    };
+    let view = |sky: &str, t: f64| {
+        let p = Project::load(&src(sky)).unwrap();
+        eval(&p, &p.scenes[0], t).view.unwrap()
+    };
+    let keyed = r#"{"model":"physical","elevation":[{"t":0,"v":30},{"t":1,"v":-5}],"azimuth":0}"#;
+    let v = view(keyed, 0.);
+    assert!(v.sky.unwrap().light, "a physical sky lights");
+    let sun = &v.lights[0];
+    assert_eq!(sun.kind, LightType::Directional);
+    assert!(sun.shadows);
+    // Down from ahead, toward the camera (project y down, z deeper).
+    let d = sun.direction;
+    assert!(
+        (d[1] - 0.5).abs() < 1e-3 && (d[2] + 0.866).abs() < 1e-3,
+        "{d:?}"
+    );
+    assert!(
+        sun.intensity > 0.5 && sun.color.0[2] < sun.color.0[0],
+        "{sun:?}"
+    );
+    assert!(view(keyed, 1.).lights.is_empty(), "set: no sun");
+    let off = r#"{"model":"physical","sun_light":false,"light":false}"#;
+    let v = view(off, 0.);
+    assert!(v.lights.is_empty() && !v.sky.unwrap().light);
+    let v = view(r#"{"elevation":30}"#, 0.);
+    assert!(
+        v.lights.is_empty() && !v.sky.unwrap().light,
+        "the gradient as before"
+    );
+    let v = view(r#"{"elevation":30,"sun_light":true}"#, 0.);
+    assert_eq!(v.lights.len(), 1);
+}
+
 /// A scene's `bloom`: the sun in frame glows into the sky round it.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

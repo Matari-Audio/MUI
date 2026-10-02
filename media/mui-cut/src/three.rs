@@ -98,6 +98,12 @@ fn is_zero(a: &Anim<f64>) -> bool {
 /// it (1 pure air, 2 a clear day, 10 hazy), `ozone` (1 the earth's) deepens
 /// twilight's blue, `ground_albedo` lights the air from below and colours
 /// the ground under the horizon, `altitude` is the eye's height in metres.
+///
+/// `light` makes the sky light the scene as an environment does (diffuse
+/// and reflections; an `environment` given lights instead), and
+/// `sun_light` adds a directional light along the sun, its colour the
+/// sunlight left after the air, casting shadows. Both default on for the
+/// physical sky and off for the gradient.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = crate::vars::bindable)]
@@ -128,6 +134,10 @@ pub struct Sky {
     pub ground_albedo: f64,
     #[serde(default, skip_serializing_if = "is_zero_f")]
     pub altitude: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub light: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sun_light: Option<bool>,
 }
 
 /// How a [`Sky`] is coloured.
@@ -211,8 +221,12 @@ impl Sky {
     pub fn at(&self, t: f64) -> mui_stage::Sky {
         let cover = self.cover.at(t).clamp(0., 1.) as f32;
         let drift = [(self.wind * t) as f32, 0.];
+        let light = self.light.unwrap_or(self.physical());
         if self.physical() {
-            return mui_stage::Sky::physical(self.sun_dir(t), self.air(t), cover, drift);
+            return mui_stage::Sky {
+                light,
+                ..mui_stage::Sky::physical(self.sun_dir(t), self.air(t), cover, drift)
+            };
         }
         let k = self.intensity.at(t).max(0.) as f32;
         let lin = |a: &Anim<Rgba>| crate::gpu3d::linear(a.at(t)).map(|c| c * k);
@@ -225,7 +239,58 @@ impl Sky {
             cover,
             drift,
             atmosphere: None,
+            light,
         }
+    }
+
+    /// With `sun_light`, the sun as a directional lamp at `t`: along the
+    /// sun, coloured by the sky's sunlight; none once the sun has set.
+    pub fn sun_lamp(&self, t: f64) -> Option<Lamp> {
+        if !self.sun_light.unwrap_or(self.physical()) {
+            return None;
+        }
+        let k = self.at(t);
+        // The gradient's sun colour is its disc's; fade it as it sets.
+        let c = if self.physical() {
+            k.sun_color
+        } else {
+            let up = smooth(-0.02, 0.05, k.sun[1]);
+            crate::gpu3d::linear(self.sun.at(t)).map(|c| c * up * self.intensity.at(t) as f32)
+        };
+        let peak = c.iter().copied().fold(0f32, f32::max);
+        (peak > 1e-4).then(|| Lamp {
+            kind: LightType::Directional,
+            color: crate::Rgba(std::array::from_fn(|i| {
+                if i == 3 {
+                    255
+                } else {
+                    (srgb(c[i] / peak) * 255. + 0.5) as u8
+                }
+            })),
+            intensity: f64::from(peak),
+            position: [0.; 3],
+            // Project axes (y down, z deeper), travelling away from the sun.
+            direction: [-k.sun[0], k.sun[1], k.sun[2]].map(f64::from),
+            range: 0.,
+            cone: 30.,
+            feather: 0.3,
+            shadows: true,
+            // About the sun's half degree.
+            softness: 0.7,
+        })
+    }
+}
+
+fn smooth(a: f32, b: f32, x: f32) -> f32 {
+    let t = ((x - a) / (b - a)).clamp(0., 1.);
+    t * t * (3. - 2. * t)
+}
+
+fn srgb(c: f32) -> f32 {
+    if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1. / 2.4) - 0.055
     }
 }
 
@@ -674,24 +739,30 @@ pub fn aim(pitch: f64, yaw: f64) -> [f64; 3] {
 pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
     View {
         camera: camera(size, layers),
-        lights: layers
-            .iter()
-            .filter(|l| l.opacity > 0.)
-            .filter_map(|l| match l.kind {
-                Kind::Light { light } => Some(Lamp {
-                    kind: light,
-                    color: l.fill,
-                    intensity: l.space.intensity * l.opacity,
-                    position: [l.x, l.y, l.space.z],
-                    direction: aim(l.space.rx, l.space.ry),
-                    range: l.space.range,
-                    cone: l.space.cone,
-                    feather: l.space.feather,
-                    shadows: l.space.cast_shadows,
-                    softness: l.space.softness,
-                }),
-                _ => None,
-            })
+        // The sky's sun first: shadow maps go to the first lights.
+        lights: (scene.sky.as_ref())
+            .and_then(|k| k.sun_lamp(t))
+            .into_iter()
+            .chain(
+                layers
+                    .iter()
+                    .filter(|l| l.opacity > 0.)
+                    .filter_map(|l| match l.kind {
+                        Kind::Light { light } => Some(Lamp {
+                            kind: light,
+                            color: l.fill,
+                            intensity: l.space.intensity * l.opacity,
+                            position: [l.x, l.y, l.space.z],
+                            direction: aim(l.space.rx, l.space.ry),
+                            range: l.space.range,
+                            cone: l.space.cone,
+                            feather: l.space.feather,
+                            shadows: l.space.cast_shadows,
+                            softness: l.space.softness,
+                        }),
+                        _ => None,
+                    }),
+            )
             .collect(),
         ground: scene.ground.clone(),
         fog: scene.fog.clone(),

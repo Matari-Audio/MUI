@@ -148,6 +148,11 @@ const GLOBALS: usize = 280;
 /// The environment a shot may name without uploading it: the built-in
 /// neutral studio ([`EnvImage::studio`]).
 pub const STUDIO: &str = "studio";
+/// The environment a [`Sky::light`] is baked into.
+const SKY_LIGHT: &str = "\u{0}sky";
+/// Width of the sky's light as baked on the CPU; the prefilter resamples
+/// it to [`env::WIDTH`].
+const SKY_BAKE: u32 = 128;
 /// Shadow map side, texels; one array layer per light, and one more for the
 /// floor's contact shadow.
 const SHADOW: u32 = 2048;
@@ -664,6 +669,9 @@ pub struct Sky {
     /// and `zenith`, `horizon` and `sun_color` only light the clouds
     /// ([`Sky::physical`] sets them from it). `None` is the gradient.
     pub atmosphere: Option<Atmosphere>,
+    /// The sky lights the shot (image-based, as an [`Environment`] does)
+    /// when no environment does.
+    pub light: bool,
 }
 impl Default for Sky {
     /// The gradient: a clear blue day, the sun 25 degrees up ahead.
@@ -676,6 +684,7 @@ impl Default for Sky {
             cover: 0.,
             drift: [0.; 2],
             atmosphere: None,
+            light: false,
         }
     }
 }
@@ -879,6 +888,9 @@ pub struct Stage {
     lut: wgpu::TextureView,
     no_env: wgpu::BindGroup,
     envs: HashMap<String, (wgpu::BindGroup, [[f32; 3]; 9])>,
+    /// The sky last baked as the shot's light (under [`SKY_LIGHT`]), its
+    /// clouds' drift zeroed: baked again only when it changes.
+    sky_baked: Option<Sky>,
     group1: wgpu::BindGroup,
     tex_layout: wgpu::BindGroupLayout,
     layout: wgpu::PipelineLayout,
@@ -1349,6 +1361,7 @@ impl Stage {
             lut,
             no_env,
             envs: HashMap::new(),
+            sky_baked: None,
             group1,
             tex_layout,
             layout,
@@ -2247,6 +2260,28 @@ impl Stage {
             g[43] = 1.;
             self.group0 = group.clone();
         }
+        if let Some(k) = s.sky.filter(|k| k.light && s.environment.is_none()) {
+            // The sky lights the shot as an environment does, baked again
+            // when the sun or the air has changed (drifting clouds aside).
+            let key = Sky {
+                drift: [0.; 2],
+                ..k
+            };
+            if self.sky_baked != Some(key) {
+                self.environment(SKY_LIGHT, &sky::bake(&key, SKY_BAKE));
+                self.sky_baked = Some(key);
+            }
+            let (group, sh) = &self.envs[SKY_LIGHT];
+            // On at 2: `sky_lights` in the shader, sharp reflections from
+            // the sky itself.
+            g[192..196].copy_from_slice(&[1., 1., 0., 2.]);
+            g[197] = (env::LEVELS - 1) as f32;
+            for (k, c) in sh.iter().enumerate() {
+                g[216 + 4 * k..][..3].copy_from_slice(c);
+            }
+            g[43] = 1.;
+            self.group0 = group.clone();
+        }
         if let Some(k) = &s.sky {
             g[256..259].copy_from_slice(&normalize(k.sun));
             g[259] = 1.;
@@ -2749,7 +2784,8 @@ impl Stage {
             std::mem::swap(&mut self.hdr, &mut self.lit);
         }
         // Only a lit shot has any reflection to trace.
-        let ssr = s.ssr && (!s.lights.is_empty() || s.environment.is_some());
+        let ssr = s.ssr
+            && (!s.lights.is_empty() || s.environment.is_some() || s.sky.is_some_and(|k| k.light));
         let chain = view(&self.chain);
         if ssr {
             self.build_chain(&mut enc);

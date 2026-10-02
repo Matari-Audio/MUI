@@ -271,6 +271,8 @@ fn contact(world: vec3f) -> f32 {
 // --- the environment --------------------------------------------------
 
 fn env_on() -> bool { return g.env.w > 0.5; }
+// The environment is the sky's light, baked (`Sky::light`).
+fn sky_lights() -> bool { return g.env.w > 1.5; }
 // A world direction as the image sees it, turned by the rotation.
 fn env_dir(d: vec3f) -> vec3f {
     return vec3f(g.env.y * d.x - g.env.z * d.z, d.y, g.env.z * d.x + g.env.y * d.z);
@@ -281,7 +283,13 @@ fn env_uv(d: vec3f) -> vec2f {
 // Light arriving along -d, blurred for `rough`.
 fn env_radiance(d: vec3f, rough: f32) -> vec3f {
     let lod = clamp(rough, 0., 1.) * g.env2.y;
-    return textureSampleLevel(env_map, env_samp, env_uv(env_dir(d)), lod).rgb * g.env.x;
+    let baked = textureSampleLevel(env_map, env_samp, env_uv(env_dir(d)), lod).rgb * g.env.x;
+    // The sky's own light: a near mirror sees the sky itself, its clouds
+    // and its sun, which the bake leaves out.
+    if (sky_lights() && rough < 0.3) {
+        return mix(sky_spec(d, rough), baked, smoothstep(0.05, 0.3, rough));
+    }
+    return baked;
 }
 // What a white Lambertian surface facing `n` reflects of the environment.
 fn env_irradiance(n: vec3f) -> vec3f {
@@ -645,7 +653,15 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
     if (below < -0.5) { return vec4f(0.); }
     let r = length(world.xz) / d.mirror.w;
     let f = d.mirror.y * exp(-max(below, 0.) / d.mirror.z);
-    return vec4f(mix(g.floor.rgb * c.a, c.rgb, f), c.a) * exp(-r * r);
+    // The floor round the reflection, lit as `fs_floor` lights it where
+    // the eye meets it: a dim floor at dusk keeps its reflections dim.
+    var floor = g.floor.rgb;
+    if (lit_shot()) {
+        let k = clamp((g.eye.y - d.mirror.x) / max(g.eye.y - world.y, 1e-4), 0., 1.);
+        let p = g.eye.xyz + (world - g.eye.xyz) * k;
+        floor *= shade(p, vec3f(0., 1., 0.), 1., 0.).diffuse;
+    }
+    return vec4f(mix(floor * c.a, c.rgb, f), c.a) * exp(-r * r);
 }
 
 @fragment fn fs_front(i: Cap) -> Out {
