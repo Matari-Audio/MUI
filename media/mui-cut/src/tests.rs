@@ -975,6 +975,20 @@ fn glass_shows_the_backdrop_through_its_shape() {
     assert!(right > 60 && right > left + 30, "right {right} left {left}");
 }
 
+/// The CPU runs no effects: a glass pane draws as its tint, translucent,
+/// not as an opaque fill.
+#[test]
+fn cpu_draws_glass_as_a_translucent_pane() {
+    let json = r##"{"size":[160,90],"fps":30,"scenes":[{"name":"a","duration":1,"background":"#000000","layers":[
+        {"id":"pane","kind":"rect","x":80,"y":45,"width":40,"height":40,"effects":[{"type":"glass"}]}]}]}"##;
+    let p = Project::load(json).unwrap();
+    let (img, _) = Renderer::new(160, 90)
+        .draw(&eval(&p, &p.scenes[0], 0.))
+        .unwrap();
+    let v = img[(45 * 160 + 80) * 4];
+    assert!((20..120).contains(&v), "{v}");
+}
+
 /// Grain is deterministic: the same frame is the same pixels in two renders,
 /// a new frame is new grain, and a motion-blurred frame's subframes share
 /// it, so blur accumulates the effect instead of averaging it away.

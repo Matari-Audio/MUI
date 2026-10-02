@@ -170,6 +170,16 @@ impl Renderer {
         self.ctx
             .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
         self.ctx.fill_rect(&Rect::new(0., 0., fw, fh));
+        let glassed;
+        let frame = if frame.layers.iter().any(glass) {
+            glassed = Frame {
+                layers: frame.layers.iter().map(unglass).collect(),
+                ..frame.clone()
+            };
+            &glassed
+        } else {
+            frame
+        };
         let layers = self.assets.layers(frame)?;
         for (scene, place) in &layers.scenes {
             mui_vello::paint(
@@ -193,6 +203,27 @@ impl Renderer {
             .collect();
         Ok((rgba, layers.all_quads()))
     }
+}
+
+/// The CPU runs no effects; a `glass` pane would draw as its own (often
+/// opaque white) fill, hiding what it should show. It draws as its tint
+/// instead, at `tint_amount` (at least a sixth): a pane, unfrosted.
+fn glass(l: &Drawn) -> bool {
+    l.effects.iter().any(|f| f.kind == "glass")
+}
+fn unglass(l: &Drawn) -> Drawn {
+    let mut l = l.clone();
+    if let Some(g) = l.effects.iter().find(|f| f.kind == "glass") {
+        let (Some(crate::fx::Val::Color(Rgba([r, g_, b, _]))), Some(crate::fx::Val::Num(k))) =
+            (g.values.get("tint"), g.values.get("tint_amount"))
+        else {
+            return l;
+        };
+        let a = (k.max(1. / 6.) * 255.).round() as u8;
+        l.fill = Rgba([*r, *g_, *b, a]);
+        l.stroke = Rgba([0; 4]);
+    }
+    l
 }
 
 impl Assets {
