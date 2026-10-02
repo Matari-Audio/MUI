@@ -148,7 +148,7 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   | `text` | `text`, `align` (`left`/`center`/`right`) | Inter outlines, a line per `\n`, the block centred on `x`, `y` |
   | `image` | `path` | a PNG relative to the project file |
   | `path` | `d` | SVG path data in pixels around `x`, `y` |
-  | `duplicator` | `shape` (`rect`/`ellipse`/`path`), `d`, `layout` (`grid`/`radial`/`linear`/`path`), `along`, `orient` | `count` copies, see below |
+  | `duplicator` | `shape` (`rect`/`ellipse`/`path`), `d`, `layout` (`grid`/`radial`/`linear`/`path`), `along`, `orient`, `source`, `show_source` | `count` copies, see below |
   | `svg` | `path` | an SVG file as vectors, centred |
   | `lottie` | `path`, `speed` (1), `loop` (true) | a Lottie JSON file, centred, playing |
   | `group` | | nothing: layers attach to it with `parent` (see Groups) |
@@ -281,21 +281,27 @@ have no meaning for a colour).
 
 ### Animators: per-glyph and per-copy motion
 
-`"animators": [...]` on a `text` or `duplicator` layer moves each glyph or
-copy on its own (After Effects' text animators, Cavalry's stagger). Every
+`"animators": [...]` on a `text`, `duplicator` or `group` layer moves each
+glyph, copy or child layer on its own (After Effects' text animators, Cavalry's stagger). Every
 number in one is keyable, and `mui-cut eval` lists the result per glyph or
 copy as `fx`.
 
 ```json
 { "by": "char", "shape": "square", "ease": "linear", "order": "forward", "seed": 0,
   "start": 0, "end": 1, "offset": 0, "amount": 1, "stagger": 0,
-  "x": 0, "y": 0, "scale": 1, "rotation": 0, "opacity": 1, "tracking": 0, "fill": "#ffffff00" }
+  "x": 0, "y": 0, "scale": 1, "rotation": 0, "opacity": 1, "tracking": 0, "fill": "#ffffff00",
+  "jitter_x": 0, "jitter_y": 0, "jitter_rotation": 0, "jitter_scale": 0, "jitter_opacity": 0, "jitter_hue": 0 }
 ```
 
 - **Units**: `by` is `char`, `word` or `line` for text (spaces go with the
   word before them, newlines are not glyphs); a duplicator's units are its
-  copies. `order` ranks them `forward`, `reverse` or `random` (a shuffle
-  fixed by `seed`).
+  copies; a group's are its child layers (those whose `parent` it is), in
+  scene order, so a stagger plays separate layers one after another. A
+  child's offsets go onto its own transform before parenting, so what is
+  parented under it follows. `order` ranks them `forward`, `reverse`,
+  `random` (a shuffle fixed by `seed`) or `distance` (nearest first, from
+  the effector's centre or else the layer's origin; units equally far share
+  a rank, so a stagger ripples out; text falls back to `forward`).
 - **Selection**: unit `r` of `n` spans `[r/n, (r+1)/n]`; the range is
   `[start + offset, end + offset]`. `shape` `square` weighs a unit by how
   much of it the range covers; `ramp_up`, `ramp_down`, `triangle`, `round`
@@ -304,13 +310,40 @@ copy as `fx`.
   nothing, the typewriter's cut). `amount` multiplies it.
 - **Stagger**: each rank reads the whole animator (range, amount, values)
   at `t - rank * stagger`, so one set of keys plays unit after unit.
+  `stagger_ease` (`linear`, `in`, `out`, `in_out`, `step`) spreads those
+  delays unevenly: rank `r` of `n` waits `ease(r / (n - 1)) * (n - 1) *
+  stagger`, the last rank as long as before.
+- **Effector**: `"falloff": {"shape": "sphere", "x": 0, "y": 0, "radius":
+  200, "softness": 100, "invert": false}` weighs each unit by where it
+  sits, in the layer's own pixels around its origin (a copy's slot, a
+  group child's place), multiplied into the range selector's weight. A
+  unit inside weighs 1, fading to 0 over `softness` pixels past the edge
+  (smoothstep; 0 is a hard edge): `sphere` is within `radius` of
+  (`x`, `y`), `box` within `radius` each way, `linear` a wall: everything
+  left of `x` (fading over `softness` to its right; `radius` unused).
+  `invert` swaps inside and out. Its numbers key like any (`animators.0.falloff.x`),
+  so keying `x` sweeps it across an array; the editor draws it over the
+  selected layer with a draggable centre and radius. Text glyphs have no
+  place and are not weighed by it.
+- **Jitter**: `jitter_x`, `jitter_y` (pixels), `jitter_rotation`
+  (degrees), `jitter_scale` (a fraction) move, turn and scale each unit
+  by its own random amount up to that either way; `jitter_opacity` (a
+  fraction) fades it by up to that, and `jitter_hue` (degrees) turns its
+  fill's hue either way. The randomness is fixed per unit by `seed`, the
+  same every frame and render, and scaled by the unit's weight, so keying
+  `amount` fades it in. On instanced copies the hue turns each copied
+  layer's own fill.
 - **Values** are what a fully selected unit becomes: `x`, `y` and `rotation`
   are added (layer pixels, degrees), `scale` and `opacity` scale towards
   their value, `tracking` adds advance after the glyph, and `fill` tints
   towards its colour by its alpha. Animators stack in order.
 - **Presets** (the inspector's "+ animator"): `typewriter` (step ease,
   `start` 0 to 1, opacity 0), `cascade` (`amount` 1 to 0 with a 0.04 s
-  stagger, y 40, opacity 0), `pop` (random order, scale 0).
+  stagger, y 40, opacity 0), `pop` (random order, scale 0); on a group,
+  "Cascade children" (the cascade with a 0.12 s stagger: each child rises
+  in after the one before) and "Ripple from point" (on a duplicator or a
+  group: `distance` order from an effector at the origin, each unit
+  popping in as the ripple reaches it).
 
 ### Duplicators
 
@@ -323,6 +356,39 @@ twelve o'clock) or `path` (evenly by length along the path data `along`,
 shifted by `path_offset`; a closed path spaces them all the way round).
 With `"orient": true` a ring copy turns so its up points outward, and a path
 copy so its +x follows the path. Animators give each copy its own offset.
+
+**Instancing.** `"source": "<layer id>"` copies that layer instead of a
+shape: any kind, and with everything parented under it (a group copies its
+whole subtree), as it draws at that time. The source's own place is each
+copy's: its pivot lands on the slot, turned and scaled by the copy, so its
+offsets, its parents and its own turn are left behind. The source then
+draws only as copies (`check` does not call it invisible); `"show_source":
+true` keeps it where it is too. Animators move each instanced copy as they
+move a shape copy, by its index. A source may hold another duplicator (its
+copies nest), never the duplicator itself. The copies paint unpicked; the
+duplicator's outline is their bounds. In 3D they lie flat on the
+duplicator's plane, as a comp's layers do.
+
+### Behaviours
+
+`"behaviours": [...]` on any layer adds motion on top of a property's keys
+(or plain value), every frame, as a pure function of time:
+
+```json
+{ "prop": "rotation", "kind": "wiggle", "amount": 10, "freq": 1, "seed": 0, "phase": 0 }
+```
+
+- `kind` `wiggle` is smooth seeded noise (Catmull-Rom through a random
+  value every `1 / freq` s), up to `amount` either way; the curve is fixed
+  by `seed` and the property's name, so wiggling `x` and `y` with one seed
+  still wanders. `oscillate` is `amount * sin(2π (freq t + phase))`.
+- `prop` is one of `x`, `y`, `z`, `scale`, `rotation`, `rx`, `ry`,
+  `opacity` (kept in 0..1; a layer that is off stays off), `width`,
+  `height`, `radius`, `font_size`, `tracking`, `stroke_width`,
+  `path_offset`, `ring_radius`; loading refuses another.
+- `amount`, `freq` and `phase` are keyable (`behaviours.0.amount`): key
+  `amount` to fade a wiggle in. Behaviours apply in the layer's own space
+  before parenting, so children follow a wiggling parent.
 
 ### Deformers
 
@@ -847,9 +913,15 @@ explodes two levels in 3D: panels, then their controls.
   playhead, scaled by its distance (`place::flatten`).
 - **Inspector** (right): the layer's settings (text, path data, layout, file),
   then every keyable property at the playhead, as the engine lists them
-  (`Cut::props`), animators and deformers each under a header with their
-  choices and a remove button; "+ animator" (plain or a preset) and
-  "+ deformer" add one. Type a value to set it (same rule as dragging). ◆ adds a key at the playhead, or removes the one
+  (`Cut::props`), animators, behaviours and deformers each under a header
+  with their choices and a remove button; "+ animator" (plain or a preset:
+  on a group "Cascade children", on a duplicator or group "Ripple from
+  point"), "+ behaviour" (Wiggle: `x` and `y` wander; Oscillate: `y` bobs)
+  and "+ deformer" add one. An animator's header picks its order (with
+  `distance`), stagger ease and seed; its "effector" box adds a `falloff`,
+  whose field, centre and radius knob are drawn over the viewport and drag
+  there (a keyed centre gets a key at the playhead). A duplicator picks its
+  `source` layer (or a shape). Type a value to set it (same rule as dragging). ◆ adds a key at the playhead, or removes the one
   there; removing the last key turns the property back into a plain value.
   Yellow ◆ = animated, filled = a key sits at the playhead.
 - **Timeline**: one canvas, only the rows in sight drawn, so hundreds of
@@ -928,8 +1000,10 @@ announces edits made by someone else.
 - `src/lib.rs`: the document (serde), `Anim::at`, `eval`, `Project::load` /
   `to_json`, `Layer::props` (every keyable property by path). Builds for
   `wasm32-unknown-unknown`; no filesystem or process.
-- `src/motion.rs`: animators (selectors, stagger, presets) and deformers,
-  evaluated inside `eval`.
+- `src/motion.rs`: animators (selectors, effectors, jitter, stagger,
+  presets), duplicator instancing, group animators, behaviours and
+  deformers, evaluated inside `eval`. `examples/procedural.cut.json` shows
+  an instanced array swept by an effector, a group stagger and a wiggle.
 - `src/vector.rs`: the vector kinds as kurbo paths (text through mui-text's
   shaping and outlines, duplicator layouts, SVG and Lottie sinks), trim and
   deformers, handed to MUI as one canvas per layer.

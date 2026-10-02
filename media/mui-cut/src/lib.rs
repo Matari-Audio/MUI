@@ -39,7 +39,8 @@ pub mod yuv;
 pub use gpu::Offline;
 pub use gpu::{Engine, GpuCanvas};
 pub use motion::{
-    ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
+    ANIMATOR_PROPS, Animator, Behaviour, Deform, Deformer, Ease, Effector, Falloff, Field, Fx,
+    Order, Unit, text_units,
 };
 pub use plugin::{
     Capture, Fragment, Note, Param, Part, PartAt, PartInfo, PluginAt, Pose, Source, Step, Surface,
@@ -302,6 +303,13 @@ pub enum Kind {
         /// Turn each copy with the ring or path it sits on.
         #[serde(default, skip_serializing_if = "is_default")]
         orient: bool,
+        /// A layer of the scene (with everything parented under it) drawn
+        /// at every copy instead of `shape`, its own place the copy's.
+        /// The source then draws only there, unless `show_source`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source: String,
+        #[serde(default, skip_serializing_if = "is_default")]
+        show_source: bool,
     },
     /// An SVG file (relative to the project), drawn as vectors, centred.
     Svg {
@@ -611,6 +619,9 @@ pub struct Layer {
     /// Vector kinds, applied in order after everything else.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub deformers: Vec<Deformer>,
+    /// Any kind: wiggles and oscillations added on top of the keys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub behaviours: Vec<motion::Behaviour>,
     /// 3D: depth in pixels (larger is farther), turns in degrees (`rx`
     /// tips the top away, `ry` turns the right side away; `rotation` is
     /// the turn about z), the pivot's depth behind the face, and the slab
@@ -802,6 +813,13 @@ impl Layer {
     /// when the layer is in a 3D scene. Cameras, lights and models always
     /// list theirs.
     pub fn props_in(&self, three: bool) -> Vec<(String, Prop<'_>)> {
+        let mut out = self.kind_props(three);
+        out.extend(motion::behaviour_props(&self.behaviours));
+        out
+    }
+
+    /// [`Layer::props_in`] but the behaviours'.
+    fn kind_props(&self, three: bool) -> Vec<(String, Prop<'_>)> {
         use Prop::{Color, Num};
         let mut out: Vec<(String, Prop<'_>)> = Vec::new();
         let mut colors = Vec::new();
@@ -868,6 +886,9 @@ impl Layer {
                     for (n, a) in [("z", &self.z), ("rx", &self.rx), ("ry", &self.ry)] {
                         num(n, a);
                     }
+                }
+                if let Kind::Group = self.kind {
+                    out.extend(motion::props(&self.animators));
                 }
                 return out;
             }
@@ -972,13 +993,7 @@ impl Layer {
             out.push(("stroke".into(), Color(&self.stroke)));
         }
         if matches!(self.kind, Kind::Text { .. } | Kind::Duplicator { .. }) {
-            for (i, a) in self.animators.iter().enumerate() {
-                for n in ANIMATOR_PROPS {
-                    let a = a.num(n).expect("ANIMATOR_PROPS are props");
-                    out.push((format!("animators.{i}.{n}"), Num(a)));
-                }
-                out.push((format!("animators.{i}.fill"), Color(&a.fill)));
-            }
+            out.extend(motion::props(&self.animators));
         }
         if vector {
             for (i, d) in self.deformers.iter().enumerate() {
@@ -1358,6 +1373,7 @@ pub struct Drawn {
     /// Comp layers: the scene's layers that draw (no camera, light,
     /// model, audio or group), placed in this frame through the comp
     /// (ids `comp/layer`), bottom first; empty while the comp is off.
+    /// A duplicator with a `source`: its copies' layers (`dup/copy/layer`).
     #[serde(skip)]
     pub comp: Vec<Drawn>,
 }
@@ -1424,6 +1440,7 @@ fn eval_in(project: &Project, scene: &Scene, t: f64, depth: usize) -> Frame {
         .iter()
         .map(|l| l.eval_at(t, project.fps, project.sample_rate))
         .collect();
+    motion::group_units(scene, &mut layers, t);
     place::compose(scene, &mut layers);
     for d in &mut layers {
         if let Kind::Text { font, .. } = &mut d.kind {
@@ -1472,6 +1489,7 @@ fn eval_in(project: &Project, scene: &Scene, t: f64, depth: usize) -> Frame {
             })
             .collect();
     }
+    motion::instance(scene, &mut layers, t, three);
     let view = three.then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,
@@ -1505,9 +1523,6 @@ impl Layer {
                 let n = text.chars().filter(|&c| c != '\n').count();
                 motion::apply(&self.animators, n, fill, t, |by| text_units(text, by))
             }
-            Kind::Duplicator { .. } => {
-                motion::apply(&self.animators, count, fill, t, |_| (0..count).collect())
-            }
             _ => Vec::new(),
         };
         let time = match self.kind {
@@ -1515,7 +1530,7 @@ impl Layer {
             Kind::Model { .. } | Kind::Comp { .. } => self.time.at(t) + self.clock(t),
             _ => 0.,
         };
-        Drawn {
+        let mut d = Drawn {
             id: self.id.clone(),
             kind: self.kind.clone(),
             x: self.x.at(t),
@@ -1578,7 +1593,24 @@ impl Layer {
             plugin: None,
             patch: None,
             comp: Vec::new(),
+        };
+        // A copy's slot is its place for the animators' effectors.
+        if let Kind::Duplicator {
+            layout,
+            along,
+            orient,
+            ..
+        } = &self.kind
+        {
+            let pos: Vec<[f64; 2]> = vector::slots(&d, *layout, along, *orient)
+                .iter()
+                .map(|(p, _)| [p.x, p.y])
+                .collect();
+            let n = d.count;
+            d.fx = motion::apply_to(&self.animators, n, &|_| fill, t, |_| (0..n).collect(), &pos);
         }
+        motion::behave(self, &mut d, t);
+        d
     }
 }
 
@@ -1717,11 +1749,13 @@ impl Project {
                     }
                     Ok(())
                 };
+                motion::check_behaviours(l).map_err(|e| format!("{at}.{e}"))?;
                 match &l.kind {
                     Kind::Path { d } => bad("d", d)?,
                     Kind::Duplicator { d, along, .. } => {
                         bad("d", d)?;
                         bad("along", along)?;
+                        motion::check_source(s, l).map_err(|e| format!("{at}.source: {e}"))?;
                     }
                     Kind::Camera { path, .. } => bad("path", path)?,
                     Kind::Lottie { speed, .. } if !speed.is_finite() => {
@@ -1972,3 +2006,5 @@ mod tests;
 mod tests3d;
 #[cfg(test)]
 mod tests_place;
+#[cfg(test)]
+mod tests_procedural;

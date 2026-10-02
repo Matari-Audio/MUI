@@ -821,6 +821,65 @@ try {
     check(lay('b').x.map(k => k.t).join() === '2,3' && lay('a').rotation.map(k => k.t).join() === '0.5,3', `dragging a picked key moves every picked key (${lay('b').x.map(k => k.t)} / ${lay('a').rotation.map(k => k.t)})`);
     await shot('editor-timeline.png');
   }
+  // Procedural: the instancing duplicator's source, the effector gizmo,
+  // group animator presets and behaviours.
+  {
+    writeFileSync(file, readFileSync(join(here, '../examples/procedural.cut.json'), 'utf8')); await sleep(1500);
+    const lay = id => read().scenes[0].layers.find(l => l.id === id);
+    const row = id => `#layers button[data-layer="${id}"]`;
+    const pick = async id => { await js(`document.querySelector('${row(id)}').click()`); await sleep(400); };
+    const [ex, ey] = await rect('#overlay');
+    const [ew] = await js(`(r => [r.width])(document.querySelector('#overlay').getBoundingClientRect())`);
+    const at2d = ([x, y]) => [ex + x * ew / 1280, ey + y * ew / 1280];
+    const pull = async ([x0, y0], [x1, y1]) => {
+      await mouse('mousePressed', x0, y0);
+      for (let i = 1; i <= 8; i++) { await mouse('mouseMoved', x0 + (x1 - x0) * i / 8, y0 + (y1 - y0) * i / 8); await sleep(20); }
+      await mouse('mouseReleased', x1, y1); await sleep(700);
+    };
+    await js(`import('/transport.js').then(m => m.seek(2))`); await sleep(400);
+    await pick('array');
+    check(await js(`document.querySelector('[data-source]')?.value`) === 'tile', 'the duplicator shows its source');
+    const ef = await js('cutEffectors()');
+    check(ef.length === 1 && ef[0].i === 0, `the effector is in the viewport (${JSON.stringify(ef)})`);
+    await shot('editor-procedural.png');
+    // The radius knob: dragged 60 px out, the radius grows by 60.
+    const r0 = lay('array').animators[0].falloff.radius;
+    const [kx, ky] = ef[0].knob;
+    await pull(at2d([kx, ky]), at2d([kx + 60, ky]));
+    const r1 = lay('array').animators[0].falloff.radius;
+    check(Math.abs(r1 - r0 - 60) < 3, `dragging the radius knob sets the radius (${r0} to ${r1})`);
+    // The centre: dragged 100 px down, keyed at the playhead.
+    const [cx, cy] = (await js('cutEffectors()'))[0].c;
+    await pull(at2d([cx, cy]), at2d([cx, cy + 100]));
+    const fy = lay('array').animators[0].falloff.y, k2 = fy.find(k => Math.abs(k.t - 2) < 1e-6);
+    check(k2 && Math.abs((await js('cutEffectors()'))[0].c[1] - (cy + 100)) < 3, `dragging the centre keys it at the playhead (${JSON.stringify(fy)})`);
+    await key('z', 'KeyZ', 2); await key('z', 'KeyZ', 2);
+    check(lay('array').animators[0].falloff.radius === r0, 'undo takes the drags back');
+    // An effector switched on for the second animator; its order offers distance.
+    await js(`(c => { c.checked = true; c.dispatchEvent(new Event('change')); })(document.querySelector('[data-effector="1"]'))`); await sleep(600);
+    check(JSON.stringify(lay('array').animators[1].falloff) === '{}' && (await js('cutEffectors()')).length === 2, 'an animator gets an effector');
+    check(await js(`[...document.querySelectorAll('#inspector [data-prop^="animators.1.falloff."]')].length`) === 4, 'its numbers show as keyable rows');
+    check(await js(`[...document.querySelectorAll('#inspector [data-prop^="animators.0.jitter_"]')].length`) === 6, 'the jitter rows show');
+    // Back to a shape: the shape field returns.
+    await js(`(s => { s.value = ''; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-source]'))`); await sleep(600);
+    check(lay('array').source === undefined && await js(`[...document.querySelectorAll('#inspector label')].some(l => l.textContent === 'shape')`), 'clearing the source makes copies of a shape again');
+    await key('z', 'KeyZ', 2);
+    check(lay('array').source === 'tile', 'and undo brings the source back');
+    // A group: Cascade children, and a wiggle.
+    await pick('words');
+    const opts = await js(`[...document.querySelector('[data-adder="+ animator"]').options].map(o => o.textContent).join()`);
+    check(opts.includes('Cascade children') && opts.includes('Ripple from point'), `a group offers its presets (${opts})`);
+    await js(`(s => { s.value = 'cascade_children'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-adder="+ animator"]'))`); await sleep(600);
+    check(lay('words').animators.length === 2 && lay('words').animators[1].stagger === 0.12, 'Cascade children lands on the group');
+    await js(`(s => { s.value = 'wiggle'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-adder="+ behaviour"]'))`); await sleep(600);
+    const bs = lay('words').behaviours;
+    check(bs.length === 4 && bs[2].prop === 'x' && bs[3].prop === 'y', `Wiggle adds behaviours (${JSON.stringify(bs)})`);
+    await js(`(s => { s.value = 'scale'; s.dispatchEvent(new Event('change')); })(document.querySelector('[data-behaviour-prop="2"]'))`); await sleep(600);
+    check(lay('words').behaviours[2].prop === 'scale', 'a behaviour\'s property changes');
+    check(await js(`!!document.querySelector('#inspector [data-prop="behaviours.3.amount"]')`), 'its amount is a keyable row');
+    await js(`document.querySelector('#right').scrollTop = 1e6`); await sleep(200);
+    await shot('editor-behaviours.png');
+  }
   check(errors.length === 0, 'no page exceptions ' + errors.join('; '));
   ws.close();
 } catch (e) {

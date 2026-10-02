@@ -111,6 +111,24 @@ impl Xf {
         }
     }
 
+    /// The flat (2D) transform that undoes this one: a point it placed
+    /// back in its own space, opacity divided out. Its scale and opacity
+    /// must not be 0.
+    pub(crate) fn inverse(&self) -> Xf {
+        let back = Xf {
+            rotation: -self.rotation,
+            scale: 1. / self.scale,
+            ..Xf::FRAME
+        };
+        let [x, y, _] = back.apply([-self.x, -self.y, 0.]);
+        Xf {
+            x,
+            y,
+            opacity: 1. / self.opacity,
+            ..back
+        }
+    }
+
     /// Turned in 3D, not only about z.
     pub fn tilted(&self) -> bool {
         self.rx != 0. || self.ry != 0.
@@ -230,11 +248,19 @@ pub fn compose(scene: &Scene, layers: &mut [Drawn]) {
 /// own 3D placement dropped). `three`: the frame around is 3D. The layer's
 /// own comp layers go with it.
 pub(crate) fn into(d: &mut Drawn, at: &Xf, size: [u32; 2], three: bool) {
-    let local = Xf {
-        x: d.x - f64::from(size[0]) / 2.,
-        y: d.y - f64::from(size[1]) / 2.,
-        ..Xf::of(d, false)
+    let pre = Xf {
+        x: -f64::from(size[0]) / 2.,
+        y: -f64::from(size[1]) / 2.,
+        ..Xf::FRAME
     };
+    rebase(d, &pre, at, three);
+}
+
+/// Layer `d` (flat, in some frame) taken through `pre` into a space, then
+/// placed in the frame around by `at`, as [`into`] does a comp's layers.
+/// Its own comp layers go with it.
+pub(crate) fn rebase(d: &mut Drawn, pre: &Xf, at: &Xf, three: bool) {
+    let local = pre.then(&Xf::of(d, false));
     let w = at.then(&Xf { z: 0., ..local });
     (d.x, d.y, d.space.z) = (w.x, w.y, w.z);
     (d.rotation, d.scale, d.opacity) = (w.rotation, w.scale, w.opacity);
@@ -244,7 +270,7 @@ pub(crate) fn into(d: &mut Drawn, at: &Xf, size: [u32; 2], three: bool) {
         (0., 0., 0.)
     };
     for k in &mut d.comp {
-        into(k, at, size, three);
+        rebase(k, pre, at, three);
     }
 }
 
