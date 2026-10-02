@@ -136,6 +136,14 @@ pub trait Canvas {
     }
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
+    /// Explicit winding for imported vector artwork.
+    fn fill_path_with_rule(&mut self, p: &BezPath, rule: peniko::Fill) -> bool {
+        if rule != peniko::Fill::NonZero {
+            return false;
+        }
+        self.fill_path(p);
+        true
+    }
     fn stroke_path(&mut self, p: &BezPath);
     /// A Gaussian-blurred rounded rectangle, analytically. With `invert`
     /// the coverage is flipped -- opaque outside the rectangle, fading to
@@ -307,6 +315,12 @@ macro_rules! wrapper {
         }
         fn fill_path(&mut self, p: &BezPath) {
             self.$inner.fill_path(p)
+        }
+        fn fill_path_with_rule(&mut self, p: &BezPath, rule: peniko::Fill) -> bool {
+            self.$inner.set_fill_rule(rule);
+            self.$inner.fill_path(p);
+            self.$inner.set_fill_rule(peniko::Fill::NonZero);
+            true
         }
         fn stroke_path(&mut self, p: &BezPath) {
             self.$inner.stroke_path(p)
@@ -499,7 +513,7 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
         Paint::Solid(c) => PaintType::Solid(srgb(*c)),
         // Images go through `Canvas::image`, which knows whether its
         // renderer takes a pixmap or an atlas id; here only the stand-in.
-        Paint::Image { .. } => PaintType::Solid(srgb(p.solid())),
+        Paint::Image { .. } | Paint::Vector { .. } => PaintType::Solid(srgb(p.solid())),
         Paint::Gradient { kind, stops } => {
             // `ColorStops` holds four stops inline, so the common gradient
             // does not allocate; a longer one allocates once, as before.
@@ -574,7 +588,7 @@ pub fn paint(
         } else if path_shadow(p) {
             blurred_path(canvas, p, &bez);
         } else {
-            one(canvas, p, &bez)?;
+            one(canvas, p, &bez, placed(transform, p))?;
         }
     }
     Ok(())
@@ -699,7 +713,7 @@ pub(crate) fn replay(
             if path_shadow(q) {
                 blurred_path(canvas, q, &bez);
             } else {
-                one(canvas, q, &bez)?;
+                one(canvas, q, &bez, placed(base, q))?;
             }
         }
     }
@@ -779,7 +793,115 @@ pub(crate) fn plain(p: &Painted) -> Option<AlphaColor<Srgb>> {
     plain.then(|| srgb(c))
 }
 
-fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
+/// Replay retained vector paths under the element and device transforms.
+fn vector_paint(
+    canvas: &mut impl Canvas,
+    vector: &mui_scene::Vector,
+    fit: Fit,
+    outline: &BezPath,
+    base: Affine,
+) -> Result<(), Error> {
+    use mui_scene::VectorCommand;
+    let bounds = outline.bounding_box();
+    let sx = bounds.width() / vector.width;
+    let sy = bounds.height() / vector.height;
+    let (sx, sy) = match fit {
+        Fit::Fill => (sx, sy),
+        Fit::Contain => {
+            let s = sx.min(sy);
+            (s, s)
+        }
+        Fit::Cover => {
+            let s = sx.max(sy);
+            (s, s)
+        }
+    };
+    let at =
+        base * Affine::translate((
+            bounds.x0 + (bounds.width() - vector.width * sx) * 0.5,
+            bounds.y0 + (bounds.height() - vector.height * sy) * 0.5,
+        )) * Affine::scale_non_uniform(sx, sy);
+    canvas.set_transform(base);
+    canvas.push_clip(outline);
+    let mut layers = 0;
+    let result = (|| {
+        for command in vector.commands() {
+            match command {
+                VectorCommand::Fill {
+                    path,
+                    transform,
+                    brush,
+                    brush_transform,
+                    rule,
+                } => {
+                    canvas.set_transform(at * *transform);
+                    canvas.set_paint(vector_brush(brush)?);
+                    canvas.set_paint_transform(*brush_transform);
+                    if !canvas.fill_path_with_rule(path, *rule) {
+                        return Err(Error::InvalidPath);
+                    }
+                    canvas.reset_paint_transform();
+                }
+                VectorCommand::Stroke {
+                    path,
+                    transform,
+                    brush,
+                    brush_transform,
+                    stroke,
+                } => {
+                    canvas.set_transform(at * *transform);
+                    canvas.set_paint(vector_brush(brush)?);
+                    canvas.set_paint_transform(*brush_transform);
+                    canvas.set_stroke(stroke.clone());
+                    canvas.stroke_path(path);
+                    canvas.reset_paint_transform();
+                }
+                VectorCommand::PushLayer {
+                    path,
+                    transform,
+                    blend,
+                    alpha,
+                } => {
+                    canvas.set_transform(at * *transform);
+                    canvas.push_clip(path);
+                    canvas.push_layer(*blend, *alpha);
+                    layers += 1;
+                }
+                VectorCommand::PopLayer => {
+                    canvas.pop_layer();
+                    canvas.pop_clip();
+                    layers -= 1;
+                }
+            }
+        }
+        Ok(())
+    })();
+    for _ in 0..layers {
+        canvas.pop_layer();
+        canvas.pop_clip();
+    }
+    canvas.reset_paint_transform();
+    canvas.pop_clip();
+    canvas.set_transform(base);
+    result
+}
+fn vector_brush(brush: &peniko::Brush) -> Result<PaintType, Error> {
+    match brush {
+        peniko::Brush::Solid(c) => Ok(PaintType::Solid(*c)),
+        peniko::Brush::Gradient(g) => Ok(PaintType::Gradient(g.clone())),
+        peniko::Brush::Image(_) => Err(Error::InvalidPath),
+    }
+}
+
+fn one(
+    canvas: &mut impl Canvas,
+    p: &Painted,
+    path: &BezPath,
+    transform: Affine,
+) -> Result<(), Error> {
+    if let Paint::Vector { vector, fit } = &p.paint {
+        return vector_paint(canvas, vector, *fit, path, transform);
+    }
     // Needs the list before it; see `backdrop`. A caller without one (a
     // tile, which cannot see past its edge) leaves the backdrop sharp.
     if p.layer == Layer::Backdrop {
@@ -1136,6 +1258,98 @@ mod snapshot {
             pixels_scene(&primary_scene, 100, 40).data(),
             "fallback output equals the primary .notdef output"
         );
+    }
+
+    /// The same retained command buffer reaches both raster and GPU encoding;
+    /// device scale changes paths, not a pre-rasterized image's resolution.
+    #[test]
+    fn retained_vector_preserves_gradient_hole_clip_and_device_scale() {
+        use mui_scene::{Vector, VectorCommand};
+        use peniko::{Brush, Fill as Winding};
+        let mut hole = Rect::new(0., 0., 24., 16.).to_path(0.01);
+        hole.extend(Rect::new(8., 4., 16., 12.).to_path(0.01));
+        let red = AlphaColor::<Srgb>::new([1., 0., 0., 1.]);
+        let blue = AlphaColor::<Srgb>::new([0., 0., 1., 1.]);
+        let vector = Arc::new(
+            Vector::new(
+                24.,
+                16.,
+                vec![
+                    VectorCommand::PushLayer {
+                        path: Rect::new(0., 0., 24., 14.).to_path(0.01),
+                        transform: Affine::IDENTITY,
+                        blend: peniko::BlendMode::default(),
+                        alpha: 0.5,
+                    },
+                    VectorCommand::Fill {
+                        path: hole,
+                        transform: Affine::IDENTITY,
+                        brush: Brush::Gradient(
+                            peniko::Gradient::new_linear((0., 0.), (24., 0.)).with_stops([red, blue]),
+                        ),
+                        brush_transform: Affine::IDENTITY,
+                        rule: Winding::EvenOdd,
+                    },
+                    VectorCommand::Stroke {
+                        path: Rect::new(1., 1., 22., 13.).to_path(0.01),
+                        transform: Affine::translate((0.5, 0.5)),
+                        brush: Brush::Solid(peniko::Color::WHITE),
+                        brush_transform: Affine::IDENTITY,
+                        stroke: Stroke::new(0.5),
+                    },
+                    VectorCommand::PopLayer,
+                ],
+            )
+            .unwrap(),
+        );
+        let root = block(48., 32.).fill(Fill::Vector(vector.clone(), Fit::Fill));
+        let scene = resolve(&SceneSpec::new(root).offered(Size::new(48., 32.))).unwrap();
+        assert!(scene.paint.iter().any(
+            |p| matches!(&p.paint, Paint::Vector { vector: v, .. } if Arc::ptr_eq(v, &vector))
+        ));
+        for scale in [1u16, 2] {
+            let mut ctx = vello_cpu::RenderContext::new(48 * scale, 32 * scale);
+            let mut resources = vello_cpu::Resources::default();
+            paint(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut resources,
+                    cache: &mut Cache::default(),
+                },
+                &scene,
+                Affine::scale(f64::from(scale)),
+            )
+            .unwrap();
+            ctx.flush();
+            let mut pixels = Pixmap::new(48 * scale, 32 * scale);
+            ctx.render(&mut pixels, &mut resources);
+            let at = |x: usize, y: usize| {
+                pixels.data()[y * scale as usize * (48 * scale) as usize + x * scale as usize]
+            };
+            let left = at(8, 4);
+            let right = at(40, 4);
+            assert!(
+                left.r > left.b && right.b > right.r,
+                "gradient lost at {scale}x: {left:?}/{right:?}"
+            );
+            assert!(
+                (120..=135).contains(&left.a),
+                "group opacity lost at {scale}x: {left:?}"
+            );
+            assert_eq!(at(24, 16).a, 0, "even-odd hole lost at {scale}x");
+            assert_eq!(at(24, 30).a, 0, "group clip lost at {scale}x");
+        }
+        #[cfg(feature = "gpu-effects")]
+        {
+            let mut encoded = vello::Scene::new();
+            let mut cache = Cache::default();
+            let textures = classic::Textures::default();
+            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [96, 64]);
+            paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
+            assert!(gpu.images.is_empty(), "vector became a bitmap upload");
+            drop(gpu);
+            assert!(!encoded.encoding().path_tags.is_empty());
+        }
     }
 
     /// A gradient shadow keeps its alpha. Both backends paint opaque black

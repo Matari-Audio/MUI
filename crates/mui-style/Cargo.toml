@@ -7,6 +7,9 @@ license.workspace = true
 description = "Theme data for MUI: Oklch colours, palettes, roles, fills, gradients, shadows and the Style a node paints by."
 
 [dependencies]
+# Shared vector primitives; the renderer uses the same version via vello_common.
+kurbo = "0.13.1"
+peniko = "0.6.1"
 # The renderer reaches us through the same crate, so colour types cannot
 # version-skew with what vello paints. No transitive dependencies of its own.
 color.workspace = true

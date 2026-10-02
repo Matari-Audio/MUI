@@ -25,6 +25,8 @@ pub(crate) fn color(c: Color) -> WeldColor {
 pub(crate) fn paint(p: Paint, b: Rect) -> Brush {
     match p {
         Paint::Solid(c) => Brush::Solid(color(c)),
+        // source() rejects vector paints before this conversion.
+        Paint::Vector { .. } => unreachable!("vector paint cannot be baked into a weld"),
         Paint::Image { image, fit } => Brush::Image {
             image: mui_weld::Image {
                 width: image.width,
@@ -166,6 +168,14 @@ pub(crate) fn source(plate: Plate, origin: Point, tolerance: f64) -> Result<Sour
         frame.right() - origin.x,
         frame.bottom() - origin.y,
     ));
+    if [&fill, &border]
+        .into_iter()
+        .any(|p| matches!(p, Some(Paint::Vector { .. })))
+    {
+        return Err(SceneError::UnsupportedWeld(
+            "vector artwork must remain a separate scene child",
+        ));
+    }
     Ok(Source {
         shape,
         fill: fill.map(|p| paint(p, b)),
