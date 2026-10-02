@@ -149,6 +149,7 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   | `duplicator` | `shape` (`rect`/`ellipse`/`path`), `d`, `layout` (`grid`/`radial`/`linear`/`path`), `along`, `orient` | `count` copies, see below |
   | `svg` | `path` | an SVG file as vectors, centred |
   | `lottie` | `path`, `speed` (1), `loop` (true) | a Lottie JSON file, centred, playing |
+  | `group` | | nothing: layers attach to it with `parent` (see Groups) |
 
   See `examples/showcase.cut.json` for every one of them.
 - **Properties**, each either a plain value or a key list:
@@ -522,6 +523,17 @@ every key stays exact. Reparent, reset and the 2D switch run in every
 variant: what they change is written resolved (into the file, and into a
 variant's `scene/layer` override where its result differs), and bindings
 they do not touch stay.
+
+### Groups
+
+A `group` layer draws nothing (in 2D, 3D and Blender); it is a node other
+layers attach to with `parent`, so they move, turn, scale and fade
+together. Groups nest. Its `opacity` multiplies into every descendant (as
+any parent's does, layer by layer: overlapping children each fade, they
+are not flattened first), so a group at opacity 0 hides its subtree. Its
+properties are `x`, `y`, `scale`, `rotation`, `opacity` (and `z`, `rx`,
+`ry` in 3D). To group layers in the editor, add a group layer and
+reparent each child to it (`Cut.reparent`), which keeps them in place.
 
 ### Plugin layers
 

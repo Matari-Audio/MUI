@@ -879,7 +879,7 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
     }
     for (i, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{i}]");
-        if !seen[i] {
+        if !seen[i] && !matches!(l.kind, Kind::Group) {
             out.add(
                 Severity::Warning,
                 "never_visible",

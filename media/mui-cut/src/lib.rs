@@ -377,6 +377,11 @@ pub enum Kind {
     Patch {
         of: String,
     },
+    /// Draws nothing: a node other layers attach to with `parent`, moving,
+    /// turning, scaling and fading them together. Groups nest; a group
+    /// that is hidden, faded out or outside its `start`..`end` takes its
+    /// whole subtree with it.
+    Group,
 }
 
 /// What a light layer is.
@@ -813,6 +818,23 @@ impl Layer {
                 num("volume", &self.volume);
                 return out;
             }
+            Kind::Group => {
+                for (n, a) in [
+                    ("x", &self.x),
+                    ("y", &self.y),
+                    ("scale", &self.scale),
+                    ("rotation", &self.rotation),
+                    ("opacity", &self.opacity),
+                ] {
+                    num(n, a);
+                }
+                if three {
+                    for (n, a) in [("z", &self.z), ("rx", &self.rx), ("ry", &self.ry)] {
+                        num(n, a);
+                    }
+                }
+                return out;
+            }
             Kind::Model { .. } => {
                 for (n, a) in [
                     ("x", &self.x),
@@ -967,6 +989,7 @@ impl Layer {
                 | Kind::Plugin { .. }
                 | Kind::Audio { .. }
                 | Kind::Patch { .. }
+                | Kind::Group
         )
     }
 

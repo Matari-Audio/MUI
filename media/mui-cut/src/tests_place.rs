@@ -696,3 +696,51 @@ fn a_child_keeps_its_own_material_under_a_tilted_parent() {
     assert_eq!(m.thickness, Some(4.));
     assert_eq!((top.transmission, top.ior), (Some(1.), Some(1.7)));
 }
+
+/// The centre pixel of `p`'s first scene at `t`, drawn 40x20 on the CPU.
+fn centre_px(p: &Project, t: f64) -> [u8; 4] {
+    let mut r = Renderer::new(40, 20);
+    let (px, _) = r.draw(&eval(p, &p.scenes[0], t)).unwrap();
+    px[(10 * 40 + 20) * 4..][..4].try_into().unwrap()
+}
+
+/// A group draws nothing; its children move and fade with it, through
+/// nested groups, and a group faded out takes its whole subtree.
+#[test]
+fn groups_draw_nothing_and_carry_their_subtree() {
+    let layers = |opacity: f64| {
+        format!(
+            r##"{{"id":"outer","kind":"group","x":200,"y":100,"opacity":{opacity}}},
+               {{"id":"inner","kind":"group","parent":"outer","scale":2,"opacity":0.5}},
+               {{"id":"dot","kind":"rect","parent":"inner","x":5,"fill":"#ff0000"}}"##
+        )
+    };
+    let p = scene("2d", &layers(1.));
+    let dot = world(&p, "dot", 0.);
+    assert!(near(dot.x, 210.) && near(dot.y, 100.) && near(dot.scale, 2.));
+    assert!(near(dot.opacity, 0.5), "opacity multiplies down the tree");
+    let red = centre_px(&p, 0.);
+    assert!(red[0] > 100 && red[1] < 20, "the child draws: {red:?}");
+    let hidden = scene("2d", &layers(0.));
+    assert_eq!(world(&hidden, "dot", 0.).opacity, 0.);
+    assert_eq!(
+        centre_px(&hidden, 0.),
+        [16, 16, 20, 255],
+        "the subtree is gone"
+    );
+    // Alone, a group (white fill and 100 square by default) draws nothing.
+    let empty = scene("2d", r#"{"id":"g","kind":"group","x":200,"y":100}"#);
+    assert_eq!(centre_px(&empty, 0.), [16, 16, 20, 255]);
+    assert_eq!(
+        empty.scenes[0].layers[0]
+            .props()
+            .iter()
+            .map(|(n, _)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["x", "y", "scale", "rotation", "opacity"]
+    );
+    // In 3D it is no slab, for the stage or Blender.
+    let three = scene("3d", r#"{"id":"g","kind":"group","x":200,"y":100}"#);
+    let f = eval(&three, &three.scenes[0], 0.);
+    assert!(Assets::default().slabs(&f.layers[0]).is_empty());
+}

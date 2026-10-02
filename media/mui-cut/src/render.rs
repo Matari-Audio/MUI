@@ -311,7 +311,8 @@ impl Assets {
             | Kind::Model { .. }
             | Kind::Plugin { .. }
             | Kind::Audio { .. }
-            | Kind::Patch { .. } => Vec::new(),
+            | Kind::Patch { .. }
+            | Kind::Group => Vec::new(),
         };
         vector::trim(&mut pieces, l.trim);
         vector::deform(&mut pieces, &l.deformers);
@@ -451,6 +452,13 @@ impl Assets {
             if let Kind::Audio { .. } = l.kind {
                 continue;
             }
+            if let Kind::Group = l.kind {
+                // No ink, but a quad (a point at its pivot), so quads stay
+                // one per drawn layer.
+                out.quads
+                    .push(quad(l.id.clone(), Affine::translate((l.x, l.y)), 0., 0.));
+                continue;
+            }
             if let Some(p) = &l.plugin {
                 self.plugin(l, p, &mut out)?;
                 continue;
@@ -526,9 +534,13 @@ impl Assets {
     /// part (`layer#part`) where the 2D drawing puts it, `explode` times
     /// [`EXPLODE_DEPTH`](crate::plugin::EXPLODE_DEPTH) towards the viewer
     /// plus its own `z`, all turned with the layer. A highlight is a flat
-    /// plate just behind its part (with the part's id too). Other layers come back as they are.
+    /// plate just behind its part (with the part's id too). A group is no
+    /// slab; other layers come back as they are.
     pub(crate) fn slabs(&self, l: &Drawn) -> Vec<Drawn> {
         use mui_stage::Mat4;
+        if let Kind::Group = l.kind {
+            return Vec::new();
+        }
         let Some(p) = &l.plugin else {
             return vec![l.clone()];
         };
