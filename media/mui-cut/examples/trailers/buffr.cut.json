@@ -1,0 +1,2583 @@
+{
+  "size": [
+    1920,
+    1080
+  ],
+  "fps": 60.0,
+  "sources": [
+    {
+      "id": "Barlow",
+      "kind": "font",
+      "path": "media/Barlow-SemiBold.ttf"
+    },
+    {
+      "id": "BarlowRegular",
+      "kind": "font",
+      "path": "media/Barlow-Regular.ttf"
+    }
+  ],
+  "render": {
+    "glass": "trace",
+    "crf": 14
+  },
+  "scenes": [
+    {
+      "name": "buffr",
+      "duration": 20.0,
+      "background": "#040406",
+      "mode": "3d",
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": [
+            {
+              "t": 0.0,
+              "v": 336.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 708.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": 960.0,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 960.0,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": 816.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": 1200.0,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": 960.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 972.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 1032.0,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": 960.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "y": [
+            {
+              "t": 0.0,
+              "v": 664.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 652.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 520.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 520.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": 520.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": 520.0,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 544.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 544.0,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": 388.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": 388.0,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": 568.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": 568.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 436.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 436.0,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": 520.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": 544.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 544.0,
+              "interp": "bezier"
+            }
+          ],
+          "z": [
+            {
+              "t": 0.0,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": -60,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": -80,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": -40,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": 0,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 0,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": 0,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": -80,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": -80,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 0,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0,
+              "interp": "bezier"
+            }
+          ],
+          "distance": [
+            {
+              "t": 0.0,
+              "v": 1000,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 880,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 2400,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 2600,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": 2250,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": 2100,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 2350,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 2250,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": 820,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": 780,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": 2500,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": 2400,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 900,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 840,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": 2000,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": 2900,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 3100,
+              "interp": "bezier"
+            }
+          ],
+          "rx": [
+            {
+              "t": 0.0,
+              "v": 8,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 5,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 4,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": -4,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": -5,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": -8,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": -7,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": -4,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": -3,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": -10,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": -8,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": -3,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": -3,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": -14,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": -8,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": -8,
+              "interp": "bezier"
+            }
+          ],
+          "ry": [
+            {
+              "t": 0.0,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 16,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 8,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": -8,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": -34,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": -28,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 20,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 13,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": -30,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": -24,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": 44,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": 32,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 6,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 2,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": -30,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": -6,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": -4,
+              "interp": "bezier"
+            }
+          ],
+          "fov": [
+            {
+              "t": 0.0,
+              "v": 26,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 26,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": 30,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 30,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": 26,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": 26,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": 30,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 26,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 26,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": 30,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 30,
+              "interp": "bezier"
+            }
+          ],
+          "aperture": [
+            {
+              "t": 0.0,
+              "v": 22,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.75,
+              "v": 20,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.9,
+              "v": 8,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 8,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": 8,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.9833,
+              "v": 6,
+              "interp": "hold"
+            },
+            {
+              "t": 8.0,
+              "v": 4,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.9833,
+              "v": 4,
+              "interp": "hold"
+            },
+            {
+              "t": 10.0,
+              "v": 16,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.9833,
+              "v": 16,
+              "interp": "hold"
+            },
+            {
+              "t": 12.0,
+              "v": 7,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.9833,
+              "v": 7,
+              "interp": "hold"
+            },
+            {
+              "t": 14.0,
+              "v": 12,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.9833,
+              "v": 12,
+              "interp": "hold"
+            },
+            {
+              "t": 16.0,
+              "v": 4,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.4,
+              "v": 3,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 3,
+              "interp": "bezier"
+            }
+          ]
+        },
+        {
+          "id": "key",
+          "kind": "light",
+          "fill": "#f2f0ea",
+          "rx": 14.0,
+          "ry": [
+            {
+              "t": 0,
+              "v": -70.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": -48.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": -36.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": -30.0,
+              "interp": "bezier"
+            }
+          ],
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 0.8,
+              "v": 1.9,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": 1.9,
+              "interp": "bezier",
+              "out": [
+                0.15,
+                0
+              ]
+            },
+            {
+              "t": 4.5,
+              "v": 0.12,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 0.12,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.6,
+              "v": 0.9,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 3.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.35,
+              "v": 2.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 2.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.08,
+              "v": 3.4,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.8,
+              "v": 1.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.4,
+              "v": 1.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ],
+          "softness": 3.0
+        },
+        {
+          "id": "rim-red",
+          "kind": "light",
+          "type": "spot",
+          "fill": "#ff1547",
+          "rx": 18.0,
+          "ry": 150.0,
+          "cone": 34.0,
+          "feather": 0.7,
+          "softness": 2.0,
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.25,
+              "v": 0.96,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 2.2399999999999998,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.4,
+              "v": 1.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 1.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.1,
+              "v": 2.5600000000000005,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.0,
+              "v": 1.2800000000000002,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ]
+        },
+        {
+          "id": "rim-cyan",
+          "kind": "light",
+          "type": "spot",
+          "fill": "#00deff",
+          "rx": 14.0,
+          "ry": -150.0,
+          "cone": 34.0,
+          "feather": 0.7,
+          "softness": 2.0,
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.5,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.75,
+              "v": 0.96,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 2.2399999999999998,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.4,
+              "v": 1.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 1.6,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.1,
+              "v": 2.5600000000000005,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.0,
+              "v": 1.2800000000000002,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ]
+        },
+        {
+          "id": "rim-yellow",
+          "kind": "light",
+          "type": "spot",
+          "fill": "#ffea00",
+          "rx": 42.0,
+          "ry": 175.0,
+          "cone": 34.0,
+          "feather": 0.7,
+          "softness": 2.0,
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.25,
+              "v": 0.54,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 1.26,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.4,
+              "v": 0.9,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 0.9,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.1,
+              "v": 1.4400000000000002,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.0,
+              "v": 0.7200000000000001,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ]
+        },
+        {
+          "id": "fill",
+          "kind": "light",
+          "type": "ambient",
+          "fill": "#9fb0c8",
+          "intensity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 0.8,
+              "v": 0.22,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": 0.22,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.5,
+              "v": 0.05,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 0.25,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.4,
+              "v": 0.22,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ]
+        },
+        {
+          "id": "music",
+          "kind": "audio",
+          "path": "buffr-music.wav"
+        },
+        {
+          "id": "buffr",
+          "name": "BUFFR",
+          "kind": "plugin",
+          "source": {
+            "plugin": "../../../../../drop-recorder",
+            "features": [
+              "cut"
+            ],
+            "args": [
+              "--input",
+              "buffr-music.wav",
+              "--music",
+              "553f5083a472"
+            ]
+          },
+          "notes": [
+            {
+              "t": 0.5,
+              "dur": 0.25,
+              "pitch": 69,
+              "vel": 100
+            },
+            {
+              "t": 0.75,
+              "dur": 0.25,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 1.0,
+              "dur": 0.5,
+              "pitch": 74,
+              "vel": 100
+            },
+            {
+              "t": 1.5,
+              "dur": 0.25,
+              "pitch": 76,
+              "vel": 100
+            },
+            {
+              "t": 1.75,
+              "dur": 0.25,
+              "pitch": 74,
+              "vel": 84
+            },
+            {
+              "t": 2.0,
+              "dur": 0.375,
+              "pitch": 72,
+              "vel": 100
+            },
+            {
+              "t": 2.375,
+              "dur": 0.125,
+              "pitch": 69,
+              "vel": 84
+            },
+            {
+              "t": 2.5,
+              "dur": 0.5,
+              "pitch": 67,
+              "vel": 100
+            },
+            {
+              "t": 3.0,
+              "dur": 0.25,
+              "pitch": 69,
+              "vel": 100
+            },
+            {
+              "t": 3.25,
+              "dur": 0.25,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 3.5,
+              "dur": 0.5,
+              "pitch": 74,
+              "vel": 100
+            },
+            {
+              "t": 8.0,
+              "dur": 0.1,
+              "pitch": 62,
+              "vel": 112
+            },
+            {
+              "t": 8.125,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 8.25,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 90
+            },
+            {
+              "t": 8.375,
+              "dur": 0.1,
+              "pitch": 77,
+              "vel": 96
+            },
+            {
+              "t": 8.5,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 112
+            },
+            {
+              "t": 8.625,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 8.75,
+              "dur": 0.1,
+              "pitch": 77,
+              "vel": 90
+            },
+            {
+              "t": 8.875,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 9.0,
+              "dur": 0.1,
+              "pitch": 62,
+              "vel": 112
+            },
+            {
+              "t": 9.125,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 9.25,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 90
+            },
+            {
+              "t": 9.375,
+              "dur": 0.1,
+              "pitch": 77,
+              "vel": 96
+            },
+            {
+              "t": 9.5,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 112
+            },
+            {
+              "t": 9.625,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 9.75,
+              "dur": 0.1,
+              "pitch": 77,
+              "vel": 90
+            },
+            {
+              "t": 9.875,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 10.0,
+              "dur": 0.1,
+              "pitch": 58,
+              "vel": 112
+            },
+            {
+              "t": 10.125,
+              "dur": 0.1,
+              "pitch": 69,
+              "vel": 84
+            },
+            {
+              "t": 10.25,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 90
+            },
+            {
+              "t": 10.375,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 96
+            },
+            {
+              "t": 10.5,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 112
+            },
+            {
+              "t": 10.625,
+              "dur": 0.1,
+              "pitch": 69,
+              "vel": 84
+            },
+            {
+              "t": 10.75,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 90
+            },
+            {
+              "t": 10.875,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 96
+            },
+            {
+              "t": 11.0,
+              "dur": 0.1,
+              "pitch": 58,
+              "vel": 112
+            },
+            {
+              "t": 11.125,
+              "dur": 0.1,
+              "pitch": 69,
+              "vel": 84
+            },
+            {
+              "t": 11.25,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 90
+            },
+            {
+              "t": 11.375,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 96
+            },
+            {
+              "t": 11.5,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 112
+            },
+            {
+              "t": 11.625,
+              "dur": 0.1,
+              "pitch": 69,
+              "vel": 84
+            },
+            {
+              "t": 11.75,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 90
+            },
+            {
+              "t": 11.875,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 96
+            },
+            {
+              "t": 12.0,
+              "dur": 0.1,
+              "pitch": 65,
+              "vel": 112
+            },
+            {
+              "t": 12.125,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 12.25,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 90
+            },
+            {
+              "t": 12.375,
+              "dur": 0.1,
+              "pitch": 79,
+              "vel": 96
+            },
+            {
+              "t": 12.5,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 112
+            },
+            {
+              "t": 12.625,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 12.75,
+              "dur": 0.1,
+              "pitch": 79,
+              "vel": 90
+            },
+            {
+              "t": 12.875,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 13.0,
+              "dur": 0.1,
+              "pitch": 65,
+              "vel": 112
+            },
+            {
+              "t": 13.125,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 13.25,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 90
+            },
+            {
+              "t": 13.375,
+              "dur": 0.1,
+              "pitch": 79,
+              "vel": 96
+            },
+            {
+              "t": 13.5,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 112
+            },
+            {
+              "t": 13.625,
+              "dur": 0.1,
+              "pitch": 72,
+              "vel": 84
+            },
+            {
+              "t": 13.75,
+              "dur": 0.1,
+              "pitch": 79,
+              "vel": 90
+            },
+            {
+              "t": 13.875,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 14.0,
+              "dur": 0.1,
+              "pitch": 60,
+              "vel": 112
+            },
+            {
+              "t": 14.125,
+              "dur": 0.1,
+              "pitch": 71,
+              "vel": 84
+            },
+            {
+              "t": 14.25,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 90
+            },
+            {
+              "t": 14.375,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 14.5,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 112
+            },
+            {
+              "t": 14.625,
+              "dur": 0.1,
+              "pitch": 71,
+              "vel": 84
+            },
+            {
+              "t": 14.75,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 90
+            },
+            {
+              "t": 14.875,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 96
+            },
+            {
+              "t": 15.0,
+              "dur": 0.1,
+              "pitch": 60,
+              "vel": 112
+            },
+            {
+              "t": 15.125,
+              "dur": 0.1,
+              "pitch": 71,
+              "vel": 84
+            },
+            {
+              "t": 15.25,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 90
+            },
+            {
+              "t": 15.375,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 15.5,
+              "dur": 0.1,
+              "pitch": 67,
+              "vel": 112
+            },
+            {
+              "t": 15.625,
+              "dur": 0.1,
+              "pitch": 71,
+              "vel": 84
+            },
+            {
+              "t": 15.75,
+              "dur": 0.1,
+              "pitch": 74,
+              "vel": 90
+            },
+            {
+              "t": 15.875,
+              "dur": 0.1,
+              "pitch": 76,
+              "vel": 96
+            },
+            {
+              "t": 16.875,
+              "dur": 0.25,
+              "pitch": 69,
+              "vel": 80
+            },
+            {
+              "t": 17.0625,
+              "dur": 0.25,
+              "pitch": 72,
+              "vel": 80
+            },
+            {
+              "t": 17.25,
+              "dur": 0.5,
+              "pitch": 74,
+              "vel": 80
+            },
+            {
+              "t": 17.625,
+              "dur": 0.25,
+              "pitch": 76,
+              "vel": 80
+            },
+            {
+              "t": 17.8125,
+              "dur": 0.25,
+              "pitch": 74,
+              "vel": 80
+            }
+          ],
+          "volume": 0.0,
+          "view_width": 1280.0,
+          "view_height": 720.0,
+          "select": [
+            "hdr.logo",
+            "hdr.status",
+            "tb.left",
+            "tb.center",
+            "tb.right",
+            "tl.audio",
+            "tl.audio.plot",
+            "tl.audio.scale",
+            "tl.midi",
+            "tl.midi.plot"
+          ],
+          "explode_levels": 2,
+          "explode_stagger": 0.1,
+          "explode": [
+            {
+              "t": 0,
+              "v": 0.03,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": 0.03,
+              "interp": "bezier",
+              "out": [
+                0.12,
+                0.25
+              ]
+            },
+            {
+              "t": 6.4,
+              "v": 0.82,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.55,
+              "v": 1.0,
+              "interp": "bezier",
+              "out": [
+                0.2,
+                0.0
+              ],
+              "in": [
+                -0.4,
+                -0.02
+              ]
+            },
+            {
+              "t": 8.0,
+              "v": 0.03,
+              "interp": "bezier",
+              "in": [
+                -0.08,
+                0.35
+              ]
+            },
+            {
+              "t": 12.0,
+              "v": 0.03,
+              "interp": "bezier"
+            },
+            {
+              "t": 12.6,
+              "v": 0.8,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.6,
+              "v": 0.86,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.1,
+              "v": 0.03,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 0.03,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.12,
+              "v": 0.09,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.9,
+              "v": 0.03,
+              "interp": "bezier"
+            }
+          ],
+          "backdrop": [
+            {
+              "t": 0,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.15,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.7,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 7.7,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.0,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 12.05,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 12.5,
+              "v": 0.15,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.7,
+              "v": 0.15,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.1,
+              "v": 1.0,
+              "interp": "bezier"
+            }
+          ],
+          "pointer_x": [
+            {
+              "t": 0,
+              "v": -1.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.05,
+              "v": 420.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.15,
+              "v": 420.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.75,
+              "v": 900.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.95,
+              "v": -1.0,
+              "interp": "hold"
+            }
+          ],
+          "pointer_y": [
+            {
+              "t": 0,
+              "v": -1.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.05,
+              "v": 250.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.95,
+              "v": -1.0,
+              "interp": "hold"
+            }
+          ],
+          "pointer_down": [
+            {
+              "t": 0,
+              "v": 0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.15,
+              "v": 1,
+              "interp": "hold"
+            },
+            {
+              "t": 14.8,
+              "v": 0,
+              "interp": "hold"
+            }
+          ],
+          "opacity": [
+            {
+              "t": 0,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.25,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.95,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ],
+          "x": 960.0,
+          "y": 520.0,
+          "scale": 1.2,
+          "extrude": 5.0,
+          "material": {
+            "roughness": 0.38,
+            "bevel": 3.0
+          }
+        },
+        {
+          "id": "you-played",
+          "kind": "text",
+          "text": "You played it.",
+          "font": "Barlow",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 0.55,
+              "v": 974.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 1.1,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 58.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 0.55,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 0.95,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 1.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 2.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 0.55,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 1.05,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 1.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 2.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "best-idea",
+          "kind": "text",
+          "text": "The best idea of the night.",
+          "font": "Barlow",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 2.05,
+              "v": 974.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 2.6,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 58.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 2.05,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 2.45,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 3.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 2.05,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 2.55,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 3.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 4.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "gone",
+          "kind": "text",
+          "text": "Gone?",
+          "font": "BarlowRegular",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 4.7,
+              "v": 554.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 5.25,
+              "v": 540.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 96.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 4.7,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 5.1,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 5.8,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 6.1,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 4.7,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 5.2,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 5.8,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 6.1,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "has-it",
+          "kind": "text",
+          "text": "BUFFR already has it.",
+          "font": "Barlow",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 8.25,
+              "v": 974.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.8,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 58.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 8.25,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 8.65,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 9.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 10.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 8.25,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 8.75,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 9.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 10.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "always",
+          "kind": "text",
+          "text": "Always recording. Hours of it.",
+          "font": "Barlow",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 10.1,
+              "v": 974.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 10.65,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 58.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 10.1,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 10.5,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 11.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 12.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 10.1,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 10.6,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 11.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 12.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "both",
+          "kind": "text",
+          "text": "Audio and MIDI, side by side.",
+          "font": "Barlow",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 12.1,
+              "v": 974.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 12.65,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 58.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 12.1,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 12.5,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 13.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 12.1,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 12.6,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 13.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 14.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "drag",
+          "kind": "text",
+          "text": "Drag the moment anywhere.",
+          "font": "Barlow",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 14.2,
+              "v": 974.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.75,
+              "v": 960.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 58.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 14.2,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 14.6,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 15.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 16.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 14.2,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 14.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 15.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 16.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "logo",
+          "kind": "svg",
+          "path": "media/buffr.svg",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 16.8,
+              "v": 470.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.7,
+              "v": 455.0,
+              "interp": "bezier"
+            }
+          ],
+          "scale": [
+            {
+              "t": 16.8,
+              "v": 0.11,
+              "interp": "bezier"
+            },
+            {
+              "t": 18.0,
+              "v": 0.12,
+              "interp": "bezier"
+            }
+          ],
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 16.8,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.3,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.5,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "bezier"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 16.8,
+                  "v": 16.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 17.4,
+                  "v": 0.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "never-lose",
+          "kind": "text",
+          "text": "Never lose an idea.",
+          "font": "BarlowRegular",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 17.4,
+              "v": 654.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.95,
+              "v": 640.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 60.0,
+          "fill": "#f4f4f2",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 17.4,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 17.8,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 17.4,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 17.9,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 19.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 20.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "url",
+          "kind": "text",
+          "text": "matari-audio.com/buffr",
+          "font": "BarlowRegular",
+          "overlay": true,
+          "x": 960.0,
+          "y": [
+            {
+              "t": 18.0,
+              "v": 726.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 18.55,
+              "v": 712.0,
+              "interp": "bezier"
+            }
+          ],
+          "font_size": 30.0,
+          "fill": "#9a9a95",
+          "tracking": 0.5,
+          "opacity": [
+            {
+              "t": 0,
+              "v": 0.0,
+              "interp": "hold"
+            },
+            {
+              "t": 18.0,
+              "v": 0.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 18.4,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 19.7,
+              "v": 1.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 20.0,
+              "v": 0.0,
+              "interp": "hold"
+            }
+          ],
+          "effects": [
+            {
+              "type": "blur",
+              "radius": [
+                {
+                  "t": 18.0,
+                  "v": 14.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 18.5,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 19.7,
+                  "v": 0.0,
+                  "interp": "bezier"
+                },
+                {
+                  "t": 20.0,
+                  "v": 10.0,
+                  "interp": "bezier"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "ground": {
+        "y": 1022.0,
+        "color": "#060608",
+        "radius": 2400.0,
+        "reflect": 0.35,
+        "contact": 0.6
+      },
+      "fog": {
+        "color": "#040406",
+        "near": 1400.0,
+        "far": 5200.0
+      },
+      "ao": {
+        "strength": 0.8,
+        "radius": 40.0
+      },
+      "bloom": {
+        "strength": 0.5,
+        "threshold": 0.9
+      },
+      "effects": [
+        {
+          "type": "grain",
+          "amount": 0.03,
+          "size": 1.2
+        },
+        {
+          "type": "crt",
+          "curvature": 0.0,
+          "scanlines": 0.0,
+          "vignette": 0.5
+        }
+      ]
+    }
+  ]
+}
