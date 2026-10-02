@@ -825,11 +825,14 @@ explodes two levels in 3D: panels, then their controls.
   slide and trim together. Drag the ruler to scrub; drag diamonds in time
   (a layer-row diamond moves every key of the layer at that time).
   Everything dragged keeps to the frame grid and snaps, within 6 px, to
-  the playhead, the scene's ends, other keys and other layers' in and out
-  points (hold Ctrl, or switch **Snap** off, to keep to frames only).
+  the playhead, markers, the scene's ends, other keys and other layers'
+  in and out points (hold Ctrl, or switch **Snap** off, to keep to frames only).
   Ctrl+wheel (or a pinch) zooms about the pointer, Shift+wheel or a
   sideways swipe pans, the wheel scrolls the rows, a middle-button drag
-  pans; F fits the scene. The ruler's ticks follow the zoom, down to
+  pans; F fits the scene.
+  **Markers** (`scene.markers`) are flags on the ruler: M adds one at the
+  playhead, drag one to move it, double-click it to name it, click it and
+  Delete to remove it; drags of anything snap to them too. The ruler's ticks follow the zoom, down to
   single frames (`1s 12f`). The graph editor below shares the same time
   view, so its keys line up with the timeline's.
 - **Graph**: the selected property's value over time, sampled from the WASM

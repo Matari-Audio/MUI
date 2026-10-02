@@ -144,3 +144,4 @@ h2 .twist { border: 0; background: transparent; padding: 0 4px 0 0; color: var(-
 #tools svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.2; }
 #tools svg rect { fill: currentColor; stroke: none; opacity: .85; }
 #tools #align-canvas { margin-left: 6px; }
+#tl-wrap .marker-name { position: absolute; top: 1px; width: 140px; height: 20px; padding: 1px 5px; font-size: 11px; z-index: 2; }

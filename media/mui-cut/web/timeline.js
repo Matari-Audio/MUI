@@ -153,6 +153,8 @@ export function drawTimeline() {
   c.fillStyle = C.outside;
   if (xAt(0, w) > LABEL) c.fillRect(LABEL, RULER, xAt(0, w) - LABEL, h - RULER);
   if (xAt(d, w) < w) c.fillRect(xAt(d, w), RULER, w - xAt(d, w), h - RULER);
+  c.fillStyle = C.handleLine;
+  for (const m of markers()) c.fillRect(Math.round(xAt(m.t, w)), RULER, 1, h - RULER);
   if (snapLine != null) { c.fillStyle = C.guide; c.fillRect(Math.round(xAt(snapLine, w)), RULER, 1, h - RULER); }
   c.restore();
   // The label column: fold triangle, kind, name, eye; key lists indented.
@@ -184,6 +186,17 @@ export function drawTimeline() {
   }
   c.fillStyle = C.barEdge;
   c.fillRect(Math.round(xAt(0, w)), RULER - 2, Math.max(0, xAt(d, w) - xAt(0, w)), 2);
+  // Markers: a flag on the ruler and its name, the picked one bright.
+  for (const m of markers()) {
+    const x = Math.round(xAt(m.t, w)) + .5, on = m === pickedMarker;
+    c.beginPath(); c.moveTo(x - 4, 2); c.lineTo(x + 4, 2); c.lineTo(x + 4, 9); c.lineTo(x, 13); c.lineTo(x - 4, 9); c.closePath();
+    c.fillStyle = on ? C.picked : C.key; c.fill(); c.strokeStyle = C.halo; c.lineWidth = 1; c.stroke();
+    if (m.name) {
+      const tw = c.measureText(m.name).width;
+      c.fillStyle = C.ruler; c.fillRect(x + 6, 2, tw + 4, 12);
+      c.fillStyle = on ? C.textOn : C.text; c.fillText(m.name, x + 8, 8);
+    }
+  }
   c.restore();
   c.fillStyle = C.gridText; c.fillText(`${timecode(S.t)}  ·  f${Math.round(S.t * S.R.fps)}`, 8, RULER / 2);
   c.save(); c.beginPath(); c.rect(LABEL, 0, w - LABEL, h); c.clip();
@@ -195,8 +208,8 @@ export function drawTimeline() {
 // playhead, the scene's ends, other keys and other layers' in and out
 // points; Ctrl held (or Snap off) keeps to the frame grid only.
 let snapLine = null;
-function snapTargets(skipKeys = new Set(), skipLayers = new Set(), withPlayhead = true) {
-  const ts = [0, dur()];
+function snapTargets(skipKeys = new Set(), skipLayers = new Set(), withPlayhead = true, skipMarker = null) {
+  const ts = [0, dur(), ...markers().filter(m => m !== skipMarker).map(m => m.t)];
   if (withPlayhead) ts.push(S.t);
   for (const l of scene().layers) {
     if (!skipLayers.has(l)) { if (l.start != null) ts.push(l.start); if (l.end != null) ts.push(l.end); }
@@ -223,7 +236,12 @@ function snapDelta(ps, d, targets, free) {
 let drag = null;
 function hitAt(e) {
   const r = tl.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  if (y < RULER) return { x, y, zone: x < LABEL ? 'corner' : 'ruler' };
+  if (y < RULER) {
+    if (x < LABEL) return { x, y, zone: 'corner' };
+    let marker = null, best = 6;
+    for (const m of markers()) { const g = Math.abs(xAt(m.t) - x); if (g < best) { best = g; marker = m; } }
+    return { x, y, zone: marker ? 'marker' : 'ruler', marker };
+  }
   const row = rows[Math.floor((y - RULER + scrollY) / ROW)];
   if (!row) return { x, y, zone: 'empty' };
   if (x < LABEL) {
@@ -254,6 +272,12 @@ tl.onpointerdown = e => {
   tl.setPointerCapture(e.pointerId);
   if (e.button === 1) { e.preventDefault(); drag = startPan(e, tl, scrollY); return; }
   if (e.button !== 0) return;
+  if (pickedMarker && h.zone !== 'marker') { pickedMarker = null; S.tlNeed = true; }
+  if (h.zone === 'marker') {
+    pickedMarker = h.marker;
+    drag = { marker: h.marker, t0: h.marker.t, x0: h.x, targets: snapTargets(new Set(), new Set(), true, h.marker) };
+    begin(); S.tlNeed = true; return;
+  }
   if (h.zone === 'ruler') { drag = { scrub: true, targets: snapTargets(new Set(), new Set(), false) }; scrub(h.x, e); return; }
   if (h.zone === 'label') {
     const l = h.row.l;
@@ -296,6 +320,11 @@ tl.onpointermove = e => {
   const x = e.clientX - tl.getBoundingClientRect().left, free = e.ctrlKey || e.metaKey;
   if (drag.pan) { pan(drag, e); scrollY = drag.y - (e.clientY - drag.y0); return; }
   if (drag.scrub) { scrub(x, e); return; }
+  if (drag.marker) {
+    const t = drag.t0 + snapDelta([drag.t0], timeAt(x) - timeAt(drag.x0), drag.targets, free);
+    drag.marker.t = tidy(Math.max(0, Math.min(dur(), t)));
+    changed(); return;
+  }
   if (drag.keys) {
     const d = snapDelta([drag.grab], timeAt(x) - timeAt(drag.x0), drag.targets, free);
     const lists = new Set();
@@ -335,13 +364,52 @@ tl.onpointerup = () => {
   const was = drag;
   drag = null; snapLine = null; S.tlNeed = true;
   if (!was || was.pan || was.scrub) return;
+  if (was.marker) markers().sort((a, b) => a.t - b.t);
   end();
   if (was.collapse && !was.moved) select(was.collapse);
 };
 tl.ondblclick = e => {
   const h = hitAt(e);
+  if (h.zone === 'marker') { rename(h.marker); return; }
   if (h.row && !h.row.p && (h.zone === 'label' || h.zone === 'bar') && openComp(h.row.l)) refresh();
 };
+// ---------- markers: `scene.markers`, named times on the ruler. M adds
+// one at the playhead; drag one to move it, double-click to name it,
+// Delete removes the picked one. Drags of anything snap to them.
+const markers = () => scene()?.markers ?? [];
+let pickedMarker = null;
+export function addMarker() {
+  const t = Math.round(S.t * S.R.fps) / S.R.fps, there = markers().find(m => Math.abs(m.t - t) < 0.5 / S.R.fps);
+  if (there) { pickedMarker = there; S.tlNeed = true; return; }
+  const m = { t };
+  edit(() => { const ms = scene().markers ??= []; ms.push(m); ms.sort((a, b) => a.t - b.t); });
+  pickedMarker = m;
+}
+// True when there was a picked marker to delete.
+export function deleteMarker() {
+  const m = pickedMarker;
+  if (!m || !markers().includes(m)) return false;
+  edit(() => { const s = scene(); s.markers = s.markers.filter(o => o !== m); if (!s.markers.length) delete s.markers; });
+  pickedMarker = null;
+  return true;
+}
+// A name field over the marker's flag: Enter or leaving it keeps the
+// name, Esc drops the change.
+function rename(m) {
+  const i = document.createElement('input');
+  i.className = 'marker-name'; i.value = m.name ?? ''; i.placeholder = 'marker name';
+  i.style.left = `${Math.min(xAt(m.t) + 6, wrap.clientWidth - 150)}px`;
+  let done = false;
+  const finish = keep => {
+    if (done) return;
+    done = true; i.remove();
+    const v = i.value.trim();
+    if (keep && v !== (m.name ?? '')) edit(() => { if (v) m.name = v; else delete m.name; });
+  };
+  i.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') finish(true); else if (e.key === 'Escape') finish(false); };
+  i.onblur = () => finish(true);
+  wrap.append(i); i.focus(); i.select();
+}
 tl.addEventListener('wheel', e => wheel(e, tl, dy => { scrollY += dy; S.tlNeed = true; }), { passive: false });
 // Alt+[ / Alt+]: the selected layers' in or out point to the playhead.
 export function trimToPlayhead(side) {
