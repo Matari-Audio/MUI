@@ -550,3 +550,178 @@ pub enum Deform {
         phase: f64,
     },
 }
+
+/// For each layer of `scene`, whether a duplicator instances it in place
+/// of drawing it: a hiding duplicator's `source` and everything parented
+/// under it.
+pub(crate) fn instanced(scene: &crate::Scene) -> Vec<bool> {
+    let mut out = vec![false; scene.layers.len()];
+    for l in &scene.layers {
+        if let crate::Kind::Duplicator {
+            source,
+            show_source: false,
+            ..
+        } = &l.kind
+            && let Some(s) = scene.layers.iter().position(|o| &o.id == source)
+        {
+            for i in subtree(scene, s, &[]) {
+                out[i] = true;
+            }
+        }
+    }
+    out
+}
+
+/// Layer `s` and its descendants, in scene order, not going into the
+/// layers in `skip` (other duplicators' hidden sources: those draw as
+/// their duplicator's copies).
+fn subtree(scene: &crate::Scene, s: usize, skip: &[usize]) -> Vec<usize> {
+    let mut out = vec![s];
+    let mut k = 0;
+    while k < out.len() {
+        let p = &scene.layers[out[k]].id;
+        for (c, l) in scene.layers.iter().enumerate() {
+            if &l.parent == p && !skip.contains(&c) && !out.contains(&c) {
+                out.push(c);
+            }
+        }
+        k += 1;
+    }
+    out.sort_unstable();
+    out
+}
+
+/// Duplicators with a `source`: each copy gets the source layer and its
+/// subtree as they draw now, re-based so the source's own transform is the
+/// copy's (its offsets, animators and slot), in the duplicator's `comp`
+/// (ids `dup/copy/layer`). Hiding sources then draw nothing themselves. A
+/// duplicator whose source holds another one runs after it, so copies of
+/// copies nest.
+pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], three: bool) {
+    use crate::{Kind, place::Xf};
+    let src = |i: usize| match &scene.layers[i].kind {
+        Kind::Duplicator { source, .. } if !source.is_empty() => {
+            scene.layers.iter().position(|o| &o.id == source)
+        }
+        _ => None,
+    };
+    let mut pending: Vec<usize> = (0..scene.layers.len())
+        .filter(|&i| src(i).is_some())
+        .collect();
+    if pending.is_empty() {
+        return;
+    }
+    let hidden = instanced(scene);
+    let skip: Vec<usize> = pending
+        .iter()
+        .filter(|&&i| {
+            matches!(
+                scene.layers[i].kind,
+                Kind::Duplicator {
+                    show_source: false,
+                    ..
+                }
+            )
+        })
+        .filter_map(|&i| src(i))
+        .collect();
+    while !pending.is_empty() {
+        let before = pending.len();
+        let mut k = 0;
+        while k < pending.len() {
+            let i = pending[k];
+            let s = src(i).expect("pending has sources");
+            let skip: Vec<usize> = skip.iter().copied().filter(|&o| o != s).collect();
+            let sub = subtree(scene, s, &skip);
+            // Itself under its source (loading refuses it), or waiting on
+            // a duplicator inside.
+            if sub.contains(&i) || sub.iter().any(|j| pending.contains(j) && *j != i) {
+                k += 1;
+                continue;
+            }
+            let at = Xf::of(&layers[i], three);
+            let source = Xf::of(&layers[s], false);
+            let Kind::Duplicator {
+                layout,
+                along,
+                orient,
+                ..
+            } = &layers[i].kind
+            else {
+                unreachable!("a source is a duplicator's")
+            };
+            let slots = crate::vector::slots(&layers[i], *layout, along, *orient);
+            let mut comp = Vec::new();
+            if source.opacity > 0. && source.scale != 0. && layers[i].opacity > 0. {
+                let from = source.inverse();
+                let members: Vec<&crate::Drawn> = sub
+                    .iter()
+                    .map(|&j| &layers[j])
+                    .filter(|d| {
+                        !matches!(
+                            d.kind,
+                            Kind::Camera { .. }
+                                | Kind::Light { .. }
+                                | Kind::Model { .. }
+                                | Kind::Audio { .. }
+                                | Kind::Group
+                        )
+                    })
+                    .collect();
+                for (c, ((p, turn), f)) in slots.iter().zip(&layers[i].fx).enumerate() {
+                    if f.opacity <= 0. || f.scale == 0. {
+                        continue;
+                    }
+                    let copy = at.then(&Xf {
+                        x: p.x + f.x,
+                        y: p.y + f.y,
+                        rotation: turn + f.rotation,
+                        scale: f.scale,
+                        opacity: f.opacity,
+                        ..Xf::FRAME
+                    });
+                    for m in &members {
+                        let mut d = (*m).clone();
+                        crate::place::rebase(&mut d, &from, &copy, three);
+                        d.opacity = d.opacity.min(1.);
+                        d.id = format!("{}/{c}/{}", layers[i].id, m.id);
+                        comp.push(d);
+                    }
+                }
+            }
+            layers[i].comp = comp;
+            pending.remove(k);
+        }
+        if pending.len() == before {
+            break;
+        }
+    }
+    for (d, h) in layers.iter_mut().zip(hidden) {
+        if h {
+            d.opacity = 0.;
+            d.comp.clear();
+        }
+    }
+}
+
+/// Duplicator `l`'s `source` is another layer of `s`, not one it sits
+/// under (which would instance itself).
+pub(crate) fn check_source(s: &crate::Scene, l: &crate::Layer) -> Result<(), String> {
+    let crate::Kind::Duplicator { source, .. } = &l.kind else {
+        return Ok(());
+    };
+    if source.is_empty() {
+        return Ok(());
+    }
+    let Some(i) = s.layers.iter().position(|o| &o.id == source) else {
+        return Err(format!("layer `{}`: no layer `{source}` to instance", l.id));
+    };
+    let me = s.layers.iter().position(|o| o.id == l.id);
+    if subtree(s, i, &[]).into_iter().any(|j| Some(j) == me) {
+        return Err(format!(
+            "layer `{}`: `{source}` holds this duplicator; it cannot instance itself",
+            l.id
+        ));
+    }
+    Ok(())
+}

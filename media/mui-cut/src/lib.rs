@@ -302,6 +302,13 @@ pub enum Kind {
         /// Turn each copy with the ring or path it sits on.
         #[serde(default, skip_serializing_if = "is_default")]
         orient: bool,
+        /// A layer of the scene (with everything parented under it) drawn
+        /// at every copy instead of `shape`, its own place the copy's.
+        /// The source then draws only there, unless `show_source`.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        source: String,
+        #[serde(default, skip_serializing_if = "is_default")]
+        show_source: bool,
     },
     /// An SVG file (relative to the project), drawn as vectors, centred.
     Svg {
@@ -1358,6 +1365,7 @@ pub struct Drawn {
     /// Comp layers: the scene's layers that draw (no camera, light,
     /// model, audio or group), placed in this frame through the comp
     /// (ids `comp/layer`), bottom first; empty while the comp is off.
+    /// A duplicator with a `source`: its copies' layers (`dup/copy/layer`).
     #[serde(skip)]
     pub comp: Vec<Drawn>,
 }
@@ -1472,6 +1480,7 @@ fn eval_in(project: &Project, scene: &Scene, t: f64, depth: usize) -> Frame {
             })
             .collect();
     }
+    motion::instance(scene, &mut layers, three);
     let view = three.then(|| three::view(project.size, scene, t, &layers));
     Frame {
         size: project.size,
@@ -1722,6 +1731,7 @@ impl Project {
                     Kind::Duplicator { d, along, .. } => {
                         bad("d", d)?;
                         bad("along", along)?;
+                        motion::check_source(s, l).map_err(|e| format!("{at}.source: {e}"))?;
                     }
                     Kind::Camera { path, .. } => bad("path", path)?,
                     Kind::Lottie { speed, .. } if !speed.is_finite() => {
@@ -1972,3 +1982,5 @@ mod tests;
 mod tests3d;
 #[cfg(test)]
 mod tests_place;
+#[cfg(test)]
+mod tests_procedural;

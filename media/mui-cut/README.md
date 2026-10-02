@@ -148,7 +148,7 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   | `text` | `text`, `align` (`left`/`center`/`right`) | Inter outlines, a line per `\n`, the block centred on `x`, `y` |
   | `image` | `path` | a PNG relative to the project file |
   | `path` | `d` | SVG path data in pixels around `x`, `y` |
-  | `duplicator` | `shape` (`rect`/`ellipse`/`path`), `d`, `layout` (`grid`/`radial`/`linear`/`path`), `along`, `orient` | `count` copies, see below |
+  | `duplicator` | `shape` (`rect`/`ellipse`/`path`), `d`, `layout` (`grid`/`radial`/`linear`/`path`), `along`, `orient`, `source`, `show_source` | `count` copies, see below |
   | `svg` | `path` | an SVG file as vectors, centred |
   | `lottie` | `path`, `speed` (1), `loop` (true) | a Lottie JSON file, centred, playing |
   | `group` | | nothing: layers attach to it with `parent` (see Groups) |
@@ -323,6 +323,18 @@ twelve o'clock) or `path` (evenly by length along the path data `along`,
 shifted by `path_offset`; a closed path spaces them all the way round).
 With `"orient": true` a ring copy turns so its up points outward, and a path
 copy so its +x follows the path. Animators give each copy its own offset.
+
+**Instancing.** `"source": "<layer id>"` copies that layer instead of a
+shape: any kind, and with everything parented under it (a group copies its
+whole subtree), as it draws at that time. The source's own place is each
+copy's: its pivot lands on the slot, turned and scaled by the copy, so its
+offsets, its parents and its own turn are left behind. The source then
+draws only as copies (`check` does not call it invisible); `"show_source":
+true` keeps it where it is too. Animators move each instanced copy as they
+move a shape copy, by its index. A source may hold another duplicator (its
+copies nest), never the duplicator itself. The copies paint unpicked; the
+duplicator's outline is their bounds. In 3D they lie flat on the
+duplicator's plane, as a comp's layers do.
 
 ### Deformers
 

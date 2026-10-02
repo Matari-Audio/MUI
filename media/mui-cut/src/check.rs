@@ -877,9 +877,11 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             );
         }
     }
+    // A duplicator's hidden source draws as its copies.
+    let instanced = crate::motion::instanced(s);
     for (i, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{i}]");
-        if !seen[i] && !matches!(l.kind, Kind::Group) {
+        if !seen[i] && !matches!(l.kind, Kind::Group) && !instanced[i] {
             out.add(
                 Severity::Warning,
                 "never_visible",

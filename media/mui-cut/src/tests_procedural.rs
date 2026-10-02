@@ -1,0 +1,105 @@
+//! Procedural motion: instancing, effectors, jitter, group stagger and
+//! behaviours.
+use super::*;
+
+fn scene_of(layers: &str) -> Project {
+    Project::load(&format!(
+        r##"{{"size":[400,200],"fps":30,"scenes":[{{"name":"a","duration":2,"background":"#000000","layers":[{layers}]}}]}}"##
+    ))
+    .unwrap()
+}
+
+fn px(p: &Project, t: f64) -> Vec<u8> {
+    let mut r = Renderer::new(400, 200);
+    r.draw(&eval(p, &p.scenes[0], t)).unwrap().0
+}
+
+fn at(px: &[u8], x: usize, y: usize) -> [u8; 4] {
+    px[(y * 400 + x) * 4..][..4].try_into().unwrap()
+}
+
+#[test]
+fn a_duplicator_instances_a_group_with_its_children_and_hides_it() {
+    // A group of two squares (a red one at its pivot, a green one 20 px
+    // right) instanced three times in a row 100 px apart round (200, 100).
+    let layers = |extra: &str| {
+        format!(
+            r##"{{"id":"g","kind":"group","x":30,"y":30,"rotation":45}},
+            {{"id":"a","kind":"rect","parent":"g","width":10,"height":10,"fill":"#ff0000"}},
+            {{"id":"b","kind":"rect","parent":"g","x":20,"width":10,"height":10,"fill":"#00ff00"}},
+            {{"id":"d","kind":"duplicator","source":"g","layout":"linear","count":3,"spacing_x":100,"x":200,"y":100{extra}}}"##
+        )
+    };
+    let p = scene_of(&layers(""));
+    let f = eval(&p, &p.scenes[0], 0.);
+    let d = f.layers.iter().find(|l| l.id == "d").unwrap();
+    // The source's own place (and its turn) is each copy's: 3 copies x 2 rects.
+    let ids: Vec<&str> = d.comp.iter().map(|k| k.id.as_str()).collect();
+    assert_eq!(ids, ["d/0/a", "d/0/b", "d/1/a", "d/1/b", "d/2/a", "d/2/b"]);
+    let b1 = &d.comp[3];
+    assert!((b1.x - 220.).abs() < 1e-9 && (b1.y - 100.).abs() < 1e-9 && b1.rotation.abs() < 1e-9);
+    let px0 = px(&p, 0.);
+    for x in [100, 200, 300] {
+        assert_eq!(at(&px0, x, 100), [255, 0, 0, 255], "a red square at {x}");
+        assert_eq!(
+            at(&px0, x + 20, 100),
+            [0, 255, 0, 255],
+            "a green square right of {x}"
+        );
+    }
+    // The source itself is hidden (and not "never visible" in check).
+    assert_eq!(at(&px0, 30, 30), [0, 0, 0, 255]);
+    let doc = format!(
+        r#"{{"size":[400,200],"fps":30,"scenes":[{{"name":"a","duration":2,"layers":[{}]}}]}}"#,
+        layers("")
+    );
+    let issues = check::check(&doc, &mut Renderer::new(400, 200), &|_| true);
+    assert!(
+        !issues.iter().any(|i| i.code == "never_visible"),
+        "{issues:?}"
+    );
+    // `show_source` keeps it.
+    let p = scene_of(&layers(r#","show_source":true"#));
+    assert_ne!(at(&px(&p, 0.), 30, 30), [0, 0, 0, 255]);
+    // A duplicator cannot instance a layer it sits under.
+    let e = Project::load(
+        r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,"layers":[
+            {"id":"g","kind":"group"},
+            {"id":"d","kind":"duplicator","parent":"g","source":"g"}]}]}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("cannot instance itself"), "{e}");
+    let e = Project::load(
+        r#"{"size":[400,200],"fps":30,"scenes":[{"name":"a","duration":2,"layers":[
+            {"id":"d","kind":"duplicator","source":"nope"}]}]}"#,
+    )
+    .unwrap_err();
+    assert!(e.contains("no layer `nope`"), "{e}");
+}
+
+#[test]
+fn instanced_copies_take_their_animators_and_nest() {
+    // The second half of the copies moves down 50 px: the animator reads
+    // each copy's index, as with plain copies.
+    let p = scene_of(
+        r##"{"id":"s","kind":"ellipse","width":10,"height":10,"fill":"#ffffff"},
+            {"id":"d","kind":"duplicator","source":"s","layout":"linear","count":4,"spacing_x":50,"x":200,"y":50,
+             "animators":[{"start":0.5,"y":50}]},
+            {"id":"e","kind":"duplicator","source":"d","layout":"linear","count":2,"spacing_x":0,"spacing_y":0,"x":0,"y":0}"##,
+    );
+    let f = eval(&p, &p.scenes[0], 0.);
+    let e = f.layers.iter().find(|l| l.id == "e").unwrap();
+    // `e` copies `d` (with its four instances) twice; `d` itself is hidden.
+    assert_eq!(e.comp.len(), 2);
+    assert_eq!(e.comp[0].comp.len(), 4);
+    let ys: Vec<f64> = e.comp[0].comp.iter().map(|k| k.y.round()).collect();
+    assert_eq!(ys, [0., 0., 50., 50.]);
+    assert!(
+        f.layers
+            .iter()
+            .find(|l| l.id == "d")
+            .unwrap()
+            .comp
+            .is_empty()
+    );
+}
