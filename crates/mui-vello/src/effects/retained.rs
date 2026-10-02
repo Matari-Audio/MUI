@@ -1000,7 +1000,12 @@ impl GpuRenderer {
                             continue;
                         }
                     }
-                    crate::one(&mut canvas, p, self.paths.get(&p.path)?)?;
+                    crate::one(
+                        &mut canvas,
+                        p,
+                        self.paths.get(&p.path)?,
+                        crate::placed(xf, p),
+                    )?;
                 }
             }
         }

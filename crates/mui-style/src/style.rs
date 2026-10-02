@@ -241,6 +241,8 @@ pub enum Fill {
     /// Boxed: a ramp is rare, and inline it would triple every fill.
     Gradient(Box<Gradient>),
     Image(Arc<Image>, Fit),
+    /// Retained paths painted at the current device scale, without a bitmap.
+    Vector(Arc<crate::Vector>, Fit),
 }
 impl From<Role> for Fill {
     fn from(r: Role) -> Self {
@@ -280,6 +282,10 @@ pub enum Paint {
         image: Arc<Image>,
         fit: Fit,
     },
+    Vector {
+        vector: Arc<crate::Vector>,
+        fit: Fit,
+    },
 }
 impl Paint {
     /// The one colour a thing on top of this paint is judged against.
@@ -291,7 +297,7 @@ impl Paint {
             }
             // Ink over a photo is a designer's problem, not a palette's; mid
             // grey is the honest guess and keeps contrast checks running.
-            Self::Image { .. } => Color::oklch(0.5, 0.0, 0.0),
+            Self::Image { .. } | Self::Vector { .. } => Color::oklch(0.5, 0.0, 0.0),
         }
     }
 }
@@ -308,6 +314,10 @@ impl Fill {
             Self::Color(c) => Paint::Solid(*c),
             Self::Image(image, fit) => Paint::Image {
                 image: image.clone(),
+                fit: *fit,
+            },
+            Self::Vector(vector, fit) => Paint::Vector {
+                vector: vector.clone(),
                 fit: *fit,
             },
             Self::Gradient(g) => Paint::Gradient {
@@ -328,6 +338,7 @@ impl Fill {
             Some(Paint::Solid(c)) => Fill::Color(f(c)),
             // Pixels are not a role: a hover tint has nothing to map here.
             Some(Paint::Image { image, fit }) => Fill::Image(image, fit),
+            Some(Paint::Vector { vector, fit }) => Fill::Vector(vector, fit),
             Some(Paint::Gradient { kind, stops }) => Gradient {
                 kind,
                 stops: stops

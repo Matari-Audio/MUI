@@ -64,6 +64,7 @@ pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
     Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme, TypeScale,
+    Vector, VectorCommand,
 };
 pub use mui_text::{Axes, Font, Weight};
 pub use scene::bar;
