@@ -1388,29 +1388,34 @@ mod snapshot {
 
     #[test]
     fn filtered_vector_requests_physical_extent_for_cpu_and_gpu() {
-        #[derive(Debug, Default)]
-        struct Source(std::sync::Mutex<Vec<(u32, u32)>>);
+        #[derive(Debug)]
+        struct Source {
+            requests: std::sync::Mutex<Vec<(u32, u32)>>,
+            images: [mui_scene::Image; 2],
+        }
         impl mui_scene::RasterSource for Source {
             fn prepared_image(
                 &self,
                 width: u32,
                 height: u32,
             ) -> Result<Option<mui_scene::Image>, String> {
-                self.0.lock().unwrap().push((width, height));
-                Ok(Some(
-                    mui_scene::Image::rgba(
-                        width,
-                        height,
-                        [255, 0, 0, 128].repeat((width * height) as usize),
-                    )
-                    .unwrap(),
-                ))
+                self.requests.lock().unwrap().push((width, height));
+                Ok(self
+                    .images
+                    .iter()
+                    .find(|i| i.width == width && i.height == height)
+                    .cloned())
             }
             fn retained_bytes(&self) -> usize {
                 0
             }
         }
-        let source = Arc::new(Source::default());
+        let source = Arc::new(Source {
+            requests: std::sync::Mutex::new(Vec::new()),
+            images: [(20, 15), (40, 30)].map(|(w, h)| {
+                mui_scene::Image::rgba(w, h, [255, 0, 0, 128].repeat((w * h) as usize)).unwrap()
+            }),
+        });
         let vector = Arc::new(mui_scene::Vector::filtered(10., 10., source.clone()).unwrap());
         let scene = resolve(
             &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector, Fit::Fill)))
@@ -1438,7 +1443,7 @@ mod snapshot {
             assert_eq!(center.r, 128, "straight alpha is premultiplied once");
             assert_eq!(center.a, 128);
         }
-        assert_eq!(*source.0.lock().unwrap(), [(20, 15), (40, 30)]);
+        assert_eq!(*source.requests.lock().unwrap(), [(20, 15), (40, 30)]);
         #[cfg(feature = "gpu-effects")]
         {
             let mut encoded = vello::Scene::new();
@@ -1447,7 +1452,7 @@ mod snapshot {
             let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [40, 30]);
             paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
             assert_eq!(gpu.images.len(), 1);
-            assert_eq!(source.0.lock().unwrap().last(), Some(&(40, 30)));
+            assert_eq!(source.requests.lock().unwrap().last(), Some(&(40, 30)));
         }
     }
 
