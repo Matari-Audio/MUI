@@ -386,6 +386,28 @@ mesh. Scenes without it render exactly as before.
   last; key `time` to scrub it. See `examples/stage3d-overlay.cut.json`.
 - Scene `ground` (`y`, `color`, `radius`, `reflect`, `contact` shadow
   strength) and `fog` (`color`, `near`, `far`); `background` is the clear.
+- Scene `sky`: the sun `elevation` degrees up and `azimuth` degrees right
+  of straight into the scene, clouds over `cover` (0..1) drifting by
+  `wind`, all scaled by `intensity`. `"model": "gradient"` (the default)
+  runs `horizon` to `zenith` lit by `sun`. `"model": "physical"` is the air
+  scattering sunlight (Rayleigh, Mie and ozone, single scattering through a
+  spherical atmosphere plus a multiple-scattering term): blue overhead,
+  paler low, the sun's limb-darkened disc reddening as it sets, its clouds
+  lit from beneath, and twilight once it is below the horizon. `turbidity`
+  (1 pure air, 2 clear, 10 hazy) whitens it, `ozone` (1 the earth's)
+  deepens twilight's blue, `ground_albedo` lights the air from below,
+  `altitude` is the eye's height in metres. It is linear HDR, so `bloom`
+  catches the sun. With `light` the sky lights the scene as an
+  environment does (diffuse and reflections, rebaked as the sun moves; an
+  `environment` lights instead); `sun_light` adds a directional light down
+  the sun, coloured by what the air leaves of it, casting shadows. Both
+  default on for the physical model, off for the gradient. Key
+  `elevation` for a sunrise: see `examples/sky.cut.json`.
+- A layer's `material`: `metallic`, `roughness`, `transmission` (glass),
+  `ior`, `thickness`, `dispersion`, `tint`, `print`, `bevel`, `texture`
+  (pressed `ribbed`, `hammered`, `ripple`), and `emission`: the layer gives
+  off its own colour that many times as bright as white light on it, lit or
+  in the dark (above 1 it feeds the bloom). Every field is keyable.
 - A scene's `effects` run on the 3D pass's output, per subframe, before
   motion blur averages them, as in 2D. A layer's own `effects` run on its
   slab: its box in the atlas gets room each side for what the stack
@@ -429,7 +451,12 @@ ambient as the world, layers and plugin parts as PNG-textured extruded
 slabs, `.glb` models through Blender's glTF importer (their maps as it
 reads them, their first animation's NLA strip driven to each frame's
 `time + t`), the ground as a plane
-and fog as a mist pass. Layer textures, the `.blend` and every frame are
+and fog as a mist pass. A physical `sky` is Blender's multiple-scattering
+Sky Texture (Nishita before 5.0) with the same sun, aerosol (`turbidity`
+less one), ozone and altitude, keyed per frame and scaled to match the
+stage's brightness; with `light` it lights the world, without the sun's
+disc when `sun_light` stands a Sun lamp (with shadows) in for it.
+`emission` is the Principled BSDF's, in the layer's colour. Layer textures, the `.blend` and every frame are
 cached by content hash under `.mui-cut-cache/blender/` next to the project;
 a re-run renders only frames whose content changed. A 2D scene or a
 missing Blender is an error. 1280x720 at 64 samples takes about 1-2 s per
@@ -764,6 +791,17 @@ explodes two levels in 3D: panels, then their controls.
   the inspector lists the properties they share, "mixed" where they differ;
   an edit or ◆ applies to all. Drag, Delete, Ctrl+D (duplicate, in place)
   and ▲/▼ act on the whole selection, each one undo step.
+- **Look** (a 3D scene's inspector): the sky on or off, its model, a sun
+  dial (drag the sun: straight into the scene is up, overhead the middle,
+  the horizon the ring), elevation, azimuth, turbidity, clouds and
+  intensity; what lights the scene (the sky, an environment or neither)
+  and the sun lamp; the environment, ground, fog, bloom and occlusion; and
+  under **Render** the project's glass mode (`raster`, `trace`, `rt`,
+  `rt-path`) and its samples. A keyed or bound value shows read-only (and
+  the dial greys); edit those in the file or the graph. A 3D layer has a
+  **shadows** box and **+ material** with presets (glass, frosted glass,
+  metal, plastic, emissive) whose fields then show as keyable rows under
+  a Material header, which swaps the preset or removes it.
 - **Panels**: drag the gutters between the left column, the viewport, the
   inspector and the timeline to resize them; double-click a gutter for its
   default. The sizes are kept in the browser (localStorage).
@@ -1114,7 +1152,10 @@ same reason.
 - 3D: glTF is `.glb` only: triangles, material factors and PNG maps (a
   JPEG map is skipped: no decoder here), the first animation, skins on
   the CPU; no morph targets, cameras or lights from the file, maps
-  without mips; `check`'s pixel lints skip 3D scenes. A layer's effects in 3D run in its own texture, so
+  without mips; `check`'s pixel lints skip 3D scenes. The physical
+  sky's clouds are the gradient's, lit by its sunlight (no volumetric
+  silver lining), there is no aerial perspective beyond `fog`, and
+  `emission` is not seen through `rt` glass or on glass itself. A layer's effects in 3D run in its own texture, so
   `chromatic` pulls towards the layer's centre, not the frame's.
 - Sources and parenting: a reparent through a turn keeps every key exact,
   but a key baked into a bezier segment splits it into two eases, so the

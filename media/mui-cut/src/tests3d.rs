@@ -1198,3 +1198,24 @@ fn an_emissive_face_glows_in_the_dark() {
     );
     assert!(hot[2] == 255 && hot[0] > lit[0] + 40, "{hot:?}");
 }
+
+/// `examples/sky.cut.json`: valid, checks clean, and its sun rises from
+/// below the horizon (twilight, no sun lamp) to high noon (a lit sun lamp).
+#[test]
+fn the_sky_example_sweeps_a_sunrise() {
+    const SKY: &str = include_str!("../examples/sky.cut.json");
+    let doc: serde_json::Value = serde_json::from_str(SKY).unwrap();
+    let v = jsonschema::validator_for(&Project::json_schema()).unwrap();
+    assert!(v.is_valid(&doc));
+    let issues = check::check(SKY, &mut Renderer::new(64, 36), &|_| true);
+    assert!(
+        issues.iter().all(|i| i.severity != check::Severity::Error),
+        "{issues:?}"
+    );
+    let p = Project::load(SKY).unwrap();
+    let view = |t: f64| eval(&p, &p.scenes[0], t).view.unwrap();
+    let (dawn, noon) = (view(0.), view(10.));
+    assert!(dawn.sky.as_ref().unwrap().sun[1] < 0. && noon.sky.as_ref().unwrap().sun[1] > 0.9);
+    let sun = |v: &three::View| v.lights.iter().any(|l| l.kind == LightType::Directional);
+    assert!(!sun(&dawn) && sun(&noon));
+}
