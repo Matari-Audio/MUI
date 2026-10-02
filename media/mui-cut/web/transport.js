@@ -7,7 +7,7 @@ import { deleteSelected, duplicateSelected, refreshLists, select, selectAll } fr
 import { transport } from './sound.js';
 import { $, S, clock, pacing } from './state.js';
 import { drawTimeline } from './timeline.js';
-import { groupSelected, ungroupSelected } from './tree.js';
+import { groupSelected, precompose, ungroupSelected } from './tree.js';
 import { BEAUTY_MAX, beauty, drawViewport, refining } from './viewport.js';
 
 // ---------- transport, keys, loop
@@ -42,6 +42,7 @@ addEventListener('keydown', e => {
   else if (e.key === 'Delete' || e.key === 'Backspace') deleteSelected();
   else if (mod && e.key.toLowerCase() === 'a') { e.preventDefault(); selectAll(); }
   else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicateSelected(); }
+  else if (mod && e.shiftKey && e.key.toLowerCase() === 'c') { e.preventDefault(); precompose(); }
   else if (mod && e.key.toLowerCase() === 'g') { e.preventDefault(); if (e.shiftKey) ungroupSelected(); else groupSelected(); }
   else if (e.key === 'Escape') select(null);
   else if (e.key.toLowerCase() === 'k' && layer()) edit(() => toggleKey(layer(), S.prop));

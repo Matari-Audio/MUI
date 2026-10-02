@@ -789,6 +789,15 @@ explodes two levels in 3D: panels, then their controls.
   under their common parent, the layers moved into it where they are;
   Ctrl+Shift+G ungroups (the children go to the group's parent, the
   group goes). Deleting a parent hands its children to its own parent.
+- **Comps**: Ctrl+Shift+C precomposes the selection: the selected layers
+  (with their subtrees) move into a new scene of the same length, named
+  after the topmost, and one `comp` layer of it, centred, takes their
+  place in the paint order, so nothing moves or retimes (a layer whose
+  parent stays behind is detached where it is first). **+ comp** (Layers
+  header) adds a comp of any scene this one may comp (none that comps it
+  back). Double-click a comp (in the list, the timeline or the viewport)
+  to open its scene. The scene list marks comped scenes, which render and
+  Export skip as shots.
 - **Reset to default** (inspector): a part back where the plugin puts it;
   a layer's transform keys and offsets cleared (to the frame's middle, or
   onto its parent), and a plugin's explode and part offsets. Undoable.

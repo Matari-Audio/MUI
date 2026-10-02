@@ -44,6 +44,7 @@ textarea { resize: vertical; min-height: 38px; font-family: ui-monospace, SFMono
 input:focus, textarea:focus, select:focus, button:focus-visible { outline: 1px solid var(--muted); outline-offset: 1px; }
 h2 { display: flex; justify-content: space-between; align-items: center; margin: 12px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
 h2 button { padding: 0 6px; }
+h2 select { padding: 0 2px; max-width: 70px; font-size: 11px; text-transform: none; letter-spacing: 0; }
 aside { padding: 0 10px 10px; background: var(--panel); overflow: auto; }
 #left { grid-area: left; border-right: 1px solid var(--line); }
 #right { grid-area: right; border-left: 1px solid var(--line); }

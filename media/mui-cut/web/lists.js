@@ -4,17 +4,19 @@ import { keyLayer } from './sound.js';
 import { dropSource, refreshSources, sourceOf } from './sources.js';
 import { $, KIND_ICON, S, cut, unfolded } from './state.js';
 import { refresh } from './transport.js';
-import { isFolded, moveLayer, setFolded, treeRows } from './tree.js';
+import { addComp, compable, comped, isFolded, moveLayer, openComp, setFolded, treeRows } from './tree.js';
 
 const EYE = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 7c1.6-2.8 3.6-4.2 6-4.2s4.4 1.4 6 4.2c-1.6 2.8-3.6 4.2-6 4.2S2.6 9.8 1 7z"/><circle cx="7" cy="7" r="1.8"/></svg>';
 const EYE_OFF = '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 7c1.6 2.8 3.6 4.2 6 4.2s4.4-1.4 6-4.2"/></svg>';
 
 // ---------- scene and layer lists
 export function refreshLists() {
+  const inComp = comped();
   $('#scenes').replaceChildren(...S.doc.scenes.map((s, i) => {
     const b = document.createElement('button');
     const d = S.R.scenes[i].duration;
-    b.textContent = `${s.name}  ·  ${d}s${s.mode === '3d' ? '  ·  3D' : ''}`;
+    b.textContent = `${s.name}  ·  ${d}s${s.mode === '3d' ? '  ·  3D' : ''}${inComp.has(s.name) ? '  ·  comp' : ''}`;
+    if (inComp.has(s.name)) b.title = 'Comped by another scene: render and export skip it as a shot';
     b.className = i === S.si ? 'on' : '';
     b.onclick = () => { S.si = i; S.sel = null; S.selKey = null; S.t = Math.min(S.t, d); refresh(); };
     return b;
@@ -40,6 +42,8 @@ export function refreshLists() {
       if (e.target.closest('[data-eye]')) { edit(() => { if (l.hidden) delete l.hidden; else l.hidden = true; }); return; }
       select(l.id, picking(e));
     };
+    b.ondblclick = e => { if (!e.target.closest('[data-twist], [data-eye]') && openComp(l)) refresh(); };
+    if (l.kind === 'comp') b.title = `Comp of scene “${l.scene}”: double-click to open it`;
     b.draggable = true;
     b.ondragstart = e => { e.dataTransfer.setData(DRAG_LAYER, l.id); e.dataTransfer.effectAllowed = 'move'; };
     // Over a row's top or bottom quarter, a layer goes above or below it;
@@ -84,6 +88,10 @@ export function refreshLists() {
     })];
   });
   $('#layers').replaceChildren(...rows);
+  // + comp: the scenes this one may comp (no cycles).
+  const can = compable(scene().name);
+  $('#add-comp').replaceChildren(new Option('+ comp', ''), ...can.map(n => new Option(n, n)));
+  $('#add-comp').disabled = !can.length;
   refreshSources();
 }
 // Drags within the editor: a source row, or a layer row.
@@ -137,6 +145,7 @@ export function setSelection(ids) {
   }
   refresh();
 }
+$('#add-comp').onchange = e => { const of = e.target.value; e.target.value = ''; if (of) addComp(of); };
 $('#add-scene').onclick = () => edit(() => {
   S.doc.scenes.push({ name: `scene ${S.doc.scenes.length + 1}`, duration: 2, layers: [] });
   S.si = S.doc.scenes.length - 1; S.sel = null;

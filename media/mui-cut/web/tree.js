@@ -112,3 +112,46 @@ export function ungroupSelected() {
   edit(() => { S.doc = doc; S.selection = freed.filter(id => !groups.some(g => g.id === id)); S.selKey = null; });
 }
 
+
+// The comps: which scenes some scene comps, and which scenes scene
+// `name` may comp (not itself, nor one that comps it, at any depth).
+export const comped = () => new Set(S.doc.scenes.flatMap(s => s.layers.filter(l => l.kind === 'comp').map(l => l.scene)));
+export function compable(name) {
+  const comps = n => S.doc.scenes.find(s => s.name === n)?.layers.filter(l => l.kind === 'comp').map(l => l.scene) ?? [];
+  const reaches = (from, seen = new Set()) => from === name || (!seen.has(from) && (seen.add(from), comps(from).some(n => reaches(n, seen))));
+  return S.doc.scenes.map(s => s.name).filter(n => !reaches(n));
+}
+// A comp layer of scene `of`, centred, on top.
+export function addComp(of) {
+  const ls = scene().layers, [W, H] = S.R.size, id = freeId(ls, 'comp');
+  edit(() => { ls.push({ id, kind: 'comp', scene: of, x: W / 2, y: H / 2 }); S.selection = [id]; S.selKey = null; });
+}
+// Double-click on a comp: its scene.
+export function openComp(l) {
+  const i = S.doc.scenes.findIndex(s => s.name === l?.scene);
+  if (l?.kind !== 'comp' || i < 0) return false;
+  S.si = i; S.selection = []; S.selKey = null; S.t = Math.min(S.t, S.R.scenes[i].duration);
+  return true;
+}
+// Ctrl+Shift+C: the selected layers (with their subtrees) moved into a
+// new scene of the same length, replaced by one comp layer of it where
+// the topmost was. A comp of a scene plays it in scene time, centred, so
+// nothing moves or retimes; a layer whose parent stays behind is first
+// detached where it is.
+export function precompose() {
+  const sel = roots(selectedLayers());
+  if (!sel.length) return;
+  const src = scene(), ids = new Set();
+  for (const l of sel) { ids.add(l.id); for (const d of descendants(l.id)) ids.add(d); }
+  const stem = `${sel.at(-1).name || sel.at(-1).id} comp`;
+  let name = stem;
+  for (let n = 2; S.doc.scenes.some(s => s.name === name); n++) name = `${stem} ${n}`;
+  let doc = structuredClone(S.doc);
+  try { for (const l of sel) if (l.parent && !ids.has(l.parent)) doc = reparent(doc, l.id, ''); } catch (e) { showError(String(e)); return; }
+  const s = doc.scenes[S.si], last = s.layers.findLastIndex(l => ids.has(l.id));
+  const [W, H] = S.R.size, id = freeId(s.layers.filter(l => !ids.has(l.id)), 'comp');
+  const comp = { id, kind: 'comp', scene: name, x: W / 2, y: H / 2 };
+  doc.scenes.push({ name, duration: structuredClone(src.duration), layers: s.layers.filter(l => ids.has(l.id)) });
+  s.layers = s.layers.flatMap((l, i) => ids.has(l.id) ? (i === last ? [comp] : []) : [l]);
+  edit(() => { S.doc = doc; S.selection = [id]; S.selKey = null; });
+}

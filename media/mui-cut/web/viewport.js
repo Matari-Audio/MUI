@@ -6,6 +6,8 @@ import { dropSource } from './sources.js';
 import { boundsOf, clearGuides, drawGuides, snapMove, snapPoint, targets } from './snap.js';
 import { drawGizmo, gizmoBox, gizmoCursor, gizmoHit, moveGizmo, startGizmo } from './gizmo.js';
 import { $, C, S, cut, pacing, worker } from './state.js';
+import { refresh } from './transport.js';
+import { openComp } from './tree.js';
 
 // ---------- viewport
 const view = $('#view'), over = $('#overlay');
@@ -303,6 +305,11 @@ over.onpointerup = () => {
   if (was?.marquee) { setSelection([...was.keep, ...marqueeHits(was.marquee)]); return; }
   end();
   if (was?.collapse && !was.moved) select(was.collapse);
+};
+// Double-click on a comp opens its scene.
+over.ondblclick = e => {
+  const id = hit(toProject(e));
+  if (!S.interact && id && openComp(scene().layers.find(l => l.id === id.split('#')[0]))) refresh();
 };
 // A source dragged from the Sources panel lands where it is dropped.
 over.addEventListener('dragover', e => { if (e.dataTransfer.types.includes(DRAG_SOURCE)) e.preventDefault(); });
