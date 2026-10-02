@@ -689,6 +689,9 @@ explodes two levels in 3D: panels, then their controls.
   the inspector lists the properties they share, "mixed" where they differ;
   an edit or ◆ applies to all. Drag, Delete, Ctrl+D (duplicate, in place)
   and ▲/▼ act on the whole selection, each one undo step.
+- **Panels**: drag the gutters between the left column, the viewport, the
+  inspector and the timeline to resize them; double-click a gutter for its
+  default. The sizes are kept in the browser (localStorage).
 - **Sources** (left, collapsible): every source the project uses or has
   imported, with thumbnails. **Import** (or drop PNG, SVG, Lottie JSON,
   `.glb` or `.ttf`/`.otf` files on the left panel) copies files to `media/` beside the

@@ -14,6 +14,7 @@ import './export.js';
 import './transport.js';
 import './sound.js';
 import './agent.js';
+import './panels.js';
 import { control } from './agent.js';
 import { adopt, captured, loadAssets, status } from './edit.js';
 import { who } from './patch.js';
