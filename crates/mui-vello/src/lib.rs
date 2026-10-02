@@ -833,9 +833,12 @@ fn vector_paint(
         {
             return Err(Error::InvalidPath);
         }
-        let image = source
-            .rasterize(w as u32, h as u32)
-            .map_err(|_| Error::InvalidPath)?;
+        let Some(image) = source
+            .prepared_image(w as u32, h as u32)
+            .map_err(|_| Error::InvalidPath)?
+        else {
+            return Ok(());
+        };
         let paint = canvas.image(&image).ok_or(Error::InvalidPath)?;
         canvas.set_transform(base);
         canvas.push_clip(outline);
@@ -1388,14 +1391,20 @@ mod snapshot {
         #[derive(Debug, Default)]
         struct Source(std::sync::Mutex<Vec<(u32, u32)>>);
         impl mui_scene::RasterSource for Source {
-            fn rasterize(&self, width: u32, height: u32) -> Result<mui_scene::Image, String> {
+            fn prepared_image(
+                &self,
+                width: u32,
+                height: u32,
+            ) -> Result<Option<mui_scene::Image>, String> {
                 self.0.lock().unwrap().push((width, height));
-                Ok(mui_scene::Image::rgba(
-                    width,
-                    height,
-                    [255, 0, 0, 128].repeat((width * height) as usize),
-                )
-                .unwrap())
+                Ok(Some(
+                    mui_scene::Image::rgba(
+                        width,
+                        height,
+                        [255, 0, 0, 128].repeat((width * height) as usize),
+                    )
+                    .unwrap(),
+                ))
             }
             fn retained_bytes(&self) -> usize {
                 0

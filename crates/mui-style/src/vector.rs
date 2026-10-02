@@ -8,7 +8,17 @@ use std::sync::Arc;
 /// Implementations retain their vector source and bound/cache requested sizes.
 /// The returned image uses the same straight RGBA contract as all MUI images.
 pub trait RasterSource: std::fmt::Debug + Send + Sync {
-    fn rasterize(&self, width: u32, height: u32) -> Result<Image, String>;
+    /// Never decode, rasterize or wait for a worker here. A miss schedules
+    /// preparation and returns None; paint omits that pending intermediate.
+    fn prepared_image(&self, width: u32, height: u32) -> Result<Option<Image>, String>;
+    /// Preparation-worker boundary; true when image/error readiness changed.
+    fn prepare_requested(&self) -> Result<bool, String> {
+        Ok(false)
+    }
+    fn set_waker(&self, _wake: Arc<dyn Fn() + Send + Sync>) {}
+    fn wake_pending(&self) -> bool {
+        false
+    }
     fn retained_bytes(&self) -> usize;
 }
 
