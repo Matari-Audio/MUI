@@ -39,7 +39,8 @@ pub mod yuv;
 pub use gpu::Offline;
 pub use gpu::{Engine, GpuCanvas};
 pub use motion::{
-    ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Falloff, Fx, Order, Unit, text_units,
+    ANIMATOR_PROPS, Animator, Deform, Deformer, Ease, Effector, Falloff, Field, Fx, Order, Unit,
+    text_units,
 };
 pub use plugin::{
     Capture, Fragment, Note, Param, Part, PartAt, PartInfo, PluginAt, Pose, Source, Step, Surface,
@@ -980,8 +981,7 @@ impl Layer {
         }
         if matches!(self.kind, Kind::Text { .. } | Kind::Duplicator { .. }) {
             for (i, a) in self.animators.iter().enumerate() {
-                for n in ANIMATOR_PROPS {
-                    let a = a.num(n).expect("ANIMATOR_PROPS are props");
+                for (n, a) in a.nums() {
                     out.push((format!("animators.{i}.{n}"), Num(a)));
                 }
                 out.push((format!("animators.{i}.fill"), Color(&a.fill)));
@@ -1514,9 +1514,6 @@ impl Layer {
                 let n = text.chars().filter(|&c| c != '\n').count();
                 motion::apply(&self.animators, n, fill, t, |by| text_units(text, by))
             }
-            Kind::Duplicator { .. } => {
-                motion::apply(&self.animators, count, fill, t, |_| (0..count).collect())
-            }
             _ => Vec::new(),
         };
         let time = match self.kind {
@@ -1524,7 +1521,7 @@ impl Layer {
             Kind::Model { .. } | Kind::Comp { .. } => self.time.at(t) + self.clock(t),
             _ => 0.,
         };
-        Drawn {
+        let mut d = Drawn {
             id: self.id.clone(),
             kind: self.kind.clone(),
             x: self.x.at(t),
@@ -1587,7 +1584,23 @@ impl Layer {
             plugin: None,
             patch: None,
             comp: Vec::new(),
+        };
+        // A copy's slot is its place for the animators' effectors.
+        if let Kind::Duplicator {
+            layout,
+            along,
+            orient,
+            ..
+        } = &self.kind
+        {
+            let pos: Vec<[f64; 2]> = vector::slots(&d, *layout, along, *orient)
+                .iter()
+                .map(|(p, _)| [p.x, p.y])
+                .collect();
+            let n = d.count;
+            d.fx = motion::apply_to(&self.animators, n, &|_| fill, t, |_| (0..n).collect(), &pos);
         }
+        d
     }
 }
 

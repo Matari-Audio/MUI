@@ -142,3 +142,61 @@ fn jitter_is_seeded_bounded_and_recolours_instances() {
     );
     assert_eq!(at(&px(&p, 0.), 200, 100), f);
 }
+
+#[test]
+fn an_effector_weighs_copies_by_place_and_sweeps() {
+    // A row of 9 copies 40 px apart (-160..160); a sphere effector of
+    // radius 50 (hard edge) sweeping from x -160 to 160 over 2 s lifts
+    // the copies it covers by 100 px.
+    let p = scene_of(
+        r##"{"id":"d","kind":"duplicator","layout":"linear","count":9,"spacing_x":40,"x":200,"y":150,"width":20,"height":20,
+            "animators":[{"y":-100,"falloff":{"x":[{"t":0,"v":-160,"interp":"linear"},{"t":2,"v":160}],"radius":50,"softness":0}}]}"##,
+    );
+    let ys = |t: f64| -> Vec<f64> {
+        p.scenes[0].layers[0]
+            .at(t)
+            .fx
+            .iter()
+            .map(|f| f.y.round())
+            .collect()
+    };
+    assert_eq!(ys(0.), [-100., -100., 0., 0., 0., 0., 0., 0., 0.]);
+    assert_eq!(ys(1.), [0., 0., 0., -100., -100., -100., 0., 0., 0.]);
+    // Drawn: at 1 s the middle copy is lifted, the end ones are not.
+    let px1 = px(&p, 1.);
+    assert_eq!(at(&px1, 200, 50), [255; 4]);
+    assert_eq!(at(&px1, 200, 150), [0, 0, 0, 255]);
+    assert_eq!(at(&px1, 40, 150), [255; 4]);
+    // Soft edges fade; invert swaps; a box and a wall; and the range
+    // selector still applies (only the first half here).
+    let fx = |falloff: &str, range: &str| -> Vec<f64> {
+        let p = scene_of(&format!(
+            r##"{{"id":"d","kind":"duplicator","layout":"linear","count":9,"spacing_x":40,
+                "animators":[{{"y":-100{range},"falloff":{falloff}}}]}}"##
+        ));
+        p.scenes[0].layers[0]
+            .at(0.)
+            .fx
+            .iter()
+            .map(|f| -f.y.round())
+            .collect()
+    };
+    let soft = fx(r#"{"radius":40,"softness":80}"#, "");
+    assert_eq!(soft[4], 100.);
+    assert!(soft[2] > 0. && soft[2] < 100. && soft[1] == 0.);
+    assert_eq!(
+        fx(r#"{"radius":50,"softness":0,"invert":true}"#, ""),
+        [100., 100., 100., 0., 0., 0., 100., 100., 100.]
+    );
+    assert_eq!(
+        fx(r#"{"shape":"linear","radius":0,"softness":0}"#, ""),
+        [100., 100., 100., 100., 100., 0., 0., 0., 0.]
+    );
+    assert_eq!(
+        fx(
+            r#"{"shape":"box","radius":40,"softness":0}"#,
+            r#","end":0.5"#
+        ),
+        [0., 0., 0., 100., 50., 0., 0., 0., 0.]
+    );
+}

@@ -305,6 +305,18 @@ copy as `fx`.
   nothing, the typewriter's cut). `amount` multiplies it.
 - **Stagger**: each rank reads the whole animator (range, amount, values)
   at `t - rank * stagger`, so one set of keys plays unit after unit.
+- **Effector**: `"falloff": {"shape": "sphere", "x": 0, "y": 0, "radius":
+  200, "softness": 100, "invert": false}` weighs each unit by where it
+  sits, in the layer's own pixels around its origin (a copy's slot, a
+  group child's place), multiplied into the range selector's weight. A
+  unit inside weighs 1, fading to 0 over `softness` pixels past the edge
+  (smoothstep; 0 is a hard edge): `sphere` is within `radius` of
+  (`x`, `y`), `box` within `radius` each way, `linear` a wall: everything
+  left of `x` (fading over `softness` to its right; `radius` unused).
+  `invert` swaps inside and out. Its numbers key like any (`animators.0.falloff.x`),
+  so keying `x` sweeps it across an array; the editor draws it over the
+  selected layer with a draggable centre and radius. Text glyphs have no
+  place and are not weighed by it.
 - **Jitter**: `jitter_x`, `jitter_y` (pixels), `jitter_rotation`
   (degrees), `jitter_scale` (a fraction) move, turn and scale each unit
   by its own random amount up to that either way; `jitter_opacity` (a

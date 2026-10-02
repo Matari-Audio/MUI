@@ -152,6 +152,88 @@ pub struct Animator {
     pub jitter_opacity: Anim<f64>,
     #[serde(default = "z", skip_serializing_if = "is_z")]
     pub jitter_hue: Anim<f64>,
+    /// A spatial effector: units weigh by where they sit, multiplied into
+    /// the range selector's weight.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub falloff: Option<Effector>,
+}
+
+/// The shape of an [`Effector`]'s field.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Field {
+    /// Full within `radius` of the centre.
+    #[default]
+    Sphere,
+    /// Full left of the centre's x (a wall to sweep across), fading over
+    /// `softness` to its right; `radius` is unused.
+    Linear,
+    /// Full within a square `radius` from the centre each way.
+    Box,
+}
+
+/// A region in the layer's own pixels around its origin (a duplicator's
+/// copies' slots, a group's children's places): a unit inside weighs 1,
+/// fading to 0 over `softness` pixels past the edge; `invert` swaps
+/// inside and out. Text glyphs have no place in it and are not weighed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[schemars(transform = crate::vars::bindable)]
+pub struct Effector {
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub shape: Field,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub x: Anim<f64>,
+    #[serde(default = "z", skip_serializing_if = "is_z")]
+    pub y: Anim<f64>,
+    #[serde(default = "two_hundred", skip_serializing_if = "is_two_hundred")]
+    pub radius: Anim<f64>,
+    #[serde(default = "hundred", skip_serializing_if = "is_hundred")]
+    pub softness: Anim<f64>,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub invert: bool,
+}
+
+fn hundred() -> Anim<f64> {
+    Anim::Value(100.)
+}
+fn is_hundred(a: &Anim<f64>) -> bool {
+    *a == hundred()
+}
+
+impl Effector {
+    /// The numeric properties, by JSON name.
+    pub const PROPS: [&str; 4] = ["x", "y", "radius", "softness"];
+
+    pub fn num(&self, name: &str) -> Option<&Anim<f64>> {
+        Some(match name {
+            "x" => &self.x,
+            "y" => &self.y,
+            "radius" => &self.radius,
+            "softness" => &self.softness,
+            _ => return None,
+        })
+    }
+
+    /// The weight at point `p` at `t`.
+    pub fn weight(&self, p: [f64; 2], t: f64) -> f64 {
+        let (dx, dy) = (p[0] - self.x.at(t), p[1] - self.y.at(t));
+        let r = self.radius.at(t);
+        let d = match self.shape {
+            Field::Sphere => dx.hypot(dy),
+            Field::Box => dx.abs().max(dy.abs()),
+            Field::Linear => dx + r,
+        };
+        let soft = self.softness.at(t).max(0.);
+        let w = if soft < 1e-9 {
+            f64::from(u8::from(d <= r))
+        } else {
+            let u = ((d - r) / soft).clamp(0., 1.);
+            1. - u * u * (3. - 2. * u)
+        };
+        if self.invert { 1. - w } else { w }
+    }
 }
 
 /// The numeric properties of an [`Animator`], by JSON name.
@@ -204,6 +286,21 @@ impl Animator {
             "jitter_hue" => &self.jitter_hue,
             _ => return None,
         })
+    }
+
+    /// Every numeric property by path inside the animator (`x`,
+    /// `falloff.radius`).
+    pub fn nums(&self) -> Vec<(String, &Anim<f64>)> {
+        let mut out: Vec<(String, &Anim<f64>)> = ANIMATOR_PROPS
+            .iter()
+            .map(|&n| (n.to_owned(), self.num(n).expect("ANIMATOR_PROPS are props")))
+            .collect();
+        if let Some(e) = &self.falloff {
+            for n in Effector::PROPS {
+                out.push((format!("falloff.{n}"), e.num(n).expect("PROPS are props")));
+            }
+        }
+        out
     }
 
     /// A classic setup as JSON-ready data, keyed over `[t0, t0 + dur]`:
@@ -266,12 +363,13 @@ impl Animator {
         })
     }
 
-    /// Each unit's weight at `t`: `ranks[u]` is unit `u`'s rank, `n` units.
-    fn weights(&self, n: usize, t: f64) -> Vec<f64> {
+    /// Each unit's weight at `t`, `n` units at `pos` (or none: text).
+    fn weights(&self, n: usize, t: f64, pos: &[[f64; 2]]) -> Vec<f64> {
         let ranks = ranks(self.order, self.seed, n);
         ranks
             .iter()
-            .map(|&r| {
+            .enumerate()
+            .map(|(u, &r)| {
                 let t = t - r as f64 * self.stagger.at(t);
                 let (lo, hi) = (r as f64 / n as f64, (r + 1) as f64 / n as f64);
                 let off = self.offset.at(t);
@@ -304,7 +402,11 @@ impl Animator {
                     Ease::InOut => w * w * (3. - 2. * w),
                     Ease::Step => f64::from(u8::from(w >= 0.5)),
                 };
-                w * self.amount.at(t)
+                let field = match (&self.falloff, pos.get(u)) {
+                    (Some(e), Some(&p)) => e.weight(p, t),
+                    _ => 1.,
+                };
+                w * field * self.amount.at(t)
             })
             .collect()
     }
@@ -358,7 +460,7 @@ pub fn apply(
     t: f64,
     unit_of: impl Fn(Unit) -> Vec<usize>,
 ) -> Vec<Fx> {
-    apply_to(animators, elements, &|_| fill, t, unit_of)
+    apply_to(animators, elements, &|_| fill, t, unit_of, &[])
 }
 
 /// [`apply`] with each element's own base fill.
@@ -368,6 +470,7 @@ pub(crate) fn apply_to(
     fill: &dyn Fn(usize) -> Rgba,
     t: f64,
     unit_of: impl Fn(Unit) -> Vec<usize>,
+    pos: &[[f64; 2]],
 ) -> Vec<Fx> {
     let mut fx: Vec<Fx> = (0..elements)
         .map(|e| Fx {
@@ -383,7 +486,7 @@ pub(crate) fn apply_to(
     for a in animators {
         let units = unit_of(a.by);
         let n = units.iter().max().map_or(0, |m| m + 1);
-        let w = a.weights(n, t);
+        let w = a.weights(n, t, pos);
         let ranks = ranks(a.order, a.seed, n);
         for (f, &u) in fx.iter_mut().zip(&units) {
             let w = w[u];
@@ -764,9 +867,15 @@ pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], t: f64
                     .any(|a| !is_clear(&a.fill) || !is_z(&a.jitter_hue))
                     .then(|| {
                         let n = slots.len() * m;
-                        apply_to(animators, n, &|e| members[e % m].fill, t, |_| {
-                            (0..n).map(|e| e / m).collect()
-                        })
+                        let pos: Vec<[f64; 2]> = slots.iter().map(|(p, _)| [p.x, p.y]).collect();
+                        apply_to(
+                            animators,
+                            n,
+                            &|e| members[e % m].fill,
+                            t,
+                            |_| (0..n).map(|e| e / m).collect(),
+                            &pos,
+                        )
                     });
                 for (c, ((p, turn), f)) in slots.iter().zip(&layers[i].fx).enumerate() {
                     if f.opacity <= 0. || f.scale == 0. {
