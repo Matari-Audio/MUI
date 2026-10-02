@@ -821,6 +821,36 @@ fn vector_paint(
             bounds.x0 + (bounds.width() - vector.width * sx) * 0.5,
             bounds.y0 + (bounds.height() - vector.height * sy) * 0.5,
         )) * Affine::scale_non_uniform(sx, sy);
+    if let Some(source) = vector.raster_source() {
+        // Request physical pixels, including node fit, scene transforms and DPI.
+        // Rotation changes sampling axes, not the source's authored geometry.
+        let [a, b, c, d, _, _] = at.as_coeffs();
+        let w = (vector.width * a.hypot(b)).ceil();
+        let h = (vector.height * c.hypot(d)).ceil();
+        if ![w, h]
+            .into_iter()
+            .all(|n| n.is_finite() && n > 0. && n <= u32::MAX as f64)
+        {
+            return Err(Error::InvalidPath);
+        }
+        let image = source
+            .rasterize(w as u32, h as u32)
+            .map_err(|_| Error::InvalidPath)?;
+        let paint = canvas.image(&image).ok_or(Error::InvalidPath)?;
+        canvas.set_transform(base);
+        canvas.push_clip(outline);
+        canvas.set_transform(at);
+        canvas.set_paint(paint);
+        canvas.set_paint_transform(Affine::scale_non_uniform(
+            vector.width / image.width as f64,
+            vector.height / image.height as f64,
+        ));
+        canvas.fill_path(&Rect::new(0., 0., vector.width, vector.height).to_path(0.01));
+        canvas.reset_paint_transform();
+        canvas.pop_clip();
+        canvas.set_transform(base);
+        return Ok(());
+    }
     canvas.set_transform(base);
     canvas.push_clip(outline);
     let mut layers = 0;
@@ -1285,7 +1315,8 @@ mod snapshot {
                         path: hole,
                         transform: Affine::IDENTITY,
                         brush: Brush::Gradient(
-                            peniko::Gradient::new_linear((0., 0.), (24., 0.)).with_stops([red, blue]),
+                            peniko::Gradient::new_linear((0., 0.), (24., 0.))
+                                .with_stops([red, blue]),
                         ),
                         brush_transform: Affine::IDENTITY,
                         rule: Winding::EvenOdd,
@@ -1349,6 +1380,65 @@ mod snapshot {
             assert!(gpu.images.is_empty(), "vector became a bitmap upload");
             drop(gpu);
             assert!(!encoded.encoding().path_tags.is_empty());
+        }
+    }
+
+    #[test]
+    fn filtered_vector_requests_physical_extent_for_cpu_and_gpu() {
+        #[derive(Debug, Default)]
+        struct Source(std::sync::Mutex<Vec<(u32, u32)>>);
+        impl mui_scene::RasterSource for Source {
+            fn rasterize(&self, width: u32, height: u32) -> Result<mui_scene::Image, String> {
+                self.0.lock().unwrap().push((width, height));
+                Ok(mui_scene::Image::rgba(
+                    width,
+                    height,
+                    [255, 0, 0, 128].repeat((width * height) as usize),
+                )
+                .unwrap())
+            }
+            fn retained_bytes(&self) -> usize {
+                0
+            }
+        }
+        let source = Arc::new(Source::default());
+        let vector = Arc::new(mui_scene::Vector::filtered(10., 10., source.clone()).unwrap());
+        let scene = resolve(
+            &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector, Fit::Fill)))
+                .offered(Size::new(20., 15.)),
+        )
+        .unwrap();
+        for scale in [1u16, 2] {
+            let mut ctx = vello_cpu::RenderContext::new(20 * scale, 15 * scale);
+            let mut resources = vello_cpu::Resources::default();
+            paint(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut resources,
+                    cache: &mut Cache::default(),
+                },
+                &scene,
+                Affine::scale(scale as f64),
+            )
+            .unwrap();
+            ctx.flush();
+            let mut pixels = Pixmap::new(20 * scale, 15 * scale);
+            ctx.render(&mut pixels, &mut resources);
+            let center =
+                pixels.data()[7 * scale as usize * (20 * scale) as usize + 10 * scale as usize];
+            assert_eq!(center.r, 128, "straight alpha is premultiplied once");
+            assert_eq!(center.a, 128);
+        }
+        assert_eq!(*source.0.lock().unwrap(), [(20, 15), (40, 30)]);
+        #[cfg(feature = "gpu-effects")]
+        {
+            let mut encoded = vello::Scene::new();
+            let mut cache = Cache::default();
+            let textures = classic::Textures::default();
+            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [40, 30]);
+            paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
+            assert_eq!(gpu.images.len(), 1);
+            assert_eq!(source.0.lock().unwrap().last(), Some(&(40, 30)));
         }
     }
 

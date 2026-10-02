@@ -16,7 +16,7 @@ mod color;
 mod style;
 mod theme;
 mod vector;
-pub use vector::{Vector, VectorCommand};
+pub use vector::{RasterSource, Vector, VectorCommand};
 
 pub use color::{Color, Mode, Palette, Pigment};
 pub use style::{

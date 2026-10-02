@@ -1,7 +1,16 @@
 //! Immutable vector artwork, independent of its file format and device scale.
+use crate::Image;
 use kurbo::{Affine, BezPath, Stroke};
 use peniko::{BlendMode, Brush, Fill};
 use std::sync::Arc;
+
+/// Device-resolution intermediate for effects that require raster compositing.
+/// Implementations retain their vector source and bound/cache requested sizes.
+/// The returned image uses the same straight RGBA contract as all MUI images.
+pub trait RasterSource: std::fmt::Debug + Send + Sync {
+    fn rasterize(&self, width: u32, height: u32) -> Result<Image, String>;
+    fn retained_bytes(&self) -> usize;
+}
 
 #[derive(Clone, Debug)]
 pub enum VectorCommand {
@@ -33,6 +42,7 @@ pub struct Vector {
     pub width: f64,
     pub height: f64,
     commands: Arc<[VectorCommand]>,
+    raster: Option<Arc<dyn RasterSource>>,
 }
 impl Vector {
     /// Reject invalid extents and unbalanced layers before a paint walk.
@@ -60,7 +70,17 @@ impl Vector {
             width,
             height,
             commands: commands.into(),
+            raster: None,
         })
+    }
+    /// Retain a vector source with effects requiring a device-sized intermediate.
+    pub fn filtered(width: f64, height: f64, source: Arc<dyn RasterSource>) -> Option<Self> {
+        let mut vector = Self::new(width, height, Vec::new())?;
+        vector.raster = Some(source);
+        Some(vector)
+    }
+    pub fn raster_source(&self) -> Option<&Arc<dyn RasterSource>> {
+        self.raster.as_ref()
     }
     pub fn commands(&self) -> &[VectorCommand] {
         &self.commands
@@ -73,5 +93,10 @@ impl PartialEq for Vector {
         self.width == other.width
             && self.height == other.height
             && Arc::ptr_eq(&self.commands, &other.commands)
+            && match (&self.raster, &other.raster) {
+                (None, None) => true,
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                _ => false,
+            }
     }
 }
