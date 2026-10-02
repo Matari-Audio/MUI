@@ -2,11 +2,15 @@
 //! the plugin: mui-cut's generated adapter claims headless editors
 //! ([`mui::host::headless`]), has the plugin's framework open its editor as
 //! a host would, and hands the parked view to [`run_headless`].
+use mui::host::View;
 use mui::host::headless::Headless;
 use mui::prelude::Size;
 use serde_json::{Value, json};
 
-use crate::{CaptureStream, Editor, NoteEvent, run_live};
+use crate::{
+    BLOCK_FRAMES, CaptureStream, Editor, Manual, NoteEvent, Vector, VectorStream, advance_notes,
+    note_event, run_live,
+};
 
 /// Captured at twice the editor's points, so a part filmed up close stays
 /// sharp.
@@ -18,7 +22,7 @@ const SCALE: f64 = 2.;
 pub fn run_headless(
     describe: Value,
     view: Headless,
-    edit: impl FnMut(&Value) -> Result<(), String>,
+    edit: impl FnMut(&Value) -> Result<(), String> + 'static,
 ) -> Result<(), String> {
     run_headless_with(describe, view, edit, |_, _| {}, || Value::Null)
 }
@@ -30,10 +34,16 @@ pub fn run_headless(
 pub fn run_headless_with(
     describe: Value,
     view: Headless,
-    edit: impl FnMut(&Value) -> Result<(), String>,
+    edit: impl FnMut(&Value) -> Result<(), String> + 'static,
     audio: impl FnMut(&[NoteEvent], &mut [[f32; 2]]) + Send + 'static,
-    mut patch: impl FnMut() -> Value,
+    mut patch: impl FnMut() -> Value + 'static,
 ) -> Result<(), String> {
+    // mui-cut built this adapter to run its commands here, the editor
+    // drawn straight from its scene: no wire, no pixels.
+    #[cfg(feature = "cut")]
+    if std::env::var_os(mui_cut::inproc::ENV).is_some() {
+        return mui_cut::inproc::run(Box::new(Live::new(view, edit, audio, patch)));
+    }
     let Headless {
         ui,
         mut view,
@@ -43,24 +53,7 @@ pub fn run_headless_with(
     let mut capture = CaptureStream::default();
     let mut size = window;
     let frame = move |_rev: u64, clock: u64, inputs: &[Value]| {
-        editor.advance(inputs, clock, |ui, input, _dt, sizes| {
-            // The tree lays out at the window's size over the view's zoom
-            // (a design size fitted to the window), as a window would.
-            let window = Editor::viewport(sizes, window);
-            let zoom = view.zoom(window);
-            let zoom = if zoom.is_finite() && zoom > 0. {
-                zoom
-            } else {
-                1.
-            };
-            size = Size::new(window.width / zoom, window.height / zoom);
-            let tree = view.build(ui, &input);
-            // Every tween settled: the pixels depend on the model alone.
-            ui.frame(Editor::layout(tree, sizes)?, Some(size), input, 1.)
-                .map_err(|e| format!("{e:?}"))?;
-            view.after_frame(ui);
-            Ok(())
-        })?;
+        draw(&mut editor, &mut view, window, &mut size, inputs, clock)?;
         let scene = editor.ui.scene().ok_or("no scene yet")?;
         let roots = editor.roots(size.width, size.height);
         #[expect(
@@ -77,6 +70,171 @@ pub fn run_headless_with(
         Ok(value)
     };
     run_live(describe, audio, edit, frame)
+}
+
+/// One editor frame at sample `clock` with `inputs`: the tree lays out at
+/// the window's size over the view's zoom (a design size fitted to the
+/// window), as a window would; `size` is what it laid out at.
+fn draw(
+    editor: &mut Editor,
+    view: &mut Box<dyn View + Send>,
+    window: Size,
+    size: &mut Size,
+    inputs: &[Value],
+    clock: u64,
+) -> Result<(), String> {
+    editor.advance(inputs, clock, |ui, input, _dt, sizes| {
+        let window = Editor::viewport(sizes, window);
+        let zoom = view.zoom(window);
+        let zoom = if zoom.is_finite() && zoom > 0. {
+            zoom
+        } else {
+            1.
+        };
+        *size = Size::new(window.width / zoom, window.height / zoom);
+        let tree = view.build(ui, &input);
+        // Every tween settled: the pixels depend on the model alone.
+        ui.frame(Editor::layout(tree, sizes)?, Some(*size), input, 1.)
+            .map_err(|e| format!("{e:?}"))?;
+        view.after_frame(ui);
+        Ok(())
+    })
+}
+
+/// The headless editor and its DSP in this process, on the sample clock:
+/// what [`run_headless_with`] serves over the wire, as calls. A frame is
+/// the editor's paint, split into parts ([`VectorStream`]), not pixels.
+pub struct Live<E, A, P> {
+    editor: Editor,
+    view: Box<dyn View + Send>,
+    window: Size,
+    size: Size,
+    edit: E,
+    audio: A,
+    patch: P,
+    clock: Manual,
+    /// Notes played since the last advance: they land at its start.
+    played: Vec<(Value, NoteEvent)>,
+    /// Pointer and editor inputs for the next frame.
+    pending: Vec<Value>,
+    stream: VectorStream,
+}
+
+impl<E, A, P> Live<E, A, P>
+where
+    E: FnMut(&Value) -> Result<(), String>,
+    A: FnMut(&[NoteEvent], &mut [[f32; 2]]),
+    P: FnMut() -> Value,
+{
+    pub fn new(view: Headless, edit: E, audio: A, patch: P) -> Self {
+        let Headless { ui, view, size } = view;
+        Self {
+            editor: Editor::new(ui),
+            view,
+            window: size,
+            size,
+            edit,
+            audio,
+            patch,
+            clock: Manual::default(),
+            played: Vec::new(),
+            pending: Vec::new(),
+            stream: VectorStream::default(),
+        }
+    }
+
+    /// `{"op": "advance", "to": sample, "notes": [..]}`: run the clock to
+    /// `to` and return the sound up to it, stereo interleaved, as the
+    /// wire's audio packets carry it.
+    pub fn advance(&mut self, command: &Value) -> Result<Vec<f32>, String> {
+        let to = command["to"].as_u64().ok_or("advance needs `to`, a sample")?;
+        let timed = advance_notes(command)?;
+        let mut out = Vec::new();
+        let mut samples = [[0.; 2]; BLOCK_FRAMES];
+        let audio = &mut self.audio;
+        let played = std::mem::take(&mut self.played);
+        self.clock.run_to(
+            to,
+            played,
+            timed,
+            |_, n, events| {
+                let s = &mut samples[..n];
+                s.fill([0.; 2]);
+                audio(events, s);
+                out.extend(s.iter().flatten().map(|v| {
+                    if v.is_finite() {
+                        v.clamp(-1., 1.)
+                    } else {
+                        0.
+                    }
+                }));
+                true
+            },
+            |_, _, _| {},
+        );
+        Ok(out)
+    }
+
+    /// A command as the wire takes it: a note plays at the next advance,
+    /// an input waits for the next frame, anything else is the plugin's
+    /// edit (a `set`).
+    pub fn command(&mut self, command: &Value) -> Result<(), String> {
+        match command["op"].as_str() {
+            Some("note_on" | "note_off" | "panic") => {
+                self.played.push((command.clone(), note_event(command)?));
+            }
+            Some("input") => self.pending.push(command.clone()),
+            Some("snapshot") => {}
+            _ => (self.edit)(command)?,
+        }
+        Ok(())
+    }
+
+    /// The editor now: the capture manifest (with the plugin's `patch`)
+    /// and the fragments it names.
+    pub fn frame(&mut self) -> Result<(Value, Vec<Vector>), String> {
+        let inputs = std::mem::take(&mut self.pending);
+        draw(
+            &mut self.editor,
+            &mut self.view,
+            self.window,
+            &mut self.size,
+            &inputs,
+            self.clock.frame,
+        )?;
+        let scene = self.editor.ui.scene().ok_or("no scene yet")?;
+        let roots = self.editor.roots(self.size.width, self.size.height);
+        let (mut manifest, vectors) = self.stream.frame(scene, self.size, &roots)?;
+        let patch = (self.patch)();
+        if !patch.is_null() {
+            manifest["patch"] = patch;
+        }
+        Ok((manifest, vectors))
+    }
+}
+
+#[cfg(feature = "cut")]
+impl<E, A, P> mui_cut::inproc::LivePlugin for Live<E, A, P>
+where
+    E: FnMut(&Value) -> Result<(), String>,
+    A: FnMut(&[NoteEvent], &mut [[f32; 2]]),
+    P: FnMut() -> Value,
+{
+    fn advance(&mut self, command: &Value) -> Result<Vec<f32>, String> {
+        Live::advance(self, command)
+    }
+    fn command(&mut self, command: &Value) -> Result<(), String> {
+        Live::command(self, command)
+    }
+    fn frame(
+        &mut self,
+    ) -> Result<(Value, Vec<(String, std::sync::Arc<mui_scene::ResolvedScene>)>), String> {
+        let (manifest, vectors) = Live::frame(self)?;
+        Ok((
+            manifest,
+            vectors.into_iter().map(|v| (v.name(), v.scene)).collect(),
+        ))
+    }
 }
 
 /// A parameter `set`, read: `{"op": "set", "id": .., "field": .., "value": ..}`

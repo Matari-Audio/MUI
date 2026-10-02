@@ -41,6 +41,9 @@ pub struct Assets {
     models: HashMap<String, Arc<crate::three::Mesh>>,
     envs: HashMap<String, Arc<mui_stage::EnvImage>>,
     captures: HashMap<String, Arc<Capture>>,
+    /// Plugin parts drawn from the editor's paint ([`crate::inproc`]),
+    /// by the path a fragment names, each at its rect's origin.
+    vectors: HashMap<String, Arc<ResolvedScene>>,
     fonts: HashMap<String, Font>,
     /// Plugin layers shown live (`serve` playing): layer id to the state
     /// drawn instead of the one the time names. See [`Assets::add_asset`].
@@ -154,6 +157,18 @@ impl Renderer {
 }
 
 impl Assets {
+    /// A capture made in this process, under the path a file of it would
+    /// have.
+    pub fn add_capture(&mut self, path: &str, capture: Capture) {
+        self.captures.insert(path.to_owned(), Arc::new(capture));
+    }
+
+    /// A plugin fragment's paint, under the path its capture names (see
+    /// [`crate::inproc`]); kept once.
+    pub fn add_vector(&mut self, path: &str, scene: Arc<ResolvedScene>) {
+        self.vectors.entry(path.to_owned()).or_insert(scene);
+    }
+
     /// A file a layer names, by its extension: `.png` for image layers,
     /// `.svg` for SVG layers, `.json` for Lottie layers; a `.json` under
     /// [`CACHE`] is a plugin capture (its images are PNGs under it too).
@@ -274,6 +289,11 @@ impl Assets {
             Kind::Ellipse => canvas(move |size| vec![Draw::fill(ellipse(size), fill)])
                 .w(l.width)
                 .h(l.height),
+            Kind::Image { path } if self.vectors.contains_key(path) => {
+                let scene = (*self.vectors[path]).clone();
+                let size = Size::new(l.width, l.height);
+                return Ok((faded(scene, l.opacity as f32), size, centred(size)));
+            }
             Kind::Image { path } => {
                 let paint: Fill = match self.images.get(path) {
                     Some(i) => Fill::Image(i.clone(), Fit::Cover),
@@ -621,7 +641,7 @@ impl Assets {
             ..outline
         });
         let drawn = l.opacity > 0. && l.scale != 0.;
-        let mut push = |el: El, at: Affine| -> Result<(), String> {
+        let push = |out: &mut Layers, el: El, at: Affine| -> Result<(), String> {
             let scene =
                 resolve(&SceneSpec::new(el)).map_err(|e| format!("layer `{}`: {e}", l.id))?;
             out.scenes.push((scene, at));
@@ -631,6 +651,7 @@ impl Assets {
             if drawn {
                 let faint = Rgba([l.fill.0[0], l.fill.0[1], l.fill.0[2], l.fill.0[3] / 8]);
                 push(
+                    out,
                     block(w, h)
                         .radius(8.)
                         .fill(color(faint))
@@ -651,7 +672,16 @@ impl Assets {
                 let (src, rect) = f.image(pose.moved);
                 (src, rect, pose.at, pose.opacity)
             };
-            let Some(img) = self.images.get(&format!("{CACHE}/{src}")) else {
+            let path = format!("{CACHE}/{src}");
+            if let Some(v) = self.vectors.get(&path) {
+                if drawn && opacity > 0. {
+                    let scene = faded((**v).clone(), (l.opacity * opacity) as f32);
+                    out.scenes
+                        .push((scene, place * at * Affine::translate((rx, ry))));
+                }
+                continue;
+            }
+            let Some(img) = self.images.get(&path) else {
                 continue;
             };
             if !drawn || opacity <= 0. {
@@ -659,6 +689,7 @@ impl Assets {
             }
             let fill = Fill::Image(img.clone(), Fit::Fill);
             push(
+                out,
                 // Square: a capture's pixels are its corners.
                 block(rw, rh)
                     .radius(0.)
@@ -684,11 +715,38 @@ impl Assets {
                     .no_fill()
                     .stroke(color(Rgba([r, g, b, a])))
                     .stroke_width(2. / (l.scale * pose.scale).abs().max(0.05));
-                push(line, at)?;
+                push(out, line, at)?;
             }
         }
         Ok(())
     }
+}
+
+/// `scene` at `opacity`, composited as one layer (a part fading out does
+/// not show its own overlaps).
+fn faded(mut scene: ResolvedScene, opacity: f32) -> ResolvedScene {
+    if opacity >= 1. || scene.paint.is_empty() {
+        return scene;
+    }
+    let mark = |layer| mui_scene::Painted {
+        layer,
+        path: Arc::default(),
+        rect: None,
+        text: None,
+        width: 0.,
+        blur: 0.,
+        ..scene.paint[0].clone()
+    };
+    let (open, close) = (
+        mark(mui_scene::Layer::Blend {
+            mix: mui_scene::Mix::Normal,
+            opacity,
+        }),
+        mark(mui_scene::Layer::Unblend),
+    );
+    scene.paint.insert(0, open);
+    scene.paint.push(close);
+    scene
 }
 
 /// A patch layer: the plugin's parameters off their defaults and its

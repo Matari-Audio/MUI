@@ -99,7 +99,7 @@ pub fn main() {
     }
 }
 
-fn run(argv: &[String]) -> Result<()> {
+pub(crate) fn run(argv: &[String]) -> Result<()> {
     if argv.first().map(String::as_str) == Some("schema") {
         let schema =
             serde_json::to_string_pretty(&Project::json_schema()).map_err(|e| e.to_string())?;
@@ -142,6 +142,11 @@ fn run(argv: &[String]) -> Result<()> {
         project: project.into(),
         flags,
     };
+    if matches!(cmd.as_str(), "render" | "still")
+        && let Some(code) = host::hand_off(argv, &load_variant(&args)?, &args.project)?
+    {
+        std::process::exit(code);
+    }
     match cmd.as_str() {
         "render" => render(&args),
         "still" => still(&args),

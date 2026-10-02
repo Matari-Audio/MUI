@@ -10,12 +10,14 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod blender;
+pub mod check;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
-pub mod check;
 pub mod fx;
 mod gpu;
 mod gpu3d;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod inproc;
 mod motion;
 pub mod pick;
 pub mod place;

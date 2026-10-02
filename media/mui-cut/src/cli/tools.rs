@@ -13,11 +13,9 @@ use crate::cli::{Args, Result, load_assets};
 pub fn check_file(path: &Path) -> Result<Vec<Issue>> {
     let src = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let Ok(p) = Project::load(&src) else {
-        return Ok(crate::check::check(
-            &src,
-            &mut Renderer::new(2, 2),
-            &|_| true,
-        ));
+        return Ok(crate::check::check(&src, &mut Renderer::new(2, 2), &|_| {
+            true
+        }));
     };
     // Contrast is sampled small: an average over a box needs few pixels.
     let w = 480u16;

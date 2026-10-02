@@ -9,9 +9,16 @@ license.workspace = true
 mui.workspace = true
 base64 = "0.22"
 mui-scene.workspace = true
+mui-geometry.workspace = true
 mui-vello = { workspace = true, features = ["cpu"] }
 serde_json.workspace = true
 png.workspace = true
+# `cut`: an adapter mui-cut builds to run its commands in this process
+# (`MUI_CUT_INPROC`), the editor handed over as `Live`.
+mui-cut = { path = "../mui-cut", optional = true }
+
+[features]
+cut = ["dep:mui-cut"]
 
 [dev-dependencies]
 epaint_default_fonts.workspace = true

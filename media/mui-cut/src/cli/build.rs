@@ -622,7 +622,9 @@ fn manifest(p: &Plugin, root: &Path, patched: &[String], features: &[String]) ->
                 .join(", ")
         ),
         format!(
-            "mui-motion-bridge = {{ path = {} }}",
+            // `cut`: `mui-cut render` hands the whole render to the adapter,
+            // which draws the plugin in-process (no capture).
+            "mui-motion-bridge = {{ path = {}, features = [\"cut\"] }}",
             path(&root.join("media/mui-motion-bridge"))
         ),
         "serde_json = \"1\"".into(),
@@ -974,7 +976,10 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
         );
         // A plugin's own adapter replaces the template.
         let own = main_rs(&detect(&fixture("nice-own")).unwrap());
-        assert!(own.contains("fn main() {} // fixture-nice-own opens Synth"), "{own}");
+        assert!(
+            own.contains("fn main() {} // fixture-nice-own opens Synth"),
+            "{own}"
+        );
         assert!(!main_rs(&detect(&fixture("nice")).unwrap()).contains("fn main() {} //"));
         // A MUI crate the plugin path-patches is one the adapter builds
         // from this tree: it is in the list.

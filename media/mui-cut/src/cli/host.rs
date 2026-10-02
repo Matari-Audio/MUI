@@ -19,10 +19,10 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Duration;
 
-use base64::Engine as _;
 use crate::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, Image, fnv, frame_at};
 use crate::sources::MediaKind;
 use crate::{Assets, Kind, Layer, Project, Source};
+use base64::Engine as _;
 use serde_json::{Value, json};
 
 use crate::cli::Result;
@@ -94,8 +94,29 @@ fn source(l: &Layer) -> &Source {
 /// its images) to `assets`. What failed, as messages.
 pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
     let dir = project.parent().unwrap_or(Path::new("."));
-    let mut errs = capture_missing(p, project);
+    let mut errs = Vec::new();
+    // A layer whose plugin runs in this process replays here, into the
+    // assets: no adapter, no cache. One layer a source: the editor has
+    // one state, so another layer of it captures as before.
+    let mut hosted: Vec<&Source> = Vec::new();
     let mut seen = HashSet::new();
+    let mut here: Vec<*const Layer> = Vec::new();
+    for (l, steps, audio) in plugins(p) {
+        let src = source(l);
+        if !crate::inproc::hosts(src) || hosted.contains(&src) {
+            continue;
+        }
+        hosted.push(src);
+        here.push(l);
+        seen.extend(steps.iter().map(|s| format!("{CACHE}/{}.json", s.key)));
+        let ran = crate::inproc::with(src, |plugin| {
+            replay_here(plugin, &steps, audio.as_ref(), dir, assets, &mut errs)
+        });
+        if let Some(Err(e)) = ran {
+            errs.push(format!("layer `{}`: {e}", l.id));
+        }
+    }
+    errs.extend(capture(jobs(p, &here), project, p.sample_rate));
     for (_, steps, _) in plugins(p) {
         for s in steps {
             let rel = format!("{CACHE}/{}.json", s.key);
@@ -131,16 +152,58 @@ pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
 /// Run the adapters of the plugin layers whose states are not all cached
 /// (or were captured from another build of the adapter). What failed.
 pub fn capture_missing(p: &Project, project: &Path) -> Vec<String> {
-    let jobs = plugins(p)
+    capture(jobs(p, &[]), project, p.sample_rate)
+}
+
+/// A capture job for every plugin layer but those in `skip`.
+fn jobs<'a>(p: &'a Project, skip: &[*const Layer]) -> Vec<Job<'a>> {
+    plugins(p)
         .into_iter()
+        .filter(|(l, _, _)| !skip.contains(&std::ptr::from_ref(*l)))
         .map(|(l, steps, audio)| Job {
             what: format!("layer `{}`", l.id),
             source: source(l),
             steps,
             audio,
         })
-        .collect();
-    capture(jobs, project, p.sample_rate)
+        .collect()
+}
+
+/// [`replay`] on the plugin hosted in this process: each step's state
+/// straight into `assets` (its fragments as vector scenes), and the
+/// soundtrack written as a replay writes it.
+fn replay_here(
+    plugin: &mut dyn crate::inproc::LivePlugin,
+    steps: &[crate::Step],
+    audio: Option<&(String, Value)>,
+    dir: &Path,
+    assets: &mut Assets,
+    errs: &mut Vec<String>,
+) -> Result<()> {
+    let mut sound = Vec::new();
+    for step in steps {
+        for c in &step.commands {
+            if c["op"] == "advance" {
+                sound.extend(plugin.advance(c)?);
+            } else if let Err(e) = plugin.command(c) {
+                errs.push(format!("adapter: {e}"));
+            }
+        }
+        let (manifest, vectors) = plugin.frame()?;
+        for (name, scene) in vectors {
+            assets.add_vector(&format!("{CACHE}/{name}"), scene);
+        }
+        let cap: Capture = serde_json::from_value(manifest).map_err(|e| e.to_string())?;
+        assets.add_capture(&format!("{CACHE}/{}.json", step.key), cap);
+    }
+    if let Some((key, tail)) = audio {
+        sound.extend(plugin.advance(tail)?);
+        let bytes: Vec<u8> = sound.iter().flat_map(|v| v.to_le_bytes()).collect();
+        std::fs::create_dir_all(dir.join(CACHE).join("audio"))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        write_atomic(&dir.join(audio_file(key)), &bytes)?;
+    }
+    Ok(())
 }
 
 /// Capture every plugin source's fresh state ([`crate::plugin::home`]),
@@ -571,4 +634,48 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     std::fs::write(&tmp, bytes)
         .and_then(|()| std::fs::rename(&tmp, path))
         .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `render`/`still` of a project with a plugin built from source: run the
+/// whole command inside its adapter instead ([`crate::inproc`]), so the
+/// first layer of that plugin draws as vectors. The exit code, or `None`
+/// to render here (no such plugin, `MUI_CUT_CAPTURE` set, or already in it).
+pub fn hand_off(argv: &[String], p: &Project, project: &Path) -> Result<Option<i32>> {
+    if crate::inproc::here() || std::env::var_os("MUI_CUT_CAPTURE").is_some() {
+        return Ok(None);
+    }
+    let Some(src) = plugins(p)
+        .into_iter()
+        .map(|(l, ..)| source(l))
+        .find(|s| !s.plugin.is_empty())
+    else {
+        return Ok(None);
+    };
+    let dir = project.parent().filter(|d| !d.as_os_str().is_empty());
+    let dir = dir.unwrap_or(Path::new("."));
+    let (exe, _) = executable(src, dir)?;
+    // The adapter starts in the project's directory: the paths given
+    // relative to here must say the same there.
+    let abs = |a: &str| {
+        std::path::absolute(a).map_or_else(|_| a.to_owned(), |p| p.to_string_lossy().into_owned())
+    };
+    let mut argv = argv.to_vec();
+    argv[1] = abs(&argv[1]);
+    if let Some(i) = argv.iter().position(|a| a == "-o")
+        && let Some(o) = argv.get_mut(i + 1).filter(|o| *o != "null")
+    {
+        *o = abs(o);
+    }
+    let status = Command::new(&exe)
+        .args(&src.args)
+        .current_dir(dir)
+        .env("MUI_BRIDGE_CLOCK", format!("manual:{}", p.sample_rate))
+        .env(
+            crate::inproc::ENV,
+            serde_json::to_string(src).map_err(|e| e.to_string())?,
+        )
+        .env(crate::inproc::ARGV, Value::from(argv).to_string())
+        .status()
+        .map_err(|e| format!("{}: {e}", exe.display()))?;
+    Ok(Some(status.code().unwrap_or(1)))
 }

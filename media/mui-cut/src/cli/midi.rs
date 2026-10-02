@@ -1,7 +1,7 @@
 //! `mui-cut midi`: a Standard MIDI File's notes as a plugin layer's
 //! `notes`, in seconds through the file's tempo map.
-use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 use crate::Note;
+use midly::{MetaMessage, MidiMessage, Smf, Timing, TrackEventKind};
 
 use crate::cli::Result;
 

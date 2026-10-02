@@ -1118,8 +1118,8 @@ impl Server {
                 if !errs.is_empty() {
                     return Err(errs.join("\n"));
                 }
-                let pcm =
-                    crate::cli::audio::mix(&p, &path, &[s])?.ok_or("nothing in the scene sounds")?;
+                let pcm = crate::cli::audio::mix(&p, &path, &[s])?
+                    .ok_or("nothing in the scene sounds")?;
                 let (from, to) = (a.from.max(0.), a.to.unwrap_or(s.duration).min(s.duration));
                 if to <= from {
                     return Err("`to` must come after `from`".into());

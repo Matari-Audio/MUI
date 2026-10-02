@@ -1556,6 +1556,8 @@ dependencies = [
  "base64 0.22.1",
  "epaint_default_fonts",
  "mui",
+ "mui-cut",
+ "mui-geometry",
  "mui-scene",
  "mui-vello",
  "png",
