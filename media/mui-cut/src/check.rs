@@ -1295,7 +1295,8 @@ mod tests {
         let schema = Project::json_schema();
         let v = jsonschema::validator_for(&schema).unwrap();
         let effects = include_str!("../examples/effects.cut.json");
-        for src in [DEMO, SHOWCASE, effects, PLUGIN] {
+        let procedural = include_str!("../examples/procedural.cut.json");
+        for src in [DEMO, SHOWCASE, effects, PLUGIN, procedural] {
             let doc: Value = serde_json::from_str(src).unwrap();
             let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errs.is_empty(), "{errs:?}");

@@ -336,3 +336,23 @@ fn behaviours_wiggle_and_oscillate_on_top_of_keys() {
     );
     assert!(l.prop("behaviours.1.amount").is_some());
 }
+
+#[test]
+fn the_procedural_example_round_trips_and_checks_clean() {
+    let src = include_str!("../examples/procedural.cut.json");
+    let p = Project::load(src).unwrap();
+    assert_eq!(p.to_json(), src);
+    let issues = check::check(src, &mut Renderer::new(320, 180), &|_| true);
+    assert!(issues.is_empty(), "{issues:?}");
+    // The array is drawn as 75 copies of the tile's two layers.
+    let f = eval(&p, &p.scenes[0], 2.);
+    assert_eq!(
+        f.layers
+            .iter()
+            .find(|l| l.id == "array")
+            .unwrap()
+            .comp
+            .len(),
+        150
+    );
+}

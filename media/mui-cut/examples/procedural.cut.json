@@ -1,0 +1,131 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "procedural",
+      "duration": 5.0,
+      "background": "#101014",
+      "layers": [
+        {
+          "id": "tile",
+          "kind": "group"
+        },
+        {
+          "id": "tile-body",
+          "parent": "tile",
+          "kind": "rect",
+          "width": 44.0,
+          "height": 44.0,
+          "radius": 10.0,
+          "fill": "#2b2d36"
+        },
+        {
+          "id": "tile-dot",
+          "parent": "tile",
+          "kind": "ellipse",
+          "width": 14.0,
+          "height": 14.0,
+          "fill": "#e6e6e6"
+        },
+        {
+          "id": "array",
+          "kind": "duplicator",
+          "source": "tile",
+          "x": 640.0,
+          "y": 300.0,
+          "count": 75.0,
+          "columns": 15.0,
+          "spacing_x": 72.0,
+          "spacing_y": 72.0,
+          "animators": [
+            {
+              "seed": 4,
+              "scale": 1.6,
+              "rotation": 45.0,
+              "fill": "#ff8a3d",
+              "jitter_rotation": 30.0,
+              "jitter_hue": 50.0,
+              "falloff": {
+                "x": [
+                  { "t": 0.8, "v": -620.0, "interp": "bezier" },
+                  { "t": 4.6, "v": 620.0, "interp": "bezier" }
+                ],
+                "y": [
+                  { "t": 0.8, "v": -120.0, "interp": "bezier" },
+                  { "t": 4.6, "v": 120.0, "interp": "bezier" }
+                ],
+                "radius": 110.0,
+                "softness": 140.0
+              }
+            },
+            {
+              "order": "distance",
+              "amount": [
+                { "t": 0.0, "v": 1.0, "interp": "bezier" },
+                { "t": 0.6, "v": 0.0, "interp": "bezier" }
+              ],
+              "stagger": 0.012,
+              "stagger_ease": "out",
+              "scale": 0.0
+            }
+          ]
+        },
+        {
+          "id": "words",
+          "kind": "group",
+          "x": 640.0,
+          "y": 620.0,
+          "animators": [
+            {
+              "amount": [
+                { "t": 1.0, "v": 1.0, "interp": "bezier" },
+                { "t": 1.6, "v": 0.0, "interp": "bezier" }
+              ],
+              "stagger": 0.18,
+              "y": 50.0,
+              "opacity": 0.0
+            }
+          ],
+          "behaviours": [
+            {
+              "prop": "rotation",
+              "amount": 2.0,
+              "freq": 0.6,
+              "seed": 2
+            },
+            {
+              "prop": "y",
+              "amount": 6.0,
+              "freq": 0.8,
+              "seed": 2
+            }
+          ]
+        },
+        {
+          "id": "w1",
+          "parent": "words",
+          "kind": "text",
+          "text": "instance",
+          "x": -230.0,
+          "font_size": 48.0
+        },
+        {
+          "id": "w2",
+          "parent": "words",
+          "kind": "text",
+          "text": "effect",
+          "font_size": 48.0
+        },
+        {
+          "id": "w3",
+          "parent": "words",
+          "kind": "text",
+          "text": "stagger",
+          "x": 210.0,
+          "font_size": 48.0
+        }
+      ]
+    }
+  ]
+}

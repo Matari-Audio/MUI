@@ -875,9 +875,15 @@ explodes two levels in 3D: panels, then their controls.
   playhead, scaled by its distance (`place::flatten`).
 - **Inspector** (right): the layer's settings (text, path data, layout, file),
   then every keyable property at the playhead, as the engine lists them
-  (`Cut::props`), animators and deformers each under a header with their
-  choices and a remove button; "+ animator" (plain or a preset) and
-  "+ deformer" add one. Type a value to set it (same rule as dragging). ◆ adds a key at the playhead, or removes the one
+  (`Cut::props`), animators, behaviours and deformers each under a header
+  with their choices and a remove button; "+ animator" (plain or a preset:
+  on a group "Cascade children", on a duplicator or group "Ripple from
+  point"), "+ behaviour" (Wiggle: `x` and `y` wander; Oscillate: `y` bobs)
+  and "+ deformer" add one. An animator's header picks its order (with
+  `distance`), stagger ease and seed; its "effector" box adds a `falloff`,
+  whose field, centre and radius knob are drawn over the viewport and drag
+  there (a keyed centre gets a key at the playhead). A duplicator picks its
+  `source` layer (or a shape). Type a value to set it (same rule as dragging). ◆ adds a key at the playhead, or removes the one
   there; removing the last key turns the property back into a plain value.
   Yellow ◆ = animated, filled = a key sits at the playhead.
 - **Timeline**: one canvas, only the rows in sight drawn, so hundreds of
@@ -956,8 +962,10 @@ announces edits made by someone else.
 - `src/lib.rs`: the document (serde), `Anim::at`, `eval`, `Project::load` /
   `to_json`, `Layer::props` (every keyable property by path). Builds for
   `wasm32-unknown-unknown`; no filesystem or process.
-- `src/motion.rs`: animators (selectors, stagger, presets) and deformers,
-  evaluated inside `eval`.
+- `src/motion.rs`: animators (selectors, effectors, jitter, stagger,
+  presets), duplicator instancing, group animators, behaviours and
+  deformers, evaluated inside `eval`. `examples/procedural.cut.json` shows
+  an instanced array swept by an effector, a group stagger and a wiggle.
 - `src/vector.rs`: the vector kinds as kurbo paths (text through mui-text's
   shaping and outlines, duplicator layouts, SVG and Lottie sinks), trim and
   deformers, handed to MUI as one canvas per layer.
