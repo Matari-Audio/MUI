@@ -18,6 +18,10 @@ pub(crate) mod gpu;
 pub struct Effect {
     #[serde(rename = "type")]
     pub kind: String,
+    /// One of the effect's `modes` (`glow`'s `bloom`, `outer`, ...); left
+    /// out, its first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     /// Left out: the schema's default.
     #[serde(flatten)]
     pub params: BTreeMap<String, Prop>,
@@ -36,6 +40,8 @@ pub enum Prop {
 pub struct Fx {
     #[serde(rename = "type")]
     pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<&'static str>,
     #[serde(flatten)]
     pub values: BTreeMap<String, Val>,
 }
@@ -68,8 +74,14 @@ pub struct Param {
 pub struct Def {
     pub name: &'static str,
     pub about: &'static str,
-    /// Full-frame passes it takes (a separable blur takes two).
+    /// Full-frame passes it takes at most (a separable blur takes two).
     pub passes: u32,
+    /// Named variants, the first the default; empty for most.
+    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    pub modes: &'static [&'static str],
+    /// It reads what is composited under its layer (so a layer's only).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub backdrop: bool,
     pub params: &'static [Param],
 }
 
@@ -95,6 +107,8 @@ pub const EFFECTS: &[Def] = &[
         name: "grain",
         about: "film grain, new every frame (not every subframe)",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[
             num("amount", 0.12, 0., 1.),
             num("size", 1.5, 0.5, 16.),
@@ -105,12 +119,16 @@ pub const EFFECTS: &[Def] = &[
         name: "chromatic",
         about: "lens chromatic aberration: red and blue pulled apart towards the edges",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[num("amount", 6., 0., 200.)],
     },
     Def {
         name: "crt",
         about: "a CRT: barrel curvature, scanlines and a vignette",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[
             num("curvature", 0.12, 0., 1.),
             num("scanlines", 0.35, 0., 1.),
@@ -122,6 +140,8 @@ pub const EFFECTS: &[Def] = &[
         name: "displace",
         about: "pixels pushed around by smooth noise that evolves over time",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[
             num("amount", 16., 0., 500.),
             num("scale", 140., 4., 4000.),
@@ -133,18 +153,24 @@ pub const EFFECTS: &[Def] = &[
         name: "blur",
         about: "gaussian blur; radius is the standard deviation",
         passes: 2,
+        modes: &[],
+        backdrop: false,
         params: &[num("radius", 8., 0., 64.)],
     },
     Def {
         name: "directional_blur",
         about: "a blur along one direction, like fast motion",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[num("length", 40., 0., 400.), num("angle", 0., -360., 360.)],
     },
     Def {
         name: "levels",
         about: "input black/white points, gamma, saturation and a tint by luminance",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[
             color("tint", [255, 255, 255, 255]),
             num("black", 0., 0., 1.),
@@ -158,6 +184,8 @@ pub const EFFECTS: &[Def] = &[
         name: "plasma",
         about: "generator: a plasma field between two colours, masked by the layer's shape",
         passes: 1,
+        modes: &[],
+        backdrop: false,
         params: &[
             color("color_a", [0xff, 0x3c, 0xac, 255]),
             color("color_b", [0x2b, 0x86, 0xc5, 255]),
@@ -165,7 +193,57 @@ pub const EFFECTS: &[Def] = &[
             num("speed", 1., -20., 20.),
         ],
     },
+    Def {
+        name: "glow",
+        about: "glow in linear light: `bloom` (what is past `threshold` spreads wide and soft), `outer` / `inner` (from the shape's edge), `neon` (a hot core in a wide halo)",
+        passes: PYRAMID_PASSES + 1,
+        modes: &["bloom", "outer", "inner", "neon"],
+        backdrop: false,
+        params: &[
+            color("color", [255, 255, 255, 255]),
+            num("threshold", 0.6, 0., 1.),
+            num("knee", 0.2, 0., 1.),
+            num("radius", 32., 0., 500.),
+            num("intensity", 1., 0., 8.),
+            num("tint", 0., 0., 1.),
+            num("falloff", 0.5, 0., 1.),
+        ],
+    },
+    Def {
+        name: "light_wrap",
+        about: "the backdrop's light spilling round the layer's edges, as when a shot is lit by what is behind it",
+        passes: PYRAMID_PASSES + 1,
+        modes: &[],
+        backdrop: true,
+        params: &[num("radius", 24., 0., 500.), num("intensity", 1., 0., 4.)],
+    },
+    Def {
+        name: "glass",
+        about: "backdrop glass: what is under the layer, inside its shape, frosted, refracted through a bevelled edge, tinted, with a rim light and an inner shadow",
+        passes: 2 * PYRAMID_PASSES + 1,
+        modes: &[],
+        backdrop: true,
+        params: &[
+            color("tint", [255, 255, 255, 255]),
+            num("frost", 12., 0., 200.),
+            num("refraction", 18., -200., 200.),
+            num("bevel", 24., 0., 400.),
+            num("dispersion", 0., 0., 1.),
+            num("tint_amount", 0.08, 0., 1.),
+            num("saturation", 1.2, 0., 4.),
+            num("highlight", 0.6, 0., 2.),
+            num("light_angle", -50., -360., 360.),
+            num("shadow", 0.25, 0., 1.),
+            num("grain", 0.02, 0., 1.),
+        ],
+    },
 ];
+
+/// Levels of the blur pyramid (`glow`, `light_wrap`, `glass`): each half the
+/// last, so the widest is 2^10 pixels across.
+pub(crate) const LEVELS: u32 = 10;
+/// A pyramid's passes: down every level and back up.
+const PYRAMID_PASSES: u32 = 2 * LEVELS;
 
 pub fn def(kind: &str) -> Option<(usize, &'static Def)> {
     EFFECTS.iter().enumerate().find(|(_, d)| d.name == kind)
@@ -173,7 +251,8 @@ pub fn def(kind: &str) -> Option<(usize, &'static Def)> {
 
 /// Refuse unknown effects or parameters, the wrong type, empty key lists
 /// and non-finite numbers.
-pub(crate) fn check(stack: &[Effect], owner: &str) -> Result<(), String> {
+/// `scene`: a scene's stack, where a backdrop effect has nothing under it.
+pub(crate) fn check(stack: &[Effect], owner: &str, scene: bool) -> Result<(), String> {
     for e in stack {
         let (_, d) = def(&e.kind).ok_or_else(|| {
             let known: Vec<_> = EFFECTS.iter().map(|d| d.name).collect();
@@ -183,6 +262,25 @@ pub(crate) fn check(stack: &[Effect], owner: &str) -> Result<(), String> {
                 known.join(", ")
             )
         })?;
+        if scene && d.backdrop {
+            return Err(format!(
+                "{owner}: `{}` reads what is under a layer, so it goes on a layer",
+                e.kind
+            ));
+        }
+        if let Some(m) = &e.mode
+            && !d.modes.contains(&m.as_str())
+        {
+            return Err(format!(
+                "{owner}: effect `{}` has no mode `{m}`{}",
+                e.kind,
+                if d.modes.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (modes: {})", d.modes.join(", "))
+                }
+            ));
+        }
         for (name, p) in &e.params {
             let bad = |why: &str| format!("{owner}: effect `{}` `{name}` {why}", e.kind);
             let ty = d
@@ -244,8 +342,15 @@ pub(crate) fn eval(stack: &[Effect], t: f64) -> Vec<Fx> {
                     (p.name.to_owned(), v)
                 })
                 .collect();
+            let mode = d.modes.first().map(|first| {
+                e.mode
+                    .as_deref()
+                    .and_then(|m| d.modes.iter().find(|x| **x == m))
+                    .unwrap_or(first)
+            });
             Some(Fx {
                 kind: e.kind.clone(),
+                mode: mode.copied(),
                 values,
             })
         })
@@ -266,6 +371,8 @@ pub(crate) fn reach(stack: &[Fx]) -> f64 {
                 "blur" => 3. * v("radius"),
                 "directional_blur" => v("length") / 2.,
                 "displace" | "chromatic" => v("amount"),
+                // The pyramid's tail is all but gone by three radii.
+                "glow" if f.mode != Some("inner") => 3. * v("radius"),
                 _ => 0.,
             }
         })

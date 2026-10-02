@@ -791,6 +791,204 @@ fn effects_draw_what_they_say() {
     assert_eq!(px(&db, 50, 45), [0, 0, 0, 255], "not across");
 }
 
+/// One frame of a 160x90 project: `layers` over `background`, at 0.5 s.
+#[cfg(not(target_arch = "wasm32"))]
+fn frame_of(background: &str, layers: &str) -> Frame {
+    let json = format!(
+        r##"{{"size":[160,90],"fps":30,"scenes":[{{"name":"a","duration":2,"background":"{background}","layers":[{layers}]}}]}}"##
+    );
+    let p = Project::load(&json).unwrap();
+    eval(&p, &p.scenes[0], 0.5)
+}
+
+/// Glow: each mode lights where it says, the falloff is smooth (no steps
+/// from 8-bit levels), and the radius keys without jumps.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn glow_lights_where_its_mode_says() {
+    let one = |layer: &str, scene: &str| {
+        let (_, f) = square(layer, scene, 0.5);
+        gpu_frames(&[vec![f]]).map(|mut v| v.remove(0))
+    };
+    let Some(plain) = one("", "") else { return };
+
+    // Outer, tinted red: a red haze just outside, fading out; the square
+    // itself white; far off, black.
+    let outer = one(
+        r##"{"type":"glow","mode":"outer","color":"#ff0000","tint":1,"radius":8}"##,
+        "",
+    )
+    .unwrap();
+    let (a, b) = (px(&outer, 56, 45), px(&outer, 50, 45));
+    assert!(a[0] > 60 && a[1] < a[0] / 4 && a[2] < a[0] / 4, "{a:?}");
+    assert!(b[0] < a[0] && b[0] > 2, "fading: {b:?}");
+    assert_eq!(px(&outer, 80, 45), [255; 4]);
+    assert_eq!(px(&outer, 5, 5), [0, 0, 0, 255]);
+
+    // Inner: red just inside the edges, the middle still white, outside
+    // untouched.
+    let inner = one(
+        r##"{"type":"glow","mode":"inner","color":"#ff0000","tint":1,"radius":4}"##,
+        "",
+    )
+    .unwrap();
+    let e = px(&inner, 61, 45);
+    assert!(e[0] > 200 && e[1] < 200, "edge {e:?}");
+    assert!(
+        near(px(&inner, 80, 45), [255; 4], 8),
+        "{:?}",
+        px(&inner, 80, 45)
+    );
+    assert_eq!(px(&inner, 56, 45), [0, 0, 0, 255]);
+
+    // Bloom over the scene: the white square lights the black round it,
+    // falling off smoothly; nothing passes a threshold of 1 with no knee.
+    let bloom = one(
+        "",
+        r#"{"type":"glow","threshold":0.5,"radius":24,"intensity":1.5}"#,
+    )
+    .unwrap();
+    let row: Vec<i32> = (101..150)
+        .map(|x| i32::from(px(&bloom, x, 45)[0]))
+        .collect();
+    assert!(row[3] > 20, "lit round it: {row:?}");
+    for w in row.windows(2) {
+        assert!(w[1] <= w[0] + 2 && w[0] - w[1] <= 12, "no steps: {row:?}");
+    }
+    let dark = one("", r#"{"type":"glow","threshold":1,"knee":0}"#).unwrap();
+    assert!(
+        dark.iter().zip(&plain).all(|(a, b)| a.abs_diff(*b) <= 1),
+        "a threshold of 1 blooms nothing"
+    );
+
+    // Neon: a halo outside, a white core.
+    let neon = one(r#"{"type":"glow","mode":"neon","radius":16}"#, "").unwrap();
+    assert!(px(&neon, 54, 45)[0] > 20, "{:?}", px(&neon, 54, 45));
+    assert_eq!(px(&neon, 80, 45), [255; 4]);
+
+    // A keyed radius grows smoothly past a pyramid level (16 px here).
+    let at = |r: f64| {
+        let o = one(
+            &format!(r#"{{"type":"glow","mode":"outer","radius":{r}}}"#),
+            "",
+        )
+        .unwrap();
+        i32::from(px(&o, 52, 45)[0])
+    };
+    let (lo, hi) = (at(15.8), at(16.2));
+    assert!((lo - hi).abs() <= 4, "{lo} then {hi}");
+}
+
+#[test]
+fn effect_modes_and_backdrops_are_checked() {
+    let load = |layer: &str, scene: &str| {
+        Project::load(&format!(
+            r#"{{"size":[64,64],"fps":30,"scenes":[{{"name":"a","duration":1,"layers":[{{"id":"r","kind":"rect","effects":[{layer}]}}],"effects":[{scene}]}}]}}"#
+        ))
+    };
+    assert!(load(r#"{"type":"glow","mode":"neon"}"#, "").is_ok());
+    assert!(load(r#"{"type":"glow","mode":"sparkle"}"#, "").is_err());
+    assert!(load(r#"{"type":"blur","mode":"outer"}"#, "").is_err());
+    assert!(load(r#"{"type":"glass"}"#, "").is_ok());
+    let e = load("", r#"{"type":"glass"}"#).unwrap_err();
+    assert!(e.contains("goes on a layer"), "{e}");
+    assert!(load("", r#"{"type":"light_wrap"}"#).is_err());
+    // Left out, the mode is the first; it survives a save.
+    let p = load(r#"{"type":"glow"},{"type":"glow","mode":"inner"}"#, "").unwrap();
+    let f = eval(&p, &p.scenes[0], 0.);
+    let modes: Vec<_> = f.layers[0].effects.iter().map(|e| e.mode).collect();
+    assert_eq!(modes, [Some("bloom"), Some("inner")]);
+    assert!(p.to_json().contains(r#""mode": "inner""#));
+}
+
+/// Light wrap: a dark layer over a bright backdrop picks the light up at
+/// its edges, not in its middle.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn light_wrap_lights_the_edges_from_behind() {
+    let sq = |fx: &str| {
+        frame_of(
+            "#ffffff",
+            &format!(
+                r##"{{"id":"sq","kind":"rect","x":80,"y":45,"width":40,"height":40,"fill":"#000000","effects":[{fx}]}}"##
+            ),
+        )
+    };
+    let Some(out) = gpu_frames(&[
+        vec![sq("")],
+        vec![sq(r#"{"type":"light_wrap","radius":3}"#)],
+    ]) else {
+        return;
+    };
+    let (plain, wrap) = (&out[0], &out[1]);
+    assert_eq!(px(plain, 61, 45), [0, 0, 0, 255]);
+    let (edge, mid) = (px(wrap, 61, 45)[0], px(wrap, 80, 45)[0]);
+    assert!(edge > 60, "edge {edge}");
+    assert!(mid < 20 && edge > mid + 50, "middle {mid}");
+    assert_eq!(px(wrap, 10, 10), [255; 4], "the backdrop is untouched");
+}
+
+/// Glass shows what is under it: as it is with every term off, frosted,
+/// refracted from past its edge, and lit on the side facing the light.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn glass_shows_the_backdrop_through_its_shape() {
+    let off = r#""frost":0,"refraction":0,"tint_amount":0,"saturation":1,"highlight":0,"shadow":0,"grain":0"#;
+    let pane = |stripe: f64, fx: &str| {
+        frame_of(
+            "#000000",
+            &format!(
+                r##"{{"id":"bar","kind":"rect","x":{stripe},"y":45,"width":6,"height":90,"fill":"#ffffff"}},
+                {{"id":"pane","kind":"rect","x":80,"y":45,"width":40,"height":40,"effects":[{{"type":"glass",{fx}}}]}}"##
+            ),
+        )
+    };
+    let Some(out) = gpu_frames(&[
+        vec![pane(80., off)],
+        vec![pane(80., &format!(r#"{off},"frost":6"#))],
+        vec![pane(105., off)],
+        vec![pane(105., &format!(r#"{off},"refraction":12,"bevel":10"#))],
+        vec![pane(
+            -20.,
+            &format!(r#"{off},"highlight":1,"light_angle":0"#),
+        )],
+    ]) else {
+        return;
+    };
+    // Every term off: the pane is clear, the stripe under it sharp.
+    assert!(
+        near(px(&out[0], 80, 45), [255; 4], 2),
+        "{:?}",
+        px(&out[0], 80, 45)
+    );
+    assert!(px(&out[0], 70, 45)[0] < 3, "{:?}", px(&out[0], 70, 45));
+    // Frosted: the stripe spreads under the pane, and only there.
+    let (mid, side) = (px(&out[1], 80, 45)[0], px(&out[1], 88, 45)[0]);
+    assert!(mid < 250 && side > 30, "mid {mid} side {side}");
+    assert_eq!(px(&out[1], 80, 10), [255; 4]);
+    assert!(px(&out[1], 88, 10)[0] < 3);
+    // Refraction: just inside the right edge shows the stripe beyond it.
+    assert!(px(&out[2], 98, 45)[0] < 3);
+    assert!(px(&out[3], 98, 45)[0] > 60, "{:?}", px(&out[3], 98, 45));
+    // Lit from the right: a rim there, little on the left.
+    let (right, left) = (px(&out[4], 99, 45)[0], px(&out[4], 60, 45)[0]);
+    assert!(right > 60 && right > left + 30, "right {right} left {left}");
+}
+
+/// The CPU runs no effects: a glass pane draws as its tint, translucent,
+/// not as an opaque fill.
+#[test]
+fn cpu_draws_glass_as_a_translucent_pane() {
+    let json = r##"{"size":[160,90],"fps":30,"scenes":[{"name":"a","duration":1,"background":"#000000","layers":[
+        {"id":"pane","kind":"rect","x":80,"y":45,"width":40,"height":40,"effects":[{"type":"glass"}]}]}]}"##;
+    let p = Project::load(json).unwrap();
+    let (img, _) = Renderer::new(160, 90)
+        .draw(&eval(&p, &p.scenes[0], 0.))
+        .unwrap();
+    let v = img[(45 * 160 + 80) * 4];
+    assert!((20..120).contains(&v), "{v}");
+}
+
 /// Grain is deterministic: the same frame is the same pixels in two renders,
 /// a new frame is new grain, and a motion-blurred frame's subframes share
 /// it, so blur accumulates the effect instead of averaging it away.

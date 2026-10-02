@@ -1,6 +1,7 @@
 import { frameNow, getp, isBind, isKeys, keyAt, layer, now, propsOf, round, scene, selectedLayers, setValue, snap, tidy, toggleKey } from './doc.js';
 import { edit, loadAssets, showError } from './edit.js';
 import { parentTo } from './lists.js';
+import { LOOKS } from './looks.js';
 import { $, FX, S, VECTOR, cut } from './state.js';
 import { refresh } from './transport.js';
 import { compable, ungroupSelected } from './tree.js';
@@ -337,8 +338,15 @@ function fxSection(owner, live) {
   head.className = 'fx-head'; head.textContent = 'Effects';
   const add = document.createElement('select');
   add.id = 'add-effect'; add.setAttribute('aria-label', 'Add an effect');
-  add.append(new Option('+ add', ''), ...FX.map(d => new Option(d.name, d.name)));
-  add.onchange = () => { const type = add.value; if (type) edit(() => { (owner.effects ??= []).push({ type }); }); };
+  // A scene has nothing under it: no backdrop effects there.
+  const fits = type => !(Array.isArray(owner.layers) && FX.find(d => d.name === type)?.backdrop);
+  const looks = document.createElement('optgroup'); looks.label = 'Looks';
+  looks.append(...LOOKS.filter(k => fits(k.fx.type)).map(k => new Option(k.name, 'look:' + k.name)));
+  add.append(new Option('+ add', ''), ...FX.filter(d => fits(d.name)).map(d => new Option(d.name, d.name)), looks);
+  add.onchange = () => {
+    const v = add.value, look = LOOKS.find(k => 'look:' + k.name === v);
+    if (v) edit(() => { (owner.effects ??= []).push(look ? structuredClone(look.fx) : { type: v }); });
+  };
   box.append(head, add);
   (owner.effects ?? []).forEach((e, i) => {
     const def = FX.find(d => d.name === e.type);
@@ -348,6 +356,11 @@ function fxSection(owner, live) {
     rm.className = 'key'; rm.textContent = '✕'; rm.title = 'Remove the effect';
     rm.onclick = () => edit(() => { owner.effects.splice(i, 1); if (!owner.effects.length) delete owner.effects; });
     box.append(title, rm);
+    if (def?.modes) {
+      const m = choice(e.mode ?? def.modes[0], def.modes, v => edit(() => { e.mode = v; }));
+      m.dataset.fx = `${i}.mode`;
+      field('mode', m);
+    }
     for (const p of def?.params ?? []) {
       const color = typeof p.default === 'string';
       const get = () => live()[i]?.[p.name] ?? p.default;

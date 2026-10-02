@@ -232,6 +232,19 @@ try {
   if (cpu) check(await js(`document.querySelector('#backend').textContent`) === 'CPU · effects off', 'the CPU viewport says effects are off');
   else check(Math.abs(grey[0] - grey[1]) <= 2 && Math.abs(grey[1] - grey[2]) <= 2 && grey[0] > 0x10, `the viewport draws the effect (${grey}) ${await js(`document.querySelector('#error').textContent`)}`);
   await shot('editor-effect.png');
+  // Looks: a preset effect from the picker, its mode a choice; a scene's
+  // picker leaves out the effects that read what is under a layer.
+  const picks = await js(`[...document.querySelectorAll('#add-effect option')].map(o => o.textContent)`);
+  check(picks.includes('Soft bloom') && picks.includes('Neon') && !picks.includes('glass') && !picks.includes('Frosted glass'),
+    `the scene's picker has the looks it can run (${picks.join(', ')})`);
+  await js(`(() => { const s = document.querySelector('#add-effect'); s.value = 'look:Soft bloom'; s.onchange(); })()`);
+  await sleep(1000);
+  const bloom = read().scenes[1].effects?.[1];
+  check(bloom?.type === 'glow' && bloom.mode === 'bloom' && bloom.radius === 90, `a look adds its effect, set (${JSON.stringify(bloom)})`);
+  await js(`(() => { const m = document.querySelector('[data-fx="1.mode"]'); m.value = 'neon'; m.onchange(); })()`);
+  await sleep(1000);
+  check(read().scenes[1].effects[1].mode === 'neon', 'an effect mode is saved');
+  if (!cpu) check(!(await js(`document.querySelector('#error').textContent`)), 'the viewport draws the glow');
   // Export: WebCodecs H.264 in the worker, muxed to MP4, every frame of
   // every scene, with the server's mix of the sound (a tone on an audio
   // layer here); a cancel stops a second run.
