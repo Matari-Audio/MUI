@@ -1614,10 +1614,10 @@ impl Project {
                         }
                         if let Some(p) = parts
                             .keys()
-                            .find(|p| p.contains('.') || p.split('/').any(str::is_empty))
+                            .find(|p| p.split('/').any(str::is_empty))
                         {
                             return Err(format!(
-                                "{at}.parts: layer `{id}`: part path `{p}` must be surface ids joined by `/`, without `.`"
+                                "{at}.parts: layer `{id}`: part path `{p}` must be surface ids joined by `/`"
                             ));
                         }
                     }
