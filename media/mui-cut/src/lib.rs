@@ -1758,7 +1758,7 @@ impl Project {
                     }
                     _ => {}
                 }
-                fx::check(&l.effects, &format!("{at}.effects: layer `{id}`"))?;
+                fx::check(&l.effects, &format!("{at}.effects: layer `{id}`"), false)?;
             }
             place::check(s).map_err(|(li, e)| {
                 format!("scenes[{si}].layers[{li}].parent: scene `{}`: {e}", s.name)
@@ -1789,6 +1789,7 @@ impl Project {
             fx::check(
                 &s.effects,
                 &format!("scenes[{si}].effects: scene `{}`", s.name),
+                true,
             )?;
         }
         Ok(p)

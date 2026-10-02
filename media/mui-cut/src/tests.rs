@@ -791,6 +791,102 @@ fn effects_draw_what_they_say() {
     assert_eq!(px(&db, 50, 45), [0, 0, 0, 255], "not across");
 }
 
+/// Glow: each mode lights where it says, the falloff is smooth (no steps
+/// from 8-bit levels), and the radius keys without jumps.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn glow_lights_where_its_mode_says() {
+    let one = |layer: &str, scene: &str| {
+        let (_, f) = square(layer, scene, 0.5);
+        gpu_frames(&[vec![f]]).map(|mut v| v.remove(0))
+    };
+    let Some(plain) = one("", "") else { return };
+
+    // Outer, tinted red: a red haze just outside, fading out; the square
+    // itself white; far off, black.
+    let outer = one(
+        r##"{"type":"glow","mode":"outer","color":"#ff0000","tint":1,"radius":8}"##,
+        "",
+    )
+    .unwrap();
+    let (a, b) = (px(&outer, 56, 45), px(&outer, 50, 45));
+    assert!(a[0] > 60 && a[1] < a[0] / 4 && a[2] < a[0] / 4, "{a:?}");
+    assert!(b[0] < a[0] && b[0] > 2, "fading: {b:?}");
+    assert_eq!(px(&outer, 80, 45), [255; 4]);
+    assert_eq!(px(&outer, 5, 5), [0, 0, 0, 255]);
+
+    // Inner: red just inside the edges, the middle still white, outside
+    // untouched.
+    let inner = one(
+        r##"{"type":"glow","mode":"inner","color":"#ff0000","tint":1,"radius":4}"##,
+        "",
+    )
+    .unwrap();
+    let e = px(&inner, 61, 45);
+    assert!(e[0] > 200 && e[1] < 200, "edge {e:?}");
+    assert!(
+        near(px(&inner, 80, 45), [255; 4], 8),
+        "{:?}",
+        px(&inner, 80, 45)
+    );
+    assert_eq!(px(&inner, 56, 45), [0, 0, 0, 255]);
+
+    // Bloom over the scene: the white square lights the black round it,
+    // falling off smoothly; nothing passes a threshold of 1 with no knee.
+    let bloom = one(
+        "",
+        r#"{"type":"glow","threshold":0.5,"radius":24,"intensity":1.5}"#,
+    )
+    .unwrap();
+    let row: Vec<i32> = (101..150)
+        .map(|x| i32::from(px(&bloom, x, 45)[0]))
+        .collect();
+    assert!(row[3] > 20, "lit round it: {row:?}");
+    for w in row.windows(2) {
+        assert!(w[1] <= w[0] + 2 && w[0] - w[1] <= 12, "no steps: {row:?}");
+    }
+    let dark = one("", r#"{"type":"glow","threshold":1,"knee":0}"#).unwrap();
+    assert!(
+        dark.iter().zip(&plain).all(|(a, b)| a.abs_diff(*b) <= 1),
+        "a threshold of 1 blooms nothing"
+    );
+
+    // Neon: a halo outside, a white core.
+    let neon = one(r#"{"type":"glow","mode":"neon","radius":16}"#, "").unwrap();
+    assert!(px(&neon, 54, 45)[0] > 20, "{:?}", px(&neon, 54, 45));
+    assert_eq!(px(&neon, 80, 45), [255; 4]);
+
+    // A keyed radius grows smoothly past a pyramid level (16 px here).
+    let at = |r: f64| {
+        let o = one(
+            &format!(r#"{{"type":"glow","mode":"outer","radius":{r}}}"#),
+            "",
+        )
+        .unwrap();
+        i32::from(px(&o, 52, 45)[0])
+    };
+    let (lo, hi) = (at(15.8), at(16.2));
+    assert!((lo - hi).abs() <= 4, "{lo} then {hi}");
+}
+
+#[test]
+fn effect_modes_are_checked() {
+    let load = |layer: &str, scene: &str| {
+        Project::load(&format!(
+            r#"{{"size":[64,64],"fps":30,"scenes":[{{"name":"a","duration":1,"layers":[{{"id":"r","kind":"rect","effects":[{layer}]}}],"effects":[{scene}]}}]}}"#
+        ))
+    };
+    assert!(load(r#"{"type":"glow","mode":"neon"}"#, "").is_ok());
+    assert!(load(r#"{"type":"glow","mode":"sparkle"}"#, "").is_err());
+    assert!(load(r#"{"type":"blur","mode":"outer"}"#, "").is_err());
+    // Left out, the mode is the first; it survives a save.
+    let p = load(r#"{"type":"glow"},{"type":"glow","mode":"inner"}"#, "").unwrap();
+    let f = eval(&p, &p.scenes[0], 0.);
+    let modes: Vec<_> = f.layers[0].effects.iter().map(|e| e.mode).collect();
+    assert_eq!(modes, [Some("bloom"), Some("inner")]);
+    assert!(p.to_json().contains(r#""mode": "inner""#));
+}
+
 /// Grain is deterministic: the same frame is the same pixels in two renders,
 /// a new frame is new grain, and a motion-blurred frame's subframes share
 /// it, so blur accumulates the effect instead of averaging it away.

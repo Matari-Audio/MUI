@@ -24,6 +24,11 @@ struct U {
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var smp: sampler;
 @group(0) @binding(2) var<uniform> u: U;
+// More inputs, for the passes that read several (a blur pyramid's levels,
+// the backdrop under a layer); a 1x1 clear texture where unused.
+@group(0) @binding(3) var aux: texture_2d<f32>;
+@group(0) @binding(4) var aux2: texture_2d<f32>;
+@group(0) @binding(5) var aux3: texture_2d<f32>;
 
 @vertex
 fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4<f32> {
@@ -82,4 +87,41 @@ fn noise(p: vec3<f32>) -> f32 {
         n += rand(b + o) * wk.x * wk.y * wk.z;
     }
     return n;
+}
+
+// sRGB transfer, both ways (straight colour).
+fn to_lin(c: vec3<f32>) -> vec3<f32> {
+    let c0 = max(c, vec3<f32>(0.0));
+    return select(pow((c0 + 0.055) / 1.055, vec3<f32>(2.4)), c0 / 12.92, c0 <= vec3<f32>(0.04045));
+}
+fn to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let c0 = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
+    return select(1.055 * pow(c0, vec3<f32>(1.0 / 2.4)) - 0.055, c0 * 12.92, c0 <= vec3<f32>(0.0031308));
+}
+
+// A stored pixel (sRGB-encoded, premultiplied) in linear light,
+// premultiplied, and back: light adds and blurs right only in linear.
+fn lin(c: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(to_lin(unpremul(c).rgb) * c.a, c.a);
+}
+fn enc(c: vec4<f32>) -> vec4<f32> {
+    let a = clamp(c.a, 0.0, 1.0);
+    return vec4<f32>(to_srgb(unpremul(vec4<f32>(c.rgb, a)).rgb) * a, a);
+}
+
+// Triangular noise of one 8-bit step, new every frame: added before a
+// smooth gradient is stored, it trades banding for invisible grain.
+fn dither(p: vec2<f32>, salt: u32) -> f32 {
+    let s = vec3<u32>(vec2<u32>(p), u.seed * 0x9e3779b9u + salt);
+    return (rand(s) + rand(s ^ vec3<u32>(0x68bc21ebu)) - 1.0) / 255.0;
+}
+
+// `enc`, dithered: rgb and coverage alike (a glow's edge is a gradient).
+fn store(c: vec4<f32>, p: vec2<f32>) -> vec4<f32> {
+    let e = enc(c);
+    let n = dither(p, 0x51u);
+    // Only a partial coverage: clear stays clear, opaque opaque.
+    let partial = step(0.5 / 255.0, e.a) * step(e.a, 1.0 - 0.5 / 255.0);
+    let a = clamp(e.a + n * partial, 0.0, 1.0);
+    return vec4<f32>(clamp(e.rgb + vec3<f32>(n), vec3<f32>(0.0), vec3<f32>(a)), a);
 }

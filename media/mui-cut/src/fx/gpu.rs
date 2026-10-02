@@ -6,19 +6,26 @@
 //! scene's stack on `A` and copies it to the target. The uniforms of every
 //! pass of a frame sit in one buffer at 256-byte dynamic offsets.
 //!
+//! `glow` blurs through a pyramid (each level half the last, down and back
+//! up, in linear light and dithered) for a wide, soft falloff at any radius.
+//!
 //! WGSL modules are plain includes: `prelude.wgsl` (bindings, the `U`
 //! header, noise) then the effect's file, which declares its `Params`. Kept
 //! off naga_oil/wesl on purpose: `concat!` does it without shipping naga to
 //! the browser.
 use std::num::NonZeroU64;
 
-use super::{EFFECTS, Fx};
+use super::{EFFECTS, Fx, LEVELS};
 use crate::gpu::GpuCanvas;
 use crate::render::Assets;
 use crate::{Drawn, Frame, Quad, Rgba};
 
 /// Per-pass uniform slot: the header (32 bytes) and up to 56 floats.
 const SLOT: u64 = 256;
+/// The pyramid's levels: linear light needs more than 8 bits, or a soft
+/// glow's tail comes out in rings. (Rendered to in the browser too, as the
+/// shutter's sum is.)
+const LINEAR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const L: usize = 0;
 const A: usize = 1;
 const P: usize = 2;
@@ -41,6 +48,7 @@ fn source(name: &str) -> Option<&'static str> {
         "directional_blur" => module!("directional_blur.wgsl"),
         "levels" => module!("levels.wgsl"),
         "plasma" => module!("plasma.wgsl"),
+        "glow" => module!("glow.wgsl"),
         _ => return None,
     })
 }
@@ -49,15 +57,24 @@ struct Targets {
     size: [u32; 2],
     textures: [wgpu::Texture; 4],
     views: [wgpu::TextureView; 4],
-    binds: [wgpu::BindGroup; 4],
+    /// The pyramid: its levels' sizes, the way down and the way back up
+    /// (level 0, half size, comes up into whatever the caller says).
+    sizes: Vec<[u32; 2]>,
+    down: Vec<wgpu::TextureView>,
+    up: Vec<wgpu::TextureView>,
 }
 
 pub(crate) struct Passes {
+    device: wgpu::Device,
     format: wgpu::TextureFormat,
     layout: wgpu::BindGroupLayout,
     effects: Vec<wgpu::RenderPipeline>,
     copy: wgpu::RenderPipeline,
     over: wgpu::RenderPipeline,
+    down: wgpu::RenderPipeline,
+    up: wgpu::RenderPipeline,
+    /// What an unused input reads: one clear pixel.
+    none: wgpu::TextureView,
     sampler: wgpu::Sampler,
     uniforms: wgpu::Buffer,
     slots: u64,
@@ -79,19 +96,20 @@ struct Header {
 
 impl Passes {
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Result<Self, String> {
+        let input = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("mui-cut fx"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
+                input(0),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -108,6 +126,9 @@ impl Passes {
                     },
                     count: None,
                 },
+                input(3),
+                input(4),
+                input(5),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -115,7 +136,10 @@ impl Passes {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = |name: &str, wgsl: &str, blend: Option<wgpu::BlendState>| {
+        let pipeline_as = |name: &str,
+                           wgsl: &str,
+                           blend: Option<wgpu::BlendState>,
+                           format: wgpu::TextureFormat| {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some(name),
                 source: wgpu::ShaderSource::Wgsl(wgsl.into()),
@@ -146,6 +170,7 @@ impl Passes {
                 cache: None,
             })
         };
+        let pipeline = |name: &str, wgsl: &str, blend| pipeline_as(name, wgsl, blend, format);
         let effects = EFFECTS
             .iter()
             .map(|d| {
@@ -159,6 +184,10 @@ impl Passes {
             module!("copy.wgsl"),
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
+        let down = pipeline_as("pyramid down", module!("pyramid_down.wgsl"), None, LINEAR);
+        let up = pipeline_as("pyramid up", module!("pyramid_up.wgsl"), None, LINEAR);
+        let none =
+            texture(device, format, [1, 1]).create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("mui-cut fx"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -167,11 +196,15 @@ impl Passes {
         });
         let slots = 16;
         Ok(Self {
+            device: device.clone(),
             format,
             layout,
             effects,
             copy,
             over,
+            down,
+            up,
+            none,
             sampler,
             uniforms: uniforms(device, slots),
             slots,
@@ -191,57 +224,31 @@ impl Passes {
         if !grow && self.targets.as_ref().is_some_and(|t| t.size == size) {
             return;
         }
-        let textures = [0; 4].map(|_| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("mui-cut fx"),
-                size: wgpu::Extent3d {
-                    width: size[0],
-                    height: size[1],
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC
-                    | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            })
-        });
+        let textures = [0; 4].map(|_| texture(device, self.format, size));
         let views = textures
             .each_ref()
             .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
-        let binds = std::array::from_fn(|i| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: None,
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&views[i]),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                            buffer: &self.uniforms,
-                            offset: 0,
-                            size: NonZeroU64::new(SLOT),
-                        }),
-                    },
-                ],
-            })
-        });
+        let mut sizes = Vec::new();
+        let mut at = size;
+        while sizes.len() < LEVELS as usize && at[0].min(at[1]) > 1 {
+            at = at.map(|v| v.div_ceil(2));
+            sizes.push(at);
+        }
+        if sizes.is_empty() {
+            sizes.push([1, 1]);
+        }
+        let level = |s: &[u32; 2]| {
+            texture(device, LINEAR, *s).create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let down = sizes.iter().map(level).collect();
+        let up = sizes.iter().map(level).collect();
         self.targets = Some(Targets {
             size,
             textures,
             views,
-            binds,
+            sizes,
+            down,
+            up,
         });
     }
 
@@ -263,16 +270,58 @@ impl Passes {
         at as u32
     }
 
+    fn view(&self, i: usize) -> wgpu::TextureView {
+        self.targets.as_ref().expect("prepared").views[i].clone()
+    }
+
+    /// One full-target pass of `pipeline` into `dst`, reading `src` (up to
+    /// four textures: `src`, `aux`, `aux2`, `aux3` in the WGSL).
     fn pass(
         &self,
         enc: &mut wgpu::CommandEncoder,
         pipeline: &wgpu::RenderPipeline,
-        src: usize,
+        src: &[&wgpu::TextureView],
         dst: &wgpu::TextureView,
         offset: u32,
         clear: bool,
     ) {
-        let t = self.targets.as_ref().expect("prepared");
+        let input = |i: usize| {
+            wgpu::BindingResource::TextureView(src.get(i).copied().unwrap_or(&self.none))
+        };
+        let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: input(0),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.uniforms,
+                        offset: 0,
+                        size: NonZeroU64::new(SLOT),
+                    }),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: input(1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: input(2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: input(3),
+                },
+            ],
+        });
         let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("mui-cut fx"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -294,7 +343,7 @@ impl Passes {
             multiview_mask: None,
         });
         pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &t.binds[src], &[offset]);
+        pass.set_bind_group(0, &bind, &[offset]);
         pass.draw(0..3, 0..1);
     }
 
@@ -308,18 +357,106 @@ impl Passes {
     ) -> usize {
         let mut cur = src;
         for fx in stack {
-            let Some((i, params)) = fx.pack() else {
+            let Some((i, mut params)) = fx.pack() else {
                 continue;
             };
-            for pass in 0..EFFECTS[i].passes {
-                let dst = if cur == P { Q } else { P };
-                let offset = self.stage(h, pass, &params);
-                let view = self.targets.as_ref().expect("prepared").views[dst].clone();
-                self.pass(enc, &self.effects[i], cur, &view, offset, true);
-                cur = dst;
-            }
+            let dst = if cur == P { Q } else { P };
+            let (from, to) = (self.view(cur), self.view(dst));
+            let num = |k: &str| match fx.values.get(k) {
+                Some(super::Val::Num(v)) => *v as f32,
+                _ => 0.,
+            };
+            let px = |k: &str| num(k) * h.scale;
+            #[expect(clippy::single_match_else, reason = "more effects join it")]
+            let srcs: Vec<wgpu::TextureView> = match fx.kind.as_str() {
+                "glow" => {
+                    let mode = EFFECTS[i]
+                        .modes
+                        .iter()
+                        .position(|m| Some(*m) == fx.mode)
+                        .unwrap_or(0);
+                    // The pyramid's first-level filter: bloom, outer, inner, neon.
+                    let filter = [1., 2., 3., 4.][mode];
+                    let n = self.levels();
+                    let mut w = spread(px("radius"), num("falloff"), n);
+                    if mode == 3 {
+                        // Neon: half in a tight core round the tube.
+                        let core = focus(px("radius") * 0.15, n);
+                        w.resize(w.len().max(core.len()), 0.);
+                        for (w, c) in w.iter_mut().zip(core.iter().chain(std::iter::repeat(&0.))) {
+                            *w = 0.5 * *w + 0.5 * c * px("radius").clamp(0., 1.);
+                        }
+                    }
+                    let up0 = self.targets.as_ref().expect("prepared").up[0].clone();
+                    let pre = [
+                        &params[..4],
+                        &[filter, num("threshold"), num("knee"), num("tint")],
+                    ]
+                    .concat();
+                    self.pyramid(enc, h, [&from, &self.none.clone()], &pre, &w, &up0);
+                    params.push(mode as f32);
+                    vec![from, up0]
+                }
+                _ => {
+                    for pass in 0..EFFECTS[i].passes {
+                        let dst = if cur == P { Q } else { P };
+                        let offset = self.stage(h, pass, &params);
+                        let (from, to) = (self.view(cur), self.view(dst));
+                        self.pass(enc, &self.effects[i], &[&from], &to, offset, true);
+                        cur = dst;
+                    }
+                    continue;
+                }
+            };
+            let offset = self.stage(h, 0, &params);
+            let srcs: Vec<&wgpu::TextureView> = srcs.iter().collect();
+            self.pass(enc, &self.effects[i], &srcs, &to, offset, true);
+            cur = dst;
         }
         cur
+    }
+
+    /// Pyramid levels at the targets' size.
+    fn levels(&self) -> usize {
+        self.targets.as_ref().expect("prepared").sizes.len()
+    }
+
+    /// Blur `src` (`[picture, aux]`) through the pyramid, its first level
+    /// filtered by `pre` (`pyramid_down.wgsl`'s `Params`), the levels summed
+    /// by `weights`, into `out` (level 0's size).
+    fn pyramid(
+        &mut self,
+        enc: &mut wgpu::CommandEncoder,
+        h: Header,
+        src: [&wgpu::TextureView; 2],
+        pre: &[f32],
+        weights: &[f32],
+        out: &wgpu::TextureView,
+    ) {
+        let t = self.targets.as_ref().expect("prepared");
+        let (sizes, down, up) = (t.sizes.clone(), t.down.clone(), t.up.clone());
+        let n = weights.len().clamp(1, sizes.len());
+        let at = |k: usize| Header {
+            res: sizes[k].map(|v| v as f32),
+            ..h
+        };
+        for k in 0..n {
+            let params = if k == 0 { pre } else { &[0.; 5] };
+            let offset = self.stage(at(k), 0, params);
+            let from = if k == 0 {
+                src
+            } else {
+                [&down[k - 1], &self.none]
+            };
+            self.pass(enc, &self.down, &from, &down[k], offset, true);
+        }
+        for k in (0..n).rev() {
+            let coarser = k + 1 < n;
+            let offset = self.stage(at(k), 0, &[weights[k], f32::from(u8::from(coarser))]);
+            let from = if coarser { &up[k + 1] } else { &self.none };
+            let to = if k == 0 { out } else { &up[k] };
+            self.pass(enc, &self.up, &[from, &down[k]], to, offset, true);
+        }
     }
 
     /// Upload the uniforms staged since the last submit, and submit `enc`.
@@ -365,7 +502,7 @@ impl Passes {
             if out != A {
                 let offset = self.stage(h, 0, &[]);
                 let a = self.targets.as_ref().expect("prepared").views[A].clone();
-                self.pass(&mut enc, &self.copy, out, &a, offset, true);
+                self.pass(&mut enc, &self.copy, &[&self.view(out)], &a, offset, true);
                 out = A;
             }
             self.submit(canvas, enc);
@@ -373,7 +510,14 @@ impl Passes {
             enc = encoder(canvas);
         }
         let offset = self.stage(h, 0, &[]);
-        self.pass(&mut enc, &self.copy, out, target, offset, true);
+        self.pass(
+            &mut enc,
+            &self.copy,
+            &[&self.view(out)],
+            target,
+            offset,
+            true,
+        );
         self.submit(canvas, enc);
         Ok(quads)
     }
@@ -414,7 +558,7 @@ impl Passes {
             let q = canvas.paint(assets, &part(bg, std::mem::take(plain)), &lv)?;
             let mut enc = encoder(canvas);
             let offset = this.stage(h, 0, &[]);
-            this.pass(&mut enc, &this.over, L, &av, offset, *first);
+            this.pass(&mut enc, &this.over, &[&lv], &av, offset, *first);
             this.submit(canvas, enc);
             *first = false;
             Ok(q)
@@ -431,7 +575,7 @@ impl Passes {
             let mut enc = encoder(canvas);
             let out = self.chain(&mut enc, h, L, &l.effects);
             let offset = self.stage(h, 0, &[]);
-            self.pass(&mut enc, &self.over, out, &av, offset, false);
+            self.pass(&mut enc, &self.over, &[&self.view(out)], &av, offset, false);
             self.submit(canvas, enc);
         }
         if !plain.is_empty() || first {
@@ -632,6 +776,59 @@ fn passes(stack: &[Fx]) -> u64 {
         .sum()
 }
 
+/// Pyramid weights, summing to 1, for a glow `r` output pixels wide. Level
+/// `k` (`2^(k+1)` pixels across) fades in as `r` passes it, so a keyed
+/// radius grows smoothly; `falloff` 0.5 weighs every level alike (the long,
+/// soft tail of light scattering), more favours the wide ones, less the
+/// near. Below a pixel the whole glow fades out.
+fn spread(r: f32, falloff: f32, max: usize) -> Vec<f32> {
+    let top = r.max(1.).log2();
+    let n = (top.ceil() as usize).clamp(1, max.max(1));
+    let ratio = 4f32.powf(falloff - 0.5);
+    let w: Vec<f32> = (0..n)
+        .map(|k| {
+            let fade = if k == 0 {
+                1.
+            } else {
+                (top - k as f32).clamp(0., 1.)
+            };
+            ratio.powi(k as i32) * fade
+        })
+        .collect();
+    let sum: f32 = w.iter().sum();
+    w.iter().map(|v| v / sum * r.clamp(0., 1.)).collect()
+}
+
+/// Pyramid weights for a blur about `r` output pixels wide: the two levels
+/// either side of it, so it keys smoothly.
+fn focus(r: f32, max: usize) -> Vec<f32> {
+    let c = (r.max(1.).log2() - 1.).clamp(0., max.max(1) as f32 - 1.);
+    let n = (c.floor() as usize + 2).min(max.max(1));
+    (0..n)
+        .map(|k| (1. - (k as f32 - c).abs()).max(0.))
+        .collect()
+}
+
+fn texture(device: &wgpu::Device, format: wgpu::TextureFormat, size: [u32; 2]) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("mui-cut fx"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
 fn uniforms(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("mui-cut fx uniforms"),
@@ -648,10 +845,16 @@ mod tests {
     /// and fit its slot.
     #[test]
     fn every_effect_uniform_suits_webgl2() {
-        for def in crate::fx::EFFECTS {
-            let wgsl = super::source(def.name).expect("a shader per effect");
-            let m =
-                naga::front::wgsl::parse_str(wgsl).unwrap_or_else(|e| panic!("{}: {e}", def.name));
+        let effects = crate::fx::EFFECTS
+            .iter()
+            .map(|d| (d.name, super::source(d.name).expect("a shader per effect")));
+        let more = [
+            ("copy", module!("copy.wgsl")),
+            ("pyramid down", module!("pyramid_down.wgsl")),
+            ("pyramid up", module!("pyramid_up.wgsl")),
+        ];
+        for (name, wgsl) in effects.chain(more) {
+            let m = naga::front::wgsl::parse_str(wgsl).unwrap_or_else(|e| panic!("{name}: {e}"));
             let mut layout = naga::proc::Layouter::default();
             layout.update(m.to_ctx()).unwrap();
             let (_, u) = m
@@ -662,8 +865,7 @@ mod tests {
             let size = layout[u.ty].size;
             assert!(
                 size % 16 == 0 && u64::from(size) <= super::SLOT,
-                "{}: U is {size} bytes",
-                def.name
+                "{name}: U is {size} bytes"
             );
         }
     }
