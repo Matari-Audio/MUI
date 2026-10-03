@@ -1247,7 +1247,7 @@ mod rotation_tests {
         assert!(
             matches!(
                 resolve(&SceneSpec::new(member(0.1))),
-                Err(SceneError::UnsupportedWeld(_))
+                Err(mui_scene::SceneError::UnsupportedWeld(_))
             ),
             "member rotation cannot silently disappear into the welded material"
         );
