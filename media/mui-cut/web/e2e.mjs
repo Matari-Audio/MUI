@@ -401,6 +401,10 @@ try {
   check(Math.abs(sky.elevation) <= 3 && Math.abs(sky.azimuth - 90) <= 3, `the sun dial sets the sun (${sky.elevation}°, ${sky.azimuth}°)`);
   await set('[data-look="lit"]', 'sky');
   check(!read().scenes[0].environment && read().scenes[0].sky, 'the sky lights the scene in place of the environment');
+  await set('[data-look="cloud_density"]', '2.5');
+  await set('[data-look="aerial"]', '4');
+  await set('[data-look="exposure"]', '0.5');
+  { const k = read().scenes[0].sky; check(k.cloud_density === 2.5 && k.aerial === 4 && k.exposure === 0.5, 'the Look sets cloud density, aerial haze and exposure'); }
   await set('[data-look="glass"]', 'rt-path');
   await set('[data-look="glass_samples"]', '64');
   check(read().render?.glass === 'rt-path' && read().render.glass_samples === 64, 'the project\'s glass mode and samples');

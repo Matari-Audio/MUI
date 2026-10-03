@@ -105,8 +105,14 @@ export function sceneLook(s) {
     num(k, 'elevation', 30, 'elevation', -90, 90);
     num(k, 'azimuth', 0, 'azimuth');
     if (physical) num(k, 'turbidity', 2, 'turbidity', 1, 32);
-    num(k, 'cover', 0.35, 'clouds', 0, 1);
+    num(k, 'cover', 0.45, 'clouds', 0, 1);
+    num(k, 'cloud_density', 1, 'cloud density', 0);
+    num(k, 'cloud_altitude', 1500, 'cloud base m', 100, 20000);
+    num(k, 'wind', 0.04, 'wind');
     num(k, 'intensity', 1, 'intensity', 0);
+    if (physical) num(k, 'aerial', 1, 'aerial haze', 0);
+    num(k, 'exposure', 0, 'exposure EV');
+    check(k, 'auto_exposure', physical, 'auto exposure');
     const by = s.environment ? 'environment' : (k.light ?? physical) ? 'sky' : 'none';
     const lit = choice(by, ['sky', 'environment', 'none'], v => edit(() => {
       if (v === 'environment') { s.environment ??= {}; return; }

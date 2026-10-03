@@ -537,6 +537,7 @@ impl Space {
                     .as_ref()
                     .map_or(1., |b| b.threshold.max(0.) as f32),
                 knee: 0.5,
+                exposure: view.exposure,
                 ..Post::NONE
             },
             ..Shot::new(camera)

@@ -57,7 +57,9 @@ struct Globals {
     sky2: vec4f,
     sky3: vec4f,
     // A physical sky (sky0.w 2): dust (Mie) and ozone density, the eye's
-    // height in km, the ground's albedo; sky5.x the sun's irradiance.
+    // height in km, the ground's albedo; sky5: the sun's irradiance, km of
+    // air per 1000 units (aerial perspective, 0 none), the clouds' density
+    // and their base in km (`Sky::uniform`).
     sky4: vec4f,
     sky5: vec4f,
 };
@@ -135,6 +137,7 @@ fn out(c: vec4f, world: vec3f) -> Out {
         let f = smoothstep(g.fog_range.x, g.fog_range.y, dist);
         o.color = vec4f(mix(c.rgb, g.fog.rgb * c.a, f), c.a);
     }
+    o.color = vec4f(aerial(o.color.rgb, c.a, (world - g.eye.xyz) / max(dist, 1e-4), dist), c.a);
     // g: the distance to the surface itself, which occlusion reads: a
     // reflection is the floor where the eye ray meets it, not the mirror
     // image's virtual depth below it (a hole to GTAO).
@@ -401,25 +404,125 @@ fn fbm(p: vec2f) -> f32 {
 // --- the sky: `Shot::sky` ---------------------------------------------------
 
 fn sky_on() -> bool { return g.sky0.w > 0.5; }
-// Value noise turned a little each octave, so no axis shows through.
-fn cloud_fbm(p: vec2f) -> f32 {
+// Value noise turned a little each octave, so no axis shows through: `n`
+// octaves, 0..1.
+fn cloud_fbm(p: vec2f, n: i32) -> f32 {
     let r = mat2x2f(0.8, 0.6, -0.6, 0.8);
     var v = 0.;
     var a = 0.5;
     var q = p;
-    for (var i = 0; i < 6; i++) {
+    for (var i = 0; i < n; i++) {
         v += a * noise(q);
         q = r * q * 2.03 + vec2f(3.1, 1.7);
         a *= 0.5;
     }
-    return v;
+    return v / (1. - 2. * a);
 }
-// Cloud at `p` on the layer: domain-warped fbm, billowed, cut at the cover.
-fn cloud_density(p: vec2f) -> f32 {
-    let w = vec2f(cloud_fbm(p * 0.45 + 4.3), cloud_fbm(p * 0.45 + vec2f(-2.7, 8.1)));
-    let n = cloud_fbm(p + 1.8 * w);
+// How much cloud stands over `p` (cloud widths): domain-warped fbm of `n`
+// octaves, cut at the cover.
+fn cloud_cover(p: vec2f, n: i32) -> f32 {
+    let w = vec2f(cloud_fbm(p * 0.45 + 4.3, 3), cloud_fbm(p * 0.45 + vec2f(-2.7, 8.1), 3));
+    let v = cloud_fbm(p + 1.8 * w, n);
     let cut = mix(0.66, 0.3, g.sky1.w);
-    return smoothstep(cut, cut + 0.16, n);
+    return smoothstep(cut, cut + 0.16, v);
+}
+// The cloud layer: its base `sky5.w` km up, this deep; a cloud this wide.
+const CLOUD_DEEP: f32 = 1.;
+const CLOUD_WIDTH: f32 = 4.;
+// Cloud at `xz` km, `h` up through the layer (0 its base, 1 its top):
+// flat-bottomed, taller where there is more of it, frayed by a finer
+// noise that slides against it as it drifts (so it churns, the same at
+// the same time). `n` octaves.
+fn cloud_at(xz: vec2f, h: f32, n: i32, seed: vec2f) -> f32 {
+    let drift = vec2f(g.sky2.w, g.sky3.w);
+    let q = xz / CLOUD_WIDTH + drift + seed;
+    let c = cloud_cover(q, n);
+    if (c <= 0.001 || h < 0. || h > 1.) { return 0.; }
+    let body = smoothstep(0., 0.08, h) * (1. - smoothstep(c * 0.5, c, h));
+    let fray = noise(q * 6.3 + drift * 1.7 + vec2f(h * 3.1, -h * 2.3));
+    return clamp(body * (0.4 + 0.6 * c) * (0.55 + 0.9 * fray), 0., 1.);
+}
+fn cloud_hg(mu: f32, k: f32) -> f32 {
+    return (1. - k * k) / (4. * SKY_PI * pow(max(1. + k * k - 2. * k * mu, 1e-4), 1.5));
+}
+// The clouds along unit `d` over `clear`, the sky behind them: the layer
+// marched, each step lit by the sun through the cloud toward it (a lobe
+// forward for the silver lining, one back) and by the sky round it, and
+// hazed by the air as they recede. a: how much of the sky shows through.
+// The gradient's sea of cloud below the horizon is the layer mirrored.
+fn clouds(d0: vec3f, clear: vec3f) -> vec4f {
+    let below = d0.y < 0.;
+    let d = vec3f(d0.x, abs(d0.y), d0.z);
+    let seed = select(vec2f(0.), vec2f(17.3, -41.9), below);
+    let o = air_eye();
+    let r0 = EARTH + g.sky5.w;
+    let r1 = r0 + CLOUD_DEEP;
+    let ro = length(o);
+    let s0 = sphere_hit(o, d, r0);
+    let s1 = sphere_hit(o, d, r1);
+    var a = 0.;
+    var b = s1.y;
+    if (ro < r0) {
+        a = s0.y;
+    } else {
+        // In or over the layer: down to its base if the ray reaches it.
+        if (ro > r1) {
+            if (s1.x > s1.y || s1.x < 0.) { return vec4f(clear, 1.); }
+            a = s1.x;
+        }
+        if (s0.x <= s0.y && s0.x > 0.) { b = s0.x; }
+    }
+    b = min(b, a + 60.);
+    if (b <= a) { return vec4f(clear, 1.); }
+    let sun = g.sky0.xyz;
+    // The sun's light at the clouds: through the air for a physical sky
+    // (high cloud keeps it a while after sunset), the gradient's sunlight.
+    var e = g.sky3.rgb * 1.2;
+    if (sky_physical()) {
+        let ol = depth_to_sun(o + d * a, sun);
+        e = select(exp(-ol) * g.sky5.x, vec3f(0.), ol.x < 0.);
+    }
+    let mu = dot(d, sun);
+    let phase = 0.75 * cloud_hg(mu, 0.65) + 0.25 * cloud_hg(mu, -0.25) + 0.1;
+    let top = g.sky1.rgb;
+    let low = g.sky2.rgb * 0.6 + top * 0.2;
+    let sig0 = 24. * g.sky5.z;
+    let ds = (b - a) / 12.;
+    // One shift per direction: no banding, and the same every frame.
+    let jit = hash2(d.xz * 517.3 + vec2f(d.y * 91.7));
+    var tr = 1.;
+    var lum = vec3f(0.);
+    var at = 0.;
+    var w = 0.;
+    for (var i = 0; i < 12; i++) {
+        let t = a + (f32(i) + jit) * ds;
+        let p = o + d * t;
+        let h = (length(p) - r0) / CLOUD_DEEP;
+        let dens = cloud_at(p.xz, h, 5, seed);
+        if (dens < 0.01) { continue; }
+        // Toward the sun through the cloud, coarser: 0.1, 0.3, 0.6 km.
+        var od = 0.;
+        for (var k = 1; k <= 3; k++) {
+            let lp = p + sun * (0.05 * f32(k * k + k));
+            od += cloud_at(lp.xz, (length(lp) - r0) / CLOUD_DEEP, 3, seed) * 0.1 * f32(k);
+        }
+        od *= sig0;
+        // Light scattered on through the cloud never quite fails inside.
+        let beer = max(exp(-od), 0.25 * exp(-0.2 * od));
+        let src = e * beer * phase + mix(low, top, clamp(h, 0., 1.)) * 0.9;
+        let st = exp(-sig0 * dens * ds);
+        lum += tr * (1. - st) * src;
+        at += tr * (1. - st) * t;
+        w += tr * (1. - st);
+        tr *= st;
+        if (tr < 0.02) { break; }
+    }
+    if (w < 1e-4) { return vec4f(clear, 1.); }
+    // The air between: far clouds melt into the sky.
+    let far = at / w;
+    var haze = vec3f(exp(-far / 40.));
+    if (sky_physical()) { haze = exp(-air_extinction(air_density(g.sky5.w * 0.5)) * far); }
+    return vec4f(clear * tr + lum * haze + clear * (1. - haze) * (1. - tr), tr);
 }
 // The physical sky (`sky.rs`, which the tests hold this to): single
 // scattering through Rayleigh, Mie and ozone, kilometres from the earth's
@@ -456,6 +559,32 @@ fn depth_to_sun(p: vec3f, sun: vec3f) -> vec3f {
     }
     return od;
 }
+// Rayleigh's and Mie's phase at `mu` (sky.rs `phases`).
+fn air_phases(mu: f32) -> vec2f {
+    let mg = 0.8;
+    return vec2f(3. / (16. * SKY_PI) * (1. + mu * mu),
+        3. / (8. * SKY_PI) * (1. - mg * mg) * (1. + mu * mu)
+        / ((2. + mg * mg) * pow(max(1. + mg * mg - 2. * mg * mu, 1e-4), 1.5)));
+}
+// Light scattered more than once where the sun is `up` (sky.rs `multiple`).
+fn air_multiple(up: f32) -> f32 {
+    return smoothstep(-0.3, 0.2, up) * (0.3 + 0.7 * max(up, 0.)) * (1. + g.sky4.w) / (4. * SKY_PI);
+}
+// Aerial perspective (sky.rs `aerial`): `rgb`, of cover `a`, seen `dist`
+// units off along unit `v` through a physical sky's air at the eye.
+fn aerial(rgb: vec3f, a: f32, v: vec3f, dist: f32) -> vec3f {
+    if (!sky_physical() || g.sky5.y <= 0.) { return rgb; }
+    let k = air_density(clamp(g.sky4.z, 0.001, 50.));
+    let ext = air_extinction(k);
+    let tr = exp(-ext * (dist * g.sky5.y * 1e-3));
+    let ph = air_phases(dot(v, g.sky0.xyz));
+    let sr = RAYLEIGH * k.x;
+    let sm = 3.996e-3 * g.sky4.x * k.y;
+    // The sun at the eye through the air: its sunlight times pi.
+    let j = (sr * ph.x + sm * ph.y) * g.sky3.rgb * SKY_PI
+        + (sr + sm) * air_multiple(g.sky0.y) * g.sky5.x;
+    return rgb * tr + j * (1. - tr) / max(ext, vec3f(1e-9)) * a;
+}
 fn air_eye() -> vec3f { return vec3f(0., EARTH + clamp(g.sky4.z, 0.001, 50.), 0.); }
 // Radiance along unit `d`, without the sun's disc.
 fn atmosphere(d: vec3f) -> vec3f {
@@ -466,11 +595,7 @@ fn atmosphere(d: vec3f) -> vec3f {
     let e = sphere_hit(o, d, EARTH);
     let ground = e.x <= e.y && e.x > 0.;
     if (ground) { far = e.x; }
-    let mu = dot(d, sun);
-    let pr = 3. / (16. * SKY_PI) * (1. + mu * mu);
-    let mg = 0.8;
-    let pm = 3. / (8. * SKY_PI) * (1. - mg * mg) * (1. + mu * mu)
-        / ((2. + mg * mg) * pow(max(1. + mg * mg - 2. * mg * mu, 1e-4), 1.5));
+    let ph = air_phases(dot(d, sun));
     let mie = 3.996e-3 * g.sky4.x;
     var od = vec3f(0.);
     var sum = vec3f(0.);
@@ -488,11 +613,9 @@ fn atmosphere(d: vec3f) -> vec3f {
         let sm = mie * k.y;
         let ol = depth_to_sun(p, sun);
         if (ol.x >= 0.) {
-            sum += exp(-(mid + ol)) * (sr * pr + sm * pm) * ds;
+            sum += exp(-(mid + ol)) * (sr * ph.x + sm * ph.y) * ds;
         }
-        let up = dot(p, sun) / r;
-        let lit = smoothstep(-0.3, 0.2, up) * (0.3 + 0.7 * max(up, 0.)) * (1. + g.sky4.w);
-        sum += exp(-mid) * (sr + sm) * ds * lit / (4. * SKY_PI);
+        sum += exp(-mid) * (sr + sm) * ds * air_multiple(dot(p, sun) / r);
     }
     if (ground) {
         let p = o + d * e.x;
@@ -538,34 +661,20 @@ fn sky_seen(d: vec3f, disc: f32) -> vec3f {
         c = select(c, mix(g.sky2.rgb, g.sky2.rgb * 0.55 + g.sky1.rgb * 0.15, smoothstep(0., 0.5, -up)), up < 0.);
         c += sunc * (0.06 * pow(mu, 4.) + 0.12 * pow(mu, 16.) * h + 0.35 * pow(mu, 64.));
     }
-    // The layer, curved over like the sky's dome: farther toward the
-    // horizon, so smaller and hazier there, but not flattened to streaks.
-    let y = abs(up) * 0.8 + 0.15;
-    let below = up < 0.;
-    let drift = vec2f(g.sky2.w, g.sky3.w);
-    let p = d.xz / y * select(0.5, 0.4, below) + drift + select(vec2f(0.), vec2f(17.3, -41.9), below);
     // A physical sky has ground below its horizon, not a sea of cloud.
-    let dens = select(cloud_density(p), 0., below && physical);
-    if (dens > 0.001) {
-        // Thinner toward the sun: march a little that way through the layer.
-        let toward = normalize(vec2f(sun.x, sun.z) + vec2f(1e-4)) * 0.18;
-        let shadow = cloud_density(p + toward) * 0.6 + cloud_density(p + 2. * toward) * 0.4;
-        let lit = exp(-3. * shadow) * select(1., 1.15, below);
-        // Undersides: the sky's blue, greyed.
-        let amb = g.sky1.rgb * 0.55 + g.sky2.rgb * 0.3;
-        // Bright edges against the sun, as droplets scatter it forward.
-        let silver = 1. + 2.5 * pow(mu, 10.) * (1. - dens);
-        let cloud = amb * (0.5 + 0.3 * dens) + sunc * 0.4 * lit * silver;
-        let fade = smoothstep(0., 0.12, abs(up));
-        c = mix(c, cloud, dens * fade);
+    var thru = 1.;
+    if (g.sky1.w > 0.001 && g.sky5.z > 0. && !(up < 0. && physical)) {
+        let k = clouds(d, c);
+        c = k.rgb;
+        thru = k.a;
     }
     // The disc, over the clouds only where they are thin.
     if (physical) {
         // ponytail: 60 times its light, not the real ~46000 (pi over the
         // disc's solid angle), which no half float or bloom survives.
-        c += sunc * 60. * disc * sun_disc(d) * (1. - dens);
+        c += sunc * 60. * disc * sun_disc(d) * thru;
     } else {
-        c += sunc * 30. * disc * smoothstep(0.99996, 0.99999, mu) * (1. - dens);
+        c += sunc * 30. * disc * smoothstep(0.99996, 0.99999, mu) * thru;
     }
     return c;
 }
@@ -1688,6 +1797,7 @@ struct Traced {
     if (g.fog.a > 0.5) {
         rgb = mix(rgb, g.fog.rgb, smoothstep(g.fog_range.x, g.fog_range.y, h.t));
     }
+    rgb = aerial(rgb, 1., ray, h.t);
     var o: Traced;
     o.color = vec4f(rgb * h.a, h.a);
     // As `fs_glass` blends it: the alpha is its cover, not a normal.

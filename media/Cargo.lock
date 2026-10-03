@@ -1625,9 +1625,11 @@ name = "mui-style"
 version = "0.4.0"
 dependencies = [
  "color",
+ "kurbo",
  "mui-geometry",
  "mui-layout",
  "mui-text",
+ "peniko",
 ]
 
 [[package]]

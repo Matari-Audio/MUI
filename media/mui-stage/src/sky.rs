@@ -29,6 +29,9 @@ pub const SUN_RADIUS: f32 = 0.004_67;
 /// share of the light scattered once more stands in for the multiple
 /// scattering Hillaire's LUT would compute.
 const MULTI: f32 = 1.;
+/// A clear day's sky, zenith and horizon, as [`Sky::auto_exposure`]
+/// meters it: the level it leaves alone.
+const DAY: f32 = 0.16;
 
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
@@ -108,11 +111,7 @@ pub fn atmosphere(a: &Atmosphere, sun: [f32; 3], d: [f32; 3]) -> [f32; 3] {
     if let Some((t0, _)) = ground {
         far = t0;
     }
-    let mu = dot(d, sun);
-    let phase_r = 3. / (16. * std::f32::consts::PI) * (1. + mu * mu);
-    let g2 = MIE_G * MIE_G;
-    let phase_m = 3. / (8. * std::f32::consts::PI) * (1. - g2) * (1. + mu * mu)
-        / ((2. + g2) * (1. + g2 - 2. * MIE_G * mu).max(1e-4).powf(1.5));
+    let (phase_r, phase_m) = phases(dot(d, sun));
     let mie_s = MIE * a.dust();
     let mut od = [0f32; 3];
     let mut sum = [0f32; 3];
@@ -139,14 +138,10 @@ pub fn atmosphere(a: &Atmosphere, sun: [f32; 3], d: [f32; 3]) -> [f32; 3] {
                 sum[c] += t * (scatter_r[c] * phase_r + scatter_m * phase_m) * ds;
             }
         }
-        // Light scattered more than once, isotropic: as bright as the sun
-        // is high over this sample, fading out through twilight.
-        let up = dot(p, sun) / r;
-        let lit = smoothstep(-0.3, 0.2, up) * (0.3 + 0.7 * up.max(0.)) * (1. + a.ground_albedo);
+        let lit = multiple(a, dot(p, sun) / r);
         for c in 0..3 {
             let t = (-mid[c]).exp();
-            sum[c] +=
-                t * (scatter_r[c] + scatter_m) * ds * MULTI * lit / (4. * std::f32::consts::PI);
+            sum[c] += t * (scatter_r[c] + scatter_m) * ds * lit;
         }
     }
     if let Some((t0, _)) = ground {
@@ -162,6 +157,49 @@ pub fn atmosphere(a: &Atmosphere, sun: [f32; 3], d: [f32; 3]) -> [f32; 3] {
         }
     }
     scale(sum, SUN * a.intensity)
+}
+
+/// Rayleigh's and Mie's phase at `mu`, the cosine between the view and
+/// the sun.
+fn phases(mu: f32) -> (f32, f32) {
+    let g2 = MIE_G * MIE_G;
+    (
+        3. / (16. * std::f32::consts::PI) * (1. + mu * mu),
+        3. / (8. * std::f32::consts::PI) * (1. - g2) * (1. + mu * mu)
+            / ((2. + g2) * (1. + g2 - 2. * MIE_G * mu).max(1e-4).powf(1.5)),
+    )
+}
+
+/// Light scattered more than once, per unit of scattering, isotropic, at a
+/// point whose sun is `up` (the cosine from its zenith): as bright as the
+/// sun is high there, and on through twilight, when the air still high
+/// in the sun lights the air below it.
+fn multiple(a: &Atmosphere, up: f32) -> f32 {
+    let lit = smoothstep(-0.3, 0.2, up) * (0.3 + 0.7 * up.max(0.)) * (1. + a.ground_albedo);
+    lit * MULTI / (4. * std::f32::consts::PI)
+}
+
+/// Aerial perspective: the air between the eye and a surface `km` off
+/// along unit `d`, its sun along `sun`, as one layer at the eye's height
+/// (a shot's distances are short beside the air's scale heights): what
+/// it leaves of the surface's light, and the light it scatters in. Far
+/// enough, a surface takes the sky's colour at the horizon.
+pub fn aerial(a: &Atmosphere, sun: [f32; 3], d: [f32; 3], km: f32) -> ([f32; 3], [f32; 3]) {
+    let (sun, d) = (norm(sun), norm(d));
+    let dens = density(eye(a)[1] - EARTH);
+    let ext = extinction(a, dens);
+    let (pr, pm) = phases(dot(d, sun));
+    let e = transmittance(a, sun);
+    let ms = multiple(a, sun[1]);
+    let sm = MIE * a.dust() * dens[1];
+    let k = SUN * a.intensity;
+    let tr = ext.map(|v| (-v * km.max(0.)).exp());
+    let add = std::array::from_fn(|c| {
+        let sr = RAYLEIGH[c] * dens[0];
+        let j = (sr * pr + sm * pm) * e[c] + (sr + sm) * ms;
+        j * k * (1. - tr[c]) / ext[c].max(1e-9)
+    });
+    (tr, add)
 }
 
 /// The colour [`Sky::physical`] gives sunlight: its irradiance through the
@@ -242,6 +280,42 @@ impl Atmosphere {
 }
 
 impl Sky {
+    /// As the shaders' `sky0`..`sky5` take it.
+    pub fn uniform(&self) -> [f32; 24] {
+        let mut g = [0.; 24];
+        g[..3].copy_from_slice(&norm(self.sun));
+        g[3] = 1.;
+        g[4..7].copy_from_slice(&self.zenith);
+        g[7] = self.cover.clamp(0., 1.);
+        g[8..11].copy_from_slice(&self.horizon);
+        g[11] = self.drift[0];
+        g[12..15].copy_from_slice(&self.sun_color);
+        g[15] = self.drift[1];
+        if let Some(a) = &self.atmosphere {
+            g[3] = 2.;
+            g[16..20].copy_from_slice(&a.uniform());
+            g[20] = SUN * a.intensity;
+            g[21] = self.aerial.max(0.);
+        }
+        g[22] = self.density.max(0.);
+        g[23] = self.cloud_altitude.clamp(0.1, 20.);
+        g
+    }
+
+    /// The exposure that keeps a physical sky readable as the sun goes
+    /// down, as a camera's meter would: 1 by day, rising (by less than the
+    /// light falls, so dusk still reads as dusk) to 64 deep in twilight.
+    /// The gradient's colours are the artist's: 1.
+    pub fn auto_exposure(&self) -> f32 {
+        let Some(a) = &self.atmosphere else {
+            return 1.;
+        };
+        let luma = |c: [f32; 3]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        let k = a.intensity.max(1e-6);
+        let seen = (luma(self.zenith) + luma(self.horizon)) * 0.5 / k;
+        (DAY / seen.max(1e-9)).powf(0.8).clamp(1., 64.)
+    }
+
     /// A physical sky: `air` scattering sunlight from `sun`, its
     /// zenith, horizon and sun colours (what the clouds are lit by) its own.
     pub fn physical(sun: [f32; 3], air: Atmosphere, cover: f32, drift: [f32; 2]) -> Self {
@@ -260,8 +334,10 @@ impl Sky {
             sun_color: sunlight(&air, s),
             cover,
             drift,
+            aerial: 1.,
             atmosphere: Some(air),
             light: true,
+            ..Self::default()
         }
     }
 }
@@ -451,5 +527,123 @@ mod tests {
         assert!(luma(dusk) < 0.5 * luma(day), "{dusk:?} against {day:?}");
         let unlit = card(40., false);
         assert!(unlit.iter().all(|v| *v > 0.99), "unlit: {unlit:?}");
+    }
+
+    #[test]
+    fn aerial_perspective_hazes_far_surfaces_toward_a_bluish_sky() {
+        let a = clear();
+        let (sun, d) = (sun_at(50.), [0., 0., 1.]);
+        let (t0, l0) = aerial(&a, sun, d, 0.);
+        assert!(t0.iter().all(|v| (*v - 1.).abs() < 1e-6) && l0 == [0.; 3]);
+        let (near, far) = (aerial(&a, sun, d, 2.), aerial(&a, sun, d, 60.));
+        // Blue goes first and comes back as the sky's.
+        assert!(far.0[2] < far.0[0] && far.1[2] > far.1[0], "{far:?}");
+        assert!(luma(far.1) > luma(near.1) && luma(far.0) < luma(near.0));
+        // Very far, a surface is about the horizon's brightness.
+        let (_, add) = aerial(&a, sun, d, 1000.);
+        let horizon = atmosphere(&a, sun, [0., 0.01, 1.]);
+        let r = luma(add) / luma(horizon);
+        assert!((0.4..2.5).contains(&r), "{add:?} against {horizon:?}");
+    }
+
+    #[test]
+    fn auto_exposure_leaves_the_day_alone_and_opens_up_for_twilight() {
+        let at = |deg| Sky::physical(sun_at(deg), clear(), 0., [0.; 2]).auto_exposure();
+        assert_eq!(at(60.), 1.);
+        assert_eq!(at(30.), 1.);
+        let mut last = 1.;
+        for deg in [10., 4., 1., -2., -4., -6.] {
+            let e = at(deg);
+            assert!(e >= last, "{deg}: {e} after {last}");
+            last = e;
+        }
+        assert!((4. ..=64.).contains(&at(-4.)), "{}", at(-4.));
+        // Intensity is the artist's: the meter does not undo it.
+        let dim = Sky::physical(sun_at(-4.), Atmosphere { intensity: 0.5, ..clear() }, 0., [0.; 2]);
+        assert_eq!(dim.auto_exposure(), at(-4.));
+        assert_eq!(Sky::default().auto_exposure(), 1.);
+    }
+
+    /// A white card `dist` units off, unlit (the sky lights nothing), seen
+    /// through `aerial`: the stage draws what [`aerial`] computes.
+    #[test]
+    fn the_stage_hazes_a_far_card_as_the_model_does() {
+        use crate::{Camera, Plane, Post, Shot, Stage};
+        use mui_scene::prelude::*;
+        let Ok(mut stage) = Stage::new(16, 16) else {
+            eprintln!("no GPU, skipped");
+            return;
+        };
+        let root = block(16., 16.).radius(0.).fill(Color::srgb(1., 1., 1.));
+        let scene = resolve(&SceneSpec::new(root)).expect("resolves");
+        stage.layer("white", &scene, Size::new(16., 16.), 1.).unwrap();
+        let air = Atmosphere { turbidity: 3., ..clear() };
+        for (sun, dist, k) in [(sun_at(20.), 4000., 10.), (sun_at(3.), 3000., 25.), (sun_at(-3.), 4000., 20.)] {
+            let sky = Sky {
+                light: false,
+                aerial: k,
+                ..Sky::physical(sun, air, 0., [0.; 2])
+            };
+            let shot = Shot {
+                planes: vec![Plane::new("white", dist, dist)],
+                sky: Some(sky),
+                post: Post::NONE,
+                ..Shot::new(Camera {
+                    eye: [0., 0., dist],
+                    target: [0.; 3],
+                    fov: 30.,
+                    roll: 0.,
+                })
+            };
+            let f = stage.render(0., 0., 1, &|_| shot.clone()).unwrap();
+            let px = &f.rgba[(8 * 16 + 8) * 4..][..3];
+            let (tr, add) = aerial(&air, sun, [0., 0., -1.], dist * k / 1000.);
+            let want: [f32; 3] = std::array::from_fn(|c| srgb(tr[c] + add[c]).min(1.));
+            for c in 0..3 {
+                assert!(
+                    (px[c] - want[c]).abs() < 0.02 + 0.03 * want[c],
+                    "sun {sun:?} at {dist}: drew {px:?}, model {want:?}"
+                );
+            }
+        }
+    }
+
+    /// Looking up into a clouded physical sky: the clouds are there, the
+    /// same at the same time, moved by their drift, and thicker clouds
+    /// darker underneath away from the sun.
+    #[test]
+    fn the_clouds_are_deterministic_drift_and_darken_as_they_thicken() {
+        use crate::{Camera, Post, Shot, Stage};
+        let Ok(mut stage) = Stage::new(48, 48) else {
+            eprintln!("no GPU, skipped");
+            return;
+        };
+        let mut frame = |cover: f32, density: f32, drift: f32| {
+            let sky = Sky {
+                density,
+                ..Sky::physical(sun_at(35.), clear(), cover, [drift, 0.])
+            };
+            let shot = Shot {
+                sky: Some(sky),
+                post: Post::NONE,
+                // Up and away from the sun.
+                ..Shot::new(Camera {
+                    eye: [0.; 3],
+                    target: [0., 0.8, 0.6],
+                    fov: 60.,
+                    roll: 0.,
+                })
+            };
+            stage.render(0., 0., 1, &|_| shot.clone()).unwrap().rgba
+        };
+        let mean = |f: &[f32]| f.chunks(4).map(|p| luma([p[0], p[1], p[2]])).sum::<f32>() / (f.len() / 4) as f32;
+        let diff = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32;
+        let clear_sky = frame(0., 1., 0.);
+        let cloudy = frame(0.7, 1., 0.);
+        assert!(diff(&clear_sky, &cloudy) > 0.02, "clouds show");
+        assert_eq!(frame(0.7, 1., 0.), cloudy, "the same time, the same clouds");
+        assert!(diff(&frame(0.7, 1., 0.5), &cloudy) > 0.01, "drift moves them");
+        let (thin, thick) = (mean(&frame(0.7, 0.4, 0.)), mean(&frame(0.7, 3., 0.)));
+        assert!(thick < thin, "dark bellies: {thick} against {thin}");
     }
 }

@@ -104,6 +104,18 @@ fn is_zero(a: &Anim<f64>) -> bool {
 /// `sun_light` adds a directional light along the sun, its colour the
 /// sunlight left after the air, casting shadows. Both default on for the
 /// physical sky and off for the gradient.
+///
+/// The clouds are a layer 1 km deep whose base is `cloud_altitude` metres
+/// up, marched through and lit by the sun through the cloud toward it
+/// (silver linings against it, dark bellies under thick cloud) and by the
+/// sky round them; `cloud_density` is their optical thickness (1
+/// fair-weather cumulus, 0.3 wisps, 3 dark). The same time draws the same
+/// clouds. `aerial` (a physical sky's; default 1) is aerial perspective:
+/// the air between the camera and every surface, a pixel a metre times
+/// `aerial`, dims it and scatters the sky's light in, so far geometry
+/// fades toward the horizon's colour. `exposure` is EV compensation (+1
+/// twice as bright); `auto_exposure` (on by default for the physical sky)
+/// meters the sky so dusk and twilight stay readable.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(transform = crate::vars::bindable)]
@@ -138,6 +150,16 @@ pub struct Sky {
     pub light: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sun_light: Option<bool>,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub cloud_density: Anim<f64>,
+    #[serde(default = "cloud_altitude", skip_serializing_if = "is_cloud_altitude")]
+    pub cloud_altitude: Anim<f64>,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub aerial: Anim<f64>,
+    #[serde(default = "zero", skip_serializing_if = "is_zero")]
+    pub exposure: Anim<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_exposure: Option<bool>,
 }
 
 /// How a [`Sky`] is coloured.
@@ -175,6 +197,12 @@ fn turbidity() -> Anim<f64> {
 }
 fn is_turbidity(a: &Anim<f64>) -> bool {
     *a == turbidity()
+}
+fn cloud_altitude() -> Anim<f64> {
+    Anim::Value(1500.)
+}
+fn is_cloud_altitude(a: &Anim<f64>) -> bool {
+    *a == cloud_altitude()
 }
 fn one_f() -> f64 {
     1.
@@ -222,9 +250,14 @@ impl Sky {
         let cover = self.cover.at(t).clamp(0., 1.) as f32;
         let drift = [(self.wind * t) as f32, 0.];
         let light = self.light.unwrap_or(self.physical());
+        let density = self.cloud_density.at(t).max(0.) as f32;
+        let cloud_altitude = (self.cloud_altitude.at(t) / 1000.).clamp(0.1, 20.) as f32;
         if self.physical() {
             return mui_stage::Sky {
                 light,
+                density,
+                cloud_altitude,
+                aerial: self.aerial.at(t).max(0.) as f32,
                 ..mui_stage::Sky::physical(self.sun_dir(t), self.air(t), cover, drift)
             };
         }
@@ -238,9 +271,23 @@ impl Sky {
             sun_color: lin(&self.sun).map(|c| c * 2.6),
             cover,
             drift,
+            density,
+            cloud_altitude,
+            aerial: 0.,
             atmosphere: None,
             light,
         }
+    }
+
+    /// The exposure at `t` the scene is drawn with: `exposure` EV, times
+    /// the sky's meter with `auto_exposure` (default on when physical).
+    pub fn exposure(&self, t: f64) -> f32 {
+        let auto = if self.auto_exposure.unwrap_or(self.physical()) {
+            self.at(t).auto_exposure()
+        } else {
+            1.
+        };
+        2f32.powf(self.exposure.at(t) as f32) * auto
     }
 
     /// With `sun_light`, the sun as a directional lamp at `t`: along the
@@ -701,6 +748,9 @@ pub struct View {
     pub ao: Option<Ao>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bloom: Option<Bloom>,
+    /// What the frame's light is multiplied by: the sky's `exposure`.
+    #[serde(skip)]
+    pub exposure: f32,
 }
 
 /// A project point (x right, y down, z deeper) in mui-stage's world
@@ -786,6 +836,7 @@ pub fn view(size: [u32; 2], scene: &Scene, t: f64, layers: &[Drawn]) -> View {
         sky: scene.sky.as_ref().map(|k| k.at(t)),
         ao: scene.ao.clone(),
         bloom: scene.bloom.clone(),
+        exposure: scene.sky.as_ref().map_or(1., |k| k.exposure(t)),
     }
 }
 

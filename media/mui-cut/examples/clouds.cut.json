@@ -1,0 +1,833 @@
+{
+  "size": [
+    1280,
+    720
+  ],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "noon",
+      "duration": 4.0,
+      "background": "#0e0f14",
+      "mode": "3d",
+      "sky": {
+        "model": "physical",
+        "azimuth": -35.0,
+        "turbidity": 2.6,
+        "elevation": 62.0,
+        "cover": 0.35
+      },
+      "ground": {
+        "y": 560.0,
+        "color": "#6a6d70",
+        "reflect": 0.15,
+        "radius": 40000.0
+      },
+      "bloom": {
+        "strength": 0.4,
+        "threshold": 1.2
+      },
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 420.0,
+          "rx": -6.0,
+          "ry": [
+            {
+              "t": 0,
+              "v": -8.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4,
+              "v": 8.0,
+              "interp": "bezier"
+            }
+          ],
+          "distance": 1500.0,
+          "fov": 46.0
+        },
+        {
+          "id": "tower1",
+          "kind": "rect",
+          "x": -1960,
+          "y": -140.0,
+          "z": 3000,
+          "width": 900,
+          "height": 1400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 540.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower2",
+          "kind": "rect",
+          "x": 2540,
+          "y": -540.0,
+          "z": 5200,
+          "width": 1100,
+          "height": 2200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 660.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower3",
+          "kind": "rect",
+          "x": -4560,
+          "y": -940.0,
+          "z": 9000,
+          "width": 1600,
+          "height": 3000,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 960.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower4",
+          "kind": "rect",
+          "x": 6240,
+          "y": -1540.0,
+          "z": 12000,
+          "width": 2000,
+          "height": 4200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1200.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower5",
+          "kind": "rect",
+          "x": -560,
+          "y": -2040.0,
+          "z": 18000,
+          "width": 2600,
+          "height": 5200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1560.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower6",
+          "kind": "rect",
+          "x": 9640,
+          "y": -2640.0,
+          "z": 26000,
+          "width": 3200,
+          "height": 6400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1920.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower7",
+          "kind": "rect",
+          "x": -10360,
+          "y": -2240.0,
+          "z": 30000,
+          "width": 3600,
+          "height": 5600,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 2160.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "pane",
+          "kind": "rect",
+          "x": 470.0,
+          "y": 400.0,
+          "z": 60.0,
+          "width": 300.0,
+          "height": 280.0,
+          "radius": 28.0,
+          "fill": "#e8f1ff",
+          "ry": 24.0,
+          "extrude": 24.0,
+          "edge": "#c9d6e6",
+          "material": {
+            "transmission": 1.0,
+            "roughness": 0.02,
+            "ior": 1.5,
+            "bevel": 14.0,
+            "thickness": 24.0
+          }
+        },
+        {
+          "id": "disc",
+          "kind": "ellipse",
+          "x": 820.0,
+          "y": 420.0,
+          "z": 140.0,
+          "width": 260.0,
+          "height": 260.0,
+          "fill": "#d9dce3",
+          "ry": -30.0,
+          "extrude": 20.0,
+          "edge": "#9a9ea8",
+          "material": {
+            "metallic": 1.0,
+            "roughness": 0.14
+          }
+        }
+      ]
+    },
+    {
+      "name": "golden-hour",
+      "duration": 4.0,
+      "background": "#0e0f14",
+      "mode": "3d",
+      "sky": {
+        "model": "physical",
+        "azimuth": -35.0,
+        "turbidity": 2.6,
+        "elevation": 4.0,
+        "cover": 0.4,
+        "cloud_altitude": 2500.0
+      },
+      "ground": {
+        "y": 560.0,
+        "color": "#6a6d70",
+        "reflect": 0.15,
+        "radius": 40000.0
+      },
+      "bloom": {
+        "strength": 0.4,
+        "threshold": 1.2
+      },
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 420.0,
+          "rx": -6.0,
+          "ry": [
+            {
+              "t": 0,
+              "v": -8.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4,
+              "v": 8.0,
+              "interp": "bezier"
+            }
+          ],
+          "distance": 1500.0,
+          "fov": 46.0
+        },
+        {
+          "id": "tower1",
+          "kind": "rect",
+          "x": -1960,
+          "y": -140.0,
+          "z": 3000,
+          "width": 900,
+          "height": 1400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 540.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower2",
+          "kind": "rect",
+          "x": 2540,
+          "y": -540.0,
+          "z": 5200,
+          "width": 1100,
+          "height": 2200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 660.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower3",
+          "kind": "rect",
+          "x": -4560,
+          "y": -940.0,
+          "z": 9000,
+          "width": 1600,
+          "height": 3000,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 960.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower4",
+          "kind": "rect",
+          "x": 6240,
+          "y": -1540.0,
+          "z": 12000,
+          "width": 2000,
+          "height": 4200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1200.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower5",
+          "kind": "rect",
+          "x": -560,
+          "y": -2040.0,
+          "z": 18000,
+          "width": 2600,
+          "height": 5200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1560.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower6",
+          "kind": "rect",
+          "x": 9640,
+          "y": -2640.0,
+          "z": 26000,
+          "width": 3200,
+          "height": 6400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1920.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower7",
+          "kind": "rect",
+          "x": -10360,
+          "y": -2240.0,
+          "z": 30000,
+          "width": 3600,
+          "height": 5600,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 2160.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "pane",
+          "kind": "rect",
+          "x": 470.0,
+          "y": 400.0,
+          "z": 60.0,
+          "width": 300.0,
+          "height": 280.0,
+          "radius": 28.0,
+          "fill": "#e8f1ff",
+          "ry": 24.0,
+          "extrude": 24.0,
+          "edge": "#c9d6e6",
+          "material": {
+            "transmission": 1.0,
+            "roughness": 0.02,
+            "ior": 1.5,
+            "bevel": 14.0,
+            "thickness": 24.0
+          }
+        },
+        {
+          "id": "disc",
+          "kind": "ellipse",
+          "x": 820.0,
+          "y": 420.0,
+          "z": 140.0,
+          "width": 260.0,
+          "height": 260.0,
+          "fill": "#d9dce3",
+          "ry": -30.0,
+          "extrude": 20.0,
+          "edge": "#9a9ea8",
+          "material": {
+            "metallic": 1.0,
+            "roughness": 0.14
+          }
+        }
+      ]
+    },
+    {
+      "name": "blue-hour",
+      "duration": 4.0,
+      "background": "#0e0f14",
+      "mode": "3d",
+      "sky": {
+        "model": "physical",
+        "azimuth": -35.0,
+        "turbidity": 2.6,
+        "elevation": -5.0,
+        "cover": 0.35,
+        "cloud_altitude": 3000.0
+      },
+      "ground": {
+        "y": 560.0,
+        "color": "#6a6d70",
+        "reflect": 0.15,
+        "radius": 40000.0
+      },
+      "bloom": {
+        "strength": 0.4,
+        "threshold": 1.2
+      },
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 420.0,
+          "rx": -6.0,
+          "ry": [
+            {
+              "t": 0,
+              "v": -8.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4,
+              "v": 8.0,
+              "interp": "bezier"
+            }
+          ],
+          "distance": 1500.0,
+          "fov": 46.0
+        },
+        {
+          "id": "tower1",
+          "kind": "rect",
+          "x": -1960,
+          "y": -140.0,
+          "z": 3000,
+          "width": 900,
+          "height": 1400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 540.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower2",
+          "kind": "rect",
+          "x": 2540,
+          "y": -540.0,
+          "z": 5200,
+          "width": 1100,
+          "height": 2200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 660.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower3",
+          "kind": "rect",
+          "x": -4560,
+          "y": -940.0,
+          "z": 9000,
+          "width": 1600,
+          "height": 3000,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 960.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower4",
+          "kind": "rect",
+          "x": 6240,
+          "y": -1540.0,
+          "z": 12000,
+          "width": 2000,
+          "height": 4200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1200.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower5",
+          "kind": "rect",
+          "x": -560,
+          "y": -2040.0,
+          "z": 18000,
+          "width": 2600,
+          "height": 5200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1560.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower6",
+          "kind": "rect",
+          "x": 9640,
+          "y": -2640.0,
+          "z": 26000,
+          "width": 3200,
+          "height": 6400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1920.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower7",
+          "kind": "rect",
+          "x": -10360,
+          "y": -2240.0,
+          "z": 30000,
+          "width": 3600,
+          "height": 5600,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 2160.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "pane",
+          "kind": "rect",
+          "x": 470.0,
+          "y": 400.0,
+          "z": 60.0,
+          "width": 300.0,
+          "height": 280.0,
+          "radius": 28.0,
+          "fill": "#e8f1ff",
+          "ry": 24.0,
+          "extrude": 24.0,
+          "edge": "#c9d6e6",
+          "material": {
+            "transmission": 1.0,
+            "roughness": 0.02,
+            "ior": 1.5,
+            "bevel": 14.0,
+            "thickness": 24.0
+          }
+        },
+        {
+          "id": "disc",
+          "kind": "ellipse",
+          "x": 820.0,
+          "y": 420.0,
+          "z": 140.0,
+          "width": 260.0,
+          "height": 260.0,
+          "fill": "#d9dce3",
+          "ry": -30.0,
+          "extrude": 20.0,
+          "edge": "#9a9ea8",
+          "material": {
+            "metallic": 1.0,
+            "roughness": 0.14
+          }
+        }
+      ]
+    },
+    {
+      "name": "overcast-haze",
+      "duration": 4.0,
+      "background": "#0e0f14",
+      "mode": "3d",
+      "sky": {
+        "model": "physical",
+        "azimuth": -35.0,
+        "turbidity": 4.0,
+        "elevation": [
+          {
+            "t": 0,
+            "v": 24.0,
+            "interp": "bezier"
+          },
+          {
+            "t": 4,
+            "v": 30.0,
+            "interp": "bezier"
+          }
+        ],
+        "cover": [
+          {
+            "t": 0,
+            "v": 0.55,
+            "interp": "linear"
+          },
+          {
+            "t": 4,
+            "v": 0.7,
+            "interp": "linear"
+          }
+        ],
+        "cloud_density": [
+          {
+            "t": 0,
+            "v": 1.4,
+            "interp": "linear"
+          },
+          {
+            "t": 4,
+            "v": 2.2,
+            "interp": "linear"
+          }
+        ],
+        "cloud_altitude": 1200.0,
+        "wind": 0.06,
+        "aerial": 3.0,
+        "exposure": 0.3
+      },
+      "ground": {
+        "y": 560.0,
+        "color": "#6a6d70",
+        "reflect": 0.15,
+        "radius": 40000.0
+      },
+      "bloom": {
+        "strength": 0.4,
+        "threshold": 1.2
+      },
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 420.0,
+          "rx": -6.0,
+          "ry": [
+            {
+              "t": 0,
+              "v": -8.0,
+              "interp": "bezier"
+            },
+            {
+              "t": 4,
+              "v": 8.0,
+              "interp": "bezier"
+            }
+          ],
+          "distance": 1500.0,
+          "fov": 46.0
+        },
+        {
+          "id": "tower1",
+          "kind": "rect",
+          "x": -1960,
+          "y": -140.0,
+          "z": 3000,
+          "width": 900,
+          "height": 1400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 540.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower2",
+          "kind": "rect",
+          "x": 2540,
+          "y": -540.0,
+          "z": 5200,
+          "width": 1100,
+          "height": 2200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 660.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower3",
+          "kind": "rect",
+          "x": -4560,
+          "y": -940.0,
+          "z": 9000,
+          "width": 1600,
+          "height": 3000,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 960.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower4",
+          "kind": "rect",
+          "x": 6240,
+          "y": -1540.0,
+          "z": 12000,
+          "width": 2000,
+          "height": 4200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1200.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower5",
+          "kind": "rect",
+          "x": -560,
+          "y": -2040.0,
+          "z": 18000,
+          "width": 2600,
+          "height": 5200,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1560.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower6",
+          "kind": "rect",
+          "x": 9640,
+          "y": -2640.0,
+          "z": 26000,
+          "width": 3200,
+          "height": 6400,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 1920.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "tower7",
+          "kind": "rect",
+          "x": -10360,
+          "y": -2240.0,
+          "z": 30000,
+          "width": 3600,
+          "height": 5600,
+          "radius": 0,
+          "fill": "#c4c7cc",
+          "extrude": 2160.0,
+          "edge": "#9da1a8",
+          "material": {
+            "roughness": 0.6
+          }
+        },
+        {
+          "id": "pane",
+          "kind": "rect",
+          "x": 470.0,
+          "y": 400.0,
+          "z": 60.0,
+          "width": 300.0,
+          "height": 280.0,
+          "radius": 28.0,
+          "fill": "#e8f1ff",
+          "ry": 24.0,
+          "extrude": 24.0,
+          "edge": "#c9d6e6",
+          "material": {
+            "transmission": 1.0,
+            "roughness": 0.02,
+            "ior": 1.5,
+            "bevel": 14.0,
+            "thickness": 24.0
+          }
+        },
+        {
+          "id": "disc",
+          "kind": "ellipse",
+          "x": 820.0,
+          "y": 420.0,
+          "z": 140.0,
+          "width": 260.0,
+          "height": 260.0,
+          "fill": "#d9dce3",
+          "ry": -30.0,
+          "extrude": 20.0,
+          "edge": "#9a9ea8",
+          "material": {
+            "metallic": 1.0,
+            "roughness": 0.14
+          }
+        }
+      ]
+    }
+  ]
+}

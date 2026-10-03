@@ -499,6 +499,21 @@ mesh. Scenes without it render exactly as before.
   the sun, coloured by what the air leaves of it, casting shadows. Both
   default on for the physical model, off for the gradient. Key
   `elevation` for a sunrise: see `examples/sky.cut.json`.
+  The clouds are a layer 1 km deep, its base `cloud_altitude` metres up
+  (default 1500), marched through and lit by the sun through the cloud
+  toward it (silver linings against the sun, dark bellies under thick
+  cloud, high cloud still pink after sunset) and by the sky round them,
+  melting into the air with distance; `cloud_density` (default 1; 0.3
+  wisps, 3 storm-dark) is their optical thickness. `cover`,
+  `cloud_density` and `cloud_altitude` key; the same time draws the same
+  clouds. `aerial` (physical only, default 1) is aerial perspective: the
+  air between the camera and each surface, a pixel a metre times
+  `aerial`, dims it and scatters in the sky's light, so far geometry
+  fades toward the horizon. `exposure` is EV compensation (+1 twice as
+  bright); `auto_exposure` (default on for the physical sky) meters the
+  sky so golden hour and twilight stay readable: no change by day, up to
+  6 stops opened deep in twilight. See `examples/clouds.cut.json` (noon,
+  golden hour, blue hour and a hazy overcast over distant towers).
 - A layer's `material`: `metallic`, `roughness`, `transmission` (glass),
   `ior`, `thickness`, `dispersion`, `tint`, `print`, `bevel`, `texture`
   (pressed `ribbed`, `hammered`, `ripple`), and `emission`: the layer gives
@@ -551,7 +566,9 @@ and fog as a mist pass. A physical `sky` is Blender's multiple-scattering
 Sky Texture (Nishita before 5.0) with the same sun, aerosol (`turbidity`
 less one), ozone and altitude, keyed per frame and scaled to match the
 stage's brightness; with `light` it lights the world, without the sun's
-disc when `sun_light` stands a Sun lamp (with shadows) in for it.
+disc when `sun_light` stands a Sun lamp (with shadows) in for it;
+its exposure is the view's, keyed. Its clouds and aerial perspective
+are not drawn.
 `emission` is the Principled BSDF's, in the layer's colour. Layer textures, the `.blend` and every frame are
 cached by content hash under `.mui-cut-cache/blender/` next to the project;
 a re-run renders only frames whose content changed. A 2D scene or a
@@ -889,8 +906,9 @@ explodes two levels in 3D: panels, then their controls.
   and ▲/▼ act on the whole selection, each one undo step.
 - **Look** (a 3D scene's inspector): the sky on or off, its model, a sun
   dial (drag the sun: straight into the scene is up, overhead the middle,
-  the horizon the ring), elevation, azimuth, turbidity, clouds and
-  intensity; what lights the scene (the sky, an environment or neither)
+  the horizon the ring), elevation, azimuth, turbidity, clouds (cover,
+  density, base, wind), intensity, aerial haze, exposure and auto
+  exposure; what lights the scene (the sky, an environment or neither)
   and the sun lamp; the environment, ground, fog, bloom and occlusion; and
   under **Render** the project's glass mode (`raster`, `trace`, `rt`,
   `rt-path`) and its samples. A keyed or bound value shows read-only (and
@@ -1259,8 +1277,9 @@ same reason.
   JPEG map is skipped: no decoder here), the first animation, skins on
   the CPU; no morph targets, cameras or lights from the file, maps
   without mips; `check`'s pixel lints skip 3D scenes. The physical
-  sky's clouds are the gradient's, lit by its sunlight (no volumetric
-  silver lining), there is no aerial perspective beyond `fog`, and
+  sky's clouds are one layer (no towers through it, no shadows on the
+  ground; they light the scene as an even overcast), aerial perspective
+  takes the air at the eye's height and is not in `rt` glass, and
   `emission` is not seen through `rt` glass or on glass itself. A layer's effects in 3D run in its own texture, so
   `chromatic` pulls towards the layer's centre, not the frame's.
 - Sources and parenting: a reparent through a turn keeps every key exact,

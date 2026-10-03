@@ -668,8 +668,17 @@ pub struct Sky {
     pub sun_color: [f32; 3],
     /// How much of the sky the clouds cover, 0..1.
     pub cover: f32,
-    /// How far the clouds have drifted, in cloud widths (x, z).
+    /// How far the clouds have drifted, in cloud widths (4 km; x, z).
     pub drift: [f32; 2],
+    /// The clouds' optical thickness: 1 fair-weather cumulus, 0.3 wisps,
+    /// 3 dark-bellied.
+    pub density: f32,
+    /// The cloud layer's base, km above the eye; it is 1 km deep.
+    pub cloud_altitude: f32,
+    /// Aerial perspective, a physical sky's only: km of air per 1000
+    /// world units (1: a unit is a metre), so far surfaces fade toward
+    /// the sky through the same air. 0 none.
+    pub aerial: f32,
     /// A physical sky: this air scatters the sun's light (see [`sky`]),
     /// and `zenith`, `horizon` and `sun_color` only light the clouds
     /// ([`Sky::physical`] sets them from it). `None` is the gradient.
@@ -688,6 +697,9 @@ impl Default for Sky {
             sun_color: [2.6, 2.3, 1.9],
             cover: 0.,
             drift: [0.; 2],
+            density: 1.,
+            cloud_altitude: 1.5,
+            aerial: 0.,
             atmosphere: None,
             light: false,
         }
@@ -2288,19 +2300,7 @@ impl Stage {
             self.group0 = group.clone();
         }
         if let Some(k) = &s.sky {
-            g[256..259].copy_from_slice(&normalize(k.sun));
-            g[259] = 1.;
-            g[260..263].copy_from_slice(&k.zenith);
-            g[263] = k.cover.clamp(0., 1.);
-            g[264..267].copy_from_slice(&k.horizon);
-            g[267] = k.drift[0];
-            g[268..271].copy_from_slice(&k.sun_color);
-            g[271] = k.drift[1];
-            if let Some(a) = &k.atmosphere {
-                g[259] = 2.;
-                g[272..276].copy_from_slice(&a.uniform());
-                g[276] = sky::SUN * a.intensity;
-            }
+            g[256..280].copy_from_slice(&k.uniform());
         }
         let ao = s.ao.filter(|a| a.strength > 0. && a.radius > 0.);
         if let Some(a) = ao {

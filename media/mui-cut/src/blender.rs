@@ -207,6 +207,10 @@ pub struct State {
     /// Texture takes them) and its strength.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sky: Option<[f32; 3]>,
+    /// The sky's exposure (its EV and meter), as the view's exposure in
+    /// stops.
+    #[serde(skip_serializing_if = "is_zero32")]
+    pub exposure: f32,
     pub lights: Vec<LightS>,
     pub layers: Vec<LayerS>,
     pub models: Vec<ModelS>,
@@ -330,6 +334,10 @@ pub struct Texture {
 }
 
 /// Four decimals: plenty (0.1 mm), and the same text on every machine.
+fn is_zero32(v: &f32) -> bool {
+    *v == 0.
+}
+
 fn r(v: f64) -> f32 {
     ((v * 1e4).round() / 1e4) as f32
 }
@@ -780,11 +788,16 @@ pub fn describe(
                 r(k.intensity.at(f.t).max(0.) * SKY_STRENGTH),
             ]
         });
+        let exposure = scene
+            .sky
+            .as_ref()
+            .map_or(0., |k| r(f64::from(k.exposure(f.t).log2())));
         Ok(State {
             camera,
             ambient: r3(ambient),
             env,
             sky,
+            exposure,
             lights,
             layers: layer_states,
             models: model_states,
@@ -805,6 +818,11 @@ pub fn describe(
         // ponytail: only the physical sky maps onto Blender's Sky Texture; a
         // Gradient Texture world would match the gradient.
         eprintln!("mui-cut: Blender draws no gradient `sky`; the background colour shows behind");
+    }
+    if physical.is_some_and(|k| k.cover.at(0.) > 0. || k.aerial.at(0.) > 0.) {
+        // ponytail: Cycles' world volume would carry aerial perspective,
+        // a volume object the clouds.
+        eprintln!("mui-cut: Blender's sky has no clouds or aerial perspective");
     }
     if scene.bloom.is_some() {
         // ponytail: Blender's own glare node would match it.
@@ -1386,6 +1404,8 @@ mod tests {
             [r(-5f64.to_radians()), r(30f64.to_radians())]
         );
         assert_eq!(noon.sky.unwrap()[0], r(60f64.to_radians()));
+        // The meter opens up for the twilight, not for noon.
+        assert!(dawn.exposure > 1. && noon.exposure == 0., "{} {}", dawn.exposure, noon.exposure);
         // Below the horizon the lamp is dark; at noon it shines down from
         // the sun the texture draws: Blender's sun at rotation ρ, elevation
         // ε sits toward (sin ρ cos ε, cos ρ cos ε, sin ε) (checked against a

@@ -1297,7 +1297,8 @@ mod tests {
         let effects = include_str!("../examples/effects.cut.json");
         let looks = include_str!("../examples/looks2d.cut.json");
         let procedural = include_str!("../examples/procedural.cut.json");
-        for src in [DEMO, SHOWCASE, effects, looks, PLUGIN, procedural] {
+        let clouds = include_str!("../examples/clouds.cut.json");
+        for src in [DEMO, SHOWCASE, effects, looks, PLUGIN, procedural, clouds] {
             let doc: Value = serde_json::from_str(src).unwrap();
             let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errs.is_empty(), "{errs:?}");

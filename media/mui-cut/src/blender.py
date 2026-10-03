@@ -100,6 +100,12 @@ def build():
     # The house style: colours as painted, no filmic curve, no bloom.
     scene.view_settings.view_transform = "Standard"
     scene.view_settings.look = "None"
+    # The sky's exposure, keyed only if it changes.
+    ev = [(t, s.get("exposure", 0)) for t, s in states()]
+    scene.view_settings.exposure = ev[0][1] if ev else 0
+    if any(v != ev[0][1] for _, v in ev):
+        for t, v in ev:
+            key(scene.view_settings, "exposure", v, t)
     frames = len(D["frames"])
     scene.frame_start, scene.frame_end = 0, max(frames - 1, 0)
     mb = O["mb"]

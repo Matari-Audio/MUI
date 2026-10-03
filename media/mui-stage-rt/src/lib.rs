@@ -1300,19 +1300,9 @@ fn globals(s: &Shot, t: f64, w: u32, h: u32, done: u32, spp: u32, bounces: u32) 
     g[36..39].copy_from_slice(&norm);
     g[39] = t as f32;
     if let Some(k) = &s.sky {
-        g[40..43].copy_from_slice(&normalize(k.sun));
-        g[43] = 1.;
-        g[44..47].copy_from_slice(&k.zenith);
-        g[47] = k.cover.clamp(0., 1.);
-        g[48..51].copy_from_slice(&k.horizon);
-        g[51] = k.drift[0];
-        g[52..55].copy_from_slice(&k.sun_color);
-        g[55] = k.drift[1];
-        if let Some(a) = &k.atmosphere {
-            g[43] = 2.;
-            g[120..124].copy_from_slice(&a.uniform());
-            g[124] = mui_stage::sky::SUN * a.intensity;
-        }
+        let u = k.uniform();
+        g[40..56].copy_from_slice(&u[..16]);
+        g[120..128].copy_from_slice(&u[16..]);
     }
     g
 }
