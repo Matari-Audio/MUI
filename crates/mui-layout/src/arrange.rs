@@ -309,17 +309,16 @@ pub(crate) fn arrange<P>(
                     line_cross((a, b))
                 };
                 let line_inner = Size::axes(inner.main(v), line_cross, v);
-                let allocated: Vec<_> = distribute(line, m.gap, v, line_inner)
-                    .into_iter()
-                    .zip(line)
-                    .map(|(main, child)| {
-                        child
-                            .node
-                            .rare()
-                            .fitted_aspect(Size::axes(main, line_cross, v))
-                            .map_or(main, |fitted| fitted.main(v))
-                    })
-                    .collect();
+                let mut allocated = distribute(line, m.gap, v, line_inner);
+                for (main, child) in allocated.iter_mut().zip(line) {
+                    if let Some(fitted) = child
+                        .node
+                        .rare()
+                        .fitted_aspect(Size::axes(*main, line_cross, v))
+                    {
+                        *main = fitted.main(v);
+                    }
+                }
                 let count = line.len() as f64;
                 let residual = (inner.main(v)
                     - allocated.iter().sum::<f64>()
