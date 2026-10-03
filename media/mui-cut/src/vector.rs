@@ -64,6 +64,10 @@ fn place(pivot: KPoint, fx: &Fx) -> Affine {
         * Affine::translate(-pivot.to_vec2())
 }
 
+/// A laid-out grapheme cluster: its text, pen x, width and its chars'
+/// indices into `fx` (newlines skipped).
+type Cluster<'a> = (&'a str, f64, f64, std::ops::Range<usize>);
+
 /// Text as one outline per grapheme cluster, lines split at `\n`, the block
 /// centred on the origin. Each cluster takes its first char's [`Fx`]
 /// (placed animators run here, on the glyphs' centres:
@@ -82,9 +86,7 @@ pub fn text(
     let lines: Vec<&str> = s.split('\n').collect();
     let height = pitch * lines.len() as f64;
     let mid = |k: usize| -height / 2. + (k as f64 + 0.5) * pitch;
-    // Each line's left edge and clusters: text, pen x, width and its chars'
-    // indices into `fx` (newlines skipped), tracked by `fx`.
-    type Cluster<'a> = (&'a str, f64, f64, std::ops::Range<usize>);
+    // Each line's left edge and clusters, tracked by `fx`.
     let lay = |fx: &[Fx]| -> Result<Vec<(f64, Vec<Cluster<'_>>)>, String> {
         let mut out = Vec::new();
         let mut ci = 0;
