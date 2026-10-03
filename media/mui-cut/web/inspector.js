@@ -98,6 +98,19 @@ function kindFields(l) {
     const src = choice(l.source ?? '', ['', ...scene().layers.filter(o => o !== l).map(o => o.id)], v => set('source', v, ''));
     src.options[0].textContent = '(a shape)'; src.dataset.source = ''; src.title = 'A layer (a group with its children) drawn at every copy';
     field('source', src);
+    // The instance picked in the viewport: which copy, where its animators
+    // put it, and a way to its source.
+    const f = l.source && S.inst?.id === l.id && frameNow()?.layers.find(d => d.id === l.id);
+    if (f) {
+      const c = S.inst.c, fx = f.fx?.[c];
+      const info = input(`copy ${c} of ${f.count}` + (fx ? ` · x ${round(fx.x)} y ${round(fx.y)} rot ${round(fx.rotation)}° scale ${round(fx.scale)} opacity ${round(fx.opacity)}` : ''), () => {});
+      info.readOnly = true; info.dataset.instance = String(c); info.title = 'The picked copy: its index and the offsets its animators give it now';
+      field('instance', info);
+      const go = document.createElement('button'); go.textContent = `Edit source · ${l.source}`; go.dataset.editSource = '';
+      go.title = 'Select the source layer: every copy follows it';
+      go.onclick = () => { S.inst = null; S.sel = l.source; S.selKey = null; refresh(); };
+      field('', go);
+    }
     if (l.source) {
       const c = document.createElement('input'); c.type = 'checkbox'; c.checked = !!l.show_source; c.dataset.showSource = '';
       c.title = 'Keep drawing the source where it is too'; c.onchange = () => set('show_source', c.checked, false);
@@ -126,15 +139,15 @@ function groupHeader(l, group, i) {
     if (l.kind === 'text') c.push(choice(item.by ?? 'char', ['char', 'word', 'line'], v => set('by', v, 'char')));
     c.push(choice(item.shape ?? 'square', ['square', 'ramp_up', 'ramp_down', 'triangle', 'round', 'smooth'], v => set('shape', v, 'square')));
     c.push(choice(item.ease ?? 'linear', ['linear', 'in', 'out', 'in_out', 'step'], v => set('ease', v, 'linear')));
-    const order = choice(item.order ?? 'forward', ['forward', 'reverse', 'random', ...(l.kind === 'text' ? [] : ['distance'])], v => set('order', v, 'forward'));
+    const order = choice(item.order ?? 'forward', ['forward', 'reverse', 'random', 'distance'], v => set('order', v, 'forward'));
     order.title = 'Order: distance ranks by distance from the effector (or the origin)'; c.push(order);
     const se = choice(item.stagger_ease ?? 'linear', ['linear', 'in', 'out', 'in_out', 'step'], v => set('stagger_ease', v, 'linear'));
     se.title = 'Stagger ease: how the delays spread over the ranks'; se.dataset.staggerEase = ''; c.push(se);
     const s = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); s.title = 'Seed: the random order and jitter'; c.push(s);
     section(`Animator ${i + 1}`, c, remove);
-    if (l.kind !== 'text') {
-      // The effector: a field over the copies or children, drawn (and
-      // dragged) in the viewport.
+    {
+      // The effector: a field over the copies, children or glyphs, drawn
+      // (and dragged) in the viewport.
       const on = document.createElement('input'); on.type = 'checkbox'; on.checked = !!item.falloff; on.dataset.effector = String(i);
       on.title = 'A spatial effector: weigh units by where they sit (drag its centre and radius in the viewport)';
       on.onchange = () => set('falloff', on.checked ? {} : undefined, undefined);
@@ -149,7 +162,8 @@ function groupHeader(l, group, i) {
     }
   } else if (group === 'behaviours') {
     const p = choice(item.prop, BEHAVE, v => set('prop', v, undefined)); p.dataset.behaviourProp = String(i); p.title = 'The property it moves';
-    const k = choice(item.kind ?? 'wiggle', ['wiggle', 'oscillate'], v => set('kind', v, 'wiggle')); k.dataset.behaviourKind = String(i);
+    const k = choice(item.kind ?? 'wiggle', ['wiggle', 'oscillate', 'spring'], v => set('kind', v, 'wiggle')); k.dataset.behaviourKind = String(i);
+    k.title = 'Spring: chases the property\'s own keys, overshooting and settling (freq, damping)';
     const c = [p, k];
     if ((item.kind ?? 'wiggle') === 'wiggle') { const sd = input(item.seed ?? 0, v => set('seed', Math.max(0, Math.round(Number(v))) || 0, 0), 'number'); sd.title = 'seed'; c.push(sd); }
     section(`Behaviour ${i + 1}`, c, remove);
@@ -287,9 +301,12 @@ export function refreshInspector() {
     const a = v === 'plain' ? {} : JSON.parse(cut.preset(v, snap(S.t), 1));
     (l.animators ??= []).push(a);
   }));
-  adder('+ behaviour', [['wiggle', 'Wiggle'], ['oscillate', 'Oscillate']], v => edit(() => {
-    // Wiggle: the position wanders; oscillate: it bobs up and down.
-    const add = v === 'wiggle' ? [{ prop: 'x', amount: 20, freq: 1.5 }, { prop: 'y', amount: 20, freq: 1.5 }] : [{ prop: 'y', kind: 'oscillate', amount: 20 }];
+  adder('+ behaviour', [['wiggle', 'Wiggle'], ['oscillate', 'Oscillate'], ['spring', 'Spring']], v => edit(() => {
+    // Wiggle: the position wanders; oscillate: it bobs up and down;
+    // spring: its position keys overshoot and settle.
+    const add = v === 'wiggle' ? [{ prop: 'x', amount: 20, freq: 1.5 }, { prop: 'y', amount: 20, freq: 1.5 }]
+      : v === 'spring' ? [{ prop: 'x', kind: 'spring', freq: 2, damping: 0.3 }, { prop: 'y', kind: 'spring', freq: 2, damping: 0.3 }]
+      : [{ prop: 'y', kind: 'oscillate', amount: 20 }];
     (l.behaviours ??= []).push(...add);
   }));
   if (!S.selPart) layerLook(l, scene());

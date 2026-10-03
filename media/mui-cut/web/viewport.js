@@ -84,7 +84,9 @@ function drawOverlay() {
   const dpr = devicePixelRatio;
   const selId = S.selection.at(-1), box = gizmoBox();
   const marked = drag?.marquee ? marqueeHits(drag.marquee).map(id => [id, 1, C.hover]) : [];
-  for (const [id, width, color] of [[hover, 1, C.hover], ...marked, ...S.selection.map(id => [id, 1.5, C.sel])]) {
+  // The picked instance: its copy's bounds, inside the duplicator's.
+  const inst = S.inst?.id === S.sel ? [[`${S.inst.id}@${S.inst.c}`, 2, C.sel]] : [];
+  for (const [id, width, color] of [[hover, 1, C.hover], ...marked, ...S.selection.map(id => [id, 1.5, C.sel]), ...inst]) {
     const q = S.quads.find(q => q.id === id);
     if (!q) continue;
     octx.beginPath();
@@ -180,7 +182,8 @@ $('#interact').onclick = () => {
 };
 over.onpointerdown = e => {
   if (orbit.on) { orbit.from = [e.clientX, e.clientY, orbit.yaw, orbit.pitch]; over.setPointerCapture(e.pointerId); return; }
-  const p = toProject(e), id = hit(p);
+  const p = toProject(e);
+  let id = hit(p);
   if (S.interact) {
     // A 2D quad maps to the UI itself; a 3D slab is found by its ray.
     const q = [...S.quads].reverse().find(q => q.ui && inside(p, q.pts));
@@ -199,6 +202,10 @@ over.onpointerdown = e => {
   if (eh) { drag = { effector: eh }; over.setPointerCapture(e.pointerId); begin(); return; }
   const gh = gizmoHit(p, perPx());
   if (gh) { drag = { gizmo: startGizmo(gh, p), snap: targets(S.selection, perPx()) }; over.setPointerCapture(e.pointerId); begin(); return; }
+  // An instanced copy (`dup@c`) picks its duplicator, and remembers which.
+  const at = id?.indexOf('@') ?? -1;
+  S.inst = at < 0 ? null : { id: id.slice(0, at), c: +id.slice(at + 1) };
+  if (at >= 0) id = id.slice(0, at);
   const how = picking(e), box = !id && !how && gizmoBox();
   if (box && !box.one && inside(p, box.pts)) { drag = moving(p); over.setPointerCapture(e.pointerId); begin(); return; }
   if (!id) {
@@ -316,7 +323,7 @@ over.onpointerup = () => {
 // Double-click on a comp opens its scene.
 over.ondblclick = e => {
   const id = hit(toProject(e));
-  if (!S.interact && id && openComp(scene().layers.find(l => l.id === id.split('#')[0]))) refresh();
+  if (!S.interact && id && openComp(scene().layers.find(l => l.id === id.split(/[#@]/)[0]))) refresh();
 };
 // A source dragged from the Sources panel lands where it is dropped.
 over.addEventListener('dragover', e => { if (e.dataTransfer.types.includes(DRAG_SOURCE)) e.preventDefault(); });

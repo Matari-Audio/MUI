@@ -331,7 +331,8 @@ copy as `fx`.
   parented under it follows. `order` ranks them `forward`, `reverse`,
   `random` (a shuffle fixed by `seed`) or `distance` (nearest first, from
   the effector's centre or else the layer's origin; units equally far share
-  a rank, so a stagger ripples out; text falls back to `forward`).
+  a rank, so a stagger ripples out; a text word or line sits at its glyphs'
+  mean).
 - **Selection**: unit `r` of `n` spans `[r/n, (r+1)/n]`; the range is
   `[start + offset, end + offset]`. `shape` `square` weighs a unit by how
   much of it the range covers; `ramp_up`, `ramp_down`, `triangle`, `round`
@@ -353,8 +354,12 @@ copy as `fx`.
   left of `x` (fading over `softness` to its right; `radius` unused).
   `invert` swaps inside and out. Its numbers key like any (`animators.0.falloff.x`),
   so keying `x` sweeps it across an array; the editor draws it over the
-  selected layer with a draggable centre and radius. Text glyphs have no
-  place and are not weighed by it.
+  selected layer with a draggable centre and radius. A text glyph weighs
+  at its centre in the laid-out block (a word or line at its glyphs'
+  mean), so a field swept across a title lifts letter after letter. The
+  renderer lays the glyphs out with the font, so it runs such text
+  animators there: `mui-cut eval`'s `fx` for that text are the selector's
+  without the field or `distance` order.
 - **Jitter**: `jitter_x`, `jitter_y` (pixels), `jitter_rotation`
   (degrees), `jitter_scale` (a fraction) move, turn and scale each unit
   by its own random amount up to that either way; `jitter_opacity` (a
@@ -395,8 +400,11 @@ offsets, its parents and its own turn are left behind. The source then
 draws only as copies (`check` does not call it invisible); `"show_source":
 true` keeps it where it is too. Animators move each instanced copy as they
 move a shape copy, by its index. A source may hold another duplicator (its
-copies nest), never the duplicator itself. The copies paint unpicked; the
-duplicator's outline is their bounds. In 3D they lie flat on the
+copies nest), never the duplicator itself. The duplicator's outline is
+their bounds, and each copy's bounds is a part quad `dup@index`: clicking a
+copy in the editor selects the duplicator with that instance picked (its
+outline drawn, and the inspector showing its index, the offsets its
+animators give it now, and a button to the source). In 3D they lie flat on the
 duplicator's plane, as a comp's layers do.
 
 ### Behaviours
@@ -408,6 +416,14 @@ duplicator's plane, as a comp's layers do.
 { "prop": "rotation", "kind": "wiggle", "amount": 10, "freq": 1, "seed": 0, "phase": 0 }
 ```
 
+- `kind` `spring` is a damped spring chasing the property's own keys
+  (`{ "prop": "x", "kind": "spring", "freq": 2, "damping": 0.3 }`): at rest
+  on the first key, then lagging, overshooting and settling after every
+  move, ringing at `freq` Hz; `damping` 0 rings forever, 1 settles without
+  overshoot (default 0.5). It is stepped from the first key in fixed 1/240 s
+  steps up to the time asked for, so any frame renders alone and the same
+  every time. A plain value (no keys) does not move. It reads `freq` and
+  `damping` only.
 - `kind` `wiggle` is smooth seeded noise (Catmull-Rom through a random
   value every `1 / freq` s), up to `amount` either way; the curve is fixed
   by `seed` and the property's name, so wiggling `x` and `y` with one seed
@@ -416,7 +432,7 @@ duplicator's plane, as a comp's layers do.
   `opacity` (kept in 0..1; a layer that is off stays off), `width`,
   `height`, `radius`, `font_size`, `tracking`, `stroke_width`,
   `path_offset`, `ring_radius`; loading refuses another.
-- `amount`, `freq` and `phase` are keyable (`behaviours.0.amount`): key
+- `amount`, `freq`, `phase` and `damping` are keyable (`behaviours.0.amount`): key
   `amount` to fade a wiggle in. Behaviours apply in the layer's own space
   before parenting, so children follow a wiggling parent.
 
@@ -1033,7 +1049,8 @@ announces edits made by someone else.
 - `src/motion.rs`: animators (selectors, effectors, jitter, stagger,
   presets), duplicator instancing, group animators, behaviours and
   deformers, evaluated inside `eval`. `examples/procedural.cut.json` shows
-  an instanced array swept by an effector, a group stagger and a wiggle.
+  an instanced array swept by an effector, a group stagger and a wiggle,
+  springs, and a title whose letters an effector lifts as it sweeps.
 - `src/vector.rs`: the vector kinds as kurbo paths (text through mui-text's
   shaping and outlines, duplicator layouts, SVG and Lottie sinks), trim and
   deformers, handed to MUI as one canvas per layer.

@@ -130,6 +130,7 @@ export function setSelection(ids) {
   const was = S.selection.at(-1) ?? null;
   S.selection = [...new Set(ids)];
   if ((S.selection.at(-1) ?? null) !== was) S.selKey = null;
+  if (S.inst && S.sel !== S.inst.id) S.inst = null;
   const l = layer();
   if (l && S.selPart && !l.parts?.[S.selPart]) edit(() => { (l.parts ??= {})[S.selPart] = {}; });
   const nums = numPaths(l).filter(p => S.selPart ? p.startsWith(`parts.${S.selPart}.`) : !p.startsWith('parts.'));

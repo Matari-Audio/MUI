@@ -50,6 +50,7 @@ export const S = {
   get selKey() { return this.selKeys.at(-1) ?? null; },
   set selKey(k) { this.selKeys = k ? [k] : []; },
   quads: [],          // layer outlines from the last render, project px
+  inst: null,         // the instance picked in the viewport: `{ id, c }`, copy `c` of source duplicator `id`
   playing: false,
   need: true,
   locked: false,      // play on the project's frame grid only
@@ -76,6 +77,7 @@ export const clock = { at: 0, t: 0 };
 // the project frame it showed; frames the playhead passed without drawing.
 export const pacing = { shown: [], dropped: 0, last: -1, pending: -1 };
 globalThis.pacing = pacing;
+globalThis.cutInst = () => S.inst; // the e2e picks an instance
 globalThis.cutQuads = () => S.quads; // the e2e aims at plugin parts with these
 // A plugin layer's part tree at the playhead (plugin::tree_json): id (the
 // path keyed as `parts.<id>.x`), surface, level, frame, rects, thumb (an

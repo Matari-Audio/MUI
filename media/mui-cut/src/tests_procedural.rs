@@ -356,3 +356,119 @@ fn the_procedural_example_round_trips_and_checks_clean() {
         150
     );
 }
+
+#[test]
+fn a_spring_chases_the_keys_overshoots_and_settles() {
+    // x steps from 100 to 300 at 0.5 s; a light spring lags behind it,
+    // swings past 300 and comes back to rest on it.
+    let p = |damping: f64| {
+        scene_of(&format!(
+            r##"{{"id":"r","kind":"rect","width":20,"height":20,"y":100,
+                "x":[{{"t":0,"v":100,"interp":"hold"}},{{"t":0.5,"v":300}}],
+                "behaviours":[{{"prop":"x","kind":"spring","freq":2,"damping":{damping}}}]}}"##
+        ))
+    };
+    let light = p(0.2);
+    let l = &light.scenes[0].layers[0];
+    let xs: Vec<f64> = (0..240).map(|i| l.at(f64::from(i) / 60.).x).collect();
+    // At rest before the step, behind just after it, past it, then settled.
+    assert!(xs[..30].iter().all(|&x| x == 100.), "{:?}", &xs[..30]);
+    assert!(xs[33] > 100. && xs[33] < 200., "{}", xs[33]);
+    let peak = xs.iter().copied().fold(0., f64::max);
+    assert!(peak > 330. && peak < 400., "{peak}");
+    assert!((l.at(8.).x - 300.).abs() < 0.5);
+    // A pure function of time: any frame alone is what the run gave.
+    assert_eq!(l.at(1.25).x, xs[75]);
+    assert_eq!(l.at(1.25).x, l.at(1.25).x);
+    // Critically damped: no overshoot.
+    let firm = p(1.);
+    let l2 = &firm.scenes[0].layers[0];
+    assert!((0..480).all(|i| l2.at(f64::from(i) / 60.).x <= 300. + 1e-9));
+    // Its numbers are its own: freq and damping, no amount or phase.
+    let props: Vec<String> = l.props().into_iter().map(|(n, _)| n).collect();
+    assert!(props.contains(&"behaviours.0.damping".to_owned()), "{props:?}");
+    assert!(!props.contains(&"behaviours.0.amount".to_owned()), "{props:?}");
+    // Drawn where the spring is: at the peak the square is right of 300.
+    let i = xs.iter().position(|&x| x == peak).unwrap();
+    let f = px(&light, i as f64 / 60.);
+    assert_eq!(at(&f, (peak - 5.) as usize, 100), [255; 4]);
+    assert_eq!(at(&f, 300 - 15, 100), [0, 0, 0, 255]);
+}
+
+#[test]
+fn text_animators_weigh_glyphs_by_place() {
+    // A wall effector: glyphs left of the text's centre rise 60 px, the
+    // ones right of it stay.
+    let p = scene_of(
+        r##"{"id":"t","kind":"text","text":"HHHHHHHH","x":200,"y":120,"font_size":40,"fill":"#ffffff",
+             "animators":[{"y":-60,"falloff":{"shape":"linear","radius":0,"softness":0}}]}"##,
+    );
+    let f = px(&p, 0.);
+    let ink = |x0: usize, x1: usize, y0: usize, y1: usize| {
+        (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| at(&f, x, y)[0] > 128)
+            .count()
+    };
+    assert!(ink(100, 195, 40, 80) > 50, "the left glyphs rose");
+    assert_eq!(ink(205, 300, 40, 80), 0, "the right ones did not");
+    assert!(ink(205, 300, 100, 140) > 50, "the right ones stayed");
+    assert_eq!(ink(100, 195, 100, 140), 0, "the left ones left");
+    // Words and lines sit at their glyphs' mean: `distance` from an
+    // effector on the second word ranks it first.
+    let a = Animator {
+        by: Unit::Word,
+        order: Order::Distance,
+        stagger: Anim::Value(1.),
+        falloff: Some(serde_json::from_str(r#"{"x":100,"radius":1000}"#).unwrap()),
+        y: Anim::Keys(vec![
+            crate::Key {
+                t: 0.,
+                v: 0.,
+                interp: crate::Interp::Linear,
+                in_: None,
+                out: None,
+            },
+            crate::Key {
+                t: 10.,
+                v: 10.,
+                interp: crate::Interp::Linear,
+                in_: None,
+                out: None,
+            },
+        ]),
+        ..Animator::default()
+    };
+    // "ab cd": a, b, space, c, d at x 0, 10, 20, 90, 110.
+    let pos = [[0., 0.], [10., 0.], [20., 0.], [90., 0.], [110., 0.]];
+    let fx = crate::motion::apply_to(
+        &[a],
+        5,
+        &|_| Rgba([255; 4]),
+        5.,
+        |by| crate::motion::text_units("ab cd", by),
+        &pos,
+    );
+    let ys: Vec<f64> = fx.iter().map(|f| f.y).collect();
+    assert_eq!(ys, [4., 4., 4., 5., 5.], "the near word first, a rank ahead");
+}
+
+#[test]
+fn each_instanced_copy_has_a_quad_to_pick() {
+    let p = scene_of(
+        r##"{"id":"s","kind":"rect","width":20,"height":10,"fill":"#ffffff"},
+            {"id":"d","kind":"duplicator","source":"s","layout":"linear","count":3,"spacing_x":100,"x":200,"y":100}"##,
+    );
+    let (_, quads) = Renderer::new(400, 200)
+        .draw(&eval(&p, &p.scenes[0], 0.))
+        .unwrap();
+    let copies: Vec<&Quad> = quads.iter().filter(|q| q.id.starts_with("d@")).collect();
+    let ids: Vec<&str> = copies.iter().map(|q| q.id.as_str()).collect();
+    assert_eq!(ids, ["d@0", "d@1", "d@2"]);
+    // Each round its own copy: the middle one 20 x 10 at (200, 100).
+    assert_eq!(copies[1].pts, [[190., 95.], [210., 95.], [210., 105.], [190., 105.]]);
+    // The duplicator's own quad still spans them all, before the copies.
+    let d = quads.iter().position(|q| q.id == "d").unwrap();
+    assert!(d < quads.iter().position(|q| q.id == "d@0").unwrap());
+    assert_eq!(quads[d].pts[0], [90., 95.]);
+}

@@ -878,6 +878,23 @@ try {
     check(lay('array').source === undefined && await js(`[...document.querySelectorAll('#inspector label')].some(l => l.textContent === 'shape')`), 'clearing the source makes copies of a shape again');
     await key('z', 'KeyZ', 2);
     check(lay('array').source === 'tile', 'and undo brings the source back');
+    // Picking an instance: a click on a copy picks the duplicator and
+    // that copy; the inspector shows it and leads to the source.
+    await sleep(600);
+    const iq = await js(`cutQuads().find(q => q.id === 'array@37')?.pts`);
+    check(!!iq, 'each instanced copy has a quad');
+    const ic = at2d([(iq[0][0] + iq[2][0]) / 2, (iq[0][1] + iq[2][1]) / 2]);
+    await mouse('mousePressed', ...ic); await mouse('mouseReleased', ...ic); await sleep(600);
+    const inst = await js('cutInst()');
+    check(inst?.id === 'array' && Number.isInteger(inst.c), `a click on a copy picks that instance (${JSON.stringify(inst)})`);
+    check((await js(`document.querySelector('[data-instance]')?.value`))?.startsWith(`copy ${inst.c} of 75`), 'the inspector shows the picked copy');
+    await shot('editor-instance.png');
+    await js(`document.querySelector('[data-edit-source]').click()`); await sleep(400);
+    check(await js(`import('/state.js').then(m => m.S.sel)`) === 'tile' && await js('cutInst()') === null, 'Edit source selects the source');
+    // Text: an effector and distance order on glyphs; a spring's rows.
+    await pick('title');
+    check(await js(`!!document.querySelector('[data-effector="0"]')`) && (await js('cutEffectors()')).length === 1, 'a text animator has an effector');
+    check(await js(`!!document.querySelector('#inspector [data-prop="behaviours.0.damping"]') && !document.querySelector('#inspector [data-prop="behaviours.0.amount"]')`), 'a spring shows freq and damping');
     // A group: Cascade children, and a wiggle.
     await pick('words');
     const opts = await js(`[...document.querySelector('[data-adder="+ animator"]').options].map(o => o.textContent).join()`);

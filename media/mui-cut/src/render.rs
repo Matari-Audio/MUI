@@ -518,7 +518,9 @@ impl Assets {
                 return Ok(());
             }
             // Instanced copies paint like a comp's layers; its quad is
-            // their bounds (a point at its pivot with none).
+            // their bounds (a point at its pivot with none), and each
+            // copy's bounds is a part quad, `dup@copy`, for the editor to
+            // pick an instance by.
             Kind::Duplicator { source, .. } if !source.is_empty() => {
                 let mut inner = Layers {
                     scenes: Vec::new(),
@@ -528,17 +530,25 @@ impl Assets {
                 for k in &l.comp {
                     self.layer(k, size, &mut inner)?;
                 }
-                let pts = inner.quads.iter().flat_map(|q| q.pts);
-                let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
-                for [x, y] in pts {
-                    (lo, hi) = ([lo[0].min(x), lo[1].min(y)], [hi[0].max(x), hi[1].max(y)]);
+                out.quads.push(
+                    bounds(l.id.clone(), &inner.quads)
+                        .unwrap_or_else(|| quad(l.id.clone(), at, 0., 0.)),
+                );
+                let copy = |q: &Quad| {
+                    let rest = q.id.strip_prefix(&l.id)?.strip_prefix('/')?;
+                    rest.split('/').next().map(str::to_owned)
+                };
+                let mut copies: Vec<String> = inner.quads.iter().filter_map(copy).collect();
+                copies.dedup();
+                for c in copies {
+                    let mine: Vec<Quad> = inner
+                        .quads
+                        .iter()
+                        .filter(|q| copy(q).as_deref() == Some(&c))
+                        .cloned()
+                        .collect();
+                    out.parts.extend(bounds(format!("{}@{c}", l.id), &mine));
                 }
-                out.quads.push(if lo[0] <= hi[0] {
-                    let place = Affine::translate((lo[0], lo[1]));
-                    quad(l.id.clone(), place, hi[0] - lo[0], hi[1] - lo[1])
-                } else {
-                    quad(l.id.clone(), at, 0., 0.)
-                });
                 out.scenes.extend(inner.scenes);
                 return Ok(());
             }
@@ -564,6 +574,18 @@ impl Layers {
     pub fn all_quads(&self) -> Vec<Quad> {
         self.quads.iter().chain(&self.parts).cloned().collect()
     }
+}
+
+/// The upright box round `quads`, none for none.
+fn bounds(id: String, quads: &[Quad]) -> Option<Quad> {
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for [x, y] in quads.iter().flat_map(|q| q.pts) {
+        (lo, hi) = ([lo[0].min(x), lo[1].min(y)], [hi[0].max(x), hi[1].max(y)]);
+    }
+    (lo[0] <= hi[0]).then(|| {
+        let place = Affine::translate((lo[0], lo[1]));
+        quad(id, place, hi[0] - lo[0], hi[1] - lo[1])
+    })
 }
 
 fn quad(id: String, place: Affine, w: f64, h: f64) -> Quad {
