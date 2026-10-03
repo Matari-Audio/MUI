@@ -93,10 +93,10 @@ impl<'a, P> Measured<'a, P> {
         let Some(inner) = inner else {
             return fallback();
         };
-        if self.node.rare().aspect_fit {
-            if let Some((width, ratio)) = self.aspect_width(inner) {
-                return if vertical { width / ratio } else { width };
-            }
+        if self.node.rare().aspect_fit
+            && let Some((width, ratio)) = self.aspect_width(inner)
+        {
+            return if vertical { width / ratio } else { width };
         }
         match (self.node.len(vertical), self.aspect_width(inner)) {
             (l @ (Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)), _) => l
