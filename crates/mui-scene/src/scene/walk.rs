@@ -869,6 +869,7 @@ impl<'a> Walk<'a> {
         }
         self.i = children_at;
         let mut sticky = Vec::new();
+        let mut overlays = Vec::new();
         for (j, c) in n.children().iter().enumerate() {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
@@ -882,6 +883,11 @@ impl<'a> Walk<'a> {
                 // Pinned over the siblings that scroll under it, so it paints
                 // after them -- but inside this node's clip, unlike a float.
                 sticky.push((self.i, c, path.clone(), self.base_y));
+                self.i += self.tree.sizes[self.i];
+                continue;
+            }
+            if c.is_overlay() {
+                overlays.push((self.i, c, path.clone()));
                 self.i += self.tree.sizes[self.i];
                 continue;
             }
@@ -907,6 +913,11 @@ impl<'a> Walk<'a> {
         for (at2, c, mut p, base) in sticky {
             self.i = at2;
             self.base_y = base;
+            self.node(c, &mut p, bg, inner)?;
+        }
+        for (at2, c, mut p) in overlays {
+            self.i = at2;
+            self.base_y = None;
             self.node(c, &mut p, bg, inner)?;
         }
         self.i = end;
@@ -1074,6 +1085,60 @@ mod tests {
                 "foreground keeps topmost hit ownership"
             );
         }
+    }
+
+    #[test]
+    fn local_overlay_follows_foreground_and_paints_inside_clip_after_hit_owner() {
+        let tree = || {
+            stack([
+                block(Len::Pct(100.), Len::Pct(100.))
+                    .push(
+                        block(Len::Container(100.), 10.)
+                            .fill(Role::Danger)
+                            .id("overlay-child"),
+                    )
+                    .fill(Role::Raised)
+                    .overlay()
+                    .id("overlay"),
+                block(120., 40.).fill(Role::Primary).id("foreground"),
+                block(Len::Pct(100.), Len::Pct(100.))
+                    .fill(Role::Surface)
+                    .underlay()
+                    .id("background"),
+            ])
+            .pad(4.)
+            .radius(8.)
+            .clip()
+            .id("composition")
+        };
+        let scene = resolve(&SceneSpec::new(tree())).unwrap();
+        assert_eq!(scene.layout.size, Size::new(128., 48.));
+        assert_eq!(
+            scene.layout.frame("overlay"),
+            scene.layout.frame("foreground")
+        );
+        assert_eq!(
+            scene.layout.frame("overlay-child").unwrap().size.width,
+            120.
+        );
+        let layers: Vec<_> = scene.paint.iter().map(|p| (&*p.key, p.layer)).collect();
+        let at = |key, layer| layers.iter().position(|p| *p == (key, layer)).unwrap();
+        assert!(at("composition", Layer::Clip) < at("background", Layer::Fill));
+        assert!(at("background", Layer::Fill) < at("foreground", Layer::Fill));
+        assert!(at("foreground", Layer::Fill) < at("overlay", Layer::Fill));
+        assert!(at("overlay-child", Layer::Fill) < at("composition", Layer::Unclip));
+        let clip = scene.surface("composition").unwrap().bounds;
+        assert_eq!(scene.surface("overlay").unwrap().clip, clip);
+        assert_eq!(scene.surface("overlay-child").unwrap().clip, clip);
+        let surfaces: Vec<_> = scene.surfaces().map(|s| &*s.key).collect();
+        assert!(
+            surfaces.iter().position(|k| *k == "foreground").unwrap()
+                < surfaces.iter().position(|k| *k == "overlay-child").unwrap()
+        );
+        assert!(
+            !tree().children()[0].clone().float().is_overlay(),
+            "portal float replaces local overlay placement"
+        );
     }
 
     /// Paths are local: two same-sized buttons paint one outline `Arc`, each

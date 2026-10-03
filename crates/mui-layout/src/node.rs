@@ -85,6 +85,8 @@ pub(crate) struct Rare {
     pub(crate) min_col: Option<f64>,
     /// An out-of-flow child painted below siblings inside the parent clip.
     pub(crate) underlay: bool,
+    /// Local out-of-flow decoration painted above foreground siblings.
+    pub(crate) overlay: bool,
 }
 impl Rare {
     const NONE: Self = Self {
@@ -94,6 +96,7 @@ impl Rare {
         pin: None,
         min_col: None,
         underlay: false,
+        overlay: false,
     };
 }
 
@@ -496,6 +499,7 @@ impl<P> Node<P> {
         self.float = true;
         if let Some(rare) = &mut self.rare {
             rare.underlay = false;
+            rare.overlay = false;
         }
         self
     }
@@ -508,6 +512,19 @@ impl<P> Node<P> {
         self.float = true;
         let rare = self.rare_mut();
         rare.underlay = true;
+        rare.overlay = false;
+        rare.pin = None;
+        self
+    }
+    /// Decorate the parent's content box above its normal children without
+    /// contributing to its intrinsic size or escaping ancestor clipping.
+    /// Like [`Node::underlay`], final foreground geometry is offered to this
+    /// child. Unlike [`Node::float`], it paints locally, after the siblings.
+    pub fn overlay(mut self) -> Self {
+        self.float = true;
+        let rare = self.rare_mut();
+        rare.underlay = false;
+        rare.overlay = true;
         rare.pin = None;
         self
     }
@@ -601,6 +618,10 @@ impl<P> Node<P> {
     /// Whether this out-of-flow child stays below siblings in their clip.
     pub fn is_underlay(&self) -> bool {
         self.float && self.rare().underlay
+    }
+    /// Whether this out-of-flow child stays above siblings in their clip.
+    pub fn is_overlay(&self) -> bool {
+        self.float && self.rare().overlay
     }
     /// Whether [`Node::sticky`] was called: the scene walk asks, because a
     /// sticky child paints after the siblings that scroll under it.

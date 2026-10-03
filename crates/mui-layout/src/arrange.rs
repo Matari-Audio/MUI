@@ -369,7 +369,7 @@ pub(crate) fn arrange<P>(
                 }
                 // A decoration belongs to this local box and its clip; do
                 // not pull authored offsets back in like a window popup.
-                None if c.node.is_underlay() => (
+                None if c.node.is_underlay() || c.node.is_overlay() => (
                     [
                         origin[0] + m.padding.left + p[0],
                         origin[1] + m.padding.top + p[1],

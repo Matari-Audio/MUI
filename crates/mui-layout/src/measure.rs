@@ -731,7 +731,7 @@ pub(crate) fn measure_uncached<'a, P>(
         Some((size.height - padding.vertical()).max(0.0)),
     ];
     for (index, child) in node.children().iter().enumerate() {
-        if !child.is_underlay() {
+        if !child.is_underlay() && !child.is_overlay() {
             continue;
         }
         let (ax, ay) = child.anchor.unwrap_or(cell_default(node));
