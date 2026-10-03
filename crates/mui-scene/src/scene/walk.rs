@@ -1149,8 +1149,14 @@ mod tests {
             .position(|p| p.key.as_str() == "rot.leaf" && p.layer == Layer::Fill)
             .unwrap();
         assert!(clip < fill);
-        assert_eq!(first.paint[clip].transform, Affine::IDENTITY);
-        assert_ne!(first.paint[fill].transform, Affine::IDENTITY);
+        assert_eq!(
+            first.paint[clip].transform,
+            mui_geometry::kurbo::Affine::IDENTITY
+        );
+        assert_ne!(
+            first.paint[fill].transform,
+            mui_geometry::kurbo::Affine::IDENTITY
+        );
         let pose = leaf.local_pose();
         let same = retained(&spec(angle, true), &mut cache, Some(&first));
         assert_eq!(same.paint, first.paint);
