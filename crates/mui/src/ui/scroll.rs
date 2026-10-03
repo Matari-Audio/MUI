@@ -143,7 +143,7 @@ impl Ui {
             };
             let target = if hovered == Some(&*s.key) || held == Some(&*s.key) {
                 1.0
-            } else if scene.surface(key).is_some_and(|n| over(n)) {
+            } else if scene.surface(key).is_some_and(over) {
                 0.35
             } else {
                 0.0

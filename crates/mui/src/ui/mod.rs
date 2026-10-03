@@ -540,10 +540,9 @@ impl Ui {
                 self.pointer.pos,
                 self.scene.as_ref().and_then(|s| s.surface(id)),
             )
+            && self.inside_surface(s, p)
         {
-            if self.inside_surface(s, p) {
-                response.wheel = s.local_pose().delta(self.wheel);
-            }
+            response.wheel = s.local_pose().delta(self.wheel);
         }
         if self
             .actions
@@ -936,9 +935,12 @@ impl Ui {
         }
         let held = self.interaction.held().map(str::to_owned);
         if prev_held != held {
-            self.capture_pose = held
-                .as_deref()
-                .and_then(|key| self.scene.as_ref()?.surface(key).map(|s| s.local_pose()));
+            self.capture_pose = held.as_deref().and_then(|key| {
+                self.scene
+                    .as_ref()?
+                    .surface(key)
+                    .map(mui_scene::ResolvedSurface::local_pose)
+            });
         }
         // A gesture is exactly the span a target is captured for, so the two
         // edges are the two ends of that capture -- plus the one a `cancel`
