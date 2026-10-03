@@ -275,6 +275,17 @@ fn visible(e: &ExternalWeld, xf: Affine, size: [u32; 2]) -> bool {
     r.x1 > 0. && r.y1 > 0. && r.x0 < f64::from(size[0]) && r.y0 < f64::from(size[1])
 }
 
+fn external_visible(
+    scene: &ResolvedScene,
+    key: &str,
+    e: &ExternalWeld,
+    xf: Affine,
+    size: [u32; 2],
+) -> bool {
+    let pose = scene.surface(key).map_or(Affine::IDENTITY, |s| s.transform);
+    visible(e, xf * pose, size)
+}
+
 fn render(
     vello: &mut vello::Renderer,
     device: &wgpu::Device,
@@ -363,6 +374,11 @@ fn reach(p: &Painted) -> Option<Rect> {
         Some(_) => r,
         None if r == NOTHING => r,
         None => r + crate::kurbo::Vec2::new(p.offset.x, p.offset.y),
+    };
+    let r = if r == NOTHING {
+        r
+    } else {
+        p.transform.transform_rect_bbox(r)
     };
     (r == NOTHING || [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite())).then_some(r)
 }
@@ -538,7 +554,7 @@ impl GpuRenderer {
         let size = self.size;
         let wanted = resolved
             .external_welds()
-            .filter(move |(_, e)| visible(e, xf, size))
+            .filter(move |(k, e)| external_visible(resolved, k, e, xf, size))
             .map(|(k, e)| (k, &*e.material));
         let mut stats = self.effects.begin(wanted)?;
         self.effects
@@ -573,7 +589,7 @@ impl GpuRenderer {
         let mut drawn = Vec::new();
         for (key, e) in resolved
             .external_welds()
-            .filter(|(_, e)| visible(e, xf, size))
+            .filter(|(k, e)| external_visible(resolved, k, e, xf, size))
         {
             let before = stats.effect_draws;
             let encoder = encoder.get_or_insert_with(|| {
@@ -885,7 +901,7 @@ impl GpuRenderer {
                     let e = resolved
                         .external_weld(&p.key)
                         .ok_or_else(|| Error::Missing(p.key.to_string()))?;
-                    if !visible(e, xf, self.size) {
+                    if !visible(e, xf * p.transform, self.size) {
                         continue;
                     }
                     let image = self
@@ -1107,5 +1123,102 @@ impl GpuRenderer {
             uniforms,
             binds,
         }
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::*;
+    use mui_scene::prelude::*;
+
+    #[test]
+    fn rotation_damage_reaches_both_original_and_rotated_footprints() {
+        let spec = |angle| {
+            SceneSpec::new(
+                stack([stack([block(10., 4.)
+                    .offset(6., 2.)
+                    .anchor(Align::Start, Align::Start)
+                    .fill(Role::Primary)
+                    .id("damage.leaf")])
+                .size(20., 10.)
+                .offset(10., 10.)
+                .anchor(Align::Start, Align::Start)
+                .rotation(angle)])
+                .size(40., 40.),
+            )
+        };
+        let first = resolve(&spec(0.)).unwrap();
+        let changed = resolve(&spec(std::f64::consts::FRAC_PI_2)).unwrap();
+        let paint = |scene: &mui_scene::ResolvedScene| {
+            scene
+                .paint
+                .iter()
+                .find(|p| p.key.as_str() == "damage.leaf" && p.layer == Layer::Fill)
+                .unwrap()
+                .clone()
+        };
+        let before = paint(&first);
+        let after = paint(&changed);
+        assert_ne!(
+            before, after,
+            "retained equality must notice the paint transform"
+        );
+        let before = reach(&before).unwrap();
+        let after = reach(&after).unwrap();
+        assert!((before.width() - 10.).abs() < 1e-8 && (before.height() - 4.).abs() < 1e-8);
+        assert!((after.width() - 4.).abs() < 1e-8 && (after.height() - 10.).abs() < 1e-8);
+        let dirty = before.union(after);
+        assert!(
+            dirty.contains(Point::new(16.5, 12.5)) && dirty.contains(Point::new(22.5, 20.5)),
+            "partial damage must cover pixels cleared and pixels newly drawn"
+        );
+        // An external member above the viewport rotates into it; preparation
+        // and compositing must use exactly the same effective visibility.
+        let external = resolve(
+            &SceneSpec::new(
+                stack([stack([block(10., 10.)
+                    .fill(Role::Primary)
+                    .anchor(Align::Start, Align::Start)])
+                .size(10., 10.)
+                .offset(0., -20.)
+                .anchor(Align::Start, Align::Start)
+                .weld(Weld::shape())
+                .id("external")])
+                .size(100., 100.)
+                .rotation(std::f64::consts::PI),
+            )
+            .weld_backend(WeldBackend::AnalyticGpu),
+        )
+        .unwrap();
+        let material = external.external_weld("external").unwrap();
+        assert!(!visible(material, Affine::IDENTITY, [150, 150]));
+        assert!(external_visible(
+            &external,
+            "external",
+            material,
+            Affine::IDENTITY,
+            [150, 150]
+        ));
+        let fill = external
+            .paint
+            .iter()
+            .find(|p| p.layer == Layer::External)
+            .unwrap();
+        assert!(visible(material, fill.transform, [150, 150]));
+
+        let member = |angle| {
+            stack([block(10., 10.).fill(Role::Primary).rotation(angle)]).weld(Weld::shape())
+        };
+        assert!(
+            matches!(
+                resolve(&SceneSpec::new(member(0.1))),
+                Err(SceneError::UnsupportedWeld(_))
+            ),
+            "member rotation cannot silently disappear into the welded material"
+        );
+        assert!(
+            resolve(&SceneSpec::new(member(0.).rotation(0.1))).is_ok(),
+            "whole welded group rotation preserves local material geometry"
+        );
     }
 }

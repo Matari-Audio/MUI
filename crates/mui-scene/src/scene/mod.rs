@@ -14,7 +14,9 @@ mod spec;
 mod text;
 mod walk;
 
-pub use resolved::{Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Text, TextGlyph};
+pub use resolved::{
+    Layer, LocalPose, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Text, TextGlyph,
+};
 pub use spec::{SceneError, SceneSpec};
 pub(crate) use text::TextState;
 
@@ -141,6 +143,7 @@ fn missing(what: &'static str, id: &mui_layout::Id) -> SceneError {
 /// What a node inherits from the nodes above it.
 #[derive(Clone, Debug, Default)]
 struct Ancestors {
+    transform: mui_geometry::kurbo::Affine,
     parent: Option<Id>,
     clip: Option<Rect>,
     clip_paths: Option<Arc<[PlacedPath]>>,
@@ -156,6 +159,7 @@ impl Ancestors {
             (a, b) => a.is_none() && b.is_none(),
         };
         paths
+            && self.transform == o.transform
             && self.parent == o.parent
             && self.clip == o.clip
             && self.cursor == o.cursor
@@ -217,6 +221,7 @@ struct Deferred<'a> {
 /// frames that paints each node, records its surface and hands material
 /// plans down to the descendants that consume them.
 struct Walk<'a> {
+    transform: mui_geometry::kurbo::Affine,
     spec: &'a SceneSpec,
     tree: Tree<'a>,
     caches: Caches<'a>,
@@ -551,6 +556,7 @@ fn resolve_with(
     surfaces.reserve(nodes);
     at.reserve(nodes);
     let mut w = Walk {
+        transform: mui_geometry::kurbo::Affine::IDENTITY,
         spec,
         tree: Tree {
             frames,

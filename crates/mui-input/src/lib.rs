@@ -233,6 +233,22 @@ impl Hit {
         clip: Option<Rect>,
         clips: Option<&[(Arc<Path>, Point)]>,
     ) -> Result<(), Error> {
+        let clips = self.cache_placed_clips(clips)?;
+        let path = self.converted(path)?;
+        self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
+    }
+
+    /// Cache the exact ancestor clips for frame-based wheel queries.
+    pub fn prepare_clips(&mut self, clips: Option<&[(Arc<Path>, Point)]>) -> Result<(), Error> {
+        self.cache_placed_clips(clips).map(|_| ())
+    }
+
+    /// Prepare exact ancestor clip contours once for frame-based queries,
+    /// including unnamed scrollers that are not gesture targets.
+    fn cache_placed_clips(
+        &mut self,
+        clips: Option<&[(Arc<Path>, Point)]>,
+    ) -> Result<Arc<[(Arc<Converted>, Vec2)]>, Error> {
         let clips = match clips.filter(|c| !c.is_empty()) {
             None => Arc::from([]),
             Some(list) => {
@@ -250,8 +266,25 @@ impl Hit {
                 }
             }
         };
-        let path = self.converted(path)?;
-        self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
+        Ok(clips)
+    }
+
+    /// Test only a registered clip stack, without requiring this node to be
+    /// the topmost hit target. Parents can receive wheel over their children.
+    pub fn inside_clips(
+        &self,
+        p: Point,
+        clip: Option<Rect>,
+        clips: Option<&[(Arc<Path>, Point)]>,
+    ) -> bool {
+        p.x.is_finite()
+            && p.y.is_finite()
+            && clip.is_none_or(|b| b.contains(p))
+            && clips.filter(|c| !c.is_empty()).is_none_or(|list| {
+                self.clip_cache
+                    .get(&(list.as_ptr() as usize, list.len()))
+                    .is_some_and(|clips| clips.iter().all(|(c, at)| c.winds(p - *at)))
+            })
     }
 
     /// Empty the map for a rebuild, keeping the conversions the last build

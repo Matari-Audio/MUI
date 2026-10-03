@@ -83,6 +83,16 @@ pub(crate) fn paint(p: Paint, b: Rect) -> Brush {
 /// integration consumes only the immediate plate's fill and inside stroke.
 pub(crate) fn check_plate(n: &El, nested: bool) -> Result<(), SceneError> {
     let s = &n.payload().style;
+    if nested
+        && n.payload()
+            .extras()
+            .rotation
+            .is_some_and(|a| a % std::f64::consts::TAU != 0.)
+    {
+        return Err(SceneError::UnsupportedWeld(
+            "per-member rotation; rotate the welded group or mark the member .unwelded()",
+        ));
+    }
     if nested && n.payload().extras().welding.is_some() {
         return Err(SceneError::UnsupportedWeld(
             "nested material-weld members; mark the nested group .unwelded()",

@@ -348,6 +348,8 @@ pub struct Element {
 /// The rarely set half of an [`Element`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
+    /// Paint-only clockwise radians about the final frame's centre.
+    pub rotation: Option<f64>,
     /// A string this text node is at least as wide as, whatever it currently
     /// says. See [`Styled::reserve`].
     pub reserve: Option<String>,
@@ -397,6 +399,7 @@ pub struct Memo {
 }
 impl Extras {
     const NONE: Self = Self {
+        rotation: None,
         reserve: None,
         tip: None,
         transition: None,
@@ -855,6 +858,18 @@ impl Paints for Style {
 /// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
+
+    /// Rotate this node and its subtree clockwise by `radians` about its
+    /// solved frame's centre. Layout frames and sibling placement stay the
+    /// same; paint, clipping, hit geometry and local pointer coordinates
+    /// rotate together. Angles must be finite; full turns are equivalent.
+    ///
+    /// A wrapper preserves modifier order: rotate an offset child by putting
+    /// the rotation on its parent, rather than rotating the child's image.
+    fn rotation(mut self, radians: f64) -> Self {
+        self.element_mut().extras_mut().rotation = Some(radians);
+        self
+    }
 
     /// Material-weld immediate non-floating, non-excluded plate children:
     /// their fills and borders blend into one image across the seams.

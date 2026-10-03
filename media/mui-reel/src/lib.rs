@@ -348,6 +348,7 @@ pub fn with_cursor(
             paint: Paint::Solid(color),
             rect: None,
             offset: Point::ZERO,
+            transform: mui::geometry::kurbo::Affine::IDENTITY,
             width,
             blur: 0.0,
             text: None,
