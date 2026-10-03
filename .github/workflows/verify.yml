@@ -55,7 +55,7 @@ jobs:
         env:
           # Test sections get lavapipe, a software Vulkan device, so the wgpu
           # tests run instead of skipping for want of an adapter.
-          GPU: ${{ endsWith(matrix.section, '-test') && 'mesa-vulkan-drivers vulkan-tools libegl1 libgl1-mesa-dri xvfb xauth' || '' }}
+          GPU: ${{ endsWith(matrix.section, '-test') && 'mesa-vulkan-drivers vulkan-tools libegl1 libegl-mesa0 libgl1-mesa-dri xvfb xauth' || '' }}
       - if: endsWith(matrix.section, '-test')
         name: Vulkan device
         run: |
