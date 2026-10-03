@@ -93,7 +93,8 @@ struct Draw {
     // bevel in world units. w: emission, the colour given off (any surface).
     glass2: vec4f,
     // Glass pressed with a relief: the steepest slope of its reeds,
-    // hammered dimples and ripples, and (`glass4`) their sizes.
+    // hammered dimples and ripples, and (`glass4`) their sizes. glass3.w: 1
+    // on a plane drawn unlit.
     glass3: vec4f,
     glass4: vec4f,
 };
@@ -671,7 +672,7 @@ fn mirrored(c: vec4f, world: vec3f) -> vec4f {
     var weight = vec3f(0.);
     let metal = d.flags.y;
     let rough = d.flags.z;
-    if (lit_shot()) {
+    if (lit_shot() && d.glass3.w < 0.5) {
         let v = normalize(g.eye.xyz - i.world);
         let base = c.rgb / max(c.a, 1e-4);
         weight = spec_weight(n, v, rough, mix(vec3f(0.04), base, metal));

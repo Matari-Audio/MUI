@@ -378,6 +378,9 @@ pub struct Plane {
     pub glow: f32,
     pub opacity: f32,
     pub material: Material,
+    /// The face is its texture as it is, no light on it: a picture that
+    /// already holds the scene's light (a backdrop seen through glass).
+    pub unlit: bool,
 }
 impl Plane {
     pub fn new(layer: &str, width: f32, height: f32) -> Self {
@@ -397,6 +400,7 @@ impl Plane {
             glow: 1.,
             opacity: 1.,
             material: Material::SLAB,
+            unlit: false,
         }
     }
     pub fn at(mut self, x: f32, y: f32, z: f32) -> Self {
@@ -2449,7 +2453,8 @@ impl Stage {
             } else {
                 p.depth
             } * p.scale.abs();
-            let [a, b, c, mut e, f, h] = material(&p.material, p.receive, thick, true, lift[i]);
+            let [a, b, c, mut e, mut f, h] = material(&p.material, p.receive, thick, true, lift[i]);
+            f[3] = f32::from(u8::from(p.unlit));
             // Traced: its face is on the layer the tracer has bound.
             e[2] = f32::from(u8::from(trace_layer.as_deref() == Some(p.layer.as_str())));
             let rows = |mirror| {

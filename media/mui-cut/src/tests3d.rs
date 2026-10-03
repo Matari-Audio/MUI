@@ -514,6 +514,55 @@ fn a_layers_effects_run_on_its_slab_with_room_to_spread() {
     }
 }
 
+/// Backdrop effects in 3D read the scene behind their layer: a frosted
+/// pane spreads the stripe behind it (and only where it is), and a dark
+/// card with light wrap picks up the bright wall behind it at its edges.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn backdrop_effects_in_3d_see_the_scene_behind_their_layer() {
+    let p = Project::load(
+        r##"{"size":[640,360],"fps":30,"scenes":[{"name":"a","duration":1,"mode":"3d","background":"#000000","layers":[
+        {"id":"stripe","kind":"rect","x":320,"y":180,"width":10,"height":360,"fill":"#ffffff"},
+        {"id":"wall","kind":"rect","x":560,"y":180,"width":160,"height":360,"fill":"#ffffff"},
+        {"id":"pane","kind":"rect","x":320,"y":180,"width":200,"height":120,"z":-80,"effects":[{"type":"glass",
+            "frost":8,"refraction":0,"tint_amount":0,"saturation":1,"highlight":0,"shadow":0,"grain":0}]},
+        {"id":"card","kind":"rect","x":560,"y":180,"width":80,"height":60,"z":-40,"fill":"#000000",
+            "effects":[{"type":"light_wrap","radius":4}]}]}]}"##,
+    )
+    .unwrap();
+    let f = eval(&p, &p.scenes[0], 0.);
+    let cam = f.view.as_ref().unwrap().camera.clone();
+    let r = |px: &[u8], [x, y]: [f64; 2]| px[(y as usize * 640 + x as usize) * 4];
+    for engine in [Engine::Classic, Engine::Sparse] {
+        let Some(mut g) = offline(&p, engine) else {
+            return;
+        };
+        let px = frame(&mut g, std::slice::from_ref(&f));
+        assert!(g.canvas.notice().is_empty(), "{}", g.canvas.notice());
+        if engine == Engine::Classic
+            && let Some(dir) = std::env::var_os("MUI_CUT_STILLS")
+        {
+            let file = std::fs::File::create(std::path::Path::new(&dir).join("backdrop-3d.png"));
+            let mut enc = png::Encoder::new(file.unwrap(), 640, 360);
+            enc.set_color(png::ColorType::Rgba);
+            enc.write_header().unwrap().write_image_data(&px).unwrap();
+        }
+        // Frosted: beside the stripe, under the pane, lit; above the pane,
+        // beside it, dark.
+        let mid = to_px(&p, &cam, [320., 180., -80.]);
+        let beside = r(&px, [mid[0] + 12., mid[1]]);
+        assert!(beside > 30, "{engine:?}: frosted {beside}");
+        assert!(r(&px, [mid[0] + 12., 10.]) < 5, "{engine:?}: sharp above");
+        // Light wrap: the card's left edge lit from the wall, its middle dark.
+        let left = to_px(&p, &cam, [520., 180., -40.]);
+        let (edge, middle) = (
+            r(&px, [left[0] + 2., left[1]]),
+            r(&px, to_px(&p, &cam, [560., 180., -40.])),
+        );
+        assert!(edge > 60 && middle < 20, "{engine:?}: wrap {edge} {middle}");
+    }
+}
+
 #[test]
 fn a_material_round_trips_keys_binds_and_fits_the_schema() {
     let layer = |roughness: &str| {

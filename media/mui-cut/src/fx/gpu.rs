@@ -84,6 +84,7 @@ pub(crate) struct Passes {
     effects: Vec<wgpu::RenderPipeline>,
     copy: wgpu::RenderPipeline,
     over: wgpu::RenderPipeline,
+    warp: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     up: wgpu::RenderPipeline,
     /// What an unused input reads: one clear pixel.
@@ -197,6 +198,7 @@ impl Passes {
             module!("copy.wgsl"),
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
         );
+        let warp = pipeline("warp", module!("warp.wgsl"), None);
         let down = pipeline_as("pyramid down", module!("pyramid_down.wgsl"), None, LINEAR);
         let up = pipeline_as("pyramid up", module!("pyramid_up.wgsl"), None, LINEAR);
         let none =
@@ -215,6 +217,7 @@ impl Passes {
             effects,
             copy,
             over,
+            warp,
             down,
             up,
             none,
@@ -713,7 +716,9 @@ impl Passes {
 
     /// Each box of `atlas` through its stack, in place: a 3D frame's layer
     /// with effects, painted with room around it for what they spread. A
-    /// box is its corner, size, and pixels per project pixel.
+    /// box is its corner, size, pixels per project pixel, its stack, and
+    /// for a backdrop effect the frame behind it with the map from the
+    /// box's pixels to that frame's uv (see `warp.wgsl`).
     pub(crate) fn boxes(
         &mut self,
         canvas: &GpuCanvas,
@@ -724,10 +729,16 @@ impl Passes {
         // One size for all (grown, never shrunk), each box at its centre,
         // so a scene of several does not reallocate per box.
         let mut size = self.targets.as_ref().map_or([1, 1], |t| t.size);
-        for (_, px, _, _) in boxes {
-            size = [size[0].max(px[0]), size[1].max(px[1])];
+        for (_, px, k, stack, behind) in boxes {
+            // A backdrop effect reads the frame behind past the box's edges.
+            let room = if behind.is_some() {
+                2 * ((super::room(stack) * k).ceil() as u32).min(1024)
+            } else {
+                0
+            };
+            size = [size[0].max(px[0] + room), size[1].max(px[1] + room)];
         }
-        let n = boxes.iter().map(|b| passes(b.3)).sum::<u64>() + 1;
+        let n = boxes.iter().map(|b| passes(b.3) + 1).sum::<u64>() + 1;
         self.prepare(&canvas.device, size, n);
         self.staged.clear();
         self.written = 0;
@@ -759,7 +770,7 @@ impl Passes {
                 },
             );
         };
-        for &(at, px, k, stack) in boxes {
+        for &(at, px, k, stack, behind) in boxes {
             let t = self.targets.as_ref().expect("prepared");
             let mid = [(size[0] - px[0]) / 2, (size[1] - px[1]) / 2];
             // `L` clear but for the box: what the stack reads past it is
@@ -787,7 +798,22 @@ impl Passes {
                 scale: k as f32,
                 seed: frame.seed,
             };
-            let out = self.chain(&mut enc, h, L, None, stack);
+            let mut backdrop = None;
+            if let Some((frame_behind, m)) = behind {
+                // The map is from the box's pixels: from `L`'s, where the
+                // box sits at `mid`.
+                let [mx, my] = mid.map(|v| v as f32);
+                let row = |r: usize| {
+                    let [a, b, c] = [m[3 * r], m[3 * r + 1], m[3 * r + 2]];
+                    [a, b, c - a * mx - b * my, 0.]
+                };
+                let params = [row(0), row(1), row(2)].concat();
+                let offset = self.stage(h, 0, &params);
+                let a = self.view(A);
+                self.pass(&mut enc, &self.warp, &[frame_behind], &a, offset, true);
+                backdrop = Some(A);
+            }
+            let out = self.chain(&mut enc, h, L, backdrop, stack);
             let t = self.targets.as_ref().expect("prepared");
             copy(&mut enc, &t.textures[out], mid, atlas, at, px);
         }
@@ -819,8 +845,16 @@ impl Passes {
 }
 
 /// A box of the atlas to run a stack over: corner, size, pixels per
-/// project pixel, and the stack.
-pub(crate) type AtlasBox<'a> = ([u32; 2], [u32; 2], f64, &'a [Fx]);
+/// project pixel, the stack, and what is behind it (for a backdrop
+/// effect): a frame and the 3x3 map, rows first, from a box pixel to that
+/// frame's uv, homogeneous.
+pub(crate) type AtlasBox<'a> = (
+    [u32; 2],
+    [u32; 2],
+    f64,
+    &'a [Fx],
+    Option<(&'a wgpu::TextureView, [f32; 9])>,
+);
 
 fn encoder(c: &GpuCanvas) -> wgpu::CommandEncoder {
     c.device
@@ -916,6 +950,7 @@ mod tests {
             .map(|d| (d.name, super::source(d.name).expect("a shader per effect")));
         let more = [
             ("copy", module!("copy.wgsl")),
+            ("warp", module!("warp.wgsl")),
             ("pyramid down", module!("pyramid_down.wgsl")),
             ("pyramid up", module!("pyramid_up.wgsl")),
         ];

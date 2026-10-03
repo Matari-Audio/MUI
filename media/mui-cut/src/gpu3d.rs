@@ -5,6 +5,13 @@
 //! its placement) changes, so a card flying about costs no Vello work. A
 //! layer with effects gets room in the atlas for what they spread, and its
 //! box there runs through its stack before the slabs sample it.
+//!
+//! A backdrop effect (`glass`, `light_wrap`) reads the scene behind its
+//! layer: the shot is drawn once without that layer and all that is nearer
+//! the camera, that frame is mapped through the layer's plane onto its box
+//! (`warp.wgsl`), and the stack runs over it; layers farthest first, so a
+//! pane sees the panes behind it. Glass then draws unlit: what it shows is
+//! already lit.
 use mui_stage::{
     Ao, Environment, Floor, Fog, Light, LightKind, Mat4, Material, Model, Plane, Post, STUDIO,
     Shot, Stage,
@@ -52,6 +59,41 @@ pub(crate) struct Space {
     #[cfg(not(target_arch = "wasm32"))]
     rt: Option<mui_stage_rt::Rt>,
     atlas_tex: Option<wgpu::Texture>,
+    /// The frame behind a backdrop layer, at the canvas's size.
+    behind: Option<([u32; 2], wgpu::TextureView)>,
+}
+
+/// Whether `stack` reads what is behind its layer.
+fn backdrop(stack: &[crate::fx::Fx]) -> bool {
+    stack
+        .iter()
+        .any(|f| crate::fx::def(&f.kind).is_some_and(|(_, d)| d.backdrop))
+}
+
+/// How far `m`'s origin is from the camera of `vp`: clip w.
+fn depth(vp: Mat4, m: Mat4) -> f32 {
+    (vp * m).0[15]
+}
+
+/// The 3x3 map, rows first, from a pixel of a layer's box in the atlas
+/// (`k` pixels per unit, the plane `size` units across) to the screen's uv,
+/// homogeneous, through `vp * model`.
+fn box_to_screen(vp: Mat4, model: Mat4, size: [f32; 2], k: f32) -> [f32; 9] {
+    let c = (vp * model).0;
+    let at = |r: usize, col: usize| c[col * 4 + r];
+    // Box pixel (x, y) is (x / k - w / 2, h / 2 - y / k) on the plane.
+    let row = |r: usize| {
+        [
+            at(r, 0) / k,
+            -at(r, 1) / k,
+            -at(r, 0) * size[0] / 2. + at(r, 1) * size[1] / 2. + at(r, 3),
+        ]
+    };
+    let (x, y, w) = (row(0), row(1), row(3));
+    // Clip to uv: u = (x / w + 1) / 2, v = (1 - y / w) / 2.
+    let u: [f32; 3] = std::array::from_fn(|i| 0.5 * (x[i] + w[i]));
+    let v: [f32; 3] = std::array::from_fn(|i| 0.5 * (w[i] - y[i]));
+    [u[0], u[1], u[2], v[0], v[1], v[2], w[0], w[1], w[2]]
 }
 
 /// sRGB bytes to linear light.
@@ -96,6 +138,7 @@ impl Space {
             #[cfg(not(target_arch = "wasm32"))]
             rt: None,
             atlas_tex: None,
+            behind: None,
         }
     }
 
@@ -258,11 +301,12 @@ impl Space {
                 .0
                 .iter()
                 .zip(&key.1)
-                .filter(|(c, _)| !c.effects.is_empty())
+                // A backdrop's stack runs once the scene behind is drawn.
+                .filter(|(c, _)| !c.effects.is_empty() && !backdrop(&c.effects))
                 .map(|(c, s)| {
                     let at = [s.at[0] + PAD, s.at[1] + PAD];
                     let px = [s.px[0] - 2 * PAD, s.px[1] - 2 * PAD];
-                    (at, px, s.k, &c.effects[..])
+                    (at, px, s.k, &c.effects[..], None)
                 })
                 .collect();
             if !boxes.is_empty() {
@@ -280,7 +324,10 @@ impl Space {
             self.atlas_tex = Some(atlas);
             self.painted = Some(key);
         }
-        let slots = &self.painted.as_ref().expect("painted above").1;
+        let painted = self.painted.as_ref().expect("painted above");
+        let slots = &painted.1;
+        // Backdrop layers: plane index, box, stack.
+        let mut behind = Vec::new();
 
         // Planes.
         let [aw, ah] = self.atlas.map(|v| v as f32);
@@ -448,6 +495,19 @@ impl Space {
                         o.translate(mui_geometry::Vec2::new(f64::from(grow), f64::from(grow)));
                         plane = plane.outline(std::sync::Arc::new(o));
                     }
+                    let stack = &painted.0[shown_i - 1].effects;
+                    if backdrop(stack) {
+                        // Glass shows the lit scene behind it, and lets
+                        // light through rather than casting a shadow.
+                        if stack.iter().any(|f| f.kind == "glass") {
+                            plane.unlit = true;
+                            plane.cast = false;
+                        }
+                        let at = [slot.at[0] + PAD, slot.at[1] + PAD];
+                        let px = [slot.px[0] - 2 * PAD, slot.px[1] - 2 * PAD];
+                        let map = box_to_screen(vp, plane.model(), plane.size, slot.k as f32);
+                        behind.push((planes.len(), at, px, slot.k, stack.clone(), map));
+                    }
                     planes.push(plane);
                 }
             }
@@ -541,6 +601,9 @@ impl Space {
             },
             ..Shot::new(camera)
         };
+        if !behind.is_empty() {
+            self.backdrops(canvas, frame, &shot, behind, vp, format)?;
+        }
         #[cfg(not(target_arch = "wasm32"))]
         if let (Some(rt), Some(spp)) = (&mut self.rt, canvas.glass) {
             rt.draw(&mut self.stage, &shot, 0., spp, target, format)
@@ -561,4 +624,86 @@ impl Space {
             .map_err(|e| e.to_string())?;
         Ok(quads)
     }
+
+    /// Each backdrop layer's stack over the scene behind it, farthest
+    /// first: `shot` without the layer and what is nearer, drawn, mapped
+    /// onto its box, the stack run there, the atlas brought up to date.
+    /// The atlas is painted again next frame: its boxes now hold results.
+    fn backdrops(
+        &mut self,
+        canvas: &GpuCanvas,
+        frame: &Frame,
+        shot: &Shot,
+        mut layers: Vec<Behind>,
+        vp: Mat4,
+        format: wgpu::TextureFormat,
+    ) -> Result<(), String> {
+        let size = canvas.size();
+        if self.behind.as_ref().is_none_or(|b| b.0 != size) {
+            let view = canvas
+                .device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("mui-cut 3D backdrop"),
+                    size: wgpu::Extent3d {
+                        width: size[0],
+                        height: size[1],
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.behind = Some((size, view));
+        }
+        let view = self.behind.as_ref().expect("made above").1.clone();
+        let atlas = self.atlas_tex.clone().ok_or("no atlas")?;
+        let plane_depth: Vec<f32> = shot.planes.iter().map(|p| depth(vp, p.model())).collect();
+        layers.sort_by(|a, b| plane_depth[b.0].total_cmp(&plane_depth[a.0]));
+        for (i, at, px, k, stack, map) in &layers {
+            let d = plane_depth[*i];
+            let farther = |e: f32| e > d;
+            let only = Shot {
+                planes: shot
+                    .planes
+                    .iter()
+                    .zip(&plane_depth)
+                    .filter(|(_, e)| farther(**e))
+                    .map(|(p, _)| p.clone())
+                    .collect(),
+                models: shot
+                    .models
+                    .iter()
+                    .filter(|m| farther(depth(vp, m.transform)))
+                    .cloned()
+                    .collect(),
+                ..shot.clone()
+            };
+            self.stage
+                .draw(&only, 0., &view, format)
+                .map_err(|e| e.to_string())?;
+            let fx = match &mut self.fx {
+                Some(fx) => fx,
+                none => none.insert(crate::fx::gpu::Passes::new(&canvas.device, format)?),
+            };
+            fx.boxes(
+                canvas,
+                frame,
+                &atlas,
+                &[(*at, *px, *k, stack, Some((&view, *map)))],
+            );
+            self.stage.layer_done("atlas").map_err(|e| e.to_string())?;
+        }
+        self.painted = None;
+        Ok(())
+    }
 }
+
+/// A backdrop layer of a 3D frame: its plane's index in the shot, its box
+/// in the atlas (corner, size, pixels per unit), its stack, and the map
+/// from the box to the screen.
+type Behind = (usize, [u32; 2], [u32; 2], f64, Vec<crate::fx::Fx>, [f32; 9]);

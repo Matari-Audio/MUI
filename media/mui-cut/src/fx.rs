@@ -379,6 +379,25 @@ pub(crate) fn reach(stack: &[Fx]) -> f64 {
         .sum()
 }
 
+/// How far, in project pixels, `stack` reads what is behind its layer
+/// past the layer's edges (a backdrop effect's blur and refraction).
+pub(crate) fn room(stack: &[Fx]) -> f64 {
+    stack
+        .iter()
+        .map(|f| {
+            let v = |k: &str| match f.values.get(k) {
+                Some(Val::Num(v)) => v.abs(),
+                _ => 0.,
+            };
+            match f.kind.as_str() {
+                "light_wrap" => 3. * v("radius"),
+                "glass" => 3. * v("frost") + v("refraction") + v("bevel"),
+                _ => 0.,
+            }
+        })
+        .fold(0., f64::max)
+}
+
 impl Fx {
     /// The shader's `Params`, in schema order: a colour is four floats
     /// (straight sRGB, 0..1), a number one.
