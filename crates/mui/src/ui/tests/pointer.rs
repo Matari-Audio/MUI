@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn target_at_queries_resolved_rotated_clipped_topmost_targets_without_input() {
+    let tree = |top_disabled: bool| {
+        stack([
+            stack([block(10., 4.)
+                .offset(6., 2.)
+                .anchor(Align::Start, Align::Start)
+                .fill(Role::Primary)
+                .id("leaf")])
+            .size(20., 10.)
+            .offset(10., 10.)
+            .anchor(Align::Start, Align::Start)
+            .rotation(std::f64::consts::FRAC_PI_2),
+            block(2., 2.)
+                .offset(20., 14.)
+                .anchor(Align::Start, Align::Start)
+                .fill(Role::Field)
+                .when(top_disabled, Styled::disabled)
+                .id("top"),
+            // Unnamed visual decoration does not intercept a target query.
+            block(2., 2.)
+                .offset(20., 14.)
+                .anchor(Align::Start, Align::Start)
+                .fill(Role::Dim),
+        ])
+        .size(22., 18.)
+        .radius(0.)
+        .clip()
+    };
+    let point = Point::new(21., 15.);
+    let mut ui = Ui::default();
+    assert_eq!(ui.target_at(point), None, "no resolved frame yet");
+    ui.frame(tree(false), None, PointerInput::default(), 0.016)
+        .unwrap();
+    assert_eq!(ui.target_at(point), Some(("top", None)));
+    assert_eq!(ui.target_at(Point::new(24., 13.)), None);
+    assert_eq!(ui.target_at(Point::new(21., 20.)), None);
+    for point in [Point::new(f64::NAN, 15.), Point::new(21., f64::INFINITY)] {
+        assert_eq!(ui.target_at(point), None);
+    }
+    ui.frame(tree(true), None, PointerInput::default(), 0.016)
+        .unwrap();
+    assert_eq!(
+        ui.target_at(point),
+        Some(("leaf", None)),
+        "disabled and noninteractive decorations preserve click-through"
+    );
+    assert_eq!(ui.pointer().pos, None, "queries do not synthesize input");
+    assert!(!ui.get("leaf").hovered && !ui.get("leaf").pressed);
+}
+
+#[test]
 fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
     let tree = |angle| {
         stack([stack([block(10., 4.)

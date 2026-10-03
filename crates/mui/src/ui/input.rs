@@ -18,6 +18,14 @@ impl Ui {
         self.pointer
     }
 
+    /// The topmost enabled target and tagged shape at a scene-space point in
+    /// the latest resolved frame. Uses the same transformed paths, ancestor
+    /// clips and external-material containment as pointer interaction, without
+    /// moving the pointer or changing capture. Non-finite points hit nothing.
+    pub fn target_at(&self, point: Point) -> Option<(&str, Option<&str>)> {
+        self.under(Some(point))
+    }
+
     /// Which shape of the canvas `id` the pointer is on, by the tag its
     /// [`Draw`](mui_scene::Draw) carried. `None` when the pointer is over no
     /// tagged shape of that node -- including inside its frame but outside
