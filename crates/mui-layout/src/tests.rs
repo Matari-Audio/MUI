@@ -291,6 +291,69 @@ fn aspect_derives_the_missing_axis() {
 }
 
 #[test]
+fn aspect_fit_respects_both_axes_intrinsic_flex_and_ratio_validation() {
+    let item = |ratio| Node::content().aspect_fit(ratio).id("fit");
+    for (offered, ratio, expected) in [
+        (Size::new(80., 40.), 1., Size::new(40., 40.)),
+        (Size::new(40., 80.), 1., Size::new(40., 40.)),
+        (Size::new(80., 30.), 2., Size::new(60., 30.)),
+        (Size::new(30., 80.), 0.5, Size::new(30., 60.)),
+    ] {
+        let tree = stack([item(ratio).full()]);
+        let layout = resolve(&tree, Some(offered), Limits::default()).unwrap();
+        assert_eq!(layout.frame("fit").unwrap().size, expected);
+    }
+    let intrinsic = resolve_with(
+        &item(2.),
+        None,
+        Limits::default(),
+        SpacingScale::DEFAULT,
+        |_, _| Size::new(80., 30.),
+    )
+    .unwrap();
+    assert_eq!(intrinsic.size, Size::new(60., 30.));
+    for vertical in [false, true] {
+        let fitted = item(1.).flex(1.);
+        let sibling = block(20., 20.).shrink(0.).id("sibling");
+        let (tree, offered) = if vertical {
+            (col([fitted, sibling]), Size::new(40., 100.))
+        } else {
+            (row([fitted, sibling]), Size::new(100., 40.))
+        };
+        let layout = resolve(&tree, Some(offered), Limits::default()).unwrap();
+        let frame = layout.frame("fit").unwrap();
+        assert_eq!(
+            frame.size,
+            Size::new(40., 40.),
+            "flex allocation preserves aspect within its cross-axis room"
+        );
+        let sibling = layout.frame("sibling").unwrap();
+        assert!(if vertical {
+            sibling.y >= frame.bottom()
+        } else {
+            sibling.x >= frame.right()
+        });
+    }
+    let old = resolve(
+        &stack([Node::content().w(Len::Pct(100.)).aspect(1.).id("old")]),
+        Some(Size::new(80., 40.)),
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        old.frame("old").unwrap().size,
+        Size::new(80., 80.),
+        "existing aspect remains width-first"
+    );
+    for ratio in [0., -1., f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            resolve(&item(ratio), Some(Size::new(80., 40.)), Limits::default()).unwrap_err(),
+            Error::InvalidValue
+        );
+    }
+}
+
+#[test]
 fn grid_flows_equal_columns_and_shares_vertical_surplus() {
     let cells = (0..5).map(|i| block(10., 10.).id(format!("c{i}")));
     let g = grid(2, cells).id("g").gap(4.);
