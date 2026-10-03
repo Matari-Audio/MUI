@@ -256,7 +256,7 @@ impl Hit {
     fn cache_placed_clips(
         &mut self,
         clips: Option<&[(Arc<Path>, Point)]>,
-    ) -> Result<Arc<[(Arc<Converted>, Vec2)]>, Error> {
+    ) -> Result<Clips, Error> {
         let clips = match clips.filter(|c| !c.is_empty()) {
             None => Arc::from([]),
             Some(list) => {
