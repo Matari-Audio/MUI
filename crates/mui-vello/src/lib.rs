@@ -136,6 +136,14 @@ pub trait Canvas {
     }
     fn set_stroke(&mut self, s: Stroke);
     fn fill_path(&mut self, p: &BezPath);
+    /// Explicit winding for imported vector artwork.
+    fn fill_path_with_rule(&mut self, p: &BezPath, rule: peniko::Fill) -> bool {
+        if rule != peniko::Fill::NonZero {
+            return false;
+        }
+        self.fill_path(p);
+        true
+    }
     fn stroke_path(&mut self, p: &BezPath);
     /// A Gaussian-blurred rounded rectangle, analytically. With `invert`
     /// the coverage is flipped -- opaque outside the rectangle, fading to
@@ -307,6 +315,12 @@ macro_rules! wrapper {
         }
         fn fill_path(&mut self, p: &BezPath) {
             self.$inner.fill_path(p)
+        }
+        fn fill_path_with_rule(&mut self, p: &BezPath, rule: peniko::Fill) -> bool {
+            self.$inner.set_fill_rule(rule);
+            self.$inner.fill_path(p);
+            self.$inner.set_fill_rule(peniko::Fill::NonZero);
+            true
         }
         fn stroke_path(&mut self, p: &BezPath) {
             self.$inner.stroke_path(p)
@@ -499,7 +513,7 @@ pub fn brush(p: &Paint, bounds: Rect) -> PaintType {
         Paint::Solid(c) => PaintType::Solid(srgb(*c)),
         // Images go through `Canvas::image`, which knows whether its
         // renderer takes a pixmap or an atlas id; here only the stand-in.
-        Paint::Image { .. } => PaintType::Solid(srgb(p.solid())),
+        Paint::Image { .. } | Paint::Vector { .. } => PaintType::Solid(srgb(p.solid())),
         Paint::Gradient { kind, stops } => {
             // `ColorStops` holds four stops inline, so the common gradient
             // does not allocate; a longer one allocates once, as before.
@@ -574,7 +588,7 @@ pub fn paint(
         } else if path_shadow(p) {
             blurred_path(canvas, p, &bez);
         } else {
-            one(canvas, p, &bez)?;
+            one(canvas, p, &bez, placed(transform, p))?;
         }
     }
     Ok(())
@@ -583,6 +597,7 @@ pub fn paint(
 /// `base` moved to where `p` stands: its paths are local to
 /// [`Painted::offset`].
 pub(crate) fn placed(base: Affine, p: &Painted) -> Affine {
+    let base = base * p.transform;
     match p.offset {
         o if o.x == 0. && o.y == 0. => base,
         o => base * Affine::translate((o.x, o.y)),
@@ -591,7 +606,8 @@ pub(crate) fn placed(base: Affine, p: &Painted) -> Affine {
 
 /// `p`'s paint box where it stands in the scene.
 pub(crate) fn scene_box(p: &Painted, path: &BezPath) -> Rect {
-    paint_box(p, path) + kurbo::Vec2::new(p.offset.x, p.offset.y)
+    p.transform
+        .transform_rect_bbox(paint_box(p, path) + kurbo::Vec2::new(p.offset.x, p.offset.y))
 }
 
 /// A drop shadow with no rounded rect to blur analytically: a custom
@@ -699,7 +715,7 @@ pub(crate) fn replay(
             if path_shadow(q) {
                 blurred_path(canvas, q, &bez);
             } else {
-                one(canvas, q, &bez)?;
+                one(canvas, q, &bez, placed(base, q))?;
             }
         }
     }
@@ -779,7 +795,148 @@ pub(crate) fn plain(p: &Painted) -> Option<AlphaColor<Srgb>> {
     plain.then(|| srgb(c))
 }
 
-fn one(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
+/// Replay retained vector paths under the element and device transforms.
+fn vector_paint(
+    canvas: &mut impl Canvas,
+    vector: &mui_scene::Vector,
+    fit: Fit,
+    outline: &BezPath,
+    base: Affine,
+) -> Result<(), Error> {
+    use mui_scene::VectorCommand;
+    let bounds = outline.bounding_box();
+    let sx = bounds.width() / vector.width;
+    let sy = bounds.height() / vector.height;
+    let (sx, sy) = match fit {
+        Fit::Fill => (sx, sy),
+        Fit::Contain => {
+            let s = sx.min(sy);
+            (s, s)
+        }
+        Fit::Cover => {
+            let s = sx.max(sy);
+            (s, s)
+        }
+    };
+    let at =
+        base * Affine::translate((
+            bounds.x0 + (bounds.width() - vector.width * sx) * 0.5,
+            bounds.y0 + (bounds.height() - vector.height * sy) * 0.5,
+        )) * Affine::scale_non_uniform(sx, sy);
+    if let Some(source) = vector.raster_source() {
+        // Request physical pixels, including node fit, scene transforms and DPI.
+        // Rotation changes sampling axes, not the source's authored geometry.
+        let [a, b, c, d, _, _] = at.as_coeffs();
+        let w = (vector.width * a.hypot(b)).ceil();
+        let h = (vector.height * c.hypot(d)).ceil();
+        if ![w, h]
+            .into_iter()
+            .all(|n| n.is_finite() && n > 0. && n <= u32::MAX as f64)
+        {
+            return Err(Error::InvalidPath);
+        }
+        let Some(image) = source
+            .prepared_image(w as u32, h as u32)
+            .map_err(|_| Error::InvalidPath)?
+        else {
+            return Ok(());
+        };
+        let paint = canvas.image(&image).ok_or(Error::InvalidPath)?;
+        canvas.set_transform(base);
+        canvas.push_clip(outline);
+        canvas.set_transform(at);
+        canvas.set_paint(paint);
+        canvas.set_paint_transform(Affine::scale_non_uniform(
+            vector.width / image.width as f64,
+            vector.height / image.height as f64,
+        ));
+        canvas.fill_path(&Rect::new(0., 0., vector.width, vector.height).to_path(0.01));
+        canvas.reset_paint_transform();
+        canvas.pop_clip();
+        canvas.set_transform(base);
+        return Ok(());
+    }
+    canvas.set_transform(base);
+    canvas.push_clip(outline);
+    let mut layers = 0;
+    let result = (|| {
+        for command in vector.commands() {
+            match command {
+                VectorCommand::Fill {
+                    path,
+                    transform,
+                    brush,
+                    brush_transform,
+                    rule,
+                } => {
+                    canvas.set_transform(at * *transform);
+                    canvas.set_paint(vector_brush(brush)?);
+                    canvas.set_paint_transform(*brush_transform);
+                    if !canvas.fill_path_with_rule(path, *rule) {
+                        return Err(Error::InvalidPath);
+                    }
+                    canvas.reset_paint_transform();
+                }
+                VectorCommand::Stroke {
+                    path,
+                    transform,
+                    brush,
+                    brush_transform,
+                    stroke,
+                } => {
+                    canvas.set_transform(at * *transform);
+                    canvas.set_paint(vector_brush(brush)?);
+                    canvas.set_paint_transform(*brush_transform);
+                    canvas.set_stroke(stroke.clone());
+                    canvas.stroke_path(path);
+                    canvas.reset_paint_transform();
+                }
+                VectorCommand::PushLayer {
+                    path,
+                    transform,
+                    blend,
+                    alpha,
+                } => {
+                    canvas.set_transform(at * *transform);
+                    canvas.push_clip(path);
+                    canvas.push_layer(*blend, *alpha);
+                    layers += 1;
+                }
+                VectorCommand::PopLayer => {
+                    canvas.pop_layer();
+                    canvas.pop_clip();
+                    layers -= 1;
+                }
+            }
+        }
+        Ok(())
+    })();
+    for _ in 0..layers {
+        canvas.pop_layer();
+        canvas.pop_clip();
+    }
+    canvas.reset_paint_transform();
+    canvas.pop_clip();
+    canvas.set_transform(base);
+    result
+}
+fn vector_brush(brush: &peniko::Brush) -> Result<PaintType, Error> {
+    match brush {
+        peniko::Brush::Solid(c) => Ok(PaintType::Solid(*c)),
+        peniko::Brush::Gradient(g) => Ok(PaintType::Gradient(g.clone())),
+        peniko::Brush::Image(_) => Err(Error::InvalidPath),
+    }
+}
+
+fn one(
+    canvas: &mut impl Canvas,
+    p: &Painted,
+    path: &BezPath,
+    transform: Affine,
+) -> Result<(), Error> {
+    if let Paint::Vector { vector, fit, .. } = &p.paint {
+        return vector_paint(canvas, vector, *fit, path, transform);
+    }
     // Needs the list before it; see `backdrop`. A caller without one (a
     // tile, which cannot see past its edge) leaves the backdrop sharp.
     if p.layer == Layer::Backdrop {
@@ -937,6 +1094,7 @@ mod seam {
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
             offset: mui_geometry::Point::default(),
+            transform: Affine::IDENTITY,
             width: 0.,
             blur: 0.,
             text: Some(Text {
@@ -980,6 +1138,144 @@ mod snapshot {
     use mui_material::prelude::*;
     use mui_scene::{ResolvedScene, TextGlyph};
     use vello_common::pixmap::Pixmap;
+
+    #[test]
+    fn subtree_rotation_preserves_bitmap_vector_glyphs_and_device_paint() {
+        use mui_scene::{Image, Vector, VectorCommand};
+        let bitmap = Arc::new(Image::rgba(1, 1, Arc::<[u8]>::from([255, 0, 0, 255])).unwrap());
+        let vector = Arc::new(
+            Vector::new(
+                6.,
+                2.,
+                vec![VectorCommand::Fill {
+                    path: Rect::new(0., 0., 6., 2.).to_path(0.01),
+                    transform: Affine::IDENTITY,
+                    brush: peniko::Brush::Solid(peniko::Color::from_rgba8(0, 255, 0, 255)),
+                    brush_transform: Affine::IDENTITY,
+                    rule: peniko::Fill::NonZero,
+                }],
+            )
+            .unwrap(),
+        );
+        let spec = |angle| {
+            SceneSpec::new(
+                stack([stack([
+                    block(6., 2.)
+                        .fill(Fill::Image(bitmap.clone(), Fit::Fill))
+                        .anchor(Align::Start, Align::Start)
+                        .id("bitmap"),
+                    block(6., 2.)
+                        .offset(8., 0.)
+                        .fill(Fill::Vector(vector.clone(), Fit::Fill))
+                        .anchor(Align::Start, Align::Start)
+                        .id("vector"),
+                    text("R")
+                        .text_size(6.)
+                        .offset(0., 3.)
+                        .fill(Color::srgb(1., 1., 1.))
+                        .anchor(Align::Start, Align::Start)
+                        .id("glyph"),
+                ])
+                .size(20., 8.)
+                .offset(10., 10.)
+                .anchor(Align::Start, Align::Start)
+                .rotation(angle)])
+                .size(40., 40.)
+                .clip(),
+            )
+            .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
+        };
+        let plain = resolve(&spec(0.)).unwrap();
+        let rotated = resolve(&spec(std::f64::consts::FRAC_PI_2)).unwrap();
+        for key in ["bitmap", "vector", "glyph"] {
+            assert_eq!(
+                plain.surface(key).unwrap().frame,
+                rotated.surface(key).unwrap().frame
+            );
+            let before = plain
+                .paint
+                .iter()
+                .find(|p| p.key.as_str() == key && matches!(p.layer, Layer::Fill | Layer::Text))
+                .unwrap();
+            let after = rotated
+                .paint
+                .iter()
+                .find(|p| p.key.as_str() == key && matches!(p.layer, Layer::Fill | Layer::Text))
+                .unwrap();
+            assert_ne!(before.transform, after.transform);
+            assert_eq!(
+                before.paint, after.paint,
+                "source artwork is not raster-rotated or replaced"
+            );
+            assert!(scene_box(after, &bez_path(&after.path, ARC_TOLERANCE).unwrap()).is_finite());
+        }
+        assert!(rotated.paint.iter().any(
+            |p| p.layer == Layer::Text && p.text.as_ref().is_some_and(|t| !t.glyphs.is_empty())
+        ));
+        for scale in [1u16, 2] {
+            let mut ctx = vello_cpu::RenderContext::new(40 * scale, 40 * scale);
+            let mut resources = vello_cpu::Resources::default();
+            paint(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut resources,
+                    cache: &mut Cache::default(),
+                },
+                &rotated,
+                Affine::scale(scale as f64),
+            )
+            .unwrap();
+            ctx.flush();
+            let mut pixels = Pixmap::new(40 * scale, 40 * scale);
+            ctx.render(&mut pixels, &mut resources);
+            let at = |x: usize, y: usize| {
+                pixels.data()[y * scale as usize * (40 * scale) as usize + x * scale as usize]
+            };
+            let red = at(23, 5);
+            let green = at(23, 13);
+            assert!(
+                red.r > 200 && red.g < 30,
+                "bitmap rotation lost at{scale}x: {red:?}"
+            );
+            assert!(
+                green.g > 200 && green.r < 30,
+                "vector rotation lost at{scale}x: {green:?}"
+            );
+            assert_eq!(
+                at(11, 11).a,
+                0,
+                "paint stayed at the unrotated bitmap position"
+            );
+            assert!(
+                (3..10).any(|y| (14..22).any(|x| {
+                    let p = at(x, y);
+                    p.r > 80 && p.g > 80 && p.b > 80
+                })),
+                "glyphs must paint in their rotated region at{scale}x"
+            );
+        }
+        #[cfg(feature = "gpu-effects")]
+        {
+            let mut encoded = vello::Scene::new();
+            let mut cache = Cache::default();
+            let textures = classic::Textures::default();
+            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [80, 80]);
+            paint(&mut gpu, &rotated, Affine::scale(2.)).unwrap();
+            assert_eq!(
+                gpu.images.len(),
+                1,
+                "only authored bitmap uploads; vector and text stay vector/glyph paint"
+            );
+            assert!(!encoded.encoding().path_tags.is_empty());
+            let mut unchanged = vello::Scene::new();
+            let mut gpu = Classic::new(&mut unchanged, &mut cache, &textures, [80, 80]);
+            paint(&mut gpu, &plain, Affine::scale(2.)).unwrap();
+            assert_ne!(
+                encoded.encoding().transforms,
+                unchanged.encoding().transforms
+            );
+        }
+    }
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
     /// reads against it, and the rounded corner stays clear.
@@ -1136,6 +1432,185 @@ mod snapshot {
             pixels_scene(&primary_scene, 100, 40).data(),
             "fallback output equals the primary .notdef output"
         );
+    }
+
+    /// The same retained command buffer reaches both raster and GPU encoding;
+    /// device scale changes paths, not a pre-rasterized image's resolution.
+    #[test]
+    fn retained_vector_preserves_gradient_hole_clip_and_device_scale() {
+        use mui_scene::{Vector, VectorCommand};
+        use peniko::{Brush, Fill as Winding};
+        let mut hole = Rect::new(0., 0., 24., 16.).to_path(0.01);
+        hole.extend(Rect::new(8., 4., 16., 12.).to_path(0.01));
+        let red = AlphaColor::<Srgb>::new([1., 0., 0., 1.]);
+        let blue = AlphaColor::<Srgb>::new([0., 0., 1., 1.]);
+        let vector = Arc::new(
+            Vector::new(
+                24.,
+                16.,
+                vec![
+                    VectorCommand::PushLayer {
+                        path: Rect::new(0., 0., 24., 14.).to_path(0.01),
+                        transform: Affine::IDENTITY,
+                        blend: peniko::BlendMode::default(),
+                        alpha: 0.5,
+                    },
+                    VectorCommand::Fill {
+                        path: hole,
+                        transform: Affine::IDENTITY,
+                        brush: Brush::Gradient(
+                            peniko::Gradient::new_linear((0., 0.), (24., 0.))
+                                .with_stops([red, blue]),
+                        ),
+                        brush_transform: Affine::IDENTITY,
+                        rule: Winding::EvenOdd,
+                    },
+                    VectorCommand::Stroke {
+                        path: Rect::new(1., 1., 22., 13.).to_path(0.01),
+                        transform: Affine::translate((0.5, 0.5)),
+                        brush: Brush::Solid(peniko::Color::WHITE),
+                        brush_transform: Affine::IDENTITY,
+                        stroke: Stroke::new(0.5),
+                    },
+                    VectorCommand::PopLayer,
+                ],
+            )
+            .unwrap(),
+        );
+        let root = block(48., 32.).fill(Fill::Vector(vector.clone(), Fit::Fill));
+        let scene = resolve(&SceneSpec::new(root).offered(Size::new(48., 32.))).unwrap();
+        assert!(scene.paint.iter().any(
+            |p| matches!(&p.paint, Paint::Vector { vector: v, .. } if Arc::ptr_eq(v, &vector))
+        ));
+        for scale in [1u16, 2] {
+            let mut ctx = vello_cpu::RenderContext::new(48 * scale, 32 * scale);
+            let mut resources = vello_cpu::Resources::default();
+            paint(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut resources,
+                    cache: &mut Cache::default(),
+                },
+                &scene,
+                Affine::scale(f64::from(scale)),
+            )
+            .unwrap();
+            ctx.flush();
+            let mut pixels = Pixmap::new(48 * scale, 32 * scale);
+            ctx.render(&mut pixels, &mut resources);
+            let at = |x: usize, y: usize| {
+                pixels.data()[y * scale as usize * (48 * scale) as usize + x * scale as usize]
+            };
+            let left = at(8, 4);
+            let right = at(40, 4);
+            assert!(
+                left.r > left.b && right.b > right.r,
+                "gradient lost at {scale}x: {left:?}/{right:?}"
+            );
+            assert!(
+                (120..=135).contains(&left.a),
+                "group opacity lost at {scale}x: {left:?}"
+            );
+            assert_eq!(at(24, 16).a, 0, "even-odd hole lost at {scale}x");
+            assert_eq!(at(24, 30).a, 0, "group clip lost at {scale}x");
+        }
+        #[cfg(feature = "gpu-effects")]
+        {
+            let mut encoded = vello::Scene::new();
+            let mut cache = Cache::default();
+            let textures = classic::Textures::default();
+            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [96, 64]);
+            paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
+            assert!(gpu.images.is_empty(), "vector became a bitmap upload");
+            assert!(!encoded.encoding().path_tags.is_empty());
+        }
+    }
+
+    #[test]
+    fn filtered_vector_requests_physical_extent_for_cpu_and_gpu() {
+        #[derive(Debug)]
+        struct Source {
+            requests: std::sync::Mutex<Vec<(u32, u32)>>,
+            images: [mui_scene::Image; 2],
+            revision: std::sync::atomic::AtomicU64,
+        }
+        impl mui_scene::RasterSource for Source {
+            fn prepared_image(
+                &self,
+                width: u32,
+                height: u32,
+            ) -> Result<Option<mui_scene::Image>, String> {
+                self.requests.lock().unwrap().push((width, height));
+                Ok(self
+                    .images
+                    .iter()
+                    .find(|i| i.width == width && i.height == height)
+                    .cloned())
+            }
+            fn revision(&self) -> u64 {
+                self.revision.load(std::sync::atomic::Ordering::Acquire)
+            }
+            fn retained_bytes(&self) -> usize {
+                0
+            }
+        }
+        let source = Arc::new(Source {
+            requests: std::sync::Mutex::new(Vec::new()),
+            revision: std::sync::atomic::AtomicU64::new(0),
+            images: [(20, 15), (40, 30)].map(|(w, h)| {
+                mui_scene::Image::rgba(w, h, [255, 0, 0, 128].repeat((w * h) as usize)).unwrap()
+            }),
+        });
+        let vector = Arc::new(mui_scene::Vector::filtered(10., 10., source.clone()).unwrap());
+        let scene = resolve(
+            &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector.clone(), Fit::Fill)))
+                .offered(Size::new(20., 15.)),
+        )
+        .unwrap();
+        for scale in [1u16, 2] {
+            let mut ctx = vello_cpu::RenderContext::new(20 * scale, 15 * scale);
+            let mut resources = vello_cpu::Resources::default();
+            paint(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut resources,
+                    cache: &mut Cache::default(),
+                },
+                &scene,
+                Affine::scale(scale as f64),
+            )
+            .unwrap();
+            ctx.flush();
+            let mut pixels = Pixmap::new(20 * scale, 15 * scale);
+            ctx.render(&mut pixels, &mut resources);
+            let center =
+                pixels.data()[7 * scale as usize * (20 * scale) as usize + 10 * scale as usize];
+            assert_eq!(center.r, 128, "straight alpha is premultiplied once");
+            assert_eq!(center.a, 128);
+        }
+        assert_eq!(*source.requests.lock().unwrap(), [(20, 15), (40, 30)]);
+        source
+            .revision
+            .fetch_add(1, std::sync::atomic::Ordering::Release);
+        let ready_scene = resolve(
+            &SceneSpec::new(block(20., 15.).fill(Fill::Vector(vector, Fit::Fill)))
+                .offered(Size::new(20., 15.)),
+        )
+        .unwrap();
+        assert_ne!(
+            scene.paint, ready_scene.paint,
+            "ready pixels on same vector Arc must invalidate retained GPU paint"
+        );
+        #[cfg(feature = "gpu-effects")]
+        {
+            let mut encoded = vello::Scene::new();
+            let mut cache = Cache::default();
+            let textures = classic::Textures::default();
+            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [40, 30]);
+            paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
+            assert_eq!(gpu.images.len(), 1);
+            assert_eq!(source.requests.lock().unwrap().last(), Some(&(40, 30)));
+        }
     }
 
     /// A gradient shadow keeps its alpha. Both backends paint opaque black

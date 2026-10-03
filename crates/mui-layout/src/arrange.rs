@@ -381,6 +381,15 @@ pub(crate) fn arrange<P>(
                     let s = pin.sized(anchor, s);
                     (pin.place(anchor, s, pins.root, pins.scale), s)
                 }
+                // A decoration belongs to this local box and its clip; do
+                // not pull authored offsets back in like a window popup.
+                None if c.node.is_underlay() || c.node.is_overlay() => (
+                    [
+                        origin[0] + m.padding.left + p[0],
+                        origin[1] + m.padding.top + p[1],
+                    ],
+                    s,
+                ),
                 // A tooltip or menu offset past the edge is pulled back inside
                 // the box it floats in -- floats are painted after the root and
                 // clipped by nothing, so off the box is off the window.

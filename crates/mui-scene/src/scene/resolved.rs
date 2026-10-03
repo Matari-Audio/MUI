@@ -2,6 +2,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
+use mui_geometry::kurbo::Affine;
 use mui_geometry::{Path, Point, Rect, RoundedRect};
 use mui_layout::{Frame, Id, Layout, Size};
 use mui_text::{Axes, Font};
@@ -110,6 +111,9 @@ pub struct Painted {
     /// images are fitted to the local path, so they travel with it. Text
     /// keeps its [`Text::origin`] in scene space and this at zero.
     pub offset: Point,
+    /// Paint-only subtree transform in scene coordinates, applied before
+    /// the entry's local offset. Identity for ordinary layout-only paint.
+    pub transform: Affine,
     /// Stroke width; `0` fills.
     pub width: f64,
     /// Gaussian blur radius: a shadow's, or a [`Layer::Backdrop`]'s.
@@ -158,6 +162,7 @@ impl PartialEq for Painted {
             paint,
             rect,
             offset,
+            transform,
             width,
             blur,
             text,
@@ -168,6 +173,7 @@ impl PartialEq for Painted {
             && *paint == o.paint
             && *rect == o.rect
             && *offset == o.offset
+            && *transform == o.transform
             && *width == o.width
             && *blur == o.blur
             && *text == o.text
@@ -177,7 +183,14 @@ impl PartialEq for Painted {
 impl Painted {
     /// `path` where it stands in the scene: a translated copy.
     pub fn placed(&self) -> Path {
-        placed(&self.path, self.offset)
+        if self.transform == Affine::IDENTITY {
+            return placed(&self.path, self.offset);
+        }
+        rigid_path(
+            &self.path,
+            self.transform * Affine::translate(self.offset.to_vec2()),
+        )
+        .expect("resolved rigid transform is valid")
     }
 }
 
@@ -192,11 +205,40 @@ fn placed(p: &Path, d: Point) -> Path {
 /// A local path and the offset that places it in the scene.
 pub type PlacedPath = (Arc<Path>, Point);
 
+/// A captured pointer coordinate space. Retain this at press time when a
+/// drag must keep its initial frame even as reactive layout changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LocalPose {
+    inverse: Affine,
+}
+impl LocalPose {
+    pub fn local(self, point: Point) -> Point {
+        self.inverse * point
+    }
+    /// Pointer travel in the captured coordinate axes; translation is ignored.
+    pub fn delta(self, delta: mui_geometry::Vec2) -> mui_geometry::Vec2 {
+        let [a, b, c, d, _, _] = self.inverse.as_coeffs();
+        mui_geometry::Vec2::new(a * delta.x + c * delta.y, b * delta.x + d * delta.y)
+    }
+}
+
+/// Scene rotations compose into a rigid affine; circular arcs stay circular.
+pub(super) fn rigid_path(path: &Path, transform: Affine) -> Result<Path, mui_geometry::Error> {
+    if transform == Affine::IDENTITY {
+        return Ok(path.clone());
+    }
+    let [a, b, _, _, x, y] = transform.as_coeffs();
+    path.rigid_transform(mui_geometry::Vec2::new(x, y), b.atan2(a))
+}
+
 /// A node's outline, for hit-testing and for anything that derives from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedSurface {
     pub key: Id,
     pub frame: Frame,
+    /// Paint-only scene transform. `frame` remains the layout box; hit
+    /// paths are already transformed and pointer positions invert this.
+    pub transform: Affine,
     /// The outline in the surface's own space; [`Self::offset`] places it,
     /// as it does a [`Painted::path`].
     pub path: Arc<Path>,
@@ -257,6 +299,15 @@ pub struct ResolvedSurface {
     pub hits: Vec<(Arc<str>, Arc<Path>)>,
 }
 impl ResolvedSurface {
+    /// Map a scene pointer into the unrotated layout-local frame.
+    pub fn local(&self, point: Point) -> Point {
+        self.local_pose().local(point)
+    }
+    pub fn local_pose(&self) -> LocalPose {
+        LocalPose {
+            inverse: Affine::translate((-self.frame.x, -self.frame.y)) * self.transform.inverse(),
+        }
+    }
     /// Borrow the cached clip outlines without exposing their shared
     /// allocation. Paths are ordered outermost to innermost, each with the
     /// offset that places it.
@@ -281,6 +332,12 @@ pub struct ResolvedScene {
     pub(crate) memos: Vec<super::MemoSpan>,
 }
 impl ResolvedScene {
+    /// The external material's own hit geometry in its unrotated space.
+    pub fn external_contains(&self, key: &str, point: Point) -> Option<bool> {
+        let external = self.external_weld(key)?;
+        let surface = self.surface(key)?;
+        Some(external.contains(surface.transform.inverse() * point))
+    }
     /// The memoised subtrees `key`'s surface is in, outermost first, each
     /// with whether this resolve reused it.
     pub fn memos_at(&self, key: &str) -> impl Iterator<Item = (u64, bool)> + use<'_> {

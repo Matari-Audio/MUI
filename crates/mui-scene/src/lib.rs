@@ -63,13 +63,14 @@ pub use mui_layout::{
 pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
     Color, Corner, Corners, Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Mode,
-    Paint, Palette, Pigment, Radius, Role, Shadow, ShadowKind, Stroke, Style, Theme, TypeScale,
+    Paint, Palette, Pigment, Radius, RasterSource, Role, Shadow, ShadowKind, Stroke, Style, Theme,
+    TypeScale, Vector, VectorCommand,
 };
 pub use mui_text::{Axes, Font, Weight};
 pub use scene::bar;
 pub use scene::{
-    Layer, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Resolver, SceneError, SceneSpec,
-    Text, TextGlyph, push_index, resolve,
+    Layer, LocalPose, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Resolver, SceneError,
+    SceneSpec, Text, TextGlyph, push_index, resolve,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare

@@ -1,6 +1,184 @@
 use super::*;
 
 #[test]
+fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
+    let tree = |angle| {
+        stack([stack([block(10., 4.)
+            .offset(6., 2.)
+            .anchor(Align::Start, Align::Start)
+            .fill(Role::Primary)
+            .id("leaf")])
+        .size(20., 10.)
+        .offset(10., 10.)
+        .anchor(Align::Start, Align::Start)
+        .rotation(angle)])
+        .size(22., 18.)
+        .radius(0.)
+        .clip()
+    };
+    let angle = std::f64::consts::FRAC_PI_2;
+    let mut ui = Ui::default();
+    ui.frame(tree(angle), None, PointerInput::default(), 0.016)
+        .unwrap();
+    ui.frame(tree(angle), None, at(24., 13., false), 0.016)
+        .unwrap();
+    assert!(
+        !ui.get("leaf").hovered,
+        "unrotated layout rectangle is not the hit shape"
+    );
+    ui.frame(tree(angle), None, at(21., 20., false), 0.016)
+        .unwrap();
+    assert!(
+        !ui.get("leaf").hovered,
+        "rotated content remains clipped by its unrotated parent"
+    );
+    ui.frame(tree(angle), None, at(21., 15., false), 0.016)
+        .unwrap();
+    assert!(
+        ui.get("leaf").hovered,
+        "leaf {:?}; exact hit {:?}",
+        ui.scene().unwrap().surface("leaf"),
+        ui.hit.at(Point::new(21., 15.))
+    );
+    assert!(ui.local("leaf").unwrap().distance(Point::new(4., 2.)) < 1e-8);
+    ui.frame(tree(angle), None, at(21., 15., true), 0.016)
+        .unwrap();
+    assert!(ui.get("leaf").pressed);
+    ui.frame(tree(std::f64::consts::PI), None, at(21., 21., true), 0.016)
+        .unwrap();
+    let moved = ui.get("leaf");
+    assert!(
+        moved.held && moved.dragged,
+        "capture survives leaving the ancestor clip"
+    );
+    assert!((moved.drag_delta - Vec2::new(6., 0.)).hypot() < 1e-8);
+    ui.frame(tree(std::f64::consts::PI), None, at(21., 24., true), 0.016)
+        .unwrap();
+    assert!(
+        (ui.get("leaf").drag_delta - Vec2::new(3., 0.)).hypot() < 1e-8,
+        "reactive rotation cannot rebase captured drag axes"
+    );
+    ui.frame(tree(angle), None, at(21., 24., false), 0.016)
+        .unwrap();
+    assert!(ui.get("leaf").released);
+    assert!(!ui.get("leaf").clicked);
+    // Wheel reads the logical parent area but obeys its exact rotated clip,
+    // not just that clip's larger world bounding rectangle.
+    let clipped = || {
+        stack([stack([block(100., 100.)
+            .offset(-30., -30.)
+            .anchor(Align::Start, Align::Start)
+            .id("wheel.child")])
+        .size(40., 20.)
+        .clip()
+        .offset(30., 30.)
+        .anchor(Align::Start, Align::Start)
+        .rotation(std::f64::consts::FRAC_PI_4)])
+        .size(100., 100.)
+    };
+    let wheel = |x, y| Input {
+        pointer: at(x, y, false),
+        wheel: Vec2::new(0., 10.),
+        ..Input::default()
+    };
+    let mut ui = Ui::default();
+    ui.frame(clipped(), None, wheel(70., 20.), 0.016).unwrap();
+    assert_eq!(
+        ui.get("wheel.child").wheel,
+        Vec2::ZERO,
+        "clip AABB corner cannot receive wheel"
+    );
+    ui.frame(clipped(), None, wheel(50., 40.), 0.016).unwrap();
+    assert!(ui.get("wheel.child").wheel.hypot() > 0.);
+    for _ in 0..4 {
+        ui.frame(clipped(), None, wheel(50., 40.), 0.016).unwrap();
+        assert!(
+            ui.get("wheel.child").wheel.hypot() > 0.,
+            "equivalent clip-list identity after a retained frame stays visible"
+        );
+    }
+
+    // Each scroller in nested handoff uses its own axes, and captured bars
+    // retain their press-time local coordinate system.
+    let scrolling = || {
+        stack([col([block(20., 200.)])
+            .size(20., 40.)
+            .scroll()
+            .offset(20., 20.)
+            .anchor(Align::Start, Align::Start)
+            .rotation(angle)
+            .id("rotated.scroll")])
+        .size(100., 100.)
+    };
+    let mut ui = Ui::default();
+    ui.frame(
+        scrolling(),
+        None,
+        Input {
+            pointer: at(30., 40., false),
+            wheel: Vec2::new(-10., 0.),
+            ..Input::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    assert!(
+        (ui.scroll("rotated.scroll")[1] - 10.).abs() < 1e-8,
+        "world horizontal wheel drives local vertical scroll"
+    );
+    for _ in 0..2 {
+        ui.frame(scrolling(), None, at(30., 40., false), 0.016)
+            .unwrap();
+    }
+    let strip = ui
+        .scene()
+        .unwrap()
+        .surfaces()
+        .find(|s| super::super::bar::bar_of(&s.key).is_some())
+        .unwrap();
+    let press = strip.transform
+        * Point::new(
+            strip.frame.x + strip.frame.size.width / 2.,
+            strip.frame.y + strip.frame.size.height / 2.,
+        );
+    ui.frame(scrolling(), None, at(press.x, press.y, true), 0.016)
+        .unwrap();
+    let before = ui.scroll("rotated.scroll")[1];
+    ui.frame(scrolling(), None, at(press.x - 2., press.y, true), 0.016)
+        .unwrap();
+    assert!(
+        ui.scroll("rotated.scroll")[1] > before,
+        "horizontal capture motion advances rotated vertical scrollbar"
+    );
+}
+
+#[test]
+fn pointer_snapshot_keeps_frame_position_modifiers_and_surface_exit() {
+    let mut ui = Ui::default();
+    let tree = || block(40., 40.).id("surface");
+    let pointer = PointerInput {
+        mods: Mods {
+            ctrl: true,
+            alt: true,
+            ..Mods::default()
+        },
+        ..at(12., 13., false)
+    };
+    ui.frame(tree(), None, pointer, 0.016).unwrap();
+    assert_eq!(ui.pointer(), pointer);
+    let exited = PointerInput {
+        pos: None,
+        ..pointer
+    };
+    ui.frame(tree(), None, exited, 0.016).unwrap();
+    assert_eq!(
+        ui.pointer(),
+        exited,
+        "a leave must not expose stale local coordinates"
+    );
+}
+
+#[test]
 fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
     let tree = || {
         row([
@@ -14,6 +192,7 @@ fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     }
     assert!(ui.inert(&at(20., 20., false).into()), "same target");
+    assert_eq!(ui.pointer(), at(20., 20., false));
     assert_eq!(
         ui.local("src"),
         Some(Point::new(20., 20.)),

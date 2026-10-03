@@ -1,6 +1,7 @@
 //! One node of the walk: its outline, paint, surface and children.
 use std::sync::Arc;
 
+use mui_geometry::kurbo::Affine;
 use mui_geometry::{Path, Point, Rect, RoundedRect, Vec2};
 use mui_layout::{Frame, Size};
 
@@ -63,6 +64,19 @@ impl<'a> Walk<'a> {
         let at = self.i;
         let frame = self.tree.frames[at];
         self.i += 1;
+        let e = n.payload();
+        let mut pose = ancestors.clone();
+        if let Some(radians) = e.extras().rotation {
+            if !radians.is_finite() {
+                return Err(mui_geometry::Error::NonFinite.into());
+            }
+            let centre = Point::new(
+                frame.x + frame.size.width / 2.,
+                frame.y + frame.size.height / 2.,
+            );
+            pose.transform *= Affine::rotate_about(radians % std::f64::consts::TAU, centre);
+        }
+        self.transform = pose.transform;
         if collapsed(frame) {
             // A flex share that collapsed to nothing: invisible, and so are
             // its children.
@@ -70,10 +84,10 @@ impl<'a> Walk<'a> {
             return Ok(());
         }
         let memo = match n.payload().extras().memo {
-            Some(m) if m.reused && self.splice(m.id, at, frame, path, under, ancestors) => {
+            Some(m) if m.reused && self.splice(m.id, at, frame, path, under, &pose) => {
                 return Ok(());
             }
-            Some(m) => Some(self.open(m, at, frame, path, under, ancestors)),
+            Some(m) => Some(self.open(m, at, frame, path, under, &pose)),
             None => None,
         };
         // ponytail: a tree path past 46 bytes (about 15 levels deep) spills to
@@ -84,8 +98,7 @@ impl<'a> Walk<'a> {
             .unwrap_or_else(|| crate::Id::runtime(path));
         // Before the outline: its cache names the node by it.
         self.key = key.clone();
-        let e = n.payload();
-        let mut inner = ancestors.clone();
+        let mut inner = pose;
         inner.cursor = e.style.cursor.or(ancestors.cursor);
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
@@ -145,6 +158,7 @@ impl<'a> Walk<'a> {
         // Everything from here on closes this node, whatever its children
         // left the key at.
         self.key = key;
+        self.transform = inner.transform;
         if let Some(heats) = &self.spec.scroll_bars
             && n.is_scroll()
             && !e.has(Element::SCROLL_BAR_OFF)
@@ -270,6 +284,30 @@ impl<'a> Walk<'a> {
         let e = n.payload();
         let content = self.content_size(n, at, frame);
         let bounds = contour.bounds()?.map(|b| b + contour.offset.to_vec2());
+        let (hit_path, hit_offset) = self.caches.outlines.rotated(
+            (key.clone(), 0),
+            &contour.path,
+            contour.offset,
+            inner.transform,
+        )?;
+        let hits = if inner.transform == Affine::IDENTITY {
+            hits
+        } else {
+            hits.into_iter()
+                .enumerate()
+                .map(|(index, (tag, path))| {
+                    self.caches
+                        .outlines
+                        .rotated(
+                            (key.clone(), index + 1),
+                            &path,
+                            contour.offset,
+                            inner.transform,
+                        )
+                        .map(|(path, _)| (tag, path))
+                })
+                .collect::<Result<_, _>>()?
+        };
         self.out.at.insert(key.clone(), self.out.surfaces.len());
         let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
@@ -282,10 +320,13 @@ impl<'a> Walk<'a> {
         self.out.surfaces.push(ResolvedSurface {
             key: key.clone(),
             frame,
-            bounds,
-            path: contour.path.clone(),
-            rect: contour.rect,
-            offset: contour.offset,
+            transform: inner.transform,
+            bounds: bounds.map(|bounds| inner.transform.transform_rect_bbox(bounds)),
+            path: hit_path,
+            rect: (inner.transform == Affine::IDENTITY)
+                .then_some(contour.rect)
+                .flatten(),
+            offset: hit_offset,
             topology_changed: contour.changed,
             cursor: inner.cursor,
             tip: e.extras().tip.clone(),
@@ -486,7 +527,17 @@ impl<'a> Walk<'a> {
         let grid = |v: f64| on_grid(v, self.spec.device_scale);
         // A moved span's clips are its own, so they move with it; an
         // ancestor's would not.
-        if moved && (ancestors.clip.is_some() || !grid(d.x) || !grid(d.y)) {
+        if moved
+            && (ancestors.clip.is_some()
+                || !grid(d.x)
+                || !grid(d.y)
+                || prev.paint[old.paint.clone()]
+                    .iter()
+                    .any(|p| p.transform != Affine::IDENTITY)
+                || prev.surfaces[old.surfaces.clone()]
+                    .iter()
+                    .any(|s| s.transform != Affine::IDENTITY))
+        {
             return false;
         }
         let Some(was) = prev.layout.all().get(old.at..old.at + size) else {
@@ -772,14 +823,22 @@ impl<'a> Walk<'a> {
             let bar_key = crate::Id::runtime(&bar::bar_key(&key, vertical));
             self.key = bar_key.clone();
             self.push(Layer::Fill, rr.path(), Some(rr), &ink, under);
+            let hit_path = Arc::new(hit.path());
+            let (hit_path, hit_offset) = self.caches.outlines.rotated(
+                (bar_key.clone(), 0),
+                &hit_path,
+                Point::ZERO,
+                inner.transform,
+            )?;
             self.out.at.insert(bar_key.clone(), self.out.surfaces.len());
             self.out.surfaces.push(ResolvedSurface {
                 key: bar_key,
                 frame: strip,
-                bounds: Some(hit.bounds()),
-                path: Arc::new(hit.path()),
-                rect: Some(hit),
-                offset: Point::ZERO,
+                transform: inner.transform,
+                bounds: Some(inner.transform.transform_rect_bbox(hit.bounds())),
+                path: hit_path,
+                rect: (inner.transform == Affine::IDENTITY).then_some(hit),
+                offset: hit_offset,
                 topology_changed: false,
                 cursor: None,
                 tip: None,
@@ -813,7 +872,9 @@ impl<'a> Walk<'a> {
         frame: Frame,
         inner: &mut Ancestors,
     ) -> Result<(), SceneError> {
-        let b = b.unwrap_or_else(|| bounds(frame, self.spec.device_scale));
+        let b = self
+            .transform
+            .transform_rect_bbox(b.unwrap_or_else(|| bounds(frame, self.spec.device_scale)));
         let b = inner.clip.map_or(b, |c| {
             Rect::new(
                 b.x0.max(c.x0),
@@ -830,13 +891,13 @@ impl<'a> Walk<'a> {
         // tessellating during each pointer query. The paths themselves are
         // the ancestors' own outlines: a nested clip adds a pointer each.
         let outer = inner.clip_paths.as_deref().unwrap_or_default();
-        inner.clip_paths = Some(
-            outer
-                .iter()
-                .cloned()
-                .chain(std::iter::once((contour.path.clone(), contour.offset)))
-                .collect(),
-        );
+        let own = self.caches.outlines.rotated(
+            (self.key.clone(), 0),
+            &contour.path,
+            contour.offset,
+            self.transform,
+        )?;
+        inner.clip_paths = Some(outer.iter().cloned().chain(std::iter::once(own)).collect());
         Ok(())
     }
 
@@ -856,13 +917,28 @@ impl<'a> Walk<'a> {
         // One scratch string for the whole walk: a path is O(depth) bytes and
         // formatting a fresh one per node was the walk's largest single cost.
         let mark = path.len();
+        // Underlays use normal ancestor clipping and surface order, but
+        // precede all foreground siblings regardless of declaration order.
+        let children_at = self.i;
+        let mut at = children_at;
+        for (j, child) in n.children().iter().enumerate() {
+            if child.is_underlay() {
+                self.i = at;
+                path.truncate(mark);
+                super::push_index(path, j);
+                self.node(child, path, bg, inner)?;
+            }
+            at += self.tree.sizes[at];
+        }
+        self.i = children_at;
         let mut sticky = Vec::new();
+        let mut overlays = Vec::new();
         for (j, c) in n.children().iter().enumerate() {
             self.base_y = bases.get(j).and_then(|b| b.map(|(y, _)| y));
             path.truncate(mark);
             super::push_index(path, j);
-            if c.payload().carve.is_some() {
-                // Already spent: it shaped the outline instead of painting.
+            if c.is_underlay() || c.payload().carve.is_some() {
+                // Underlays already painted; carves shaped the outline.
                 self.i += self.tree.sizes[self.i];
                 continue;
             }
@@ -873,6 +949,11 @@ impl<'a> Walk<'a> {
                 self.i += self.tree.sizes[self.i];
                 continue;
             }
+            if c.is_overlay() {
+                overlays.push((self.i, c, path.clone()));
+                self.i += self.tree.sizes[self.i];
+                continue;
+            }
             if c.is_float() {
                 self.out.deferred.push(Deferred {
                     at: self.i,
@@ -880,6 +961,7 @@ impl<'a> Walk<'a> {
                     path: path.clone(),
                     under: bg,
                     ancestors: Ancestors {
+                        transform: inner.transform,
                         parent: inner.parent.clone(),
                         cursor: inner.cursor,
                         disabled: inner.disabled,
@@ -895,6 +977,11 @@ impl<'a> Walk<'a> {
         for (at2, c, mut p, base) in sticky {
             self.i = at2;
             self.base_y = base;
+            self.node(c, &mut p, bg, inner)?;
+        }
+        for (at2, c, mut p) in overlays {
+            self.i = at2;
+            self.base_y = None;
             self.node(c, &mut p, bg, inner)?;
         }
         self.i = end;
@@ -1015,6 +1102,202 @@ mod tests {
     use super::super::*;
     use crate::Paint;
     use crate::prelude::*;
+
+    #[test]
+    fn subtree_rotation_keeps_layout_clips_order_and_retained_pose() {
+        let spec = |angle, reused| {
+            let mut scope = stack([block(10., 4.)
+                .offset(6., 2.)
+                .anchor(Align::Start, Align::Start)
+                .fill(Role::Primary)
+                .id("rot.leaf")])
+            .size(20., 10.)
+            .offset(10., 10.)
+            .anchor(Align::Start, Align::Start)
+            .rotation(angle)
+            .id("rot.scope");
+            scope.payload_mut().extras_mut().memo = Some(crate::Memo { id: 91, reused });
+            SceneSpec::new(stack([scope]).size(22., 18.).clip().id("rot.root"))
+        };
+        let mut cache = TextState::default();
+        let angle = std::f64::consts::FRAC_PI_2;
+        let first = retained(&spec(angle, false), &mut cache, None);
+        let leaf = first.surface("rot.leaf").unwrap();
+        assert_eq!(
+            (
+                leaf.frame.x,
+                leaf.frame.y,
+                leaf.frame.size.width,
+                leaf.frame.size.height
+            ),
+            (16., 12., 10., 4.)
+        );
+        assert!(
+            leaf.local(Point::new(21., 15.))
+                .distance(Point::new(4., 2.))
+                < 1e-8
+        );
+        assert_eq!(leaf.clip, Some(Rect::new(0., 0., 22., 18.)));
+        let clip = first
+            .paint
+            .iter()
+            .position(|p| p.layer == Layer::Clip)
+            .unwrap();
+        let fill = first
+            .paint
+            .iter()
+            .position(|p| p.key.as_str() == "rot.leaf" && p.layer == Layer::Fill)
+            .unwrap();
+        assert!(clip < fill);
+        assert_eq!(
+            first.paint[clip].transform,
+            mui_geometry::kurbo::Affine::IDENTITY
+        );
+        assert_ne!(
+            first.paint[fill].transform,
+            mui_geometry::kurbo::Affine::IDENTITY
+        );
+        let pose = leaf.local_pose();
+        let same = retained(&spec(angle, true), &mut cache, Some(&first));
+        assert_eq!(same.paint, first.paint);
+        assert!(Arc::ptr_eq(
+            &same.surface("rot.leaf").unwrap().path,
+            &leaf.path
+        ));
+        assert_eq!(
+            same.memos_at("rot.scope").collect::<Vec<_>>(),
+            vec![(91, true)]
+        );
+        let changed = retained(&spec(std::f64::consts::PI, true), &mut cache, Some(&same));
+        assert_ne!(
+            changed.paint, first.paint,
+            "rotation after a memo must invalidate its retained paint"
+        );
+        assert!(
+            !Arc::ptr_eq(&changed.surface("rot.leaf").unwrap().path, &leaf.path),
+            "a retained tree with changed pose must regenerate its world hit path"
+        );
+        assert_eq!(changed.surface("rot.leaf").unwrap().frame, leaf.frame);
+        assert!(
+            pose.local(Point::new(21., 15.))
+                .distance(Point::new(4., 2.))
+                < 1e-8,
+            "captured coordinate pose must remain unchanged"
+        );
+        let fresh = resolve(&spec(std::f64::consts::PI, false)).unwrap();
+        assert_eq!(changed.paint, fresh.paint);
+        for angle in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert!(resolve(&spec(angle, false)).is_err());
+        }
+    }
+
+    #[test]
+    fn underlay_follows_foreground_geometry_and_keeps_paint_clip_and_hit_order() {
+        let spec = |width| {
+            SceneSpec::new(
+                stack([
+                    block(width, 40.).fill(Role::Primary).id("foreground"),
+                    block(Len::Pct(100.), Len::Pct(100.))
+                        .fill(Role::Raised)
+                        .push(
+                            block(Len::Container(100.), 10.)
+                                .offset(-3., 4.)
+                                .fill(Role::Danger)
+                                .id("decoration-child"),
+                        )
+                        .underlay()
+                        .id("background"),
+                ])
+                .pad(4.)
+                .radius(8.)
+                .clip()
+                .id("composition"),
+            )
+        };
+        let mut cache = TextState::default();
+        for width in [120., 180.] {
+            let scene = cache.resolve(&spec(width)).unwrap();
+            assert_eq!(scene.layout.size, Size::new(width + 8., 48.));
+            assert_eq!(
+                scene.layout.frame("background"),
+                scene.layout.frame("foreground")
+            );
+            let decoration = scene.layout.frame("decoration-child").unwrap();
+            assert_eq!(
+                (decoration.x, decoration.size.width),
+                (1., width),
+                "final parent width drives decoration measurement"
+            );
+            let layers: Vec<_> = scene.paint.iter().map(|p| (&*p.key, p.layer)).collect();
+            let at = |key, layer| layers.iter().position(|p| *p == (key, layer)).unwrap();
+            assert!(at("composition", Layer::Clip) < at("background", Layer::Fill));
+            assert!(at("background", Layer::Fill) < at("foreground", Layer::Fill));
+            assert!(at("foreground", Layer::Fill) < at("composition", Layer::Unclip));
+            let parent_clip = scene.surface("composition").unwrap().bounds;
+            assert_eq!(scene.surface("background").unwrap().clip, parent_clip);
+            assert_eq!(scene.surface("decoration-child").unwrap().clip, parent_clip);
+            let surfaces: Vec<_> = scene.surfaces().map(|s| &*s.key).collect();
+            assert!(
+                surfaces.iter().position(|k| *k == "background").unwrap()
+                    < surfaces.iter().position(|k| *k == "foreground").unwrap(),
+                "foreground keeps topmost hit ownership"
+            );
+        }
+    }
+
+    #[test]
+    fn local_overlay_follows_foreground_and_paints_inside_clip_after_hit_owner() {
+        let tree = || {
+            stack([
+                block(Len::Pct(100.), Len::Pct(100.))
+                    .push(
+                        block(Len::Container(100.), 10.)
+                            .fill(Role::Danger)
+                            .id("overlay-child"),
+                    )
+                    .fill(Role::Raised)
+                    .overlay()
+                    .id("overlay"),
+                block(120., 40.).fill(Role::Primary).id("foreground"),
+                block(Len::Pct(100.), Len::Pct(100.))
+                    .fill(Role::Surface)
+                    .underlay()
+                    .id("background"),
+            ])
+            .pad(4.)
+            .radius(8.)
+            .clip()
+            .id("composition")
+        };
+        let scene = resolve(&SceneSpec::new(tree())).unwrap();
+        assert_eq!(scene.layout.size, Size::new(128., 48.));
+        assert_eq!(
+            scene.layout.frame("overlay"),
+            scene.layout.frame("foreground")
+        );
+        assert_eq!(
+            scene.layout.frame("overlay-child").unwrap().size.width,
+            120.
+        );
+        let layers: Vec<_> = scene.paint.iter().map(|p| (&*p.key, p.layer)).collect();
+        let at = |key, layer| layers.iter().position(|p| *p == (key, layer)).unwrap();
+        assert!(at("composition", Layer::Clip) < at("background", Layer::Fill));
+        assert!(at("background", Layer::Fill) < at("foreground", Layer::Fill));
+        assert!(at("foreground", Layer::Fill) < at("overlay", Layer::Fill));
+        assert!(at("overlay-child", Layer::Fill) < at("composition", Layer::Unclip));
+        let clip = scene.surface("composition").unwrap().bounds;
+        assert_eq!(scene.surface("overlay").unwrap().clip, clip);
+        assert_eq!(scene.surface("overlay-child").unwrap().clip, clip);
+        let surfaces: Vec<_> = scene.surfaces().map(|s| &*s.key).collect();
+        assert!(
+            surfaces.iter().position(|k| *k == "foreground").unwrap()
+                < surfaces.iter().position(|k| *k == "overlay-child").unwrap()
+        );
+        assert!(
+            !tree().children()[0].clone().float().is_overlay(),
+            "portal float replaces local overlay placement"
+        );
+    }
 
     /// Paths are local: two same-sized buttons paint one outline `Arc`, each
     /// at its own offset, and a button that only moved keeps it -- its

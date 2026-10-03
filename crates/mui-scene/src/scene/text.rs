@@ -276,7 +276,10 @@ impl<'a> Runs<'a> {
         cap: Option<usize>,
     ) -> Vec<Cow<'t, str>> {
         let one = || vec![Cow::Borrowed(text)];
-        if max.is_nan() || max <= 0.0 || self.measure(text, face).width <= max + 0.5 {
+        if max.is_nan()
+            || max <= 0.0
+            || (self.measure(text, face).width <= max + 0.5 && !text.contains('\n'))
+        {
             return one();
         }
         let fonts = self.fonts_for(face);
@@ -419,8 +422,16 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
         // column, aligned with nothing above it.
-        Some(room) if room > 0.0 && one_line.width > room + 0.5 => {
+        Some(room) if room > 0.0 && (one_line.width > room + 0.5 || t.contains('\n')) => {
             Size::new(room, runs.wrapped(t, face, room, e.lines))
+        }
+        _ if t.contains('\n') => {
+            let lines = runs.lines(t, face, f64::INFINITY, e.lines);
+            let width = lines
+                .iter()
+                .map(|line| runs.measure(line, face).width)
+                .fold(0., f64::max);
+            Size::new(width, lines.len() as f64 * one_line.height)
         }
         _ => one_line,
     };
@@ -467,6 +478,52 @@ mod tests {
         assert_eq!(text.outlines.entries.len(), 1);
         assert_eq!(text.len(), 1, "only b0's run is left");
         assert_eq!(text.last_coords.len(), 1, "only b0's hinting state is left");
+    }
+
+    #[test]
+    fn explicit_newlines_keep_line_caps_and_intrinsic_height_even_when_width_fits() {
+        let mut cache = TextState::default();
+        let font = font();
+        let one = cache
+            .resolve(&SceneSpec::new(text("override").id("one")).font(font.clone()))
+            .unwrap();
+        let single = one.layout.frame("one").unwrap().size;
+        for width in [None, Some(600.)] {
+            for cap in [None, Some(3), Some(2)] {
+                let mut label = text("override\nnext\nend").id("multiline");
+                if let Some(cap) = cap {
+                    label = label.lines(cap);
+                }
+                let mut root = col([label]);
+                if let Some(width) = width {
+                    root = root.w(width);
+                }
+                let scene = cache
+                    .resolve(&SceneSpec::new(root).font(font.clone()))
+                    .unwrap();
+                let count = scene
+                    .paint
+                    .iter()
+                    .filter(|paint| &*paint.key == "multiline" && paint.layer == Layer::Text)
+                    .count();
+                let expected = cap.unwrap_or(3);
+                assert_eq!(
+                    count, expected,
+                    "explicit lines survive a wide offer and respect cap {cap:?}"
+                );
+                let size = scene.layout.frame("multiline").unwrap().size;
+                assert!(
+                    (size.height - single.height * expected as f64).abs() < 1e-9,
+                    "{count} painted lines need matching intrinsic height: {size:?}"
+                );
+                if width.is_none() {
+                    assert!(
+                        (size.width - single.width).abs() < 1e-9,
+                        "intrinsic width is the longest line, not all lines concatenated"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
