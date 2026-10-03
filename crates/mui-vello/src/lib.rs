@@ -1266,12 +1266,10 @@ mod snapshot {
                 1,
                 "only authored bitmap uploads; vector and text stay vector/glyph paint"
             );
-            drop(gpu);
             assert!(!encoded.encoding().path_tags.is_empty());
             let mut unchanged = vello::Scene::new();
             let mut gpu = Classic::new(&mut unchanged, &mut cache, &textures, [80, 80]);
             paint(&mut gpu, &plain, Affine::scale(2.)).unwrap();
-            drop(gpu);
             assert_ne!(
                 encoded.encoding().transforms,
                 unchanged.encoding().transforms
@@ -1524,7 +1522,6 @@ mod snapshot {
             let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [96, 64]);
             paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
             assert!(gpu.images.is_empty(), "vector became a bitmap upload");
-            drop(gpu);
             assert!(!encoded.encoding().path_tags.is_empty());
         }
     }

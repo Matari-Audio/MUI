@@ -253,10 +253,7 @@ impl Hit {
 
     /// Prepare exact ancestor clip contours once for frame-based queries,
     /// including unnamed scrollers that are not gesture targets.
-    fn cache_placed_clips(
-        &mut self,
-        clips: Option<&[(Arc<Path>, Point)]>,
-    ) -> Result<Clips, Error> {
+    fn cache_placed_clips(&mut self, clips: Option<&[(Arc<Path>, Point)]>) -> Result<Clips, Error> {
         let clips = match clips.filter(|c| !c.is_empty()) {
             None => Arc::from([]),
             Some(list) => {
