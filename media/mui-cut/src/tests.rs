@@ -879,6 +879,50 @@ fn glow_lights_where_its_mode_says() {
     assert!((lo - hi).abs() <= 4, "{lo} then {hi}");
 }
 
+/// Neon: the tube burns white, its halo keeps the tube's colour, saturated,
+/// bright close in and still lit well out (a tight tier and a wide one).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn neon_burns_white_in_a_saturated_two_tier_halo() {
+    let bar = frame_of(
+        "#000000",
+        r##"{"id":"bar","kind":"rect","x":80,"y":45,"width":100,"height":3,"fill":"#ff2d95",
+            "effects":[{"type":"glow","mode":"neon","radius":16,"intensity":1.4}]}"##,
+    );
+    let Some(out) = gpu_frames(&[vec![bar]]) else {
+        return;
+    };
+    let core = px(&out[0], 80, 45);
+    assert!(core[..3].iter().all(|c| *c > 230), "core {core:?}");
+    let saturated = |p: [u8; 4]| {
+        u32::from(p[1]) * 4 < u32::from(p[0]) && u32::from(p[2]) * 4 < u32::from(p[0]) * 3
+    };
+    let near = px(&out[0], 80, 49);
+    assert!(near[0] > 150 && saturated(near), "near {near:?}");
+    let far = px(&out[0], 80, 58);
+    assert!(far[0] > 25 && saturated(far), "far {far:?}");
+    // Two tiers: steep close in, a long tail.
+    let (a, b, c) = (near[0], px(&out[0], 80, 51)[0], far[0]);
+    assert!(a > b + 40 && b > c, "{a} {b} {c}");
+}
+
+/// Bloom from a source much smaller than its radius still reads: a 4 px
+/// white dot lights the dark round it at a 48 px radius.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_small_bright_dot_blooms_at_a_wide_radius() {
+    let json = r##"{"size":[160,90],"fps":30,"scenes":[{"name":"a","duration":1,"background":"#000000",
+        "layers":[{"id":"dot","kind":"rect","x":40,"y":45,"width":4,"height":4,"fill":"#ffffff"}],
+        "effects":[{"type":"glow","threshold":0.6,"radius":48}]}]}"##;
+    let p = Project::load(json).unwrap();
+    let Some(out) = gpu_frames(&[vec![eval(&p, &p.scenes[0], 0.)]]) else {
+        return;
+    };
+    let lit: Vec<u8> = [6, 12, 24].map(|d| px(&out[0], 40 + d, 45)[0]).to_vec();
+    assert!(lit[0] > 30 && lit[1] > 20 && lit[2] > 10, "{lit:?}");
+    assert!(lit.windows(2).all(|w| w[0] >= w[1]), "falling off: {lit:?}");
+}
+
 #[test]
 fn effect_modes_and_backdrops_are_checked() {
     let load = |layer: &str, scene: &str| {

@@ -28,6 +28,13 @@ const SLOT: u64 = 256;
 /// glow's tail comes out in rings. (Rendered to in the browser too, as the
 /// shutter's sum is.)
 const LINEAR: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// Bloom's and neon's small-source compensation (`pyramid_up.wgsl`'s
+/// `sparse`): a source covering a sixteenth of a level's pixel spreads with
+/// about three times the light (and never past its own colour).
+const SPARSE: f32 = 0.75;
+/// Neon's two tiers, before `intensity`.
+const NEON_TIGHT: f32 = 1.2;
+const NEON_WIDE: f32 = 1.0;
 const L: usize = 0;
 const A: usize = 1;
 const P: usize = 2;
@@ -391,27 +398,32 @@ impl Passes {
                     let n = self.levels();
                     let mut w = spread(px("radius"), num("falloff"), n);
                     if mode == 3 {
-                        // Neon: half in a tight core round the tube.
-                        let core = focus(px("radius") * 0.15, n);
-                        w.resize(w.len().max(core.len()), 0.);
-                        for (w, c) in w.iter_mut().zip(core.iter().chain(std::iter::repeat(&0.))) {
-                            *w = 0.5 * *w + 0.5 * c * px("radius").clamp(0., 1.);
+                        // Neon, two tiers: a tight, hot halo hugging the
+                        // tube (a fifth of the radius, falling off fast)
+                        // and the wide one, dimmer, out to `radius`.
+                        let tight = spread(px("radius") * 0.2, 0.25, n);
+                        w.resize(w.len().max(tight.len()), 0.);
+                        for (k, w) in w.iter_mut().enumerate() {
+                            *w = NEON_WIDE * *w + NEON_TIGHT * tight.get(k).unwrap_or(&0.);
                         }
                     }
+                    // Bloom and neon spread a small source as if it were
+                    // bigger, so it reads at any radius.
+                    let sparse = if mode == 0 || mode == 3 { SPARSE } else { 0. };
                     let up0 = self.targets.as_ref().expect("prepared").up[0].clone();
                     let pre = [
                         &params[..4],
                         &[filter, num("threshold"), num("knee"), num("tint")],
                     ]
                     .concat();
-                    self.pyramid(enc, h, [&from, &self.none.clone()], &pre, &w, &up0);
+                    self.pyramid(enc, h, [&from, &self.none.clone()], &pre, &w, sparse, &up0);
                     params.push(mode as f32);
                     vec![from, up0]
                 }
                 "light_wrap" => {
                     let w = focus(px("radius"), self.levels());
                     let up0 = self.targets.as_ref().expect("prepared").up[0].clone();
-                    self.pyramid(enc, h, [&from, &under], &[0., 0., 0., 0., 5.], &w, &up0);
+                    self.pyramid(enc, h, [&from, &under], &[0., 0., 0., 0., 5.], &w, 0., &up0);
                     vec![from, up0]
                 }
                 "glass" => {
@@ -425,6 +437,7 @@ impl Passes {
                         [&from, &none],
                         &[0., 0., 0., 0., 6.],
                         &focus(px("bevel"), n),
+                        0.,
                         &edge,
                     );
                     self.pyramid(
@@ -433,6 +446,7 @@ impl Passes {
                         [&under, &none],
                         &[0., 0., 0., 0., 7.],
                         &focus(px("frost"), n),
+                        0.,
                         &up0,
                     );
                     vec![from, under, up0, edge]
@@ -463,7 +477,12 @@ impl Passes {
 
     /// Blur `src` (`[picture, aux]`) through the pyramid, its first level
     /// filtered by `pre` (`pyramid_down.wgsl`'s `Params`), the levels summed
-    /// by `weights`, into `out` (level 0's size).
+    /// by `weights` (each level's light over its coverage to the power
+    /// `sparse`), into `out` (level 0's size).
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a pyramid takes this many inputs"
+    )]
     fn pyramid(
         &mut self,
         enc: &mut wgpu::CommandEncoder,
@@ -471,6 +490,7 @@ impl Passes {
         src: [&wgpu::TextureView; 2],
         pre: &[f32],
         weights: &[f32],
+        sparse: f32,
         out: &wgpu::TextureView,
     ) {
         let t = self.targets.as_ref().expect("prepared");
@@ -492,7 +512,11 @@ impl Passes {
         }
         for k in (0..n).rev() {
             let coarser = k + 1 < n;
-            let offset = self.stage(at(k), 0, &[weights[k], f32::from(u8::from(coarser))]);
+            let offset = self.stage(
+                at(k),
+                0,
+                &[weights[k], f32::from(u8::from(coarser)), sparse],
+            );
             let from = if coarser { &up[k + 1] } else { &self.none };
             let to = if k == 0 { out } else { &up[k] };
             self.pass(enc, &self.up, &[from, &down[k]], to, offset, true);

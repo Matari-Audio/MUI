@@ -35,7 +35,9 @@ fn pick(uv: vec2<f32>) -> vec4<f32> {
         q = q * q / (4.0 * k);
         let w = max(q, br - u.p.threshold) / max(br, 1e-4);
         let rgb = mix(c.rgb, luma(c.rgb) * tinted, u.p.tint);
-        return vec4<f32>(rgb, c.a) * w;
+        // Coverage is what glows, not how much: the way up reads it to tell
+        // a small source from a big one (`pyramid_up.wgsl`'s `sparse`).
+        return vec4<f32>(rgb * w, select(0.0, c.a, w > 0.0));
     }
     if m == 3u {
         return vec4<f32>(tinted, 1.0) * (1.0 - s.a);
@@ -49,7 +51,7 @@ fn pick(uv: vec2<f32>) -> vec4<f32> {
     }
     var own = unpremul(lin(s)).rgb;
     if m == 4u {
-        own = max(mix(vec3<f32>(luma(own)), own, 1.4), vec3<f32>(0.0));
+        own = max(mix(vec3<f32>(luma(own)), own, 1.6), vec3<f32>(0.0));
     }
     return vec4<f32>(mix(own, tinted, u.p.tint), 1.0) * s.a;
 }

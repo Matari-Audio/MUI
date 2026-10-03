@@ -27,17 +27,22 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
         // Inner: over the shape, inside it.
         g = g / max(g.a, 1.0) * s.a;
         o = vec4<f32>(s.rgb * (1.0 - g.a) + g.rgb, s.a);
+    } else if m == 3u {
+        // Neon: the tube's own colour, hotter where its tight halo piles up
+        // on it (the core spills to white); round it, the halo stays its
+        // colour, saturated: light past 1 there is kept in hue, not spilled.
+        let ga = min(max(max(g.r, g.g), g.b), 1.0);
+        var rgb = s.rgb + g.rgb * max(s.a, 0.0);
+        let over = max(rgb - vec3<f32>(s.a), vec3<f32>(0.0));
+        rgb += vec3<f32>(over.r + over.g + over.b) * 0.5;
+        let halo = g.rgb * (1.0 - s.a);
+        let peak = max(max(max(halo.r, halo.g), halo.b), 1.0);
+        o = vec4<f32>(rgb + halo / peak, s.a + ga * (1.0 - s.a));
+        return store(o, pos.xy);
     } else {
-        // Bloom and neon add light; neon's tube burns white at its core.
-        var c = s;
-        if m == 3u {
-            c = vec4<f32>(mix(c.rgb, vec3<f32>(c.a), 0.35 * min(u.p.intensity, 1.0)), c.a);
-        }
-        o = vec4<f32>(c.rgb + g.rgb, c.a + min(g.a, 1.0) * (1.0 - c.a));
+        // Bloom adds light: over clear, as little coverage as the light needs.
+        let ga = min(max(max(g.r, g.g), g.b), 1.0);
+        o = vec4<f32>(s.rgb + g.rgb, s.a + ga * (1.0 - s.a));
     }
-    // Past white, the excess spills into the other channels, so a hot
-    // colour goes to white rather than clipping flat.
-    let over = max(o.rgb - vec3<f32>(o.a), vec3<f32>(0.0));
-    o = vec4<f32>(o.rgb + vec3<f32>(over.r + over.g + over.b) * 0.5, o.a);
     return store(o, pos.xy);
 }
