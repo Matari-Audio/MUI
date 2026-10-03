@@ -65,7 +65,9 @@ fn place(pivot: KPoint, fx: &Fx) -> Affine {
 }
 
 /// Text as one outline per grapheme cluster, lines split at `\n`, the block
-/// centred on the origin. Each cluster takes its first char's [`Fx`].
+/// centred on the origin. Each cluster takes its first char's [`Fx`]
+/// (placed animators run here, on the glyphs' centres:
+/// [`Drawn::glyph_motion`]).
 pub fn text(
     l: &Drawn,
     s: &str,
@@ -79,38 +81,68 @@ pub fn text(
     let pitch = l.line_height * fs;
     let lines: Vec<&str> = s.split('\n').collect();
     let height = pitch * lines.len() as f64;
-    let mut out = Vec::new();
-    let mut ci = 0; // char index, newlines skipped: the index into `l.fx`
-    for (k, line) in lines.iter().enumerate() {
-        let run = mui_text::shape_run(fonts, line, fs, &axes).map_err(err)?;
-        let adv = mui_text::char_advances(fonts, line, fs, &axes).map_err(err)?;
-        // First pass: clusters and pen positions, for the line's width.
-        let mut clusters = Vec::new();
-        let mut pen = 0.;
-        let chars: Vec<(usize, char)> = line.char_indices().collect();
-        let mut j = 0;
-        while j < chars.len() {
-            let mut e = j + 1;
-            while e < chars.len() && !adv[e].1 {
-                e += 1;
+    let mid = |k: usize| -height / 2. + (k as f64 + 0.5) * pitch;
+    // Each line's left edge and clusters: text, pen x, width and its chars'
+    // indices into `fx` (newlines skipped), tracked by `fx`.
+    type Cluster<'a> = (&'a str, f64, f64, std::ops::Range<usize>);
+    let lay = |fx: &[Fx]| -> Result<Vec<(f64, Vec<Cluster<'_>>)>, String> {
+        let mut out = Vec::new();
+        let mut ci = 0;
+        for line in &lines {
+            let adv = mui_text::char_advances(fonts, line, fs, &axes).map_err(err)?;
+            let mut clusters = Vec::new();
+            let mut pen = 0.;
+            let chars: Vec<(usize, char)> = line.char_indices().collect();
+            let mut j = 0;
+            while j < chars.len() {
+                let mut e = j + 1;
+                while e < chars.len() && !adv[e].1 {
+                    e += 1;
+                }
+                let w: f64 = adv[j..e].iter().map(|a| a.0).sum();
+                let end = chars.get(e).map_or(line.len(), |c| c.0);
+                clusters.push((&line[chars[j].0..end], pen, w, ci + j..ci + e));
+                let track = (e - j) as f64 * l.tracking + fx.get(ci + j).map_or(0., |f| f.tracking);
+                pen += w + track;
+                j = e;
             }
-            let w: f64 = adv[j..e].iter().map(|a| a.0).sum();
-            let end = chars.get(e).map_or(line.len(), |c| c.0);
-            let fx = l.fx.get(ci + j);
-            clusters.push((&line[chars[j].0..end], pen, w, fx));
-            let track = (e - j) as f64 * l.tracking + fx.map_or(0., |f| f.tracking);
-            pen += w + track;
-            j = e;
+            let x0 = match align {
+                Align::Left => 0.,
+                Align::Center => -pen / 2.,
+                Align::Right => -pen,
+            };
+            out.push((x0, clusters));
+            ci += chars.len();
         }
-        let width = pen;
-        let x0 = match align {
-            Align::Left => 0.,
-            Align::Center => -width / 2.,
-            Align::Right => -width,
-        };
-        let mid = -height / 2. + (k as f64 + 0.5) * pitch;
-        let baseline = mid + (run.ascent - run.descent) / 2.;
-        for (g, x, w, fx) in clusters {
+        Ok(out)
+    };
+    let placed;
+    let fx: &[Fx] = match &l.glyph_motion {
+        Some(m) => {
+            // Each char at its cluster's centre, laid out untracked by them.
+            let mut pos = Vec::new();
+            for (k, (x0, clusters)) in lay(&[])?.into_iter().enumerate() {
+                for (_, x, w, chars) in clusters {
+                    pos.extend(chars.map(|_| [x0 + x + w / 2., mid(k)]));
+                }
+            }
+            placed = crate::motion::apply_to(
+                &m.0,
+                pos.len(),
+                &|_| l.fill,
+                m.1,
+                |by| crate::motion::text_units(s, by),
+                &pos,
+            );
+            &placed
+        }
+        None => &l.fx,
+    };
+    let mut out = Vec::new();
+    for (k, (x0, clusters)) in lay(fx)?.into_iter().enumerate() {
+        let run = mui_text::shape_run(fonts, lines[k], fs, &axes).map_err(err)?;
+        let baseline = mid(k) + (run.ascent - run.descent) / 2.;
+        for (g, x, w, chars) in clusters {
             if g.trim().is_empty() {
                 continue;
             }
@@ -118,11 +150,11 @@ pub fn text(
             let mut path =
                 mui_geometry::bez_path(&glyph.path, 0.05).map_err(|e| format!("{e:?}"))?;
             path.apply_affine(Affine::translate((x0 + x, baseline)));
-            let (fill, opacity, a) = match fx {
+            let (fill, opacity, a) = match fx.get(chars.start) {
                 Some(fx) => (
                     fx.fill,
                     fx.opacity,
-                    place(KPoint::new(x0 + x + w / 2., mid), fx),
+                    place(KPoint::new(x0 + x + w / 2., mid(k)), fx),
                 ),
                 None => (l.fill, 1., Affine::IDENTITY),
             };
@@ -130,7 +162,6 @@ pub fn text(
                 out.push(paint(l, fill, opacity, path).transform(a));
             }
         }
-        ci += chars.len();
     }
     Ok(out)
 }

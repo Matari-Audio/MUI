@@ -1376,6 +1376,12 @@ pub struct Drawn {
     /// A duplicator with a `source`: its copies' layers (`dup/copy/layer`).
     #[serde(skip)]
     pub comp: Vec<Drawn>,
+    /// Text whose animators weigh glyphs by place (an effector or
+    /// `distance` order): those animators and the time, run again where
+    /// the glyphs are laid out (the font's advances are the renderer's), in
+    /// place of `fx`, which reads them without places.
+    #[serde(skip)]
+    pub glyph_motion: Option<Box<(Vec<Animator>, f64)>>,
 }
 
 /// Everything a renderer needs for one instant of one scene.
@@ -1593,6 +1599,9 @@ impl Layer {
             plugin: None,
             patch: None,
             comp: Vec::new(),
+            glyph_motion: (matches!(self.kind, Kind::Text { .. })
+                && motion::placed(&self.animators))
+            .then(|| Box::new((self.animators.clone(), t))),
         };
         // A copy's slot is its place for the animators' effectors.
         if let Kind::Duplicator {

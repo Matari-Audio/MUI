@@ -66,7 +66,7 @@ pub enum Order {
     /// Nearest first, from the effector's centre (`falloff`), else the
     /// layer's origin: a unit's rank is its distance, scaled so the
     /// farthest is last, so units equally far start together (a ripple).
-    /// Text glyphs have no place: forward.
+    /// A text unit sits at its glyphs' centres.
     Distance,
 }
 
@@ -187,7 +187,8 @@ pub enum Field {
 /// A region in the layer's own pixels around its origin (a duplicator's
 /// copies' slots, a group's children's places): a unit inside weighs 1,
 /// fading to 0 over `softness` pixels past the edge; `invert` swaps
-/// inside and out. Text glyphs have no place in it and are not weighed.
+/// inside and out. A text glyph (word, line) weighs at its centre in the
+/// laid-out block.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[schemars(transform = crate::vars::bindable)]
 pub struct Effector {
@@ -544,7 +545,9 @@ pub fn apply(
     apply_to(animators, elements, &|_| fill, t, unit_of, &[])
 }
 
-/// [`apply`] with each element's own base fill.
+/// [`apply`] with each element's own base fill and place (`pos`, one per
+/// element in the layer's own pixels, or none): a unit sits at the mean of
+/// its elements' places, for effectors and `distance` order.
 pub(crate) fn apply_to(
     animators: &[Animator],
     elements: usize,
@@ -567,8 +570,9 @@ pub(crate) fn apply_to(
     for a in animators {
         let units = unit_of(a.by);
         let n = units.iter().max().map_or(0, |m| m + 1);
-        let w = a.weights(n, t, pos);
-        let ranks = a.ranks(n, t, pos);
+        let pos = unit_places(&units, n, pos);
+        let w = a.weights(n, t, &pos);
+        let ranks = a.ranks(n, t, &pos);
         for (f, &u) in fx.iter_mut().zip(&units) {
             let w = w[u];
             if w == 0. {
@@ -601,6 +605,29 @@ pub(crate) fn apply_to(
         }
     }
     fx
+}
+
+/// Each of `n` units' place: the mean of its elements' (none without one
+/// per element).
+fn unit_places(units: &[usize], n: usize, pos: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    if pos.len() != units.len() {
+        return Vec::new();
+    }
+    let mut sum = vec![[0., 0., 0.]; n];
+    for (&u, p) in units.iter().zip(pos) {
+        sum[u] = [sum[u][0] + p[0], sum[u][1] + p[1], sum[u][2] + 1.];
+    }
+    sum.iter()
+        .map(|&[x, y, k]| [x / k.max(1.), y / k.max(1.)])
+        .collect()
+}
+
+/// Whether text animators `a` weigh glyphs by place (an effector, or
+/// `distance` order): then the renderer, which knows the font's
+/// advances, runs them ([`crate::Drawn::glyph_motion`]).
+pub(crate) fn placed(a: &[Animator]) -> bool {
+    a.iter()
+        .any(|a| a.falloff.is_some() || a.order == Order::Distance)
 }
 
 /// `c` with its hue turned by `deg` degrees (HSV; lightness and alpha kept).
@@ -948,7 +975,8 @@ pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], t: f64
                     .any(|a| !is_clear(&a.fill) || !is_z(&a.jitter_hue))
                     .then(|| {
                         let n = slots.len() * m;
-                        let pos: Vec<[f64; 2]> = slots.iter().map(|(p, _)| [p.x, p.y]).collect();
+                        let pos: Vec<[f64; 2]> =
+                            (0..n).map(|e| [slots[e / m].0.x, slots[e / m].0.y]).collect();
                         apply_to(
                             animators,
                             n,
@@ -1077,6 +1105,11 @@ pub enum Wave {
     Wiggle,
     /// A sine of `amount`, `freq` cycles per second, from `phase`.
     Oscillate,
+    /// A damped spring chasing the property's own keys: it rests on the
+    /// first key and lags, overshoots and settles after every move, ringing
+    /// at `freq` Hz with `damping` (0 rings forever, 1 settles without
+    /// overshoot). `amount`, `seed` and `phase` are unused.
+    Spring,
 }
 
 /// Motion added on top of a layer property's keys, every frame: a wiggle
@@ -1098,6 +1131,17 @@ pub struct Behaviour {
     /// Cycles (or noise features) to start in at 0 s.
     #[serde(default = "z", skip_serializing_if = "is_z")]
     pub phase: Anim<f64>,
+    /// Spring only: the damping ratio, 0 (rings forever) up; 1 is the
+    /// fastest settle without overshoot.
+    #[serde(default = "half", skip_serializing_if = "is_half")]
+    pub damping: Anim<f64>,
+}
+
+fn half() -> Anim<f64> {
+    Anim::Value(0.5)
+}
+fn is_half(a: &Anim<f64>) -> bool {
+    *a == half()
 }
 
 fn ten() -> Anim<f64> {
@@ -1128,23 +1172,60 @@ pub const BEHAVIOUR_PROPS: [&str; 16] = [
 ];
 
 impl Behaviour {
-    /// Its numeric properties, by JSON name.
-    pub const PROPS: [&str; 3] = ["amount", "freq", "phase"];
+    /// Its numeric properties, by JSON name: the ones its kind reads.
+    pub fn props(&self) -> &'static [&'static str] {
+        match self.kind {
+            Wave::Spring => &["freq", "damping"],
+            _ => &["amount", "freq", "phase"],
+        }
+    }
 
     pub fn num(&self, name: &str) -> Option<&Anim<f64>> {
         Some(match name {
             "amount" => &self.amount,
             "freq" => &self.freq,
             "phase" => &self.phase,
+            "damping" => &self.damping,
             _ => return None,
         })
     }
 
-    /// The offset at `t`.
+    /// Where the spring is at `t` chasing `target`: at rest on its first
+    /// key, then stepped forward from there in fixed 1/240 s steps (the
+    /// last one shorter, ending on `t`), so any frame renders on its own,
+    /// the same every time. Damping is taken implicitly: stable however
+    /// stiff. ponytail: re-simulates from the first key every call
+    /// (240 steps per second of scene); cache per layer if hour-long scenes
+    /// need it.
+    pub fn spring(&self, target: &Anim<f64>, t: f64) -> f64 {
+        const DT: f64 = 1. / 240.;
+        let Anim::Keys(keys) = target else {
+            return target.at(t);
+        };
+        let t0 = keys.iter().map(|k| k.t).fold(f64::INFINITY, f64::min);
+        if t <= t0 {
+            return target.at(t);
+        }
+        let steps = ((t - t0) / DT).ceil() as u64;
+        let (mut x, mut v) = (target.at(t0), 0.);
+        for i in 0..steps {
+            let s = t0 + i as f64 * DT;
+            let h = DT.min(t - s);
+            let w = std::f64::consts::TAU * self.freq.at(s).clamp(0.01, 60.);
+            let z = self.damping.at(s).max(0.);
+            v = (v + h * w * w * (target.at(s + h) - x)) / (1. + 2. * z * w * h);
+            x += h * v;
+        }
+        x
+    }
+
+    /// The offset at `t` (a spring's is [`Behaviour::spring`]'s, which
+    /// needs its target: see [`behave`]).
     pub fn at(&self, t: f64) -> f64 {
         let x = self.freq.at(t) * t + self.phase.at(t);
         let a = self.amount.at(t);
         match self.kind {
+            Wave::Spring => 0.,
             Wave::Oscillate => a * (std::f64::consts::TAU * x).sin(),
             Wave::Wiggle => {
                 // A different curve per property, from one seed.
@@ -1180,7 +1261,7 @@ pub(crate) fn behaviour_props(bs: &[Behaviour]) -> Vec<(String, crate::Prop<'_>)
     bs.iter()
         .enumerate()
         .flat_map(|(i, b)| {
-            Behaviour::PROPS.iter().map(move |&n| {
+            b.props().iter().map(move |&n| {
                 let a = b.num(n).expect("PROPS are props");
                 (format!("behaviours.{i}.{n}"), crate::Prop::Num(a))
             })
@@ -1211,13 +1292,40 @@ fn slot<'a>(d: &'a mut crate::Drawn, prop: &str) -> Option<&'a mut f64> {
     })
 }
 
+/// Layer `l`'s own animation of `prop`: what a spring chases.
+fn target<'a>(l: &'a crate::Layer, prop: &str) -> Option<&'a Anim<f64>> {
+    Some(match prop {
+        "x" => &l.x,
+        "y" => &l.y,
+        "z" => &l.z,
+        "scale" => &l.scale,
+        "rotation" => &l.rotation,
+        "rx" => &l.rx,
+        "ry" => &l.ry,
+        "opacity" => &l.opacity,
+        "width" => &l.width,
+        "height" => &l.height,
+        "radius" => &l.radius,
+        "font_size" => &l.font_size,
+        "tracking" => &l.tracking,
+        "stroke_width" => &l.stroke_width,
+        "path_offset" => &l.path_offset,
+        "ring_radius" => &l.ring_radius,
+        _ => return None,
+    })
+}
+
 /// Layer `l`'s behaviours added to its evaluated values at `t`, kept in
 /// range (opacity 0..1, sizes not below 0).
 pub(crate) fn behave(l: &crate::Layer, d: &mut crate::Drawn, t: f64) {
     for b in &l.behaviours {
         let on = l.on(t);
+        let off = match (b.kind, target(l, &b.prop)) {
+            (Wave::Spring, Some(a)) => b.spring(a, t) - a.at(t),
+            _ => b.at(t),
+        };
         if let Some(v) = slot(d, &b.prop) {
-            *v += b.at(t);
+            *v += off;
             match b.prop.as_str() {
                 // Off stays off.
                 "opacity" => *v = if on { v.clamp(0., 1.) } else { 0. },
