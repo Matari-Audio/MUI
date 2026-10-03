@@ -217,7 +217,8 @@ impl LocalPose {
     }
     /// Pointer travel in the captured coordinate axes; translation is ignored.
     pub fn delta(self, delta: mui_geometry::Vec2) -> mui_geometry::Vec2 {
-        self.inverse * delta
+        let [a, b, c, d, _, _] = self.inverse.as_coeffs();
+        mui_geometry::Vec2::new(a * delta.x + c * delta.y, b * delta.x + d * delta.y)
     }
 }
 
