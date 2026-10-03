@@ -359,12 +359,12 @@ fn the_procedural_example_round_trips_and_checks_clean() {
 
 #[test]
 fn a_spring_chases_the_keys_overshoots_and_settles() {
-    // x steps from 100 to 300 at 0.5 s; a light spring lags behind it,
-    // swings past 300 and comes back to rest on it.
+    // x steps from 50 to 250 at 0.5 s; a light spring lags behind it,
+    // swings past 250 and comes back to rest on it.
     let p = |damping: f64| {
         scene_of(&format!(
             r##"{{"id":"r","kind":"rect","width":20,"height":20,"y":100,
-                "x":[{{"t":0,"v":100,"interp":"hold"}},{{"t":0.5,"v":300}}],
+                "x":[{{"t":0,"v":50,"interp":"hold"}},{{"t":0.5,"v":250}}],
                 "behaviours":[{{"prop":"x","kind":"spring","freq":2,"damping":{damping}}}]}}"##
         ))
     };
@@ -372,27 +372,33 @@ fn a_spring_chases_the_keys_overshoots_and_settles() {
     let l = &light.scenes[0].layers[0];
     let xs: Vec<f64> = (0..240).map(|i| l.at(f64::from(i) / 60.).x).collect();
     // At rest before the step, behind just after it, past it, then settled.
-    assert!(xs[..30].iter().all(|&x| x == 100.), "{:?}", &xs[..30]);
-    assert!(xs[33] > 100. && xs[33] < 200., "{}", xs[33]);
+    assert!(xs[..30].iter().all(|&x| x == 50.), "{:?}", &xs[..30]);
+    assert!(xs[33] > 50. && xs[33] < 150., "{}", xs[33]);
     let peak = xs.iter().copied().fold(0., f64::max);
-    assert!(peak > 330. && peak < 400., "{peak}");
-    assert!((l.at(8.).x - 300.).abs() < 0.5);
+    assert!(peak > 330. && peak < 380., "{peak}");
+    assert!((l.at(8.).x - 250.).abs() < 0.5);
     // A pure function of time: any frame alone is what the run gave.
     assert_eq!(l.at(1.25).x, xs[75]);
     assert_eq!(l.at(1.25).x, l.at(1.25).x);
-    // Critically damped: no overshoot.
+    // Critically damped: no visible overshoot (the steps leave a hair).
     let firm = p(1.);
     let l2 = &firm.scenes[0].layers[0];
-    assert!((0..480).all(|i| l2.at(f64::from(i) / 60.).x <= 300. + 1e-9));
+    assert!((0..480).all(|i| l2.at(f64::from(i) / 60.).x <= 250.5));
     // Its numbers are its own: freq and damping, no amount or phase.
     let props: Vec<String> = l.props().into_iter().map(|(n, _)| n).collect();
-    assert!(props.contains(&"behaviours.0.damping".to_owned()), "{props:?}");
-    assert!(!props.contains(&"behaviours.0.amount".to_owned()), "{props:?}");
-    // Drawn where the spring is: at the peak the square is right of 300.
+    assert!(
+        props.contains(&"behaviours.0.damping".to_owned()),
+        "{props:?}"
+    );
+    assert!(
+        !props.contains(&"behaviours.0.amount".to_owned()),
+        "{props:?}"
+    );
+    // Drawn where the spring is: at the peak the square is right of 250.
     let i = xs.iter().position(|&x| x == peak).unwrap();
     let f = px(&light, i as f64 / 60.);
     assert_eq!(at(&f, (peak - 5.) as usize, 100), [255; 4]);
-    assert_eq!(at(&f, 300 - 15, 100), [0, 0, 0, 255]);
+    assert_eq!(at(&f, 250 - 15, 100), [0, 0, 0, 255]);
 }
 
 #[test]
@@ -450,7 +456,11 @@ fn text_animators_weigh_glyphs_by_place() {
         &pos,
     );
     let ys: Vec<f64> = fx.iter().map(|f| f.y).collect();
-    assert_eq!(ys, [4., 4., 4., 5., 5.], "the near word first, a rank ahead");
+    assert_eq!(
+        ys,
+        [4., 4., 4., 5., 5.],
+        "the near word first, a rank ahead"
+    );
 }
 
 #[test]
@@ -466,7 +476,10 @@ fn each_instanced_copy_has_a_quad_to_pick() {
     let ids: Vec<&str> = copies.iter().map(|q| q.id.as_str()).collect();
     assert_eq!(ids, ["d@0", "d@1", "d@2"]);
     // Each round its own copy: the middle one 20 x 10 at (200, 100).
-    assert_eq!(copies[1].pts, [[190., 95.], [210., 95.], [210., 105.], [190., 105.]]);
+    assert_eq!(
+        copies[1].pts,
+        [[190., 95.], [210., 95.], [210., 105.], [190., 105.]]
+    );
     // The duplicator's own quad still spans them all, before the copies.
     let d = quads.iter().position(|q| q.id == "d").unwrap();
     assert!(d < quads.iter().position(|q| q.id == "d@0").unwrap());

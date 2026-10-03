@@ -975,8 +975,9 @@ pub(crate) fn instance(scene: &crate::Scene, layers: &mut [crate::Drawn], t: f64
                     .any(|a| !is_clear(&a.fill) || !is_z(&a.jitter_hue))
                     .then(|| {
                         let n = slots.len() * m;
-                        let pos: Vec<[f64; 2]> =
-                            (0..n).map(|e| [slots[e / m].0.x, slots[e / m].0.y]).collect();
+                        let pos: Vec<[f64; 2]> = (0..n)
+                            .map(|e| [slots[e / m].0.x, slots[e / m].0.y])
+                            .collect();
                         apply_to(
                             animators,
                             n,

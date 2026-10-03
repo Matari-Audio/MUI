@@ -1,8 +1,5 @@
 {
-  "size": [
-    1280,
-    720
-  ],
+  "size": [1280, 720],
   "fps": 30.0,
   "scenes": [
     {
@@ -51,28 +48,12 @@
               "jitter_hue": 50.0,
               "falloff": {
                 "x": [
-                  {
-                    "t": 0.8,
-                    "v": -620.0,
-                    "interp": "bezier"
-                  },
-                  {
-                    "t": 4.6,
-                    "v": 620.0,
-                    "interp": "bezier"
-                  }
+                  { "t": 0.8, "v": -620.0, "interp": "bezier" },
+                  { "t": 4.6, "v": 620.0, "interp": "bezier" }
                 ],
                 "y": [
-                  {
-                    "t": 0.8,
-                    "v": -120.0,
-                    "interp": "bezier"
-                  },
-                  {
-                    "t": 4.6,
-                    "v": 120.0,
-                    "interp": "bezier"
-                  }
+                  { "t": 0.8, "v": -120.0, "interp": "bezier" },
+                  { "t": 4.6, "v": 120.0, "interp": "bezier" }
                 ],
                 "radius": 110.0,
                 "softness": 140.0
@@ -81,16 +62,8 @@
             {
               "order": "distance",
               "amount": [
-                {
-                  "t": 0.0,
-                  "v": 1.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 0.6,
-                  "v": 0.0,
-                  "interp": "bezier"
-                }
+                { "t": 0.0, "v": 1.0, "interp": "bezier" },
+                { "t": 0.6, "v": 0.0, "interp": "bezier" }
               ],
               "stagger": 0.012,
               "stagger_ease": "out",
@@ -106,16 +79,8 @@
           "animators": [
             {
               "amount": [
-                {
-                  "t": 1.0,
-                  "v": 1.0,
-                  "interp": "bezier"
-                },
-                {
-                  "t": 1.6,
-                  "v": 0.0,
-                  "interp": "bezier"
-                }
+                { "t": 1.0, "v": 1.0, "interp": "bezier" },
+                { "t": 1.6, "v": 0.0, "interp": "bezier" }
               ],
               "stagger": 0.18,
               "y": 50.0,
@@ -166,35 +131,18 @@
           "text": "procedural",
           "x": 640.0,
           "y": [
-            {
-              "t": 0.0,
-              "v": 40.0,
-              "interp": "hold"
-            },
-            {
-              "t": 0.4,
-              "v": 110.0
-            }
+            { "t": 0.0, "v": 40.0, "interp": "hold" },
+            { "t": 0.4, "v": 110.0, "interp": "bezier" }
           ],
-          "font_size": 64.0,
           "animators": [
             {
               "y": -24.0,
               "rotation": -12.0,
               "fill": "#ff8a3d",
               "falloff": {
-                "shape": "sphere",
                 "x": [
-                  {
-                    "t": 0.8,
-                    "v": -420.0,
-                    "interp": "bezier"
-                  },
-                  {
-                    "t": 4.4,
-                    "v": 420.0,
-                    "interp": "bezier"
-                  }
+                  { "t": 0.8, "v": -420.0, "interp": "bezier" },
+                  { "t": 4.4, "v": 420.0, "interp": "bezier" }
                 ],
                 "radius": 60.0,
                 "softness": 120.0
