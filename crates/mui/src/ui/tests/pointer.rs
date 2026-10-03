@@ -101,8 +101,8 @@ fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
     // Each scroller in nested handoff uses its own axes, and captured bars
     // retain their press-time local coordinate system.
     let scrolling = || {
-        stack([col([block(20., 100.)])
-            .size(20., 10.)
+        stack([col([block(20., 200.)])
+            .size(20., 40.)
             .scroll()
             .offset(20., 20.)
             .anchor(Align::Start, Align::Start)
@@ -115,7 +115,7 @@ fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
         scrolling(),
         None,
         Input {
-            pointer: at(30., 25., false),
+            pointer: at(30., 40., false),
             wheel: Vec2::new(-10., 0.),
             ..Input::default()
         },
@@ -127,7 +127,7 @@ fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
         "world horizontal wheel drives local vertical scroll"
     );
     for _ in 0..2 {
-        ui.frame(scrolling(), None, at(30., 25., false), 0.016)
+        ui.frame(scrolling(), None, at(30., 40., false), 0.016)
             .unwrap();
     }
     let strip = ui
