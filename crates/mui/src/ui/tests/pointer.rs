@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn pointer_snapshot_keeps_frame_position_modifiers_and_surface_exit() {
+    let mut ui = Ui::default();
+    let tree = || block(40., 40.).id("surface");
+    let pointer = PointerInput {
+        mods: Mods {
+            ctrl: true,
+            alt: true,
+            ..Mods::default()
+        },
+        ..at(12., 13., false)
+    };
+    ui.frame(tree(), None, pointer, 0.016).unwrap();
+    assert_eq!(ui.pointer(), pointer);
+    let exited = PointerInput {
+        pos: None,
+        ..pointer
+    };
+    ui.frame(tree(), None, exited, 0.016).unwrap();
+    assert_eq!(
+        ui.pointer(),
+        exited,
+        "a leave must not expose stale local coordinates"
+    );
+}
+
+#[test]
 fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
     let tree = || {
         row([
@@ -14,6 +40,7 @@ fn a_move_is_inert_only_on_the_same_target_away_from_raw_pointer_readers() {
         ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     }
     assert!(ui.inert(&at(20., 20., false).into()), "same target");
+    assert_eq!(ui.pointer(), at(20., 20., false));
     assert_eq!(
         ui.local("src"),
         Some(Point::new(20., 20.)),

@@ -11,6 +11,13 @@ impl Ui {
             None => self.pasted.clone(),
         }
     }
+    /// The latest pointer state accepted by [`Ui::frame`] or [`Ui::inert`].
+    /// Position is in scene coordinates; `None` means the pointer left the
+    /// surface. This is a read-only snapshot, including current modifiers.
+    pub fn pointer(&self) -> PointerInput {
+        self.pointer
+    }
+
     /// Which shape of the canvas `id` the pointer is on, by the tag its
     /// [`Draw`](mui_scene::Draw) carried. `None` when the pointer is over no
     /// tagged shape of that node -- including inside its frame but outside
