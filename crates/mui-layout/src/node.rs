@@ -79,6 +79,8 @@ pub(crate) struct Rare {
     pub(crate) line_gap: Option<Spacing>,
     pub(crate) maximum: Option<Size>,
     pub(crate) aspect: Option<f64>,
+    /// Contain the aspect in both offered axes rather than deriving height.
+    pub(crate) aspect_fit: bool,
     /// Anchored placement for a float; see [`Node::pin`].
     pub(crate) pin: Option<Pin>,
     /// Grids only: the narrowest a column may get before the grid drops one.
@@ -89,9 +91,19 @@ impl Rare {
         line_gap: None,
         maximum: None,
         aspect: None,
+        aspect_fit: false,
         pin: None,
         min_col: None,
     };
+    pub(crate) fn fitted_aspect(&self, offered: Size) -> Option<Size> {
+        let ratio = self.aspect.filter(|_| self.aspect_fit)?;
+        let limit = self.maximum.unwrap_or(offered);
+        let width = offered
+            .width
+            .min(limit.width)
+            .min(offered.height.min(limit.height) * ratio);
+        Some(Size::new(width, width / ratio))
+    }
 }
 
 impl<P: Default> Node<P> {
@@ -293,7 +305,19 @@ impl<P> Node<P> {
     /// `width / height`. Fills in whichever axis was left `Auto` -- at measure
     /// from a fixed sibling axis, at arrange from the allocated one.
     pub fn aspect(mut self, ratio: impl Px) -> Self {
-        self.rare_mut().aspect = Some(ratio.px());
+        let rare = self.rare_mut();
+        rare.aspect = Some(ratio.px());
+        rare.aspect_fit = false;
+        self
+    }
+    /// Keep `width / height` inside both offered dimensions, including the
+    /// final flex allocation. An unspecified axis follows the other one;
+    /// with no offer, the intrinsic size supplies the containing box.
+    /// Existing [`Node::aspect`] keeps its width-first behavior.
+    pub fn aspect_fit(mut self, ratio: impl Px) -> Self {
+        let rare = self.rare_mut();
+        rare.aspect = Some(ratio.px());
+        rare.aspect_fit = true;
         self
     }
     /// The floor on the width.

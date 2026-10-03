@@ -93,6 +93,11 @@ impl<'a, P> Measured<'a, P> {
         let Some(inner) = inner else {
             return fallback();
         };
+        if self.node.rare().aspect_fit {
+            if let Some((width, ratio)) = self.aspect_width(inner) {
+                return if vertical { width / ratio } else { width };
+            }
+        }
         match (self.node.len(vertical), self.aspect_width(inner)) {
             (l @ (Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)), _) => l
                 .fixed(inner.main(vertical), self.container[vertical as usize])
@@ -106,7 +111,21 @@ impl<'a, P> Measured<'a, P> {
     /// width -- and the height follows.
     pub(crate) fn aspect_width(&self, inner: Size) -> Option<(f64, f64)> {
         let n = self.node;
-        let a = n.rare().aspect.filter(|_| matches!(n.height, Len::Auto))?;
+        let a = n.rare().aspect?;
+        if n.rare().aspect_fit {
+            let offered = Size::new(
+                n.width
+                    .fixed(inner.width, self.container[0])
+                    .unwrap_or(inner.width),
+                n.height
+                    .fixed(inner.height, self.container[1])
+                    .unwrap_or(inner.height),
+            );
+            return n.rare().fitted_aspect(offered).map(|size| (size.width, a));
+        }
+        if !matches!(n.height, Len::Auto) {
+            return None;
+        }
         let cap = |v: f64| n.rare().maximum.map_or(v, |m| v.min(m.width));
         Some((
             cap(n
@@ -327,10 +346,23 @@ pub(crate) fn measure_uncached<'a, P>(
         None => [flex_width.or(definite[0]), node.height.px().or(definite[1])],
     };
     if let Some(a) = node.rare().aspect.filter(|_| boxed.is_none()) {
-        match (definite, node.height, node.width) {
-            ([Some(w), _], Len::Auto, _) => definite[1] = Some(w / a),
-            ([None, Some(h)], _, Len::Auto) => definite[0] = Some(h * a),
-            _ => {}
+        if node.rare().aspect_fit {
+            if definite.iter().any(Option::is_some) {
+                let fitted = node
+                    .rare()
+                    .fitted_aspect(Size::new(
+                        definite[0].unwrap_or(f64::INFINITY),
+                        definite[1].unwrap_or(f64::INFINITY),
+                    ))
+                    .unwrap();
+                definite = [Some(fitted.width), Some(fitted.height)];
+            }
+        } else {
+            match (definite, node.height, node.width) {
+                ([Some(w), _], Len::Auto, _) => definite[1] = Some(w / a),
+                ([None, Some(h)], _, Len::Auto) => definite[0] = Some(h * a),
+                _ => {}
+            }
         }
     }
     let inner = [
@@ -721,6 +753,16 @@ pub(crate) fn measure_uncached<'a, P>(
         Some(max) => (
             Size::new(size.width.min(max.width), size.height.min(max.height)),
             Size::new(floor.width.min(max.width), floor.height.min(max.height)),
+        ),
+        None => (size, floor),
+    };
+    let (size, floor) = match node.rare().fitted_aspect(size) {
+        Some(fitted) => (
+            fitted,
+            Size::new(
+                floor.width.min(fitted.width),
+                floor.height.min(fitted.height),
+            ),
         ),
         None => (size, floor),
     };
