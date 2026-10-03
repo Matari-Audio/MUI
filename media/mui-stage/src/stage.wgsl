@@ -137,7 +137,6 @@ fn out(c: vec4f, world: vec3f) -> Out {
         let f = smoothstep(g.fog_range.x, g.fog_range.y, dist);
         o.color = vec4f(mix(c.rgb, g.fog.rgb * c.a, f), c.a);
     }
-    o.color = vec4f(aerial(o.color.rgb, c.a, (world - g.eye.xyz) / max(dist, 1e-4), dist), c.a);
     // g: the distance to the surface itself, which occlusion reads: a
     // reflection is the floor where the eye ray meets it, not the mirror
     // image's virtual depth below it (a hole to GTAO).
@@ -145,6 +144,9 @@ fn out(c: vec4f, world: vec3f) -> Out {
     if (d.mirror.w > 0.) {
         surf = dist * clamp((g.eye.y - d.mirror.x) / max(g.eye.y - world.y, 1e-4), 0., 1.);
     }
+    // The air as far as the surface the eye sees: a reflection's floor,
+    // so it hazes as the floor under it does.
+    o.color = vec4f(aerial(o.color.rgb, c.a, (world - g.eye.xyz) / max(dist, 1e-4), surf), c.a);
     o.dist = vec4f(dist, surf, 0., 1.);
     o.spec = vec4f(0.);
     return o;
@@ -486,15 +488,17 @@ fn clouds(d0: vec3f, clear: vec3f) -> vec4f {
     let phase = 0.75 * cloud_hg(mu, 0.65) + 0.25 * cloud_hg(mu, -0.25) + 0.1;
     let top = g.sky1.rgb;
     let low = g.sky2.rgb * 0.6 + top * 0.2;
-    let sig0 = 24. * g.sky5.z;
-    let ds = (b - a) / 12.;
+    let sig0 = 12. * g.sky5.z;
+    // Steps no longer than 0.12 km, so a cloud's edge is never a step's
+    // guess: far through a long grazing path the first 4 km show.
+    let ds = min((b - a) / 32., 0.12);
     // One shift per direction: no banding, and the same every frame.
     let jit = hash2(d.xz * 517.3 + vec2f(d.y * 91.7));
     var tr = 1.;
     var lum = vec3f(0.);
     var at = 0.;
     var w = 0.;
-    for (var i = 0; i < 12; i++) {
+    for (var i = 0; i < 32; i++) {
         let t = a + (f32(i) + jit) * ds;
         let p = o + d * t;
         let h = (length(p) - r0) / CLOUD_DEEP;

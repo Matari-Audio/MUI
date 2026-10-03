@@ -559,7 +559,15 @@ mod tests {
         }
         assert!((4. ..=64.).contains(&at(-4.)), "{}", at(-4.));
         // Intensity is the artist's: the meter does not undo it.
-        let dim = Sky::physical(sun_at(-4.), Atmosphere { intensity: 0.5, ..clear() }, 0., [0.; 2]);
+        let dim = Sky::physical(
+            sun_at(-4.),
+            Atmosphere {
+                intensity: 0.5,
+                ..clear()
+            },
+            0.,
+            [0.; 2],
+        );
         assert_eq!(dim.auto_exposure(), at(-4.));
         assert_eq!(Sky::default().auto_exposure(), 1.);
     }
@@ -576,9 +584,18 @@ mod tests {
         };
         let root = block(16., 16.).radius(0.).fill(Color::srgb(1., 1., 1.));
         let scene = resolve(&SceneSpec::new(root)).expect("resolves");
-        stage.layer("white", &scene, Size::new(16., 16.), 1.).unwrap();
-        let air = Atmosphere { turbidity: 3., ..clear() };
-        for (sun, dist, k) in [(sun_at(20.), 4000., 10.), (sun_at(3.), 3000., 25.), (sun_at(-3.), 4000., 20.)] {
+        stage
+            .layer("white", &scene, Size::new(16., 16.), 1.)
+            .unwrap();
+        let air = Atmosphere {
+            turbidity: 3.,
+            ..clear()
+        };
+        for (sun, dist, k) in [
+            (sun_at(20.), 4000., 10.),
+            (sun_at(3.), 3000., 25.),
+            (sun_at(-3.), 4000., 20.),
+        ] {
             let sky = Sky {
                 light: false,
                 aerial: k,
@@ -636,13 +653,20 @@ mod tests {
             };
             stage.render(0., 0., 1, &|_| shot.clone()).unwrap().rgba
         };
-        let mean = |f: &[f32]| f.chunks(4).map(|p| luma([p[0], p[1], p[2]])).sum::<f32>() / (f.len() / 4) as f32;
-        let diff = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32;
+        let mean = |f: &[f32]| {
+            f.chunks(4).map(|p| luma([p[0], p[1], p[2]])).sum::<f32>() / (f.len() / 4) as f32
+        };
+        let diff = |a: &[f32], b: &[f32]| {
+            a.iter().zip(b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len() as f32
+        };
         let clear_sky = frame(0., 1., 0.);
         let cloudy = frame(0.7, 1., 0.);
         assert!(diff(&clear_sky, &cloudy) > 0.02, "clouds show");
         assert_eq!(frame(0.7, 1., 0.), cloudy, "the same time, the same clouds");
-        assert!(diff(&frame(0.7, 1., 0.5), &cloudy) > 0.01, "drift moves them");
+        assert!(
+            diff(&frame(0.7, 1., 0.5), &cloudy) > 0.01,
+            "drift moves them"
+        );
         let (thin, thick) = (mean(&frame(0.7, 0.4, 0.)), mean(&frame(0.7, 3., 0.)));
         assert!(thick < thin, "dark bellies: {thick} against {thin}");
     }

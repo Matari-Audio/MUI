@@ -1405,7 +1405,12 @@ mod tests {
         );
         assert_eq!(noon.sky.unwrap()[0], r(60f64.to_radians()));
         // The meter opens up for the twilight, not for noon.
-        assert!(dawn.exposure > 1. && noon.exposure == 0., "{} {}", dawn.exposure, noon.exposure);
+        assert!(
+            dawn.exposure > 1. && noon.exposure == 0.,
+            "{} {}",
+            dawn.exposure,
+            noon.exposure
+        );
         // Below the horizon the lamp is dark; at noon it shines down from
         // the sun the texture draws: Blender's sun at rotation ρ, elevation
         // ε sits toward (sin ρ cos ε, cos ρ cos ε, sin ε) (checked against a
