@@ -1109,9 +1109,6 @@ impl Ui {
             // `Arc`, so only new shapes convert.
             let mut hit = std::mem::take(&mut self.hit);
             hit.clear();
-            for s in scene.surfaces() {
-                hit.prepare_clips(s.clip_paths())?;
-            }
             for s in scene
                 .surfaces()
                 .filter(|s| (named(&s.key) || s.pointer_states) && !s.disabled)
@@ -1129,6 +1126,10 @@ impl Ui {
             }
             self.hit = hit;
         }
+        // Equivalent contours may arrive in a fresh clip-list Arc even when
+        // the gesture map is reused. Register only this frame's list keys.
+        self.hit
+            .prepare_clips(scene.surfaces().filter_map(|s| s.clip_paths()))?;
         Ok((scene, glided, spec.root))
     }
 

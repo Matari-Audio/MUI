@@ -84,6 +84,13 @@ fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
     );
     ui.frame(clipped(), None, wheel(50., 40.), 0.016).unwrap();
     assert!(ui.get("wheel.child").wheel.hypot() > 0.);
+    for _ in 0..4 {
+        ui.frame(clipped(), None, wheel(50., 40.), 0.016).unwrap();
+        assert!(
+            ui.get("wheel.child").wheel.hypot() > 0.,
+            "equivalent clip-list identity after a retained frame stays visible"
+        );
+    }
 
     // Each scroller in nested handoff uses its own axes, and captured bars
     // retain their press-time local coordinate system.

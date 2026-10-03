@@ -238,9 +238,17 @@ impl Hit {
         self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
     }
 
-    /// Cache the exact ancestor clips for frame-based wheel queries.
-    pub fn prepare_clips(&mut self, clips: Option<&[(Arc<Path>, Point)]>) -> Result<(), Error> {
-        self.cache_placed_clips(clips).map(|_| ())
+    /// Cache this frame's exact ancestor clips for frame-based wheel queries.
+    /// Old list identities are discarded; path conversions remain reusable.
+    pub fn prepare_clips<'a>(
+        &mut self,
+        lists: impl IntoIterator<Item = &'a [(Arc<Path>, Point)]>,
+    ) -> Result<(), Error> {
+        self.clip_cache.clear();
+        for clips in lists {
+            self.cache_placed_clips(Some(clips))?;
+        }
+        Ok(())
     }
 
     /// Prepare exact ancestor clip contours once for frame-based queries,
