@@ -1215,7 +1215,7 @@ mod rotation_tests {
                     .fill(Role::Primary)
                     .anchor(Align::Start, Align::Start)])
                 .size(10., 10.)
-                .offset(0., -20.)
+                .offset(0., -100.)
                 .anchor(Align::Start, Align::Start)
                 .weld(Weld::shape())
                 .id("external")])
@@ -1226,20 +1226,24 @@ mod rotation_tests {
         )
         .unwrap();
         let material = external.external_weld("external").unwrap();
-        assert!(!visible(material, Affine::IDENTITY, [150, 150]));
+        assert!(
+            !visible(material, Affine::IDENTITY, [300, 300]),
+            "unrotated material domain {:?}",
+            material.bounds()
+        );
         assert!(external_visible(
             &external,
             "external",
             material,
             Affine::IDENTITY,
-            [150, 150]
+            [300, 300]
         ));
         let fill = external
             .paint
             .iter()
             .find(|p| p.layer == Layer::External)
             .unwrap();
-        assert!(visible(material, fill.transform, [150, 150]));
+        assert!(visible(material, fill.transform, [300, 300]));
 
         let member = |angle| {
             stack([block(10., 10.).fill(Role::Primary).rotation(angle)]).weld(Weld::shape())

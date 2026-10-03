@@ -13,6 +13,7 @@ fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
         .anchor(Align::Start, Align::Start)
         .rotation(angle)])
         .size(22., 18.)
+        .radius(0.)
         .clip()
     };
     let angle = std::f64::consts::FRAC_PI_2;
@@ -33,7 +34,12 @@ fn rotated_pointer_uses_exact_hit_parent_clip_and_press_time_axes() {
     );
     ui.frame(tree(angle), None, at(21., 15., false), 0.016)
         .unwrap();
-    assert!(ui.get("leaf").hovered);
+    assert!(
+        ui.get("leaf").hovered,
+        "leaf {:?}; exact hit {:?}",
+        ui.scene().unwrap().surface("leaf"),
+        ui.hit.at(Point::new(21., 15.))
+    );
     assert!(ui.local("leaf").unwrap().distance(Point::new(4., 2.)) < 1e-8);
     ui.frame(tree(angle), None, at(21., 15., true), 0.016)
         .unwrap();

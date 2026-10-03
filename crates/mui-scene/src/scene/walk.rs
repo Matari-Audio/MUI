@@ -1173,9 +1173,9 @@ mod tests {
             changed.paint, first.paint,
             "rotation after a memo must invalidate its retained paint"
         );
-        assert_eq!(
-            changed.memos_at("rot.scope").collect::<Vec<_>>(),
-            vec![(91, false)]
+        assert!(
+            !Arc::ptr_eq(&changed.surface("rot.leaf").unwrap().path, &leaf.path),
+            "a retained tree with changed pose must regenerate its world hit path"
         );
         assert_eq!(changed.surface("rot.leaf").unwrap().frame, leaf.frame);
         assert!(
