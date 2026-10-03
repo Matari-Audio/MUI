@@ -632,8 +632,10 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 /// `panic = "abort"` it is the host's crash.
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let display = surface::Display::new(window).map_err(|e| e.to_string())?;
+        let instance = wgpu::Instance::new(
+            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)),
+        );
         // SAFETY: the surface comes from this window's live native handle,
         // and baseview drops the handler that owns it before the window.
         #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]

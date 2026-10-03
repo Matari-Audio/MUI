@@ -1,5 +1,4 @@
-//! Headless: the handler without a window or a GPU. The queue, schedule
-//! and routing are tested in `mui::host`; these check the translation.
+//! Event translation checks and an opt-in native presentation regression.
 use super::*;
 use keyboard_types::Code;
 use mui::Ui;
@@ -31,6 +30,109 @@ fn handler(size: (u32, u32), scale: f64) -> Handler<Knob> {
         view: Knob { value: 0.5 },
     }));
     Handler::new(shared, Arc::default(), size, scale)
+}
+
+/// Run with an X11 display and compute-capable EGL driver:
+/// `WGPU_BACKEND=gl cargo test -p mui-baseview native_surface_presents_and_reopens -- --ignored`
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a live X11 display and graphics driver"]
+fn native_surface_presents_and_reopens() {
+    use std::sync::mpsc::{Sender, channel};
+
+    struct Probe {
+        // Drop graphics before the native context, as the production handler does.
+        gpu: RefCell<Option<Host>>,
+        cx: WindowContext,
+        result: RefCell<Option<Sender<Result<(), String>>>>,
+    }
+    impl WindowHandler for Probe {
+        fn on_frame(&self) -> Result<(), HandlerError> {
+            if let Some(send) = self.result.borrow_mut().take() {
+                let result = (|| {
+                    let mut gpu = open_gpu(&self.cx, (240, 200))?;
+                    let mut h = handler((240, 200), 1.0);
+                    h.step();
+                    let scene = lock(&h.shared).ui.scene().cloned().ok_or("no scene")?;
+                    for recreated in [false, true] {
+                        if recreated {
+                            // SAFETY: cx outlives gpu and the replacement surface.
+                            #[expect(unsafe_code, reason = "exercises native surface recovery")]
+                            let surface = unsafe { surface::create(gpu.instance(), &self.cx) }
+                                .ok_or("surface recreation failed")?;
+                            gpu.replace_surface(surface);
+                        }
+                        if !matches!(
+                            gpu.present(&scene, Affine::IDENTITY)
+                                .map_err(|e| e.to_string())?,
+                            Frame::Presented(_)
+                        ) {
+                            return Err("frame was not presented".to_owned());
+                        }
+                    }
+                    *self.gpu.borrow_mut() = Some(gpu);
+                    Ok(())
+                })();
+                let _ = send.send(result);
+            }
+            Ok(())
+        }
+        fn resized(&self, _: WindowSize) -> Result<(), HandlerError> {
+            Ok(())
+        }
+        fn on_event(&self, _: Event) -> EventStatus {
+            EventStatus::Ignored
+        }
+    }
+
+    for (parented, map_first) in [(false, false), (true, true), (true, false)] {
+        for _ in 0..2 {
+            let parent = parented.then(|| {
+                let (send, recv) = channel();
+                let window =
+                    Window::create(settings("MUI regression parent", (240, 200)), move |cx| {
+                        send.send(cx.platform_handle()).expect("parent handle");
+                        Ok(Probe {
+                            gpu: RefCell::new(None),
+                            cx,
+                            result: RefCell::new(None),
+                        })
+                    })
+                    .expect("parent creation");
+                let handle = recv
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("parent handle");
+                if map_first {
+                    window.show().expect("parent mapping before attachment");
+                }
+                (window, handle)
+            });
+            let mut options = settings("MUI presentation regression", (240, 200));
+            if let Some((_, handle)) = &parent {
+                options = options.with_parent(handle);
+            }
+            let (send, recv) = channel();
+            let window = Window::create(options, |cx| {
+                Ok(Probe {
+                    gpu: RefCell::new(None),
+                    cx,
+                    result: RefCell::new(Some(send)),
+                })
+            })
+            .expect("native window creation");
+            window.show().expect("native window mapping");
+            if let Some((window, _)) = &parent
+                && !map_first
+            {
+                window.show().expect("parent mapping after attachment");
+            }
+            let result = recv.recv_timeout(Duration::from_secs(30));
+            window.close();
+            result
+                .expect("first frame callback")
+                .expect("native presentation");
+        }
+    }
 }
 
 fn key(key: HostKey, code: Code, state: KeyState, modifiers: Modifiers) -> Event {
