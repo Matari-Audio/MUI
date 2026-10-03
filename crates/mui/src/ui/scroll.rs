@@ -92,7 +92,12 @@ impl Ui {
                 (f.x, f.size.width)
             }
         };
-        let ((start, len), (_, view)) = (along(strip.frame), along(node.frame));
+        let ((_, len), (_, view)) = (along(strip.frame), along(node.frame));
+        let start = 0.;
+        let p = self
+            .capture_pose
+            .unwrap_or_else(|| strip.local_pose())
+            .local(p);
         let total = if vertical {
             node.content.height
         } else {
@@ -133,11 +138,12 @@ impl Ui {
             let Some((key, _)) = bar::bar_of(&s.key) else {
                 continue;
             };
-            let over =
-                |f: mui_layout::Frame| self.pointer.pos.is_some_and(|p| f.contains(p.x, p.y));
+            let over = |s: &mui_scene::ResolvedSurface| {
+                self.pointer.pos.is_some_and(|p| self.inside_surface(s, p))
+            };
             let target = if hovered == Some(&*s.key) || held == Some(&*s.key) {
                 1.0
-            } else if scene.surface(key).is_some_and(|n| over(n.frame)) {
+            } else if scene.surface(key).is_some_and(|n| over(n)) {
                 0.35
             } else {
                 0.0
@@ -167,14 +173,10 @@ impl Ui {
         };
         for s in scene.surfaces().rev() {
             let f = s.frame;
-            if p.x < f.x || p.x > f.right() || p.y < f.y || p.y > f.bottom() {
+            if !self.inside_surface(s, p) {
                 continue;
             }
-            if s.clip.is_some_and(|clip| {
-                p.x < clip.x0 || p.x > clip.x1 || p.y < clip.y0 || p.y > clip.y1
-            }) {
-                continue;
-            }
+            let wheel = s.local_pose().delta(wheel);
             // A node that keeps the wheel reads it from `Response::wheel`
             // or claimed it with `Ui::wheel`; nothing it sits in scrolls
             // under it.

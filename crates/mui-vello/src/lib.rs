@@ -597,6 +597,7 @@ pub fn paint(
 /// `base` moved to where `p` stands: its paths are local to
 /// [`Painted::offset`].
 pub(crate) fn placed(base: Affine, p: &Painted) -> Affine {
+    let base = base * p.transform;
     match p.offset {
         o if o.x == 0. && o.y == 0. => base,
         o => base * Affine::translate((o.x, o.y)),
@@ -605,7 +606,8 @@ pub(crate) fn placed(base: Affine, p: &Painted) -> Affine {
 
 /// `p`'s paint box where it stands in the scene.
 pub(crate) fn scene_box(p: &Painted, path: &BezPath) -> Rect {
-    paint_box(p, path) + kurbo::Vec2::new(p.offset.x, p.offset.y)
+    p.transform
+        .transform_rect_bbox(paint_box(p, path) + kurbo::Vec2::new(p.offset.x, p.offset.y))
 }
 
 /// A drop shadow with no rounded rect to blur analytically: a custom
@@ -1092,6 +1094,7 @@ mod seam {
             paint: Paint::Solid(mui_scene::Color::oklch(0.5, 0., 0.)),
             rect: None,
             offset: mui_geometry::Point::default(),
+            transform: Affine::IDENTITY,
             width: 0.,
             blur: 0.,
             text: Some(Text {
@@ -1135,6 +1138,146 @@ mod snapshot {
     use mui_material::prelude::*;
     use mui_scene::{ResolvedScene, TextGlyph};
     use vello_common::pixmap::Pixmap;
+
+    #[test]
+    fn subtree_rotation_preserves_bitmap_vector_glyphs_and_device_paint() {
+        use mui_scene::{Image, Vector, VectorCommand};
+        let bitmap = Arc::new(Image::rgba(1, 1, Arc::<[u8]>::from([255, 0, 0, 255])).unwrap());
+        let vector = Arc::new(
+            Vector::new(
+                6.,
+                2.,
+                vec![VectorCommand::Fill {
+                    path: Rect::new(0., 0., 6., 2.).to_path(0.01),
+                    transform: Affine::IDENTITY,
+                    brush: peniko::Brush::Solid(peniko::Color::from_rgba8(0, 255, 0, 255)),
+                    brush_transform: Affine::IDENTITY,
+                    rule: peniko::Fill::NonZero,
+                }],
+            )
+            .unwrap(),
+        );
+        let spec = |angle| {
+            SceneSpec::new(
+                stack([stack([
+                    block(6., 2.)
+                        .fill(Fill::Image(bitmap.clone(), Fit::Fill))
+                        .anchor(Align::Start, Align::Start)
+                        .id("bitmap"),
+                    block(6., 2.)
+                        .offset(8., 0.)
+                        .fill(Fill::Vector(vector.clone(), Fit::Fill))
+                        .anchor(Align::Start, Align::Start)
+                        .id("vector"),
+                    text("R")
+                        .text_size(6.)
+                        .offset(0., 3.)
+                        .fill(Color::srgb(1., 1., 1.))
+                        .anchor(Align::Start, Align::Start)
+                        .id("glyph"),
+                ])
+                .size(20., 8.)
+                .offset(10., 10.)
+                .anchor(Align::Start, Align::Start)
+                .rotation(angle)])
+                .size(40., 40.)
+                .clip(),
+            )
+            .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap())
+        };
+        let plain = resolve(&spec(0.)).unwrap();
+        let rotated = resolve(&spec(std::f64::consts::FRAC_PI_2)).unwrap();
+        for key in ["bitmap", "vector", "glyph"] {
+            assert_eq!(
+                plain.surface(key).unwrap().frame,
+                rotated.surface(key).unwrap().frame
+            );
+            let before = plain
+                .paint
+                .iter()
+                .find(|p| p.key.as_str() == key && matches!(p.layer, Layer::Fill | Layer::Text))
+                .unwrap();
+            let after = rotated
+                .paint
+                .iter()
+                .find(|p| p.key.as_str() == key && matches!(p.layer, Layer::Fill | Layer::Text))
+                .unwrap();
+            assert_ne!(before.transform, after.transform);
+            assert_eq!(
+                before.paint, after.paint,
+                "source artwork is not raster-rotated or replaced"
+            );
+            assert!(scene_box(after, &bez_path(&after.path, ARC_TOLERANCE).unwrap()).is_finite());
+        }
+        assert!(rotated.paint.iter().any(
+            |p| p.layer == Layer::Text && p.text.as_ref().is_some_and(|t| !t.glyphs.is_empty())
+        ));
+        for scale in [1u16, 2] {
+            let mut ctx = vello_cpu::RenderContext::new(40 * scale, 40 * scale);
+            let mut resources = vello_cpu::Resources::default();
+            paint(
+                &mut Cpu {
+                    ctx: &mut ctx,
+                    resources: &mut resources,
+                    cache: &mut Cache::default(),
+                },
+                &rotated,
+                Affine::scale(scale as f64),
+            )
+            .unwrap();
+            ctx.flush();
+            let mut pixels = Pixmap::new(40 * scale, 40 * scale);
+            ctx.render(&mut pixels, &mut resources);
+            let at = |x: usize, y: usize| {
+                pixels.data()[y * scale as usize * (40 * scale) as usize + x * scale as usize]
+            };
+            let red = at(23, 5);
+            let green = at(23, 13);
+            assert!(
+                red.r > 200 && red.g < 30,
+                "bitmap rotation lost at{scale}x: {red:?}"
+            );
+            assert!(
+                green.g > 200 && green.r < 30,
+                "vector rotation lost at{scale}x: {green:?}"
+            );
+            assert_eq!(
+                at(11, 11).a,
+                0,
+                "paint stayed at the unrotated bitmap position"
+            );
+            assert!(
+                (3..10).any(|y| (14..22).any(|x| {
+                    let p = at(x, y);
+                    p.r > 80 && p.g > 80 && p.b > 80
+                })),
+                "glyphs must paint in their rotated region at{scale}x"
+            );
+        }
+        #[cfg(feature = "gpu-effects")]
+        {
+            let mut encoded = vello::Scene::new();
+            let mut cache = Cache::default();
+            let textures = classic::Textures::default();
+            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [80, 80]);
+            paint(&mut gpu, &rotated, Affine::scale(2.)).unwrap();
+            assert_eq!(
+                gpu.images.len(),
+                1,
+                "only authored bitmap uploads; vector and text stay vector/glyph paint"
+            );
+            drop(gpu);
+            assert!(!encoded.encoding().path_tags.is_empty());
+            let mut unchanged = vello::Scene::new();
+            let mut gpu = Classic::new(&mut unchanged, &mut cache, &textures, [80, 80]);
+            paint(&mut gpu, &plain, Affine::scale(2.)).unwrap();
+            drop(gpu);
+            assert_ne!(
+                encoded.encoding().transforms,
+                unchanged.encoding().transforms
+            );
+        }
+    }
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
     /// reads against it, and the rounded corner stays clear.

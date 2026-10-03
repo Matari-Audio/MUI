@@ -127,6 +127,7 @@ pub struct Ui {
     /// See [`Ui::set_double_click`].
     double_click: f64,
     interaction: Pointer,
+    capture_pose: Option<mui_scene::LocalPose>,
     actions: Vec<SemanticAction>,
     hit: Hit,
     scene: Option<ResolvedScene>,
@@ -236,6 +237,7 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
                     && a.pointer_states == b.pointer_states
                     && same([&a.path].into_iter(), [&b.path].into_iter())
                     && a.offset == b.offset
+                    && a.transform == b.transform
                     && a.clip == b.clip
                     && same(
                         a.clip_paths().unwrap_or(&[]).iter().map(|c| &c.0),
@@ -268,6 +270,7 @@ impl Ui {
             scale: None,
             weld_backend: mui_scene::WeldBackend::Reference,
             interaction: Pointer::new(),
+            capture_pose: None,
             actions: Vec::new(),
             hit: Hit::default(),
             scene: None,
@@ -521,6 +524,12 @@ impl Ui {
         let id: Id = id.into();
         let id = id.as_str();
         let mut response = self.interaction.get(id);
+        if self.interaction.held() == Some(id)
+            && let Some(pose) = self.capture_pose
+        {
+            response.drag_delta = pose.delta(response.drag_delta);
+            response.drag_total = pose.delta(response.drag_total);
+        }
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
             .keys(id)
@@ -532,13 +541,8 @@ impl Ui {
                 self.scene.as_ref().and_then(|s| s.surface(id)),
             )
         {
-            let f = s.frame;
-            let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
-            let clipped = s
-                .clip
-                .is_some_and(|c| p.x < c.x0 || p.x > c.x1 || p.y < c.y0 || p.y > c.y1);
-            if inside && !clipped {
-                response.wheel = self.wheel;
+            if self.inside_surface(s, p) {
+                response.wheel = s.local_pose().delta(self.wheel);
             }
         }
         if self
@@ -923,9 +927,7 @@ impl Ui {
                 if tag.is_some() {
                     return None;
                 }
-                last_scene
-                    .and_then(|s| s.external_weld(key))
-                    .map(|e| e.contains(p))
+                last_scene.and_then(|s| s.external_contains(key, p))
             });
         // A payload outlives its gesture by exactly the one frame the drop is
         // reported in -- the frame the target's tree reads it from.
@@ -933,6 +935,11 @@ impl Ui {
             self.drag = None;
         }
         let held = self.interaction.held().map(str::to_owned);
+        if prev_held != held {
+            self.capture_pose = held
+                .as_deref()
+                .and_then(|key| self.scene.as_ref()?.surface(key).map(|s| s.local_pose()));
+        }
         // A gesture is exactly the span a target is captured for, so the two
         // edges are the two ends of that capture -- plus the one a `cancel`
         // stole before this frame could see it.
@@ -954,8 +961,7 @@ impl Ui {
                     }
                     self.scene
                         .as_ref()
-                        .and_then(|s| s.external_weld(key))
-                        .map(|e| e.contains(p))
+                        .and_then(|s| s.external_contains(key, p))
                 })?;
                 Some((id.to_owned(), tag?.to_owned()))
             });
@@ -1103,6 +1109,9 @@ impl Ui {
             // `Arc`, so only new shapes convert.
             let mut hit = std::mem::take(&mut self.hit);
             hit.clear();
+            for s in scene.surfaces() {
+                hit.prepare_clips(s.clip_paths())?;
+            }
             for s in scene
                 .surfaces()
                 .filter(|s| (named(&s.key) || s.pointer_states) && !s.disabled)
@@ -1121,6 +1130,17 @@ impl Ui {
             self.hit = hit;
         }
         Ok((scene, glided, spec.root))
+    }
+
+    /// Logical frame containment in the node's own axes, plus the same
+    /// cached exact ancestor clips used by gesture hit testing.
+    fn inside_surface(&self, s: &mui_scene::ResolvedSurface, p: Point) -> bool {
+        let local = s.local(p);
+        local.x >= 0.
+            && local.x <= s.frame.size.width
+            && local.y >= 0.
+            && local.y <= s.frame.size.height
+            && self.hit.inside_clips(p, s.clip, s.clip_paths())
     }
 
     /// Keep the scene, hand out the edges, and say what the host should do
@@ -1146,8 +1166,18 @@ impl Ui {
 
         // The caret area a field asked for, moved into the scene's space.
         let ime = self.ime_caret.take().and_then(|(id, at, h)| {
-            let f = scene.surface(&id)?.frame;
-            Some((Point::new(f.x + at.x, f.y + at.y), Size::new(1.0, h)))
+            let s = scene.surface(&id)?;
+            let f = s.frame;
+            let rect = s.transform.transform_rect_bbox(mui_geometry::Rect::new(
+                f.x + at.x,
+                f.y + at.y,
+                f.x + at.x + 1.,
+                f.y + at.y + h,
+            ));
+            Some((
+                Point::new(rect.x0, rect.y0),
+                Size::new(rect.width(), rect.height()),
+            ))
         });
         // Where the pin actually put it, so a host placing its own tooltip
         // window agrees with the one in the scene.

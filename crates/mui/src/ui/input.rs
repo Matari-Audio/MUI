@@ -161,7 +161,7 @@ impl Ui {
         let id = id.as_str();
         let p = self.pointer.pos?;
         let s = self.scene.as_ref()?.surface(id)?;
-        Some(Point::new(p.x - s.frame.x, p.y - s.frame.y))
+        Some(s.local(p))
     }
     /// Whether `input` would change nothing a frame shows, so the host can
     /// skip building one: a bare move with no capture held and no edge owed
@@ -220,7 +220,7 @@ impl Ui {
             if tag.is_some() {
                 return None;
             }
-            scene.external_weld(key).map(|e| e.contains(q))
+            scene.external_contains(key, q)
         })
     }
     /// Whether `pos` lands on another hovered target or tagged shape.

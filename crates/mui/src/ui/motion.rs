@@ -257,6 +257,7 @@ impl Ui {
                 paint: Paint::Solid(Color::oklcha(0., 0., 0., 0.)),
                 rect: None,
                 offset: Point::ZERO,
+                transform: mui_geometry::kurbo::Affine::IDENTITY,
                 width: 0.,
                 blur: 0.,
                 text: None,
