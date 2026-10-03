@@ -619,7 +619,9 @@ impl Passes {
                      first: &mut bool|
          -> Result<Vec<Quad>, String> {
             let bg = if *first { frame.background } else { clear };
-            let q = canvas.paint(assets, &part(bg, std::mem::take(plain)), &lv)?;
+            // Not the first: it goes over `A`, which its backdrops see.
+            let beneath = (!*first).then_some(&av);
+            let q = canvas.paint(assets, &part(bg, std::mem::take(plain)), beneath, &lv)?;
             let mut enc = encoder(canvas);
             let offset = this.stage(h, 0, &[]);
             this.pass(&mut enc, &this.over, &[&lv], &av, offset, *first);
@@ -635,7 +637,7 @@ impl Passes {
             if !plain.is_empty() || first {
                 quads.extend(flush(self, canvas, &mut plain, &mut first)?);
             }
-            quads.extend(canvas.paint(assets, &part(clear, vec![l.clone()]), &lv)?);
+            quads.extend(canvas.paint(assets, &part(clear, vec![l.clone()]), Some(&av), &lv)?);
             let mut enc = encoder(canvas);
             let out = self.chain(&mut enc, h, L, Some(A), &l.effects);
             let offset = self.stage(h, 0, &[]);

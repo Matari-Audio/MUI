@@ -1019,6 +1019,57 @@ fn glass_shows_the_backdrop_through_its_shape() {
     assert!(right > 60 && right > left + 30, "right {right} left {left}");
 }
 
+/// MUI's own backdrop blur on `vello_gpu`: a panel with `backdrop_blur`
+/// frosts every layer under it (the frame is split at the panel: what is
+/// below rendered, then blurred inside the panel), drawn in one run or over
+/// a layer with effects.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn mui_backdrop_blur_frosts_the_layers_under_it() {
+    use mui_scene::prelude::*;
+    let mut g = match Offline::new([160, 90], Engine::Sparse) {
+        Ok(g) => g,
+        Err(e) => return eprintln!("skipped: no GPU ({e})"),
+    };
+    let panel = block(60., 40.)
+        .radius(6.)
+        .fill(crate::render::color(Rgba([255, 255, 255, 24])))
+        .backdrop_blur(4.);
+    let scene = mui_scene::resolve(&mui_scene::SceneSpec::new(panel)).unwrap();
+    g.assets.add_vector("panel.mui", std::sync::Arc::new(scene));
+    let frame = |stripe_fx: &str| {
+        frame_of(
+            "#000000",
+            &format!(
+                r##"{{"id":"bar","kind":"rect","x":80,"y":45,"width":6,"height":90,"fill":"#ffffff","effects":[{stripe_fx}]}},
+                {{"id":"ui","kind":"image","path":"panel.mui","x":80,"y":45,"width":60,"height":40}}"##
+            ),
+        )
+    };
+    let mut out = Vec::new();
+    for f in [frame(""), frame(r#"{"type":"levels"}"#)] {
+        out.extend(g.push(&[f]).unwrap());
+    }
+    out.extend(g.finish().unwrap());
+    if let Some(dir) = std::env::var_os("MUI_CUT_STILLS") {
+        let path = std::path::Path::new(&dir).join("mui-backdrop.png");
+        let file = std::fs::File::create(path).unwrap();
+        let mut enc = png::Encoder::new(file, 160, 90);
+        enc.set_color(png::ColorType::Rgba);
+        enc.write_header()
+            .unwrap()
+            .write_image_data(&out[0])
+            .unwrap();
+    }
+    for img in &out {
+        // Under the panel the stripe is spread: dimmer in the middle, lit
+        // beside it. Outside it, sharp.
+        let (mid, side) = (px(img, 80, 45)[0], px(img, 86, 45)[0]);
+        assert!(mid < 235 && side > 40, "mid {mid} side {side}");
+        assert!(px(img, 80, 10)[0] > 250 && px(img, 86, 10)[0] < 5);
+    }
+}
+
 /// The CPU runs no effects: a glass pane draws as its tint, translucent,
 /// not as an opaque fill.
 #[test]

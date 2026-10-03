@@ -168,6 +168,16 @@ pub trait Canvas {
     fn push_blur(&mut self, _clip: &BezPath, _std_dev: f32) -> bool {
         false
     }
+    /// A [`Layer::Backdrop`] drawn by the canvas itself, from what it has
+    /// drawn so far: a canvas that can render mid-list splits the frame
+    /// here (everything below rendered, blurred by `std_dev` inside `clip`
+    /// over `reach`, a device-space box, then the list continues), so the
+    /// blur sees all under the node, past this scene too. `false`, having
+    /// drawn nothing: the list's prefix is replayed through
+    /// [`Canvas::push_blur`] instead.
+    fn backdrop(&mut self, _clip: &BezPath, _std_dev: f32, _reach: Rect) -> bool {
+        false
+    }
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
     /// measured from the run's origin along the baseline.
     fn glyphs(&mut self, text: &mui_scene::Text);
@@ -659,6 +669,9 @@ fn backdrop(
     }
     // What the blur can pull in: three standard deviations past the outline.
     let reach = scene_box(p, outline).inflate(3. * p.blur, 3. * p.blur);
+    if canvas.backdrop(outline, p.blur as f32, base.transform_rect_bbox(reach)) {
+        return Ok(());
+    }
     if canvas.push_blur(outline, p.blur as f32) {
         replay(canvas, below, reach, base)?;
         canvas.pop_layer();

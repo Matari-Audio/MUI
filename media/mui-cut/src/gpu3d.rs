@@ -253,7 +253,7 @@ impl Space {
                     )
                 })
                 .collect();
-            canvas.paint_scenes(assets, &placed, None, self.atlas, &view)?;
+            canvas.paint_scenes(assets, &placed, None, None, self.atlas, &view)?;
             let boxes: Vec<_> = key
                 .0
                 .iter()

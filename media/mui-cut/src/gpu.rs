@@ -163,7 +163,7 @@ impl GpuCanvas {
             }
         }
         if !frame.has_effects() {
-            return self.paint(assets, frame, target);
+            return self.paint(assets, frame, None, target);
         }
         self.with_fx(|fx, canvas| fx.draw(canvas, assets, frame, target))
     }
@@ -196,11 +196,13 @@ impl GpuCanvas {
     }
 
     /// The effects' hook: `frame`'s layers and background as the renderer
-    /// draws them, ignoring effects.
+    /// draws them, ignoring effects, to go over `beneath` (which a MUI
+    /// backdrop blur in them sees).
     pub(crate) fn paint(
         &mut self,
         assets: &Assets,
         frame: &Frame,
+        beneath: Option<&wgpu::TextureView>,
         target: &wgpu::TextureView,
     ) -> Result<Vec<Quad>, String> {
         let [fw, fh] = frame.size.map(f64::from);
@@ -213,6 +215,7 @@ impl GpuCanvas {
             assets,
             &placed,
             Some((frame.background, [fw, fh], view)),
+            beneath,
             self.size,
             target,
         )?;
@@ -220,12 +223,15 @@ impl GpuCanvas {
     }
 
     /// Paint `scenes` into `target`, `size` pixels, over `background` (a
-    /// colour filling `[w, h]` under an affine) or over nothing.
+    /// colour filling `[w, h]` under an affine) or over nothing; the target
+    /// goes over `beneath` later. A MUI backdrop blur sees all of that
+    /// under it on `vello_gpu`; classic Vello draws it sharp.
     pub(crate) fn paint_scenes(
         &mut self,
         assets: &Assets,
         scenes: &[(&ResolvedScene, Affine)],
         background: Option<(Rgba, [f64; 2], Affine)>,
+        beneath: Option<&wgpu::TextureView>,
         size: [u32; 2],
         target: &wgpu::TextureView,
     ) -> Result<(), String> {
@@ -280,10 +286,13 @@ impl GpuCanvas {
                         .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
                     sparse.scene.fill_rect(&Rect::new(0., 0., fw, fh));
                 }
-                let mut c = sparse.canvas();
+                let mut c = sparse.canvas(&self.device, &self.queue, beneath);
                 paint(&mut |s, t| {
                     mui_vello::paint(&mut c, s, t).map_err(|e| format!("paint: {e:?}"))
                 });
+                if let Some(e) = c.failed.take() {
+                    failed = Some(format!("backdrop: {e}"));
+                }
                 sparse.render(&self.device, &self.queue, target)?;
             }
         }
