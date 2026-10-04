@@ -528,29 +528,75 @@ mod tests {
         assert_eq!(s.paint[inset].blur, 4.);
     }
 
-    /// A welded outline has no analytic rounded rect, so its shadow is one
-    /// blurred rect per welded child instead of a single dropped entry.
+    /// A zero-spread drop on a weld uses the final rounded outline as one path.
     #[test]
-    fn a_welded_shadow_is_one_blurred_rect_per_child() {
+    fn a_welded_zero_spread_drop_shadow_uses_the_final_contour() {
+        let shadow = Shadow::soft(12.);
         let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
             .union(Role::Surface)
-            .shadow(Shadow::soft(12.))
+            .radius(8.)
+            .shadow(shadow.clone())
             .id("weld");
         let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
-        let sh: Vec<_> = s
+        let shadows: Vec<_> = s
             .paint
             .iter()
-            .filter(|p| matches!(p.layer, Layer::Shadow(_)))
+            .filter(|p| p.layer == Layer::Shadow(ShadowKind::Drop))
             .collect();
-        assert_eq!(sh.len(), 2, "one blurred rect per welded child");
-        for (p, k) in sh.iter().zip(["a", "b"]) {
-            assert_eq!(p.blur, 12.);
-            let r = p.rect.expect("a rect the renderer can blur").bounds();
-            let r = r + p.offset.to_vec2();
-            let child = s.surface(k).unwrap();
+        let outline = s
+            .paint
+            .iter()
+            .find(|p| p.key.as_str() == "weld" && p.layer == Layer::Fill)
+            .unwrap();
+        assert_eq!(shadows.len(), 1, "one drop shadow follows the weld contour");
+        let shadow_paint = shadows[0];
+        assert_eq!(shadow_paint.blur, shadow.blur);
+        assert!(
+            shadow_paint.rect.is_none(),
+            "the welded contour is not a rect"
+        );
+        assert_eq!(
+            shadow_paint.path.as_ref(),
+            outline.path.as_ref(),
+            "the shadow follows the final outline"
+        );
+        assert_eq!(
+            shadow_paint.offset,
+            outline.offset + mui_geometry::Vec2::new(shadow.dx, shadow.dy)
+        );
+    }
+
+    /// Nonzero spread still expands one blur rect per welded child.
+    #[test]
+    fn a_spread_welded_drop_shadow_uses_each_child_rect() {
+        let shadow = Shadow {
+            spread: 1.,
+            ..Shadow::soft(12.)
+        };
+        let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
+            .union(Role::Surface)
+            .shadow(shadow.clone())
+            .id("weld");
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let shadows: Vec<_> = s
+            .paint
+            .iter()
+            .filter(|p| p.layer == Layer::Shadow(ShadowKind::Drop))
+            .collect();
+        assert_eq!(shadows.len(), 2, "spread follows each welded child");
+        for (p, key) in shadows.iter().zip(["a", "b"]) {
+            assert_eq!(p.blur, shadow.blur);
+            let r = p
+                .rect
+                .expect("spread shadow keeps an analytic rect")
+                .bounds()
+                + p.offset.to_vec2();
+            let child = s.surface(key).unwrap();
             let child = child.rect.unwrap().bounds() + child.offset.to_vec2();
-            assert!((r.x0 - child.x0).abs() < 1e-9);
-            assert!((r.y0 - child.y0 - Shadow::soft(12.).dy).abs() < 1e-9);
+            assert!((r.x0 - child.x0 + shadow.spread).abs() < 1e-9);
+            assert!((r.y0 - child.y0 + shadow.spread - shadow.dy).abs() < 1e-9);
+            assert!((r.x1 - child.x1 - shadow.spread).abs() < 1e-9);
+            assert!((r.y1 - child.y1 - shadow.spread - shadow.dy).abs() < 1e-9);
         }
     }
 
