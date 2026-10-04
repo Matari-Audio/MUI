@@ -5,6 +5,13 @@ revision **c1e0eed67159b61aea6e2ffeb905d5b4fbd452b0**, the revision in MUI's
 previous lockfile. Its original MIT and Apache-2.0 licenses and README are retained.
 Only this crate is vendored; it has no workspace-inherited manifest values.
 
+The Linux `Window::close_bounded` API, bounded join, callback revocation and
+regressions are ported from Matari-Audio/moose revision
+**bffa4677d0b82119d38566ce7e932dc5c463d497**, under the same original licenses.
+MUI also checks revocation while draining its added XIM callback queue. Detach
+requires a pinned plug-in image and no registered host callbacks; callers must
+revoke their handler's host state first. Ordinary close remains synchronous.
+
 MUI additions expose `Event::Ime` and `WindowContext::set_ime_configuration`.
 Configuration includes physical client-relative candidate geometry, surrounding
 UTF-8 text, byte selection, and marked range. Platforms ignore identical values:

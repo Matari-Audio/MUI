@@ -136,12 +136,18 @@ impl EventLoop {
 
     #[inline]
     fn drain_xcb_events(&mut self) -> Result<bool, ConnectionError> {
+        if self.window.main_thread_shared.callbacks_revoked() {
+            return Ok(false);
+        }
         let mut event_received = false;
         // Core X11 auto-repeat arrives as a KeyRelease/KeyPress pair with the
         // same keycode, timestamp and window. Swallow the synthetic release so
         // handlers see one repeated key-down instead of release + fresh press.
         let mut pending_release: Option<KeyReleaseEvent> = None;
         while let Some(event) = self.window.connection.conn.poll_for_event()? {
+            if self.window.main_thread_shared.callbacks_revoked() {
+                break;
+            }
             event_received = true;
             match event {
                 XEvent::KeyRelease(release) => {
@@ -164,7 +170,9 @@ impl EventLoop {
                 }
             }
         }
-        if let Some(release) = pending_release {
+        if let Some(release) =
+            pending_release.filter(|_| !self.window.main_thread_shared.callbacks_revoked())
+        {
             self.handle_xcb_event(XEvent::KeyRelease(release))?;
         }
 
@@ -203,6 +211,9 @@ impl EventLoop {
     }
 
     fn handle_redraw(&mut self) {
+        if self.window.main_thread_shared.callbacks_revoked() {
+            return;
+        }
         if !self.exposed {
             return;
         }
@@ -223,6 +234,9 @@ impl EventLoop {
     }
 
     fn handle_coalesced_resize_events(&mut self) -> Result<(), FatalError> {
+        if self.window.main_thread_shared.callbacks_revoked() {
+            return Ok(());
+        }
         let mut comes_from_parent = false;
         if let Some(new_parent_size) = self.new_parent_size.take() {
             if new_parent_size != self.window.get_size() {
@@ -367,6 +381,10 @@ impl EventLoop {
     }
 
     fn try_handle_idle(&mut self) -> Result<(), FatalError> {
+        if self.window.main_thread_shared.callbacks_revoked() {
+            self.stop_now();
+            return Ok(());
+        }
         // Check for any events in the internal buffers before going to sleep:
         self.drain_xcb_events()?;
 
@@ -388,8 +406,10 @@ impl EventLoop {
         self.drain_xcb_events()?;
         inner.run(None, &mut self, Self::handle_idle)?;
 
-        self.release_forwarded_keys();
-        self.handle_event(Event::Window(WindowEvent::WillClose));
+        if !self.window.main_thread_shared.callbacks_revoked() {
+            self.release_forwarded_keys();
+            self.handle_event(Event::Window(WindowEvent::WillClose));
+        }
 
         // If the event loop doesn't stop because the host asked it to, then we should notify it
         if !self.window.main_thread_shared.is_stop_host_requested() {
@@ -411,6 +431,10 @@ impl EventLoop {
         let events =
             self.window.ime.borrow_mut().as_mut().map(|ime| ime.drain()).unwrap_or_default();
         for event in events {
+            // MUI's queued XIM callbacks must observe bounded-close revocation too.
+            if self.window.main_thread_shared.callbacks_revoked() {
+                break;
+            }
             match event {
                 super::ime::NativeEvent::Input(event) => {
                     self.handle_event(event);
@@ -438,6 +462,9 @@ impl EventLoop {
     fn handle_xcb_event(&mut self, event: XEvent) -> Result<(), ConnectionError> {
         let filtered = self.window.ime.borrow_mut().as_mut().is_some_and(|ime| ime.filter(&event));
         self.drain_ime();
+        if self.window.main_thread_shared.callbacks_revoked() {
+            return Ok(());
+        }
         if filtered {
             return Ok(());
         }
@@ -680,7 +707,9 @@ impl EventLoop {
     }
 
     fn handle_event(&mut self, event: Event) {
-        self.handler.on_event(event);
+        if !self.window.main_thread_shared.callbacks_revoked() {
+            self.handler.on_event(event);
+        }
     }
 
     /// Hands a key event the handler ignored to the embed parent, so host
