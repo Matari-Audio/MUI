@@ -1,0 +1,20 @@
+[package]
+name = "mui-winit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+mui = { workspace = true, features = ["gpu-effects"] }
+mui-access.workspace = true
+wgpu = { workspace = true, features = ["default"] }
+winit = "0.30"
+accesskit_winit = "0.33"
+arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
+
+[dev-dependencies]
+epaint_default_fonts.workspace = true
+
+[lints]
+workspace = true
