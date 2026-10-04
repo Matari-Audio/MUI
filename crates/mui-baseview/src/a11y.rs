@@ -14,7 +14,7 @@ use mui_access::accesskit::DeactivationHandler;
 use mui_access::accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, TreeUpdate,
 };
-use raw_window_handle::RawWindowHandle;
+use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 #[cfg(target_os = "linux")]
 mod x11;
 
@@ -25,14 +25,27 @@ type NativeAdapter = accesskit_macos::SubclassingAdapter;
 #[cfg(target_os = "windows")]
 type NativeAdapter = accesskit_windows::SubclassingAdapter;
 
-pub(crate) struct A11y {
+/// Native accessibility adapter, confined to the window's owning thread.
+/// Publish notifications outside model locks and mutable UI borrows: they can
+/// synchronously reenter the native window procedure.
+pub struct NativeAccessibility {
     adapter: NativeAdapter,
+    // Match the native window's thread confinement on every platform.
+    thread: std::marker::PhantomData<std::rc::Rc<()>>,
+    #[cfg(target_os = "linux")]
+    active: Arc<AtomicBool>,
+    #[cfg(target_os = "linux")]
+    bounds: x11::BoundsPoll,
+}
+
+/// The portable accessibility endpoint. It may move to the thread that owns
+/// the UI, while [`NativeAccessibility`] stays on the native window thread.
+/// Activation and action callbacks only touch shared atomics and a channel.
+pub struct AccessibilityUi {
     actions: Receiver<ActionRequest>,
     asked: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     publisher: Publisher,
-    #[cfg(target_os = "linux")]
-    bounds: x11::BoundsPoll,
 }
 
 struct Asked {
@@ -64,10 +77,22 @@ impl DeactivationHandler for Gone {
     }
 }
 
-impl A11y {
-    /// Called on the window's owning thread by baseview's pre-show builder.
-    /// Drop before closing its native view (macOS's adapter retains the view).
-    pub(crate) fn new(handle: RawWindowHandle) -> Option<Self> {
+impl NativeAccessibility {
+    /// Attach accessibility before showing the native window.
+    ///
+    /// The UI endpoint can be moved to another thread; send its prepared tree
+    /// updates back to this native endpoint for publication.
+    ///
+    /// # Safety
+    /// The handle must identify the caller's live native window. Call on its
+    /// owning thread, with no model lock or mutable UI
+    /// borrow held. Keep this endpoint on that thread and drop it before the
+    /// native window is destroyed, including on `WindowEvent::WillClose`.
+    #[expect(
+        unsafe_code,
+        reason = "native adapter requires the caller's window lifetime contract"
+    )]
+    pub unsafe fn new(handle: RawWindowHandle) -> Option<(Self, AccessibilityUi)> {
         let (send, actions) = channel();
         let asked = Arc::new(AtomicBool::new(false));
         let active = Arc::new(AtomicBool::new(false));
@@ -109,23 +134,26 @@ impl A11y {
             let hwnd = accesskit_windows::HWND(handle.hwnd.get() as *mut std::ffi::c_void);
             accesskit_windows::SubclassingAdapter::new(hwnd, activation, Actions(send))
         };
-        Some(Self {
-            adapter,
-            actions,
-            asked,
-            active,
-            publisher: Publisher::default(),
-            #[cfg(target_os = "linux")]
-            bounds: x11::BoundsPoll::default(),
-        })
-    }
-
-    pub(crate) fn wants_tree(&self) -> bool {
-        self.asked.load(Ordering::Acquire)
+        Some((
+            Self {
+                adapter,
+                thread: std::marker::PhantomData,
+                #[cfg(target_os = "linux")]
+                active: Arc::clone(&active),
+                #[cfg(target_os = "linux")]
+                bounds: x11::BoundsPoll::default(),
+            },
+            AccessibilityUi {
+                actions,
+                asked,
+                active,
+                publisher: Publisher::default(),
+            },
+        ))
     }
 
     /// Called outside the model lock, since native events can reenter.
-    pub(crate) fn focus(&mut self, focused: bool) {
+    pub fn focus(&mut self, focused: bool) {
         #[cfg(target_os = "linux")]
         self.adapter.update_window_focus_state(focused);
         #[cfg(target_os = "macos")]
@@ -138,34 +166,57 @@ impl A11y {
         let _ = focused;
     }
 
-    /// Track the editor's X11 origin using baseview's own live connection.
-    /// Call outside Shared/model locks on the window's thread, every tick.
-    /// No X11 requests occur while accessibility is inactive.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn update_bounds(&mut self, window: &baseview::WindowContext) {
-        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-        if !self.active.load(Ordering::Acquire) {
-            self.bounds.pause();
-            return;
-        }
-        let bounds = self.bounds.update(std::time::Instant::now(), || {
-            let display = window.display_handle().ok()?;
-            let handle = window.window_handle().ok()?;
-            // SAFETY: WindowContext owns this original connection and XID,
-            // remaining borrowed for the whole query on its owning thread.
-            #[expect(unsafe_code, reason = "query baseview's live borrowed X11 connection")]
-            unsafe {
-                x11::query(display.as_raw(), handle.as_raw())
+    /// Track the editor's origin, using its original live display connection.
+    /// No requests occur while accessibility is inactive; other platforms' native
+    /// adapters track their own bounds.
+    ///
+    /// # Safety
+    /// Both handles must be borrowed from the same live native window/display
+    /// for this call, on its owning thread, outside model locks/UI borrows.
+    #[expect(
+        unsafe_code,
+        reason = "bounds query borrows the caller's native display"
+    )]
+    pub unsafe fn update_bounds(&mut self, display: RawDisplayHandle, window: RawWindowHandle) {
+        #[cfg(target_os = "linux")]
+        {
+            if !self.active.load(Ordering::Acquire) {
+                self.bounds.pause();
+                return;
             }
-        });
-        if let Some(bounds) = bounds {
-            self.adapter
-                .set_root_window_bounds(bounds.outer, bounds.inner);
+            let bounds = self.bounds.update(std::time::Instant::now(), || {
+                // SAFETY: caller keeps this original connection and window live.
+                unsafe { x11::query(display, window) }
+            });
+            if let Some(bounds) = bounds {
+                self.adapter
+                    .set_root_window_bounds(bounds.outer, bounds.inner);
+            }
         }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (display, window);
+    }
+
+    /// Publish after releasing the model lock. AccessKit's adapter borrow is
+    /// gone before `raise`, permitting nested native accessibility queries.
+    pub fn publish(&mut self, update: TreeUpdate) {
+        #[cfg(target_os = "linux")]
+        self.adapter.update_if_active(|| update);
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        if let Some(events) = self.adapter.update_if_active(|| update) {
+            events.raise();
+        }
+    }
+}
+
+impl AccessibilityUi {
+    /// A native provider asked for a full tree; redraw even an idle UI.
+    pub fn wants_tree(&self) -> bool {
+        self.asked.load(Ordering::Acquire)
     }
 
     /// Apply queued requests on the normal UI tick; no native calls occur.
-    pub(crate) fn apply(&mut self, ui: &mut Ui) -> bool {
+    pub fn apply(&mut self, ui: &mut Ui) -> bool {
         let mut landed = false;
         while let Ok(request) = self.actions.try_recv() {
             if let Some(action) = ui.scene().and_then(|scene| semantic(scene, &request)) {
@@ -198,7 +249,7 @@ impl A11y {
     }
 
     /// Prepare under the model lock without calling the native adapter.
-    pub(crate) fn prepare(&mut self, ui: &Ui) -> Option<TreeUpdate> {
+    pub fn prepare(&mut self, ui: &Ui) -> Option<TreeUpdate> {
         if !self.active.load(Ordering::Acquire) {
             return None;
         }
@@ -210,17 +261,6 @@ impl A11y {
             self.publisher
                 .update(scene, ui.focus_key(), ui.scale().unwrap_or(1.0)),
         )
-    }
-
-    /// Publish after releasing the model lock. AccessKit's adapter borrow is
-    /// gone before `raise`, permitting nested native accessibility queries.
-    pub(crate) fn publish(&mut self, update: TreeUpdate) {
-        #[cfg(target_os = "linux")]
-        self.adapter.update_if_active(|| update);
-        #[cfg(any(target_os = "macos", target_os = "windows"))]
-        if let Some(events) = self.adapter.update_if_active(|| update) {
-            events.raise();
-        }
     }
 }
 
@@ -268,6 +308,72 @@ mod tests {
     use super::*;
     use mui::scene::prelude::*;
     use mui_access::accesskit::TreeId;
+
+    #[test]
+    fn portable_endpoint_accepts_callbacks_during_a_model_borrow_and_disconnects_on_drop() {
+        fn assert_send<T: Send>() {}
+        struct View;
+        impl crate::View for View {
+            fn build(&mut self, _: &mut Ui, _: &mui::prelude::Input) -> mui::prelude::El {
+                block(10., 10.)
+                    .focusable()
+                    .a11y(mui_access::A11y::Button)
+                    .id("field")
+            }
+            fn changed(&mut self) -> bool {
+                false
+            }
+            fn request_resize(&mut self, _: u32, _: u32) -> bool {
+                false
+            }
+        }
+        assert_send::<crate::native::AccessibilityUi>();
+        let shared = Arc::new(std::sync::Mutex::new(crate::Shared {
+            ui: Ui::default(),
+            view: View,
+        }));
+        let mut handler = crate::Handler::new(shared.clone(), Arc::default(), (100, 100), 1.);
+        handler.step();
+        let (send, actions) = channel();
+        let asked = Arc::new(AtomicBool::new(false));
+        let active = Arc::new(AtomicBool::new(false));
+        let mut endpoint = AccessibilityUi {
+            actions,
+            asked: asked.clone(),
+            active: active.clone(),
+            publisher: Publisher::default(),
+        };
+        let mut activation = Asked { asked, active };
+        let mut callback = Actions(send);
+        let request = || ActionRequest {
+            action: Action::Focus,
+            target_tree: TreeId::ROOT,
+            target_node: mui_access::node_id("field"),
+            data: None,
+        };
+        // These synchronous callbacks must not borrow/lock the model, even
+        // when delivered while the editor already holds it.
+        let mut model = crate::lock(&shared);
+        assert!(activation.request_initial_tree().is_none());
+        callback.do_action(request());
+        assert!(endpoint.wants_tree());
+        assert!(endpoint.apply(&mut model.ui));
+        let first = endpoint.prepare(&model.ui).unwrap();
+        assert!(!endpoint.wants_tree());
+        assert!(!first.nodes.is_empty());
+        // Reentrant activation after prepare requests another complete tree.
+        assert!(activation.request_initial_tree().is_none());
+        assert!(!endpoint.prepare(&model.ui).unwrap().nodes.is_empty());
+        drop(model);
+        handler.driver.redraw();
+        handler.step();
+        assert_eq!(crate::lock(&shared).ui.focus_key(), Some("field"));
+        drop(endpoint);
+        // Pending native callbacks neither retain the model nor reach a new
+        // window's endpoint after its predecessor has closed.
+        callback.do_action(request());
+        assert_eq!(Arc::strong_count(&shared), 2);
+    }
 
     #[test]
     fn activation_and_actions_never_need_the_model_or_native_window() {

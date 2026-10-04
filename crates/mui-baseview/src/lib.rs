@@ -15,7 +15,11 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use a11y::A11y;
+use a11y::{AccessibilityUi, NativeAccessibility};
+type A11y = (NativeAccessibility, AccessibilityUi);
+
+/// Native IME and accessibility bridges for custom baseview hosts.
+pub mod native;
 /// The baseview this window runs on (moose-baseview), so a consumer names
 /// `Window`, `WindowSettings` and friends without depending on it itself.
 pub use baseview;
@@ -32,6 +36,8 @@ pub use mui::host::{Shared, View, lock};
 use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{Frame, Host, target_size};
 use mui::vello::kurbo::Affine;
+#[cfg(target_os = "linux")]
+use raw_window_handle::HasDisplayHandle;
 use raw_window_handle::HasWindowHandle;
 
 const GPU_RETRY: Duration = Duration::from_millis(500);
@@ -151,12 +157,20 @@ fn build<V: View + Send + 'static>(
         let size = cx.size();
         let physical = (size.physical.width, size.physical.height);
         let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
-        handler.a11y = cx
-            .window_handle()
-            .ok()
-            .and_then(|handle| A11y::new(handle.as_raw()));
-        if let Some(a11y) = handler.a11y.as_mut() {
-            a11y.focus(cx.has_focus());
+        // SAFETY: this pre-show builder runs on the window's thread. The
+        // handler drops its native adapter before its window context/teardown.
+        #[expect(
+            unsafe_code,
+            reason = "baseview builder owns the native window lifecycle"
+        )]
+        {
+            handler.a11y = cx.window_handle().ok().and_then(|handle| {
+                // SAFETY: this builder owns the live window's lifecycle.
+                unsafe { NativeAccessibility::new(handle.as_raw()) }
+            });
+        }
+        if let Some((native, _)) = handler.a11y.as_mut() {
+            native.focus(cx.has_focus());
         }
         handler.parented = parented;
         Ok(Adapter {
@@ -246,8 +260,14 @@ impl<V: View> Handler<V> {
             return;
         }
         #[cfg(target_os = "linux")]
-        if let Some(a11y) = self.a11y.as_mut() {
-            a11y.update_bounds(window);
+        if let Some((native, _)) = self.a11y.as_mut()
+            && let (Ok(display), Ok(handle)) = (window.display_handle(), window.window_handle())
+        {
+            // SAFETY: both handles borrow this live window on its owning thread.
+            #[expect(unsafe_code, reason = "query the owned window's original display")]
+            unsafe {
+                native.update_bounds(display.as_raw(), handle.as_raw());
+            }
         }
         // macOS: keep the child pinned to the parent's top as it resizes.
         // A top-level window's view is its content view: leave it be.
@@ -287,7 +307,7 @@ impl<V: View> Handler<V> {
         let capture;
         let scene = {
             let mut s = lock(&self.shared);
-            let a11y = self.a11y.as_mut();
+            let a11y = self.a11y.as_mut().map(|(_, ui)| ui);
             if let Some(a11y) = &a11y
                 && a11y.wants_tree()
             {
@@ -308,7 +328,7 @@ impl<V: View> Handler<V> {
             // ignored key already goes to the host. Only on a change: each
             // call also moves focus.
             capture = s.ui.focus_is_text();
-            if let Some(a11y) = self.a11y.as_mut()
+            if let Some((_, a11y)) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
                 accessibility_update = a11y.prepare(&s.ui);
@@ -325,8 +345,8 @@ impl<V: View> Handler<V> {
             window.set_keyboard_capture(capture);
             self.captured = Some(capture);
         }
-        if let (Some(a11y), Some(update)) = (self.a11y.as_mut(), accessibility_update) {
-            a11y.publish(update);
+        if let (Some((native, _)), Some(update)) = (self.a11y.as_mut(), accessibility_update) {
+            native.publish(update);
         }
         // Native IME APIs may synchronously call the adapter. No model lock is held.
         if self.applied_ime.as_ref() != Some(&ime_configuration) {
@@ -407,16 +427,7 @@ impl<V: View> Handler<V> {
         let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
         let d = &mut self.driver;
         match event {
-            Event::Ime(event) => d.ime(match event {
-                baseview::Ime::Selection(range) => mui::prelude::Ime::Selection(range.clone()),
-                baseview::Ime::Enabled => mui::prelude::Ime::Enabled,
-                baseview::Ime::Preedit { text, cursor } => mui::prelude::Ime::Preedit {
-                    text: text.clone(),
-                    cursor: *cursor,
-                },
-                baseview::Ime::Commit(text) => mui::prelude::Ime::Commit(text.clone()),
-                baseview::Ime::Disabled => mui::prelude::Ime::Disabled,
-            }),
+            Event::Ime(event) => d.ime(native::ime_event(event)),
             Event::Keyboard(key) => {
                 let event = key_event(key);
                 let hook = self.requests.keys.lock().ok().and_then(|h| h.clone());
@@ -488,8 +499,8 @@ impl<V: View> Handler<V> {
             Event::Window(e @ (WindowEvent::Focused | WindowEvent::Unfocused)) => {
                 let focused = matches!(e, WindowEvent::Focused);
                 d.focus(focused);
-                if let Some(a11y) = self.a11y.as_mut() {
-                    a11y.focus(focused);
+                if let Some((native, _)) = self.a11y.as_mut() {
+                    native.focus(focused);
                 }
             }
             Event::Window(WindowEvent::WillClose) => {
@@ -590,13 +601,11 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
 
 /// Scene geometry is in UI points; baseview's IME contract uses client pixels.
 fn native_ime(config: mui::host::ImeConfiguration, scale: f64) -> baseview::ImeConfiguration {
+    let config = native::ime_configuration(config, scale);
     baseview::ImeConfiguration {
         id: config.id,
-        position: PhysicalPosition::new(config.area.0.x * scale, config.area.0.y * scale),
-        size: baseview::dpi::PhysicalSize::new(
-            config.area.1.width * scale,
-            config.area.1.height * scale,
-        ),
+        position: PhysicalPosition::new(config.area.0.x, config.area.0.y),
+        size: baseview::dpi::PhysicalSize::new(config.area.1.width, config.area.1.height),
         text: config.text,
         selection: config.selection,
         marked: config.marked,
