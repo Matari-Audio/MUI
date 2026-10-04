@@ -1464,3 +1464,30 @@ fn vertical_wrapping_flex_item_settles_cross_width_at_final_height() {
         assert_eq!(cached, fresh);
     }
 }
+
+#[test]
+fn equal_intrinsic_vertical_share_still_settles_percentage_grid_height() {
+    let grid = grid(1, [stack([block(100., 100.)]).h(Len::Pct(100.)).id("cell")])
+        .grid_rows([GridTrack::MinFr { min: 0., fr: 1. }])
+        .h(Len::Pct(50.))
+        .id("grid");
+    let body = col([grid]).grow(1.).min_h(0.);
+    let tree = col([block(100., 100.).shrink(0.), body]).size(100., 200.);
+    let fresh = resolve(&tree, None, Limits::default()).unwrap();
+    assert_eq!(fresh.frame("grid").unwrap().size.height, 50.);
+    assert_eq!(fresh.frame("cell").unwrap().size.height, 50.);
+    let mut cache = LayoutCache::default();
+    for _ in 0..3 {
+        let cached = resolve_cached_with(
+            &tree,
+            None,
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            &mut cache,
+            |_, _| {},
+            |_, _| Size::ZERO,
+        )
+        .unwrap();
+        assert_eq!(cached, fresh);
+    }
+}

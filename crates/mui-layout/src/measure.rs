@@ -29,6 +29,8 @@ pub(crate) struct Measured<'a, P> {
     /// Dependencies on the final flex share, separately for width and height:
     /// wrapped content, percentage descendants, aspect ratios or grid tracks.
     pub(crate) fluid: [bool; 2],
+    /// Whether descendants were measured with a definite height.
+    pub(crate) definite_height: bool,
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
     pub(crate) cols: usize,
@@ -703,19 +705,16 @@ pub(crate) fn measure_uncached<'a, P>(
                 // row tracks depend on every change of the final height.
                 let basis = children[index].size.main(vertical);
                 let was_at = at[index].unwrap_or(basis);
-                // A height cap/floor can settle this item's outer size while
-                // its first-pass descendants still used an intrinsic height.
-                // Revisit that boundary once even when the flex share equals it.
-                let height_boundary = vertical
-                    && at[index].is_none()
-                    && (c.minimum.height > 0.0 && basis <= c.minimum.height
-                        || c.rare().maximum.is_some_and(|m| basis >= m.height));
+                // An intrinsic basis (including a capped one) can equal the
+                // final share while descendants still have no definite height.
+                let unsettled_height =
+                    vertical && at[index].is_none() && !children[index].definite_height;
                 let unchanged = if vertical {
                     (main - was_at).abs() < 1e-8
                 } else {
                     (0.0..=0.5).contains(&(main - was_at))
                 };
-                if !children[index].fluid[axis] || unchanged && !height_boundary {
+                if !children[index].fluid[axis] || unchanged && !unsettled_height {
                     continue;
                 }
                 let align = c.align_self.unwrap_or(node.align);
@@ -1086,6 +1085,7 @@ pub(crate) fn measure_uncached<'a, P>(
         frozen: None,
         index: 0,
         fluid: [fluid, height_fluid],
+        definite_height: definite[1].is_some(),
         gap,
         line_gap,
         padding,
