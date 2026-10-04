@@ -271,12 +271,14 @@ impl Handler {
             self.deferred_keys.push_back(*event);
             return Ok(true);
         }
-        if !self.forwards(event) {
-            return Ok(false);
-        }
         if self.synchronizing {
+            // Local-only releases must not overtake a press waiting for XIM.
+            // flush_deferred replays them locally once preceding keys are acknowledged.
             self.deferred_keys.push_back(*event);
             return Ok(true);
+        }
+        if !self.forwards(event) {
+            return Ok(false);
         }
         let flags = self.forward_flags(event);
         send(self.im, self.ic, flags, event)?;
@@ -489,7 +491,13 @@ mod tests {
         handler.flush_deferred(&mut send).unwrap();
         assert!(handler.synchronizing);
         key.response_type = x11rb::protocol::xproto::KEY_RELEASE_EVENT;
-        assert!(!handler.forward(&key, &mut send).unwrap(), "unrequested release stays local");
+        assert!(handler.forward(&key, &mut send).unwrap(), "release waits for preceding press");
+        assert!(handler.acknowledge_sync(3, 7));
+        handler.flush_deferred(&mut send).unwrap();
+        assert!(
+            matches!(handler.pending.pop_front(), Some(NativeEvent::Key(event)) if event.response_type == x11rb::protocol::xproto::KEY_RELEASE_EVENT)
+        );
+        assert!(!handler.forward(&key, &mut send).unwrap(), "idle unrequested release stays local");
         assert_eq!(sent.len(), 2, "one queued key sent only after ACK");
         assert!(sent
             .iter()
@@ -505,6 +513,66 @@ mod tests {
         assert!(!handler.acknowledge_sync(3, 7), "retired IC ACK cannot unlock new IC");
         assert!(handler.synchronizing);
         assert!(handler.acknowledge_sync(3, 9));
+    }
+    #[test]
+    fn local_release_waits_for_both_synchronous_presses_without_being_sent_to_xim() {
+        let mut handler = Handler {
+            im: 3,
+            ic: 7,
+            enabled: true,
+            forward_mask: u32::from(x11rb::protocol::xproto::EventMask::KEY_PRESS),
+            synchronous_mask: u32::from(x11rb::protocol::xproto::EventMask::KEY_PRESS),
+            ..Handler::default()
+        };
+        let press = |detail| KeyPressEvent {
+            response_type: x11rb::protocol::xproto::KEY_PRESS_EVENT,
+            detail,
+            ..KeyPressEvent::default()
+        };
+        let first = press(38);
+        let second = press(39);
+        let release =
+            KeyPressEvent { response_type: x11rb::protocol::xproto::KEY_RELEASE_EVENT, ..second };
+        let mut sent = Vec::new();
+        let mut send = |_: u16, _: u16, _: xim::ForwardEventFlag, event: &KeyPressEvent| {
+            sent.push((event.response_type, event.detail));
+            Ok(())
+        };
+        assert!(handler.forward(&first, &mut send).unwrap());
+        assert!(handler.forward(&second, &mut send).unwrap());
+        assert!(handler.forward(&release, &mut send).unwrap());
+        assert_eq!(handler.deferred_keys.len(), 2);
+        assert!(handler.pending.is_empty(), "release cannot reach the UI before the press");
+        assert!(handler.acknowledge_sync(3, 7));
+        handler.flush_deferred(&mut send).unwrap();
+        assert_eq!(handler.deferred_keys.len(), 1);
+        assert!(handler.pending.is_empty(), "second press still awaits XIM");
+        // XIM returns the unconsumed press before acknowledging its request.
+        handler.pending.push_back(NativeEvent::Key(second));
+        assert!(handler.acknowledge_sync(3, 7));
+        handler.flush_deferred(&mut send).unwrap();
+        assert!(handler.deferred_keys.is_empty());
+        assert!(!handler.synchronizing);
+        assert_eq!(
+            sent,
+            vec![(first.response_type, first.detail), (second.response_type, second.detail)],
+            "local-only release never enters the transport"
+        );
+        let delivered: Vec<_> = handler
+            .pending
+            .into_iter()
+            .map(|event| match event {
+                NativeEvent::Key(event) => (event.response_type, event.detail),
+                NativeEvent::Input(_) => panic!("unexpected input event"),
+            })
+            .collect();
+        assert_eq!(
+            delivered,
+            vec![
+                (x11rb::protocol::xproto::KEY_PRESS_EVENT, 39),
+                (x11rb::protocol::xproto::KEY_RELEASE_EVENT, 39),
+            ]
+        );
     }
     #[test]
     fn retired_context_and_pending_creation_cannot_route_old_field_callbacks() {
