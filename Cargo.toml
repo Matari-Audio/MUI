@@ -17,6 +17,7 @@ members = [
   "crates/mui-winit",
   "crates/mui-input",
   "crates/mui-access",
+  "crates/mui-native-dialog",
   "crates/mui-symbols",
   "examples/gain-plugin",
   "vendor/vello",
@@ -37,6 +38,7 @@ license = "MIT"
 # Internal crates.
 mui = { path = "crates/mui" }
 mui-access = { path = "crates/mui-access" }
+mui-native-dialog = { path = "crates/mui-native-dialog" }
 mui-baseview = { path = "crates/mui-baseview" }
 mui-winit = { path = "crates/mui-winit" }
 mui-geometry = { path = "crates/mui-geometry" }
