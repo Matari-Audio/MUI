@@ -1,6 +1,6 @@
 //! Headless: the driver with no window and no GPU.
 use super::*;
-use crate::prelude::{block, knob};
+use crate::prelude::{Styled, block, knob};
 
 struct NoClipboard;
 impl Clipboard for NoClipboard {
@@ -459,4 +459,112 @@ fn shared_state_with_canvas_caches_is_send() {
     send::<Cache>();
     // A view that is nothing but a cache stands in for one that keeps some.
     shared::<std::sync::Arc<Mutex<Shared<Cache>>>>();
+}
+
+#[test]
+fn profiling_tracks_invalidation_skips_coalescing_and_clock_regressions() {
+    let mut r = Rig::new(Pad, (400, 300), 1.0);
+    assert!(r.d.profiler().is_none());
+    r.d.enable_profiling(ProfileConfig { capacity: 4 });
+    assert!(r.step());
+    for _ in 0..8 {
+        assert!(!r.step());
+    }
+    assert!(r.d.next_wake().is_none());
+    r.d.pointer_moved(at(200., 200.), none());
+    r.d.pointer_moved(at(210., 200.), none());
+    assert!(!r.step());
+    r.d.redraw();
+    assert!(r.d.next_wake().is_some());
+    assert!(r.step());
+    let now = r.d.last_frame();
+    assert!(!r.d.advance(&mut r.s, now - Duration::from_secs(1)));
+    assert_eq!(r.d.last_frame(), now);
+    let profile = r.d.profiler().unwrap();
+    assert_eq!(profile.counter(Counter::Invalidations), 1);
+    assert_eq!(profile.counter(Counter::InputsEnqueued), 2);
+    assert_eq!(profile.counter(Counter::HoverCoalesced), 1);
+    assert_eq!(profile.counter(Counter::InertHoverSkips), 1);
+    assert_eq!(profile.counter(Counter::IdleSkips), 8);
+    assert_eq!(profile.counter(Counter::ClockRegressions), 1);
+    assert_eq!(profile.counter(Counter::Frames), 2);
+    assert_eq!(profile.percentiles(Phase::Advance).retained, 4);
+    assert!(profile.percentiles(Phase::Resolve).total >= 2);
+    assert_eq!(profile.percentiles(Phase::PresentCall).total, 0);
+    r.d.disable_profiling();
+    assert!(r.d.profiler().is_none());
+}
+
+#[test]
+fn queued_ime_edges_survive_throttling_minimize_and_clock_regression() {
+    let mut r = Rig::new(Pad, (400, 300), 1.0);
+    assert!(r.step());
+    r.d.enable_profiling(ProfileConfig::default());
+    r.d.min_interval = Some(Duration::from_millis(100));
+    r.d.ime(Ime::Preedit {
+        text: "あ".into(),
+        cursor: Some((0, 3)),
+    });
+    r.d.ime(Ime::Commit("あ".into()));
+    assert_eq!(inputs(&r.d).len(), 2);
+    assert!(!r.step());
+    assert_eq!(
+        r.d.next_wake(),
+        Some(r.d.last_frame() + Duration::from_millis(100))
+    );
+    r.d.resized((0, 0), 1.0);
+    assert!(!r.step());
+    assert_eq!(r.d.next_wake(), None);
+    assert_eq!(inputs(&r.d).len(), 2);
+    r.d.resized((400, 300), 1.0);
+    let now = r.d.last_frame() + Duration::from_millis(100);
+    assert!(r.d.advance(&mut r.s, now));
+    assert!(r.d.pending.is_empty());
+    let profile = r.d.profiler().unwrap();
+    assert_eq!(profile.counter(Counter::InputsDispatched), 2);
+    assert_eq!(profile.counter(Counter::MinimizedSkips), 1);
+    assert_eq!(profile.counter(Counter::ThrottledSkips), 1);
+    assert_eq!(profile.percentiles(Phase::InputQueueWait).total, 1);
+}
+
+#[test]
+fn ime_configuration_uses_utf8_boundaries_and_disables_after_blur() {
+    struct Text;
+    impl View for Text {
+        fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+            ui.set_ime_caret("edit", Point::new(2., 3.), 20.);
+            block(100., 30.)
+                .id("edit")
+                .focusable()
+                .a11y(crate::prelude::A11y::TextInput {
+                    value: "aé🙂".into(),
+                    selection: (1, 3),
+                    carets: vec![0., 8., 16., 24.],
+                })
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+    let mut r = Rig::new(Text, (400, 300), 1.);
+    r.step();
+    r.s.ui.focus("edit");
+    r.d.redraw();
+    r.step();
+    let config = r.d.ime_configuration(&r.s.ui).unwrap();
+    assert_eq!(config.text, "aé🙂");
+    assert_eq!(config.selection, 1..7);
+    assert_eq!(r.d.ime_area(), Some(config.area));
+    r.d.focus(false);
+    assert!(r.d.ime_configuration(&r.s.ui).is_none());
+    assert!(r.d.ime_area().is_none());
+    r.s.ui.blur();
+    r.d.redraw();
+    r.step();
+    assert!(r.d.ime_configuration(&r.s.ui).is_none());
+    r.d.close(&mut r.s);
+    assert!(r.d.ime_area().is_none());
 }

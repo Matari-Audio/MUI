@@ -34,6 +34,7 @@ pub use mui_vello as vello;
 
 mod actions;
 pub mod host;
+pub mod profiling;
 mod ui;
 pub mod widgets;
 pub use actions::SemanticAction;
