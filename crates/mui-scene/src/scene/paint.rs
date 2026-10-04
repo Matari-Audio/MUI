@@ -215,14 +215,17 @@ impl Walk<'_> {
                 (r.radius() + grow).max(0.0),
             )
         };
-        // ponytail: a welded shadow is the union of the children's blurs,
-        // not the blur of the union -- each child rect keeps the convex
-        // radius, so the seams are rounded where the welded outline is
-        // straight or concave, and overlapping children over-composite
-        // there. A blur filter layer is the upgrade.
+        // A zero-spread drop follows the final outline, including a weld's
+        // filleted corners, rather than its original square participants.
+        // ponytail: inset and spread shadows still use participant rects;
+        // inverse-path blur and path offsets are their upgrade.
         let rects = match &contour.rect {
             Some(r) => std::slice::from_ref(r),
-            None if !contour.shadow_rects.is_empty() => &contour.shadow_rects[..],
+            None if !contour.shadow_rects.is_empty()
+                && (sh.kind != ShadowKind::Drop || grow != 0.0) =>
+            {
+                &contour.shadow_rects[..]
+            }
             // ponytail: no analytic rect and no welds -- the shape travels
             // as a path, and the spread with it is dropped.
             None => {
