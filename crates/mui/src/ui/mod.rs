@@ -816,7 +816,14 @@ impl Ui {
         dt: f64,
     ) -> Result<Frame<'_>, SceneError> {
         if !(dt.is_finite() && dt >= 0.0 && (self.time + dt).is_finite()) {
+            Self::discard_tree(root);
             return Err(SceneError::InvalidFrameDelta);
+        }
+        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default())
+            .and_then(|()| self.validate_expanded_tree_budget(&root))
+        {
+            Self::discard_tree(root);
+            return Err(error);
         }
         self.resolved = false;
         self.bracket_commands();
@@ -868,6 +875,10 @@ impl Ui {
         // the whole tree.
         let mut root = root;
         let mut memos = self.splice(&mut root);
+        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default()) {
+            Self::discard_tree(root);
+            return Err(error);
+        }
         let captured = self.reconcile();
         // Reduced motion does not poll a stationary gesture. Capture edges and
         // moved drag samples still owe the next tree its up-to-date response.
@@ -900,6 +911,10 @@ impl Ui {
             memos.iter_mut().for_each(|(p, _)| p.insert(0, 0));
         }
         let mut root = Self::wrap_tip(root, tip.as_ref());
+        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default()) {
+            Self::discard_tree(root);
+            return Err(error);
+        }
         let heats = self.bar_heats();
         let (moving, shaped) = self.sweep(&mut root, dt);
         animating |= moving;
@@ -1110,10 +1125,7 @@ impl Ui {
         heats: rustc_hash::FxHashMap<Id, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme.clone());
-        spec.limits.extent = spec
-            .limits
-            .extent
-            .max(Self::virtual_scroll_extent(&spec.root)?);
+        spec.limits.extent = Self::virtual_scroll_extent(&mut spec.root, spec.limits, self.scale)?;
         spec.offered = offered;
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();

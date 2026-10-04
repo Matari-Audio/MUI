@@ -367,7 +367,7 @@ fn a_million_row_list_keeps_its_extent_when_the_subtree_is_memoized() {
 
 #[test]
 fn invalid_extent_declarations_are_rejected() {
-    for extent in [-1.0, 0.0, f64::NAN, f64::INFINITY] {
+    for extent in [-1.0, 0.0, f64::NAN, f64::INFINITY, f64::MAX] {
         let mut ui = Ui::default();
         let mut tree = col([block(100.0, 20.0)]).size(100.0, 40.0).scroll();
         tree.payload_mut().extras_mut().virtual_scroll_extent = Some(extent);
@@ -390,4 +390,161 @@ fn variable_height_overflow_is_rejected_without_changing_the_index() {
     assert!(!list.set_height(1, huge));
     assert_eq!(list.height(1), Some(1.0));
     assert!(list.total_height().is_finite());
+}
+
+#[test]
+fn tree_budgets_are_checked_before_ui_recursion_and_keep_the_previous_scene() {
+    let mut ui = Ui::default();
+    resolve(&mut ui, block(10.0, 10.0).id("previous"));
+    let mut deep = block(1.0, 1.0);
+    for _ in 0..10_000 {
+        deep = col([deep]);
+    }
+    assert!(matches!(
+        ui.frame(deep, None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+    assert!(ui.scene().unwrap().surface("previous").is_some());
+    let wide = col((0..4096).map(|_| block(1.0, 1.0)));
+    assert!(matches!(
+        ui.frame(wide, None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+    assert!(ui.scene().unwrap().surface("previous").is_some());
+}
+
+#[test]
+fn retained_memos_cannot_expand_beyond_the_frame_depth_budget() {
+    let mut ui = Ui::default();
+    let mut calls = 0;
+    for frame in 0..3 {
+        let mut tree = ui.memo("deep", (), |_| {
+            calls += 1;
+            let mut tree = block(1.0, 1.0);
+            for _ in 0..40 {
+                tree = col([tree]);
+            }
+            tree
+        });
+        if frame == 2 {
+            for _ in 0..30 {
+                tree = col([tree]);
+            }
+            assert!(matches!(
+                ui.frame(tree, None, Input::default(), 0.016),
+                Err(mui_scene::SceneError::Layout(
+                    mui_layout::Error::BudgetExceeded
+                ))
+            ));
+        } else {
+            resolve(&mut ui, tree);
+        }
+    }
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn virtual_content_allowance_does_not_expand_sibling_or_viewport_dimensions() {
+    for viewport in [false, true] {
+        let mut ui = Ui::default();
+        let mut state = ListState::uniform_count(1_000_000, 20.0);
+        let mut list = uniform_list(&mut ui, "rows", &mut state, options(40.0), |_, _| {
+            block(100.0, 20.0)
+        })
+        .el;
+        let tree = if viewport {
+            list = list.h(2_000_000.0);
+            list
+        } else {
+            row([list, block(2_000_000.0, 20.0)])
+        };
+        assert!(ui.frame(tree, None, Input::default(), 0.016).is_err());
+    }
+}
+
+#[test]
+fn retained_memos_cannot_expand_beyond_the_frame_node_budget() {
+    let mut ui = Ui::default();
+    for frame in 0..3 {
+        let tree = ui.memo("wide", (), |_| col((0..3000).map(|_| block(1.0, 1.0))));
+        if frame == 2 {
+            let tree = col(std::iter::once(tree).chain((0..1100).map(|_| block(1.0, 1.0))));
+            assert!(matches!(
+                ui.frame(tree, None, Input::default(), 0.016),
+                Err(mui_scene::SceneError::Layout(
+                    mui_layout::Error::BudgetExceeded
+                ))
+            ));
+        } else {
+            resolve(&mut ui, tree);
+        }
+    }
+}
+
+#[test]
+fn virtual_content_allowance_keeps_ordinary_intrinsic_and_scroll_aggregate_limits() {
+    for intrinsic in [false, true] {
+        let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        let mut state = ListState::uniform_count(1_000_000, 20.0);
+        let list = uniform_list(&mut ui, "rows", &mut state, options(40.0), |_, _| {
+            block(100.0, 20.0)
+        })
+        .el;
+        let sibling = if intrinsic {
+            text("M").text_size(2_000_000.0).size(10.0, 10.0)
+        } else {
+            col([block(20.0, 600_000.0), block(20.0, 600_000.0)])
+                .size(20.0, 40.0)
+                .scroll()
+        };
+        let tree = row([list, sibling]);
+        assert!(ui.frame(tree, None, Input::default(), 0.016).is_err());
+    }
+}
+
+#[test]
+fn invalid_delta_also_discards_deep_owned_input_without_recursive_drop() {
+    let mut ui = Ui::default();
+    let mut tree = block(1.0, 1.0);
+    for _ in 0..10_000 {
+        tree = col([tree]);
+    }
+    assert!(matches!(
+        ui.frame(tree, None, Input::default(), f64::NAN),
+        Err(mui_scene::SceneError::InvalidFrameDelta)
+    ));
+}
+
+#[test]
+fn motion_frames_cannot_exceed_scoped_dimensions_before_paint() {
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let painted = calls.clone();
+    let mut root = canvas(move |_| {
+        painted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Vec::new()
+    })
+    .size(10.0, 10.0)
+    .id("moving")
+    .animate_layout();
+    root.set_layout_extent_limit(100.0);
+    let spec = mui_scene::SceneSpec::new(root);
+    let mut resolver = mui_scene::Resolver::default();
+    assert!(matches!(
+        resolver.resolve_after(
+            &spec,
+            &mut |_, _, mut frame| {
+                frame.size.height = 200.0;
+                frame
+            },
+            None
+        ),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
 }

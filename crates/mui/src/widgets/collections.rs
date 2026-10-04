@@ -9,7 +9,7 @@
 //! GPUI's `elements/{uniform_list,list}.rs` at a84689073d296dfd39987bc7dd478e43ef76d83a
 //! was reviewed (gpui is Apache-2.0). Its layout/application callbacks and SumTree
 //! depend on GPUI's runtime. This implementation uses MUI's existing scroll tree
-//! and a standard Fenwick height index; no GPUI source is copied.
+//! and a standard sum segment tree; no GPUI source is copied.
 
 use super::Response;
 use crate::Ui;
@@ -52,12 +52,16 @@ impl ListOptions {
     }
     fn validate(self) {
         assert!(
-            self.width.is_finite() && self.width > 0.0,
-            "list width must be finite and positive"
+            self.width.is_finite()
+                && self.width > 0.0
+                && self.width <= mui_layout::Limits::default().extent,
+            "list width must be finite, positive and within the viewport extent limit"
         );
         assert!(
-            self.height.is_finite() && self.height > 0.0,
-            "list height must be finite and positive"
+            self.height.is_finite()
+                && self.height > 0.0
+                && self.height <= mui_layout::Limits::default().extent,
+            "list height must be finite, positive and within the viewport extent limit"
         );
         assert!(
             self.overscan.is_finite() && self.overscan >= 0.0,
@@ -110,52 +114,84 @@ pub struct ListEvent {
 #[derive(Clone, Debug)]
 enum Heights {
     Uniform(f64),
-    Variable { values: Vec<f64>, tree: Vec<f64> },
+    // Complete sum tree: replacing a leaf recomputes its ancestors rather than
+    // applying a cancellation-prone delta to sums containing larger values.
+    Variable { len: usize, tree: Vec<f64> },
 }
 
 impl Heights {
     fn variable(values: Vec<f64>) -> Self {
-        let mut tree = vec![0.0; values.len() + 1];
-        // Linear construction; individual height changes update logarithmically.
-        for (i, value) in values.iter().enumerate() {
-            let j = i + 1;
-            tree[j] += value;
-            let parent = j + j.isolate_lowest_one();
-            if parent < tree.len() {
-                tree[parent] += tree[j];
-            }
+        let base = values.len().next_power_of_two();
+        let mut tree = vec![0.0; base * 2];
+        tree[base..base + values.len()].copy_from_slice(&values);
+        for i in (1..base).rev() {
+            tree[i] = tree[i * 2] + tree[i * 2 + 1];
         }
-        Self::Variable { values, tree }
+        assert!(tree[1].is_finite(), "invalid list height");
+        Self::Variable {
+            len: values.len(),
+            tree,
+        }
     }
     fn height(&self, index: usize) -> f64 {
         match self {
             Self::Uniform(h) => *h,
-            Self::Variable { values, .. } => values[index],
+            Self::Variable { tree, .. } => tree[tree.len() / 2 + index],
         }
     }
-    fn prefix(&self, mut count: usize) -> f64 {
+    fn prefix(&self, count: usize) -> f64 {
         match self {
             Self::Uniform(h) => count as f64 * h,
-            Self::Variable { tree, .. } => {
-                let mut sum = 0.0;
-                while count > 0 {
-                    sum += tree[count];
-                    count &= count - 1;
+            Self::Variable { len, tree } => {
+                if count == *len {
+                    return tree[1];
                 }
-                sum
+                let base = tree.len() / 2;
+                let (mut left, mut right) = (base, base + count);
+                let (mut a, mut b) = (0.0, 0.0);
+                while left < right {
+                    if !left.is_multiple_of(2) {
+                        a += tree[left];
+                        left += 1;
+                    }
+                    if !right.is_multiple_of(2) {
+                        right -= 1;
+                        b = tree[right] + b;
+                    }
+                    left /= 2;
+                    right /= 2;
+                }
+                // Positive prefixes cannot exceed the validated root sum.
+                // Different addition orders can round upward at f64's ceiling.
+                (a + b).min(tree[1])
             }
         }
     }
-    fn set(&mut self, index: usize, height: f64) {
-        if let Self::Variable { values, tree } = self {
-            let delta = height - values[index];
-            values[index] = height;
-            let mut i = index + 1;
-            while i < tree.len() {
-                tree[i] += delta;
-                i += i.isolate_lowest_one();
+    fn set(&mut self, index: usize, height: f64) -> bool {
+        let Self::Variable { tree, .. } = self else {
+            return false;
+        };
+        let leaf = tree.len() / 2 + index;
+        let (mut at, mut sum) = (leaf, height);
+        // Check the prospective root before mutating any part of the index.
+        while at > 1 {
+            sum = if at.is_multiple_of(2) {
+                sum + tree[at + 1]
+            } else {
+                tree[at - 1] + sum
+            };
+            if !sum.is_finite() {
+                return false;
             }
+            at /= 2;
         }
+        tree[leaf] = height;
+        let mut at = leaf / 2;
+        while at > 0 {
+            tree[at] = tree[at * 2] + tree[at * 2 + 1];
+            at /= 2;
+        }
+        true
     }
     /// Index containing `offset`; exact row boundaries belong to the next row.
     fn index_at(&self, offset: f64, count: usize) -> usize {
@@ -165,18 +201,21 @@ impl Heights {
         match self {
             Self::Uniform(h) => ((offset / h).floor() as usize).min(count),
             Self::Variable { tree, .. } => {
-                let mut index = 0;
-                let mut sum = 0.0;
-                let mut bit = count.isolate_highest_one();
-                while bit > 0 {
-                    let next = index + bit;
-                    if next <= count && sum + tree[next] <= offset {
-                        sum += tree[next];
-                        index = next;
-                    }
-                    bit >>= 1;
+                if offset >= tree[1] {
+                    return count;
                 }
-                index
+                let (mut at, mut before) = (1, 0.0);
+                let base = tree.len() / 2;
+                while at < base {
+                    let boundary = (before + tree[at * 2]).min(tree[1]);
+                    if offset < boundary {
+                        at *= 2;
+                    } else {
+                        before = boundary;
+                        at = at * 2 + 1;
+                    }
+                }
+                (at - base).min(count)
             }
         }
     }
@@ -330,11 +369,10 @@ impl ListState {
         if old == height {
             return true;
         }
-        if !(self.total_height() - old + height).is_finite() {
+        let anchor = self.anchor();
+        if !self.heights.set(index, height) {
             return false;
         }
-        let anchor = self.anchor();
-        self.heights.set(index, height);
         self.restore(anchor);
         true
     }
@@ -391,10 +429,10 @@ impl ListState {
     }
     fn align_item(&mut self, index: usize, height: f64, align: ScrollTo) {
         let top = self.heights.prefix(index);
-        let bottom = top + self.heights.height(index);
+        let bottom = self.heights.prefix(index + 1);
         self.offset = match align {
             ScrollTo::Start => top,
-            ScrollTo::Center => (top + bottom - height) * 0.5,
+            ScrollTo::Center => top + (self.heights.height(index) - height) * 0.5,
             ScrollTo::End => bottom - height,
             ScrollTo::Nearest if top < self.offset => top,
             ScrollTo::Nearest if bottom > self.offset + height => {
@@ -737,6 +775,32 @@ fn build_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn small_heights_recover_after_large_leaves_are_replaced() {
+        let mut state = ListState::variable([1, 2], 1e16);
+        assert!(state.set_height(1, 1.0));
+        assert!(state.set_height(0, 1.0));
+        assert_eq!(state.total_height(), 2.0);
+        assert_eq!(state.heights.prefix(1), 1.0);
+        assert_eq!(state.heights.index_at(1.0, 2), 1);
+        let mut heights = Heights::variable(vec![1e300; 257]);
+        for i in (0..257).rev() {
+            assert!(heights.set(i, 1.0));
+        }
+        assert_eq!(heights.prefix(257), 257.0);
+        for i in 0..257 {
+            assert_eq!(heights.index_at(i as f64, 257), i);
+        }
+    }
+
+    #[test]
+    fn centering_large_finite_heights_does_not_overflow() {
+        let h = f64::MAX / 4.0;
+        let mut state = ListState::uniform_count(3, h);
+        state.align_item(2, h / 2.0, ScrollTo::Center);
+        assert_eq!(state.offset, h * 2.25);
+    }
 
     #[test]
     fn indexed_height_updates_and_pixel_queries_match_a_linear_reference() {

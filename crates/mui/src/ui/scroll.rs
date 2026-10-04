@@ -3,18 +3,83 @@ use super::*;
 use mui_scene::Id;
 
 impl Ui {
-    /// Read declarations from the actual tree, after memo placeholders are
-    /// spliced. The same spec/limit is used by every resolve_after layout pass.
-    pub(super) fn virtual_scroll_extent(root: &El) -> Result<f64, SceneError> {
-        let mut extent: f64 = 0.0;
-        if let Some(value) = root.payload().extras().virtual_scroll_extent {
-            if !root.is_scroll() || !value.is_finite() || value <= 0.0 {
-                return Err(mui_layout::Error::InvalidValue.into());
+    /// Rejected input can itself be too deep for Rust's recursive field drop.
+    /// Detach children before dropping each parent, without cloning payloads.
+    pub(super) fn discard_tree(root: El) {
+        let mut pending = vec![root];
+        while let Some(mut node) = pending.pop() {
+            for child in node.children_mut() {
+                pending.push(std::mem::replace(child, mui_scene::block(0.0, 0.0)));
             }
-            extent = value;
         }
-        for child in root.children() {
-            extent = extent.max(Self::virtual_scroll_extent(child)?);
+    }
+
+    /// Bound the tree before UI passes recurse into user or expanded memo nodes.
+    pub(super) fn validate_tree_budget(
+        root: &El,
+        limits: mui_layout::Limits,
+    ) -> Result<(), SceneError> {
+        let mut pending = vec![(root, 0usize)];
+        let mut visited = 0;
+        while let Some((node, depth)) = pending.pop() {
+            if depth > limits.depth || visited >= limits.nodes {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            visited += 1;
+            let children = node.children();
+            if children.len() > limits.nodes - visited - pending.len() {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            pending.extend(children.iter().map(|child| (child, depth + 1)));
+        }
+        Ok(())
+    }
+
+    /// Read declarations iteratively after memo expansion. Only descendants of
+    /// a declared scroll root receive its content allowance; the viewport and
+    /// unrelated nodes retain the ordinary layout cap.
+    pub(super) fn virtual_scroll_extent(
+        root: &mut El,
+        limits: mui_layout::Limits,
+        scale: Option<f64>,
+    ) -> Result<f64, SceneError> {
+        Self::validate_tree_budget(root, limits)?;
+        let mut extent = limits.extent;
+        let mut pending = vec![&*root];
+        while let Some(node) = pending.pop() {
+            if let Some(value) = node.payload().extras().virtual_scroll_extent {
+                // Logical extents also reach geometry backends. Leave ample
+                // headroom for finite scaled coordinates and arithmetic.
+                if !node.is_scroll()
+                    || !value.is_finite()
+                    || value <= 0.0
+                    || value > f32::MAX as f64 / 1024.0
+                    || value * scale.unwrap_or(1.0) > f32::MAX as f64 / 1024.0
+                {
+                    return Err(mui_layout::Error::InvalidValue.into());
+                }
+                extent = extent.max(value);
+            }
+            pending.extend(node.children());
+        }
+        if extent > limits.extent {
+            // Ordinary frames need no rare-node allocation or cache-key change.
+            // When the pass ceiling is raised, explicitly cap every node so an
+            // unrelated intrinsic measurement cannot inherit that ceiling.
+            let mut pending = vec![(root, limits.extent)];
+            while let Some((node, cap)) = pending.pop() {
+                node.set_layout_extent_limit(cap);
+                let child_cap = node
+                    .payload()
+                    .extras()
+                    .virtual_scroll_extent
+                    .map_or(cap, |value| cap.max(value));
+                pending.extend(
+                    node.children_mut()
+                        .iter_mut()
+                        .map(|child| (child, child_cap)),
+                );
+            }
         }
         Ok(extent)
     }

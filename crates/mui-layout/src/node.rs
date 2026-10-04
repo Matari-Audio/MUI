@@ -244,6 +244,11 @@ impl<P> Node<P> {
         self.rare_mut().layout_extent_limit = Some(extent);
     }
 
+    /// This node's local ceiling, before the solve's global ceiling is applied.
+    pub fn layout_extent_limit(&self) -> Option<f64> {
+        self.rare().layout_extent_limit
+    }
+
     /// Validate this node's authored layout values against its local/global
     /// ceiling. This is shallow: it does not walk children, check duplicate
     /// IDs, measure intrinsic content, or resolve spacing tokens.

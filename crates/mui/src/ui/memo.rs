@@ -121,6 +121,40 @@ impl Ui {
     /// Put every kept memo subtree back where the build left its
     /// placeholder, and return where each memo's root is, by child-index
     /// path. Walks only until it has met every root the build handed out.
+    /// Check the tree as it will appear after memo expansion without moving
+    /// retained trees or recursively walking potentially oversized input.
+    pub(super) fn validate_expanded_tree_budget(&self, root: &El) -> Result<(), SceneError> {
+        if self.issued == 0 {
+            return Ok(());
+        }
+        let limits = mui_layout::Limits::default();
+        TREES.with(|trees| {
+            let trees = trees.borrow();
+            let mut expanded = std::collections::HashSet::new();
+            let mut pending = vec![(root, 0usize)];
+            let mut visited = 0;
+            while let Some((mut node, depth)) = pending.pop() {
+                if depth > limits.depth || visited >= limits.nodes {
+                    return Err(mui_layout::Error::BudgetExceeded.into());
+                }
+                if let Some(memo) = node.payload().extras().memo
+                    && memo.reused
+                    && expanded.insert(memo.id)
+                    && let Some(tree) = trees.get(&(self.me, memo.id))
+                {
+                    node = tree;
+                }
+                visited += 1;
+                let children = node.children();
+                if children.len() > limits.nodes - visited - pending.len() {
+                    return Err(mui_layout::Error::BudgetExceeded.into());
+                }
+                pending.extend(children.iter().map(|child| (child, depth + 1)));
+            }
+            Ok(())
+        })
+    }
+
     pub(super) fn splice(&mut self, root: &mut El) -> Vec<(Vec<usize>, u64)> {
         let mut found = Vec::new();
         let mut left = std::mem::take(&mut self.issued);

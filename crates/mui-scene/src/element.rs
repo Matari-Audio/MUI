@@ -390,9 +390,11 @@ pub struct Extras {
     /// Set by the runtime on the root of a memoised subtree (`Ui::memo`).
     pub memo: Option<Memo>,
     /// Validated logical scroll-content extent declared by a virtual list.
-    /// Allows its spacers to exceed the ordinary layout extent, only in the
-    /// frame containing this scroll root. Retained with memoized subtrees;
-    /// never changes a native surface size or the node/depth budgets.
+    /// Allows content descendants to exceed the ordinary layout extent while
+    /// the viewport and unrelated nodes keep their normal cap. The Ui runtime
+    /// accepts finite positive logical and scaled values up to `f32::MAX / 1024`.
+    /// Retained with memoized subtrees; never changes native surface sizes or
+    /// tree budgets.
     pub virtual_scroll_extent: Option<f64>,
 }
 
