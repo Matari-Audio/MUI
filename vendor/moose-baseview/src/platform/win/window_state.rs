@@ -225,9 +225,10 @@ impl WindowSharedState {
         Guard(&self.resize_host_originated)
     }
 
-    pub fn originate_host_destroy(&self) -> impl Drop + use<'_> {
+    // A host close can wait for an active callback; its origin must survive
+    // that callback rather than being cleared by a synchronous scope guard.
+    pub fn mark_host_destroy(&self) {
         self.destroy_host_originated.set(true);
-        Guard(&self.destroy_host_originated)
     }
 }
 
