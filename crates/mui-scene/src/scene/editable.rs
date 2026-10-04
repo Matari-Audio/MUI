@@ -43,7 +43,7 @@ impl Walk<'_> {
         let ranges = if edit.multiline {
             self.runs.line_ranges(text, face, width)
         } else {
-            vec![0..text.len()]
+            std::iter::once(0..text.len()).collect()
         };
         let row = if edit.caret_upstream {
             ranges.iter().position(|r| r.end == edit.caret)
@@ -118,7 +118,7 @@ impl Walk<'_> {
                 snap(frame.y + line.origin.y + ascent, self.spec.device_scale),
             );
             let run = self.runs.run(&text[range.clone()], face)?.cloned();
-            let bands = line.carets.selection_spans(
+            let mut bands = line.carets.selection_spans(
                 edit.selection.start.saturating_sub(range.start)
                     ..edit
                         .selection
@@ -126,6 +126,13 @@ impl Walk<'_> {
                         .saturating_sub(range.start)
                         .min(range.len()),
             );
+            if edit.selection.start <= range.end
+                && edit.selection.end > range.end
+                && text.as_bytes().get(range.end) == Some(&b'\n')
+            {
+                let x = line.carets.x(range.len());
+                bands.push(x..x + face.size * 0.3);
+            }
             for band in &bands {
                 let rect = Rect::new(
                     frame.x + line.origin.x + band.start,

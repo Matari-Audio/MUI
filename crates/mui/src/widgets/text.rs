@@ -157,10 +157,8 @@ fn edit_keys(
     value: &mut String,
     (anchor, caret): (&mut usize, &mut usize),
     newline: Newline,
-    rows: Option<(&Rows, usize)>,
-    geometry: Option<&mui_scene::TextGeometry>,
-    goal: &mut Option<f64>,
-    upstream: &mut bool,
+    (rows, geometry): (Option<(&Rows, usize)>, Option<&mui_scene::TextGeometry>),
+    (goal, upstream): (&mut Option<f64>, &mut bool),
 ) -> bool {
     let multi = rows.is_some();
     let mut submitted = false;
@@ -298,8 +296,24 @@ fn edit_keys(
                 }
                 *anchor = *caret;
             }
-            Key::Left if !k.mods.shift && anchor != caret => moved = Some((*anchor).min(*caret)),
-            Key::Right if !k.mods.shift && anchor != caret => moved = Some((*anchor).max(*caret)),
+            Key::Left | Key::Right if !k.mods.shift && anchor != caret => {
+                let right = k.key == Key::Right;
+                moved = Some(geometry.map_or_else(
+                    || {
+                        if right {
+                            (*anchor).max(*caret)
+                        } else {
+                            (*anchor).min(*caret)
+                        }
+                    },
+                    |g| {
+                        chars(
+                            value,
+                            g.selection_edge(byte(value, *anchor), byte(value, *caret), right),
+                        )
+                    },
+                ));
+            }
             Key::Left | Key::Right => {
                 moved = Some(geometry.map_or_else(
                     || {
@@ -315,7 +329,7 @@ fn edit_keys(
                             g.visual_move(byte(value, *caret), k.key == Key::Right),
                         )
                     },
-                ))
+                ));
             }
             Key::Home | Key::End => {
                 let end = k.key == Key::End;
@@ -350,8 +364,10 @@ fn edit_keys(
                     };
                     moved = Some(match geometry {
                         Some(g) => {
-                            let (b, x) = g.vertical_move(byte(value, *caret), step, *goal);
+                            let (b, x, affinity) =
+                                g.vertical_move(byte(value, *caret), step, *goal);
                             *goal = Some(x);
+                            *upstream = affinity;
                             chars(value, b)
                         }
                         None => r.vertical(ui, value, *caret, step),
@@ -439,7 +455,8 @@ pub fn text_edit(
     let geometry = ui
         .scene()
         .and_then(|s| s.surface(id))
-        .and_then(|s| s.text_geometry.clone());
+        .and_then(|s| s.text_geometry.clone())
+        .filter(|g| &*g.state.value == value.as_str());
     let room = ui
         .scene()
         .and_then(|s| s.surface(id))
@@ -459,20 +476,24 @@ pub fn text_edit(
         .map_or_else(|| ui.text_scroll(id), |g| g.scroll);
     let r = ui.get(id);
     let (mut goal, mut upstream) = ui.text_navigation(id);
+    // A marked composition owns its cursor and pending source replacement.
+    // Native replacement selections arrive as ordered Ime::Selection events;
+    // raw pointer events must not destroy that replacement before a commit.
     if (r.pressed || r.dragged)
+        && ui.preedit().is_none()
         && let Some(p) = ui.local(id)
     {
-        caret = geometry
+        let (at, affinity) = geometry
             .as_ref()
-            .map_or(0, |g| chars(value, g.hit(p).min(value.len())));
-        caret = grapheme::floor(value, caret);
+            .map_or((0, false), |g| g.hit_with_affinity(p));
+        caret = grapheme::floor(value, chars(value, at.min(value.len())));
         goal = None;
-        upstream = false;
+        upstream = affinity;
         if r.pressed {
             anchor = caret;
         }
     }
-    if r.double_clicked {
+    if r.double_clicked && ui.preedit().is_none() {
         (anchor, caret) = grapheme::word(value, caret);
     }
 
@@ -489,10 +510,8 @@ pub fn text_edit(
             value,
             (&mut anchor, &mut caret),
             opts.newline,
-            rows.as_ref().map(|r| (r, page)),
-            geometry.as_deref(),
-            &mut goal,
-            &mut upstream,
+            (rows.as_ref().map(|r| (r, page)), geometry.as_deref()),
+            (&mut goal, &mut upstream),
         );
     ui.set_sel(id, anchor, caret);
     ui.set_text_navigation(id, goal, upstream);

@@ -325,18 +325,17 @@ impl<'a> Walk<'a> {
         };
         if let (Some(g), Some(semantics)) = (&text_geometry, &mut semantics)
             && let crate::A11y::TextInput { carets, .. } = &mut semantics.role
+            && g.lines.len() == 1
         {
-            if g.lines.len() == 1 {
-                let line = &g.lines[0];
-                *carets = g
-                    .state
-                    .value
-                    .char_indices()
-                    .map(|(b, _)| b)
-                    .chain([g.state.value.len()])
-                    .map(|b| line.origin.x + line.carets.x(g.source_to_display(b)))
-                    .collect();
-            }
+            let line = &g.lines[0];
+            *carets = g
+                .state
+                .value
+                .char_indices()
+                .map(|(b, _)| b)
+                .chain([g.state.value.len()])
+                .map(|b| line.origin.x + line.carets.x(g.source_to_display(b)))
+                .collect();
         }
         self.out.surfaces.push(ResolvedSurface {
             key: key.clone(),

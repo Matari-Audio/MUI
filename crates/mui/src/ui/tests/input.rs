@@ -853,3 +853,116 @@ fn end_at_a_soft_wrap_keeps_the_caret_on_the_previous_visual_line() {
     assert_eq!(g.row(g.state.caret), 0);
     assert_eq!(g.caret.y, g.lines[0].origin.y);
 }
+
+#[test]
+fn selecting_hard_breaks_and_empty_lines_paints_each_newline() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "ab\n\ncd".to_owned();
+    ui.set_sel("f", 2, 4);
+    let root = widgets::text_edit(
+        &mut ui,
+        "f",
+        &mut value,
+        widgets::TextOpts {
+            newline: widgets::Newline::Enter,
+            ..Default::default()
+        },
+    )
+    .el;
+    let f = ui
+        .frame(root, Some(Size::new(100., 100.)), Input::default(), 0.016)
+        .unwrap();
+    assert_eq!(
+        f.scene
+            .surface("f")
+            .unwrap()
+            .text_geometry
+            .as_ref()
+            .unwrap()
+            .lines
+            .len(),
+        3
+    );
+    assert_eq!(
+        f.scene
+            .paint
+            .iter()
+            .filter(|p| p.key.as_str() == "f" && matches!(p.layer, mui_scene::Layer::Draw(_)))
+            .count(),
+        2,
+        "both the first and empty line's selected newline have a visible band"
+    );
+}
+
+#[test]
+fn a_rtl_selection_collapses_toward_the_visual_arrow_edge() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "אבג".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, Input::default(), 0.016).unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 0, 3);
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, key(Key::Right), 0.016).unwrap();
+    tree(&mut ui, &mut value);
+    assert_eq!(
+        ui.sel("f"),
+        (0, 0),
+        "rightmost selection endpoint is logical start"
+    );
+}
+
+#[test]
+fn a_pointer_during_preedit_keeps_the_pending_replacement_selection() {
+    let mut ui = Ui::default();
+    let mut value = "abcdef".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(150., 60.)), Input::default(), 0.016)
+        .unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 1, 4);
+    let root = tree(&mut ui, &mut value);
+    ui.frame(
+        root,
+        Some(Size::new(150., 60.)),
+        Input {
+            ime: vec![mui_input::Ime::Preedit {
+                text: "XY".into(),
+                cursor: Some((1, 1)),
+            }],
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    let root = tree(&mut ui, &mut value);
+    let f = ui
+        .frame(root, Some(Size::new(150., 60.)), Input::default(), 0.016)
+        .unwrap();
+    let field = f.scene.surface("f").unwrap();
+    let g = field.text_geometry.as_ref().unwrap();
+    let p = Point::new(
+        field.frame.x + g.lines[0].origin.x + g.lines[0].carets.x(2),
+        field.frame.y + g.lines[0].origin.y + g.line_height / 2.,
+    );
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(150., 60.)), at(p.x, p.y, true), 0.016)
+        .unwrap();
+    tree(&mut ui, &mut value);
+    assert_eq!(ui.sel("f"), (1, 4), "composition still replaces bcd");
+    let root = tree(&mut ui, &mut value);
+    ui.frame(
+        root,
+        Some(Size::new(150., 60.)),
+        Input {
+            ime: vec![mui_input::Ime::Commit("XY".into())],
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    tree(&mut ui, &mut value);
+    assert_eq!(value, "aXYef");
+}

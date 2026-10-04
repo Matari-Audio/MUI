@@ -71,13 +71,44 @@ impl TextGeometry {
             .unwrap_or(0)
     }
     pub fn hit(&self, point: Point) -> usize {
-        let line = self.lines.iter().min_by(|a, b| {
+        self.hit_with_affinity(point).0
+    }
+    /// The logical source position plus affinity at a shared soft-wrap end.
+    pub fn hit_with_affinity(&self, point: Point) -> (usize, bool) {
+        let line = self.lines.iter().enumerate().min_by(|(_, a), (_, b)| {
             let d = |l: &TextLineGeometry| (point.y - (l.origin.y + l.height / 2.)).abs();
             d(a).total_cmp(&d(b))
         });
-        line.map_or(0, |l| {
-            self.display_to_source(l.range.start + l.carets.hit(point.x - l.origin.x))
+        line.map_or((0, false), |(row, l)| {
+            let display = l.range.start + l.carets.hit(point.x - l.origin.x);
+            let upstream = display == l.range.end
+                && self
+                    .lines
+                    .get(row + 1)
+                    .is_some_and(|next| next.range.start == display);
+            (self.display_to_source(display), upstream)
         })
+    }
+    /// Collapse a logical selection toward its visual endpoint. RTL text can
+    /// put the greater logical offset on the left of the smaller one.
+    pub fn selection_edge(&self, a: usize, c: usize, right: bool) -> usize {
+        let position = |source| {
+            let b = self.source_to_display(source);
+            let row = self.row(b);
+            let l = &self.lines[row];
+            (
+                row,
+                l.carets
+                    .x(b.saturating_sub(l.range.start).min(l.range.len())),
+            )
+        };
+        let (pa, pc) = (position(a), position(c));
+        let order = pa.0.cmp(&pc.0).then(pa.1.total_cmp(&pc.1));
+        if (order.is_gt() && right) || (order.is_lt() && !right) {
+            a
+        } else {
+            c
+        }
     }
     pub fn visual_move(&self, source_byte: usize, right: bool) -> usize {
         let b = self.source_to_display(source_byte);
@@ -108,7 +139,7 @@ impl TextGeometry {
         source_byte: usize,
         delta: isize,
         goal: Option<f64>,
-    ) -> (usize, f64) {
+    ) -> (usize, f64, bool) {
         let b = self.source_to_display(source_byte);
         let row = self.row(b);
         let l = &self.lines[row];
@@ -119,6 +150,12 @@ impl TextGeometry {
         let target =
             (row as isize + delta).clamp(0, self.lines.len().saturating_sub(1) as isize) as usize;
         let l = &self.lines[target];
-        (self.display_to_source(l.range.start + l.carets.hit(x)), x)
+        let display = l.range.start + l.carets.hit(x);
+        let upstream = display == l.range.end
+            && self
+                .lines
+                .get(target + 1)
+                .is_some_and(|next| next.range.start == display);
+        (self.display_to_source(display), x, upstream)
     }
 }
