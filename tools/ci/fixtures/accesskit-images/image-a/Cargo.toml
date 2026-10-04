@@ -1,0 +1,11 @@
+[package]
+name = "mui-accesskit-image-a"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+accesskit_macos = { path = "../../../../../vendor/accesskit_macos", features = ["image-probe"] }

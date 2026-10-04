@@ -1,0 +1,3 @@
+[workspace]
+members = ["image-a", "image-b"]
+resolver = "2"

@@ -94,8 +94,8 @@ jobs:
       # The same gate as local, one section of it.
       - run: ./tools/verify.sh ${{ matrix.section }}
       - if: matrix.section == 'root-test'
-        name: Native EGL presentation and reopen
-        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-baseview native_surface_presents_and_reopens --locked --offline -- --ignored
+        name: Native EGL presentation, accessibility and reopen
+        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-baseview --lib --locked --offline -- --ignored
       - if: matrix.section == 'root-test'
         name: Native multiwindow presentation and resize
         run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-winit --test native_windows --locked --offline -- --ignored
@@ -153,6 +153,9 @@ jobs:
         run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      - if: runner.os == 'macOS'
+        name: Accessibility providers in two native libraries
+        run: python3 tools/ci/check-macos-accesskit-images.py
       - name: Native platform lint
         run: cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
       # fmt and wasm are already gated on Linux.
