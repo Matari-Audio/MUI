@@ -59,7 +59,7 @@ jobs:
         env:
           # Test sections get lavapipe, a software Vulkan device, so the wgpu
           # tests run instead of skipping for want of an adapter.
-          GPU: ${{ endsWith(matrix.section, '-test') && 'mesa-vulkan-drivers vulkan-tools libegl1 libegl-mesa0 libgl1-mesa-dri xvfb xauth' || '' }}
+          GPU: ${{ endsWith(matrix.section, '-test') && 'mesa-vulkan-drivers vulkan-tools libegl1 libegl-mesa0 libgl1-mesa-dri xvfb xauth dbus-daemon' || '' }}
       - if: endsWith(matrix.section, '-test')
         name: Vulkan device
         run: |
@@ -93,6 +93,9 @@ jobs:
         run: cargo fetch --manifest-path media/Cargo.toml --locked
       # The same gate as local, one section of it.
       - run: ./tools/verify.sh ${{ matrix.section }}
+      - if: matrix.section == 'root-test'
+        name: Desktop portal dialogs and owned worker teardown
+        run: cargo test -p mui-native-dialog --features xdg-portal --locked --offline
       - if: matrix.section == 'root-test'
         name: Native EGL presentation, accessibility and reopen
         run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-baseview --lib --locked --offline -- --ignored

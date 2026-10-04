@@ -48,6 +48,10 @@ const GPU_RETRY: Duration = Duration::from_millis(500);
 /// the key come up. Runs on the window's thread with the last frame's `Ui`.
 pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 
+/// A native-close signal. Runs before borrowing the model or handler; it must
+/// only signal cancellation, never borrow the UI/model or wait for workers.
+pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
+
 /// Requests from the host's thread, applied by the window's next tick,
 /// which is the only place baseview's `WindowContext` can be touched.
 #[derive(Default)]
@@ -56,11 +60,20 @@ pub struct Requests {
     scale: AtomicU64,
     redraw: AtomicBool,
     keys: Mutex<Option<KeyHook>>,
+    close: Mutex<Option<CloseHook>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
 }
 
 impl Requests {
+    /// Register the close signal for the next native window, before opening it.
+    /// It runs once on native close, or when the window adapter is dropped.
+    pub fn on_close(&self, hook: CloseHook) {
+        *self
+            .close
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
     /// The editor's X11 window identifier, for parenting desktop portal dialogs.
     ///
     /// Available after native creation and cleared on close. This is an owned
@@ -201,7 +214,17 @@ fn build<V: View + Send + 'static>(
             native.focus(cx.has_focus());
         }
         handler.parented = parented;
+        let hook = handler
+            .requests
+            .close
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
         Ok(Adapter {
+            close: NativeClose {
+                hook,
+                fired: Cell::new(false),
+            },
             cx,
             handler: RefCell::new(handler),
             pending_resize: Cell::new(None),
@@ -577,11 +600,37 @@ impl<V: View> Handler<V> {
 /// returns). A call that finds the handler busy is kept, the latest resize
 /// and every event, and delivered once the outer call returns.
 struct Adapter<V> {
+    // Cancel owned dialogs before dropping the native context or model.
+    close: NativeClose,
     // Drop graphics and native accessibility before their window context.
     handler: RefCell<Handler<V>>,
     cx: WindowContext,
     pending_resize: Cell<Option<WindowSize>>,
     pending_events: RefCell<VecDeque<Event>>,
+}
+
+struct NativeClose {
+    hook: Option<CloseHook>,
+    fired: Cell<bool>,
+}
+
+impl NativeClose {
+    fn fire(&self) {
+        if !self.fired.replace(true)
+            && let Some(hook) = &self.hook
+        {
+            // This callback precedes the handler's panic guard at the FFI edge.
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook())).is_err() {
+                eprintln!("mui-baseview: panic in native close signal");
+            }
+        }
+    }
+}
+
+impl Drop for NativeClose {
+    fn drop(&mut self) {
+        self.fire();
+    }
 }
 
 impl<V: View> Adapter<V> {
@@ -645,6 +694,9 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
     }
 
     fn on_event(&self, event: Event) -> EventStatus {
+        if matches!(event, Event::Window(WindowEvent::WillClose)) {
+            self.close.fire();
+        }
         let Ok(mut h) = self.handler.try_borrow_mut() else {
             self.pending_events.borrow_mut().push_back(event);
             return EventStatus::Ignored;
