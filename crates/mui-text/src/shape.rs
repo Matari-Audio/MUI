@@ -224,6 +224,22 @@ fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, E
     })
 }
 
+/// Layout and default-ignorable controls need no visible glyph. In
+/// particular ZWJ and variation selectors belong to the surrounding grapheme.
+/// Harfrust interprets these during shaping; rejecting the face before that
+/// would send an entire emoji sequence back to the primary .notdef face.
+pub(crate) fn covers_grapheme(charmap: &skrifa::charmap::Charmap<'_>, grapheme: &str) -> bool {
+    grapheme.chars().all(|ch| {
+        matches!(ch as u32,
+            0x0009..=0x000D | 0x0085 | 0x00AD | 0x034F | 0x061C | 0x115F..=0x1160 | 0x17B4..=0x17B5 |
+            0x180B..=0x180F | 0x200B..=0x200F | 0x202A..=0x202E |
+            0x2060..=0x206F | 0x3164 | 0xFE00..=0xFE0F | 0xFEFF |
+            0xFFA0 | 0xFFF0..=0xFFF8 | 0x1BCA0..=0x1BCA3 |
+            0x1D173..=0x1D17A | 0xE0000..=0xE0FFF
+        ) || charmap.map(ch).is_some()
+    })
+}
+
 /// Split one visual segment into runs of the first face that covers each
 /// grapheme whole, appended to `chunks`. A grapheme no face covers stays with
 /// the primary face and draws its `.notdef`.
@@ -239,7 +255,7 @@ fn fallback_chunks(
         let at = range.start + offset;
         let font = charmaps
             .iter()
-            .position(|charmap| grapheme.chars().all(|ch| charmap.map(ch).is_some()))
+            .position(|charmap| covers_grapheme(charmap, grapheme))
             .unwrap_or(0);
         if let Some(previous) = current.filter(|&index| index != font) {
             chunks.push((start..at, previous));
@@ -574,6 +590,13 @@ mod tests {
         let run = text_run(&[hack(), emoji()], "A😀", 24., &[], 0.05).unwrap();
         assert_eq!(run.glyphs[0].font, 0);
         assert_eq!(run.glyphs.last().unwrap().font, 1);
+        assert!(run.advance > 0.);
+    }
+
+    #[test]
+    fn fallback_keeps_joiners_and_variation_selectors_in_the_emoji_face() {
+        let run = shape_run(&[hack(), emoji()], "😀\u{200d}😀\u{fe0f}", 24., &[]).unwrap();
+        assert!(run.glyphs.iter().all(|glyph| glyph.font == 1));
         assert!(run.advance > 0.);
     }
 
