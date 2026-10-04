@@ -228,3 +228,19 @@ fn native_ime_preedit_stays_tentative_and_commit_is_not_duplicated() {
         "field blur clears candidate request"
     );
 }
+
+#[test]
+fn prepared_scene_does_not_keep_the_model_locked_during_native_presentation() {
+    let (mut driver, shared) = rig();
+    let shared = Mutex::new(shared);
+    let (changed, snapshot) = prepare_frame(&mut driver, &shared, Instant::now());
+    assert!(changed);
+    let snapshot = snapshot.expect("first frame snapshot");
+    // A GPU/native callback can read or mutate the model while retaining the
+    // frame it is presenting, without waiting on the rendering callback.
+    let mut model = shared
+        .try_lock()
+        .expect("preparation released the model lock");
+    model.ui.blur();
+    assert!(snapshot.surface("pad").is_some());
+}

@@ -74,7 +74,9 @@ impl Gpu {
             Frame::Skipped => {}
             Frame::SurfaceLost => {
                 let surface = surface(self.host.instance(), &self.window)?;
-                self.host.replace_surface(surface);
+                self.host
+                    .try_replace_surface(surface)
+                    .map_err(|error| error.to_string())?;
             }
         }
         self.window.request_redraw();

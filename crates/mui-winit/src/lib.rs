@@ -23,7 +23,8 @@ use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
 use winit::event::{
-    Ime as NativeIme, KeyEvent as WinitKeyEvent, MouseButton, MouseScrollDelta, WindowEvent,
+    Ime as NativeIme, KeyEvent as WinitKeyEvent, MouseButton, MouseScrollDelta, StartCause,
+    WindowEvent,
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey};
@@ -93,6 +94,7 @@ pub fn run_shared<V: View>(shared: Arc<Mutex<Shared<V>>>, options: Options) -> R
         mods: Mods::default(),
         ime_on: false,
         composing: false,
+        native_cursor: None,
         next_poll: Instant::now(),
         error: None,
     };
@@ -136,6 +138,7 @@ struct App<V> {
     mods: Mods,
     ime_on: bool,
     composing: bool,
+    native_cursor: Option<Cursor>,
     next_poll: Instant,
     error: Option<String>,
 }
@@ -188,18 +191,22 @@ impl<V: View> App<V> {
         self.gpu = None;
         self.driver = None;
         self.ime_on = false;
+        self.native_cursor = None;
     }
     fn publish(&mut self) {
-        let shared = lock(&self.shared);
-        let (Some(access), Some(scene), Some(driver)) =
-            (&mut self.access, shared.ui.scene(), &self.driver)
-        else {
+        let (Some(access), Some(driver)) = (&mut self.access, &self.driver) else {
             return;
         };
-        access.update_if_active(|| {
+        let update = {
+            let shared = lock(&self.shared);
+            let Some(scene) = shared.ui.scene() else {
+                return;
+            };
             self.published
                 .update(scene, shared.ui.focus_key(), driver.ui_scale())
-        });
+        };
+        // Raising native accessibility events can reenter the application.
+        access.update_if_active(|| update);
     }
     fn draw(&mut self) {
         if !self.state.visible() {
@@ -210,10 +217,13 @@ impl<V: View> App<V> {
             return;
         };
         driver.min_interval = Some(interval);
-        let mut shared = lock(&self.shared);
-        let changed = driver.advance(&mut shared, Instant::now());
+        let (changed, scene) = prepare_frame(driver, &self.shared, Instant::now());
         let window = gpu.window();
-        window.set_cursor(cursor(driver.cursor()));
+        let current_cursor = driver.cursor();
+        if self.native_cursor != Some(current_cursor) {
+            window.set_cursor(cursor(current_cursor));
+            self.native_cursor = Some(current_cursor);
+        }
         let area = driver.ime_area();
         let on = area.is_some() && self.state.focused && !self.state.occluded;
         if std::mem::replace(&mut self.ime_on, on) != on {
@@ -229,16 +239,21 @@ impl<V: View> App<V> {
         // RedrawRequested also covers expose/surface recovery when the tree
         // stayed current. Host damage tracking avoids repainting it needlessly.
         let backend_started = driver.profiler().map(|_| Instant::now());
-        if let Some(scene) = shared.ui.scene()
-            && let Err(error) = gpu.present(scene, Affine::scale(driver.ui_scale()))
-        {
-            shared.view.log(&format!("mui-winit: {error}"));
-        }
+        let presented = scene
+            .as_ref()
+            .map(|scene| gpu.present(scene, Affine::scale(driver.ui_scale())));
         if let (Some(started), Some(profile)) = (backend_started, driver.profiler_mut()) {
             // Whole backend CPU call: includes encoding, submission and present.
             profile.record_since(mui::profiling::Phase::BackendDraw, started);
+            if matches!(&presented, Some(Ok(Some(_)))) {
+                // Only a frame submitted for presentation completes the input
+                // sample. This measures CPU return, not GPU completion/scanout.
+                profile.record_since(mui::profiling::Phase::PresentCall, started);
+            }
         }
-        drop(shared);
+        if let Some(Err(error)) = presented {
+            lock(&self.shared).view.log(&format!("mui-winit: {error}"));
+        }
         if changed {
             self.publish();
         }
@@ -257,6 +272,11 @@ impl<V: View> App<V> {
 }
 
 impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
+    fn new_events(&mut self, _: &ActiveEventLoop, _: StartCause) {
+        if let Some(profile) = self.driver.as_mut().and_then(Driver::profiler_mut) {
+            profile.count(mui::profiling::Counter::NativeWakes, 1);
+        }
+    }
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
             return;
@@ -318,9 +338,6 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
         self.close();
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(profile) = self.driver.as_mut().and_then(Driver::profiler_mut) {
-            profile.count(mui::profiling::Counter::NativeWakes, 1);
-        }
         if !self.state.visible() || self.gpu.is_none() {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
@@ -531,6 +548,19 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
             gpu.window().request_redraw();
         }
     }
+}
+
+/// Own the scene before entering native code, which may block or reenter.
+fn prepare_frame<V: View>(
+    driver: &mut Driver,
+    shared: &Mutex<Shared<V>>,
+    now: Instant,
+) -> (bool, Option<mui::scene::ResolvedScene>) {
+    let mut shared = lock(shared);
+    let changed = driver.advance(&mut shared, now);
+    // ponytail: owned snapshot per redraw; an Arc scene API can remove this
+    // clone without holding model locks during surface waits.
+    (changed, shared.ui.scene().cloned())
 }
 
 fn key_event(event: &WinitKeyEvent, mods: Mods, composing: bool) -> KeyEvent {
