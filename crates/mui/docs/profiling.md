@@ -28,7 +28,12 @@ if let (Some(profile), Some(start)) = (driver.profiler_mut(), start) {
 `PresentCall` means the CPU present function returned. It does not mean GPU work
 finished or pixels reached the display. `InputToPresentCall` links the oldest
 input in the dispatched batch to this return, and is emitted only if a present
-call is recorded. Encode/submit/backend-draw/native-wake intervals require actual
+call is recorded. The backend must call `discard_pending_presentation()` for
+`Frame::Current` (no visual change), and keep the marker for `Frame::Skipped`
+(deferred presentation). Deferred frames preserve the earliest pending input
+across later input batches; window close clears both queued and presentation
+markers. This is an observed CPU batch-to-present metric, not a claim that every
+input changed a pixel. Encode/submit/backend-draw/native-wake intervals require actual
 backend hooks. Nested phases overlap; do not add their times together.
 
 Call `profiler.percentiles(phase)` to get p50/p95/p99 over retained samples plus

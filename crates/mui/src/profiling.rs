@@ -241,15 +241,25 @@ impl Profiler {
     pub(crate) fn dispatch_batch(&mut self) {
         if let Some(input) = self.oldest_input.take() {
             self.record_since(Phase::InputQueueWait, input);
-            self.present_input = Some(input);
+            self.present_input = Some(
+                self.present_input
+                    .map_or(input, |pending| pending.min(input)),
+            );
         }
     }
     pub(crate) fn discard_inputs(&mut self) {
         self.oldest_input = None;
     }
+    /// The backend confirms the newly resolved scene has no visual change.
+    /// Clear its input marker so an unrelated later present cannot claim latency.
+    /// Keep the marker for a skipped/deferred presentation that will be retried.
+    pub fn discard_pending_presentation(&mut self) {
+        self.present_input = None;
+    }
+
     pub(crate) fn finish_inputs(&mut self) {
         self.oldest_input = None;
-        self.present_input = None;
+        self.discard_pending_presentation();
     }
 }
 
@@ -294,5 +304,42 @@ mod tests {
         assert_eq!(profiler.percentiles(Phase::InputToPresentCall).total, 1);
         profiler.record_duration(Phase::PresentCall, Duration::ZERO);
         assert_eq!(profiler.percentiles(Phase::InputToPresentCall).total, 1);
+    }
+    #[test]
+    fn unchanged_frames_do_not_link_input_to_an_unrelated_present() {
+        let mut profile = Profiler::new(ProfileConfig::default());
+        profile.input_enqueued();
+        profile.dispatch_batch();
+        // Backend Frame::Current: this input produces no visual change.
+        profile.discard_pending_presentation();
+        profile.record_duration(Phase::PresentCall, Duration::ZERO);
+        assert_eq!(profile.percentiles(Phase::InputToPresentCall).total, 0);
+        assert_eq!(profile.counter(Counter::PresentCalls), 1);
+    }
+
+    #[test]
+    fn deferred_presents_preserve_earliest_input_and_close_clears_markers() {
+        let mut profile = Profiler::new(ProfileConfig::default());
+        let now = Instant::now();
+        let first = now - Duration::from_millis(20);
+        profile.oldest_input = Some(first);
+        profile.dispatch_batch();
+        // Backend Frame::Skipped: no present occurred, and another input arrives.
+        profile.oldest_input = Some(now - Duration::from_millis(10));
+        profile.dispatch_batch();
+        assert_eq!(profile.present_input, Some(first));
+        profile.record_between(Phase::PresentCall, now, now + Duration::from_millis(5));
+        assert_eq!(
+            profile.percentiles(Phase::InputToPresentCall).p50,
+            Duration::from_millis(25)
+        );
+        profile.input_enqueued();
+        profile.dispatch_batch();
+        profile.input_enqueued();
+        profile.finish_inputs();
+        assert_eq!(profile.oldest_input, None);
+        assert_eq!(profile.present_input, None);
+        profile.record_duration(Phase::PresentCall, Duration::ZERO);
+        assert_eq!(profile.percentiles(Phase::InputToPresentCall).total, 1);
     }
 }
