@@ -69,7 +69,7 @@ pub(crate) struct Frozen {
     extent_limit: f64,
     floor: Size,
     content: Size,
-    fluid: bool,
+    fluid: [bool; 2],
     cols: usize,
     columns: Vec<f64>,
     rows: Vec<f64>,
