@@ -252,6 +252,16 @@ impl BaseviewView {
 
     /// Trigger the event immediately and return the event status.
     pub(crate) fn trigger_event(this: ViewRef<Self>, event: Event) -> EventStatus {
+        match &event {
+            Event::Window(WindowEvent::Focused) => this.ime.focused.set(true),
+            Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose) => {
+                // Disable synchronously before dispatch; AppKit can reenter
+                // insertText/setMarkedText before the adapter's next frame.
+                this.ime.focused.set(false);
+                this.ime.marked.borrow_mut().clear();
+            }
+            _ => {}
+        }
         this.window_handler.use_handler(|h| h.on_event(event)).unwrap_or(EventStatus::Ignored)
     }
 
@@ -687,7 +697,7 @@ impl ViewImpl for BaseviewView {
     }
 
     fn has_marked_text(this: ViewRef<Self>) -> bool {
-        !this.ime.marked.borrow().is_empty()
+        this.ime.enabled() && !this.ime.marked.borrow().is_empty()
     }
     fn marked_range(this: ViewRef<Self>) -> objc2_foundation::NSRange {
         this.ime.marked_range()
@@ -702,13 +712,18 @@ impl ViewImpl for BaseviewView {
         if !this.ime.enabled() {
             return;
         }
+        let owner = this.ime.configuration.borrow().as_ref().map(|c| c.id.clone());
         let replacement_event = this.ime.replacement(replacement);
+        let text = super::ime::text(text);
+        this.ime.commit(&text, replacement);
         if let Some(event) = replacement_event {
             Self::trigger_event(this, Event::Ime(event));
         }
-        let text = super::ime::text(text);
-        this.ime.marked.borrow_mut().clear();
-        Self::trigger_event(this, Event::Ime(crate::Ime::Commit(text)));
+        if this.ime.enabled()
+            && this.ime.configuration.borrow().as_ref().map(|c| c.id.clone()) == owner
+        {
+            Self::trigger_event(this, Event::Ime(crate::Ime::Commit(text)));
+        }
     }
     fn set_marked_text(
         this: ViewRef<Self>, text: &objc2::runtime::AnyObject, selected: objc2_foundation::NSRange,
@@ -717,17 +732,26 @@ impl ViewImpl for BaseviewView {
         if !this.ime.enabled() {
             return;
         }
+        let owner = this.ime.configuration.borrow().as_ref().map(|c| c.id.clone());
         let replacement_event = this.ime.replacement(replacement);
-        if let Some(event) = replacement_event {
+        let event = this.ime.mark(super::ime::text(text), selected, replacement);
+        if let Some(replacement) = replacement_event {
+            Self::trigger_event(this, Event::Ime(replacement));
+        }
+        if this.ime.enabled()
+            && this.ime.configuration.borrow().as_ref().map(|c| c.id.clone()) == owner
+        {
             Self::trigger_event(this, Event::Ime(event));
         }
-        let event = this.ime.mark(super::ime::text(text), selected, replacement);
-        Self::trigger_event(this, Event::Ime(event));
     }
     fn unmark_text(this: ViewRef<Self>) {
+        if !this.ime.enabled() {
+            return;
+        }
         // Cocoa accepts marked text on unmark. Cancellation uses discardMarkedText.
         let text = std::mem::take(&mut *this.ime.marked.borrow_mut());
         if !text.is_empty() {
+            this.ime.commit(&text, objc2_foundation::NSRange::new(crate::ime::NS_NOT_FOUND, 0));
             Self::trigger_event(this, Event::Ime(crate::Ime::Commit(text)));
         }
     }
@@ -755,18 +779,18 @@ impl ViewImpl for BaseviewView {
         this: ViewRef<Self>, range: objc2_foundation::NSRange,
         actual: *mut objc2_foundation::NSRange,
     ) -> Option<Retained<objc2_foundation::NSAttributedString>> {
-        let config = this.ime.configuration.borrow().clone()?;
-        if range.location == usize::MAX {
+        let shadow = this.ime.shadow.borrow().clone()?;
+        if range.location >= crate::ime::NS_NOT_FOUND {
             return None;
         }
-        let start = crate::ime::utf16_to_byte(&config.text, range.location);
+        let start = crate::ime::utf16_to_byte(&shadow.text, range.location);
         let end =
-            crate::ime::utf16_to_byte(&config.text, range.location.saturating_add(range.length));
-        let text = config.text.get(start..end)?;
+            crate::ime::utf16_to_byte(&shadow.text, range.location.saturating_add(range.length));
+        let text = shadow.text.get(start..end)?;
         if !actual.is_null() {
             unsafe {
                 actual.write(objc2_foundation::NSRange::new(
-                    config.text[..start].encode_utf16().count(),
+                    shadow.text[..start].encode_utf16().count(),
                     text.encode_utf16().count(),
                 ));
             }

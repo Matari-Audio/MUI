@@ -17,6 +17,7 @@ pub(crate) struct NativeIme {
     configured: Cell<bool>,
     cancel_pending: Cell<bool>,
     pub composing: Cell<bool>,
+    applying: Cell<bool>,
 }
 struct Context {
     hwnd: HWND,
@@ -57,9 +58,14 @@ impl NativeIme {
         if self.configured.replace(true) && *self.configuration.borrow() == config {
             return;
         }
+        let cancelled = crate::ime::composition_cancelled(
+            &self.configuration.borrow(),
+            &config,
+            self.composing.get(),
+        );
         let switched =
             self.configuration.borrow().as_ref().map(|c| &c.id) != config.as_ref().map(|c| &c.id);
-        if switched {
+        if switched || cancelled {
             self.cancel_pending.set(true);
         }
         *self.configuration.borrow_mut() = config;
@@ -68,11 +74,19 @@ impl NativeIme {
             PostMessageW(hwnd, super::window::BV_IME_CONFIGURE, 0, 0);
         }
     }
+    pub fn accepts(&self, hwnd: HWND) -> bool {
+        self.enabled.get() == Some(true)
+            && self.configuration.borrow().is_some()
+            && !self.cancel_pending.get()
+            && !self.applying.get()
+            && unsafe { GetFocus() == hwnd }
+    }
     pub fn apply(&self, hwnd: HWND) -> Option<Ime> {
         let on = self.configuration.borrow().is_some();
         let changed = self.enabled.replace(Some(on)) != Some(on);
         let cancel = self.cancel_pending.replace(false);
         if changed || cancel {
+            self.applying.set(true);
             unsafe {
                 if (!on || cancel) && GetFocus() == hwnd {
                     if let Some(ctx) = Context::get(hwnd) {
@@ -84,6 +98,7 @@ impl NativeIme {
                 }
             }
             self.composing.set(false);
+            self.applying.set(false);
         }
         self.position(hwnd);
         changed.then_some(if on { Ime::Enabled } else { Ime::Disabled })
@@ -96,8 +111,7 @@ impl NativeIme {
         let Some(ctx) = Context::get(hwnd) else {
             return;
         };
-        let x = config.position.x as i32;
-        let y = config.position.y as i32;
+        let (x, y, right, bottom) = crate::ime::candidate_rect(&config);
         unsafe {
             ImmSetCompositionWindow(
                 ctx.himc,
@@ -112,19 +126,14 @@ impl NativeIme {
                 &CANDIDATEFORM {
                     dwIndex: 0,
                     dwStyle: CFS_EXCLUDE,
-                    ptCurrentPos: POINT { x, y: y.saturating_add(config.size.height as i32) },
-                    rcArea: RECT {
-                        left: x,
-                        top: y,
-                        right: x.saturating_add(config.size.width as i32).max(x + 1),
-                        bottom: y.saturating_add(config.size.height as i32),
-                    },
+                    ptCurrentPos: POINT { x, y: bottom },
+                    rcArea: RECT { left: x, top: y, right, bottom },
                 },
             );
         }
     }
     pub fn composition(&self, hwnd: HWND, flags: u32) -> Vec<Ime> {
-        if self.enabled.get() != Some(true) {
+        if !self.accepts(hwnd) {
             return Vec::new();
         }
         let Some(ctx) = Context::get(hwnd) else {
@@ -155,7 +164,10 @@ impl NativeIme {
         }
         events
     }
-    pub fn reconversion(&self, lparam: isize) -> Option<isize> {
+    pub fn reconversion(&self, hwnd: HWND, lparam: isize) -> Option<isize> {
+        if !self.accepts(hwnd) {
+            return None;
+        }
         let config = self.configuration.borrow().clone()?;
         let utf16: Vec<_> = config.text.encode_utf16().collect();
         let bytes = std::mem::size_of::<RECONVERTSTRING>() + (utf16.len() + 1) * 2;

@@ -78,18 +78,25 @@ impl WindowContext {
         let Some(inner) = view.inner_ref() else {
             return;
         };
+        inner.ime.focused.set(self.has_focus());
         let config = config.filter(crate::ImeConfiguration::valid);
         if *inner.ime.configuration.borrow() == config {
             return;
         }
-        let switched = inner.ime.configuration.borrow().as_ref().map(|c| &c.id)
-            != config.as_ref().map(|c| &c.id);
+        let previous = inner.ime.configuration.borrow().clone();
+        let switched = previous.as_ref().map(|c| &c.id) != config.as_ref().map(|c| &c.id);
+        let cancelled = crate::ime::composition_cancelled(
+            &previous,
+            &config,
+            !inner.ime.marked.borrow().is_empty(),
+        );
         let enabled = config.is_some();
         let changed = inner.ime.enabled() != enabled;
-        *inner.ime.configuration.borrow_mut() = config;
-        if changed || switched {
-            if !enabled || switched {
+        inner.ime.configure(&config);
+        if changed || switched || cancelled {
+            if !enabled || switched || cancelled {
                 inner.ime.marked.borrow_mut().clear();
+                inner.ime.discarding.set(true);
                 unsafe {
                     let context: Option<objc2::rc::Retained<objc2::runtime::AnyObject>> =
                         objc2::msg_send![&*view, inputContext];
@@ -97,10 +104,17 @@ impl WindowContext {
                         let _: () = objc2::msg_send![&*context, discardMarkedText];
                     }
                 }
+                inner.ime.discarding.set(false);
             }
             BaseviewView::trigger_event(
                 inner,
-                crate::Event::Ime(if enabled { crate::Ime::Enabled } else { crate::Ime::Disabled }),
+                crate::Event::Ime(if cancelled {
+                    crate::Ime::Preedit { text: String::new(), cursor: None }
+                } else if enabled {
+                    crate::Ime::Enabled
+                } else {
+                    crate::Ime::Disabled
+                }),
             );
         }
         unsafe {

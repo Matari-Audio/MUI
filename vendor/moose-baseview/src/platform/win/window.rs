@@ -635,8 +635,10 @@ unsafe fn wnd_proc_inner(
             })
         }
         WM_IME_STARTCOMPOSITION => {
-            window_state.ime.composing.set(true);
-            window_state.ime.position(window.as_raw());
+            if window_state.ime.accepts(window.as_raw()) {
+                window_state.ime.composing.set(true);
+                window_state.ime.position(window.as_raw());
+            }
             Some(0)
         }
         WM_IME_COMPOSITION => {
@@ -648,14 +650,16 @@ unsafe fn wnd_proc_inner(
         }
         WM_IME_ENDCOMPOSITION => {
             window_state.ime.composing.set(false);
-            window_bv.handle_event(Event::Ime(crate::Ime::Preedit {
-                text: String::new(),
-                cursor: None,
-            }));
+            if window_state.ime.accepts(window.as_raw()) {
+                window_bv.handle_event(Event::Ime(crate::Ime::Preedit {
+                    text: String::new(),
+                    cursor: None,
+                }));
+            }
             Some(0)
         }
         WM_IME_REQUEST if wparam as u32 == windows_sys::Win32::UI::Input::Ime::IMR_DOCUMENTFEED => {
-            window_state.ime.reconversion(lparam)
+            window_state.ime.reconversion(window.as_raw(), lparam)
         }
         WM_IME_CHAR => Some(0),
         WM_CHAR | WM_SYSCHAR | WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP

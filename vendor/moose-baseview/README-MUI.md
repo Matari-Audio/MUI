@@ -12,13 +12,19 @@ changing the caret cannot repeatedly disable/enable an active composition.
 
 * Cocoa implements `NSTextInputClient` selectors and `interpretKeyEvents`, converts
   UTF-16 ranges, returns attributed surrounding text and screen candidate bounds.
+  A synchronous text shadow covers multiple edits between UI ticks; focus loss
+  immediately blocks late mutating callbacks.
 * Windows uses IMM32 result/preedit strings and UTF-16 caret conversion,
   associates/disassociates the thread input context only on enable changes,
   positions composition/candidate windows, and serves `IMR_DOCUMENTFEED`.
 * X11 uses the maintained MIT-licensed `zed-xim` fork of xim-rs, pinned to
   `16f35a2c881b815a2b6cdfd6687988e84f8447d8`. Its transport shares the original
-  owned XCB connection and creates one input context per window, processes
-  incremental preedit/caret callbacks, and positions the candidate spot. It reads
+  owned XCB connection, replaces the input context when field identity or focus
+  changes, and processes incremental preedit/caret callbacks. Retired ICs remain
+  rejected until their destruction reply; fresh creation waits for that reply.
+  Negotiated event masks determine press/release forwarding and synchronous flags,
+  while unrequested events retain local keyboard handling. It positions the
+  candidate spot and reads
   `XMODIFIERS` and locale variables; it never mutates the host's environment or
   process-wide locale. An XIM server must be running before opening the window.
 
@@ -33,7 +39,8 @@ configuration for change detection, but only sends supported spot attributes.
 This is not a native Wayland backend; XWayland does not provide Wayland
 text-input-v3 support. Cocoa explicit replacement ranges are translated to ordered
 UTF-8 selection events before their associated preedit/commit. Input identity
-changes cancel the preceding native context composition.
+changes cancel the preceding native context composition. XIM forwarding follows
+[X.Org XIM protocol event masks](https://xorg.freedesktop.org/archive/current/doc/libX11/XIM/xim.html).
 
 ## Maintaining this patch
 
