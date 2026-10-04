@@ -1670,6 +1670,8 @@ dependencies = [
  "objc",
  "raw-window-handle",
  "wgpu",
+ "x11-dl",
+ "x11rb",
 ]
 
 [[package]]

@@ -239,7 +239,7 @@ fn semantic(scene: &mui::scene::ResolvedScene, request: &ActionRequest) -> Optio
         (Action::Click, _)
             if matches!(
                 role,
-                Some(mui_access::A11y::Button) | Some(mui_access::A11y::Toggle { .. })
+                Some(mui_access::A11y::Button | mui_access::A11y::Toggle { .. })
             ) =>
         {
             SemanticAction::activate(key)

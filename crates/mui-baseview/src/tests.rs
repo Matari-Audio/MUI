@@ -283,7 +283,7 @@ fn native_composition_reaches_the_driver_once() {
         fn build(&mut self, _: &mut Ui, input: &Input) -> El {
             self.seen.extend(input.ime.clone());
             self.text.push_str(&input.text);
-            mui::prelude::block(20.0, 20.0).into()
+            mui::prelude::block(20.0, 20.0)
         }
         fn changed(&mut self) -> bool {
             false
