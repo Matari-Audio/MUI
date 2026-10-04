@@ -1,4 +1,5 @@
 //! Opt-in native smoke. Select X11/Wayland in the parent process environment.
+//! Requires Linux coreutils `timeout` to bound the entire native subprocess group.
 //! `xvfb-run -a cargo test -p mui-winit --test native_windows -- --ignored`
 #![cfg(target_os = "linux")]
 
@@ -7,8 +8,13 @@
 fn two_native_windows_present_resize_and_close() {
     // Cargo has released its build lock before running integration tests. The
     // child is needed because winit requires the application's main thread.
-    let mut child = std::process::Command::new(env!("CARGO"))
+    // Kill the whole group if native initialization blocks, including Cargo's
+    // example child; killing only the Cargo wrapper would leave it running.
+    let status = std::process::Command::new("timeout")
         .args([
+            "--kill-after=5s",
+            "90s",
+            env!("CARGO"),
             "run",
             "--locked",
             "-p",
@@ -17,19 +23,7 @@ fn two_native_windows_present_resize_and_close() {
             "native_windows",
         ])
         .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .spawn()
-        .expect("start native smoke example");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
-    loop {
-        if let Some(status) = child.try_wait().expect("poll native smoke") {
-            assert!(status.success(), "native smoke returned {status}");
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            panic!("native smoke exceeded its process deadline");
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+        .status()
+        .expect("start bounded native smoke example");
+    assert!(status.success(), "native smoke returned {status}");
 }
