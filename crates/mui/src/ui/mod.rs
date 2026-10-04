@@ -135,7 +135,7 @@ pub struct Ui {
     capture_pose: Option<mui_scene::LocalPose>,
     actions: Vec<SemanticAction>,
     hit: Hit,
-    scene: Option<ResolvedScene>,
+    scene: Option<Arc<ResolvedScene>>,
     /// Everything kept under a node key between frames: see [`NodeState`].
     nodes: Nodes,
     /// Nodes that left the tree, still fading out where they stood.
@@ -392,6 +392,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_morph(id, progress)
     }
@@ -407,6 +408,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_solid_material(id, index, fill, border, width)
     }
@@ -419,6 +421,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_material_blend(id, blend)
     }
@@ -436,9 +439,24 @@ impl Ui {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.resolver.layout_stats()
     }
+    /// Borrow the last successfully resolved scene.
     pub fn scene(&self) -> Option<&ResolvedScene> {
-        self.scene.as_ref()
+        self.scene.as_deref()
     }
+    /// Retain the last scene in O(1), without borrowing this `Ui`.
+    ///
+    /// Hosts can take this snapshot under their model lock, then release the
+    /// lock before native presentation or callbacks. Repeated snapshots share
+    /// the same allocation until a frame resolves or a direct scene update is
+    /// applied. Later updates never change a retained snapshot.
+    ///
+    /// Drop snapshots after use so the next frame can recycle their buffers.
+    /// Direct [`Self::set_text`] and weld updates copy the scene only when a
+    /// snapshot is still retained; normal frame commits never clone it.
+    pub fn scene_snapshot(&self) -> Option<Arc<ResolvedScene>> {
+        self.scene.as_ref().map(Arc::clone)
+    }
+
     /// Swap what one text node says without resolving the tree again: the
     /// last frame's layout stands and only that node's glyphs are shaped.
     ///
@@ -468,6 +486,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(mui_scene::SceneError::NoTextLayer)?
             .set_text(id, s.as_ref())
     }
@@ -545,7 +564,7 @@ impl Ui {
         if self.wheel != Vec2::ZERO
             && let (Some(p), Some(s)) = (
                 self.pointer.pos,
-                self.scene.as_ref().and_then(|s| s.surface(id)),
+                self.scene.as_deref().and_then(|s| s.surface(id)),
             )
             && self.inside_surface(s, p)
         {
@@ -567,7 +586,7 @@ impl Ui {
     /// incompatible and non-finite requests are rejected without changing state.
     /// Custom controls must consume the matching action through `get`/`drag`.
     pub fn request_action(&mut self, action: SemanticAction) -> bool {
-        let Some(surface) = self.scene.as_ref().and_then(|s| s.surface(action.id())) else {
+        let Some(surface) = self.scene.as_deref().and_then(|s| s.surface(action.id())) else {
             return false;
         };
         if surface.disabled {
@@ -691,7 +710,7 @@ impl Ui {
     /// assert_eq!(ui.min_size(), Some(Size::new(56., 46.)));
     /// ```
     pub fn min_size(&self) -> Option<Size> {
-        Some(self.scene.as_ref()?.layout.min_size())
+        Some(self.scene.as_deref()?.layout.min_size())
     }
     /// The scene's font then its fallbacks, borrowed when there are none.
     fn fonts(&self) -> Option<std::borrow::Cow<'_, [Font]>> {
@@ -906,7 +925,7 @@ impl Ui {
         let keyed = self
             .focus
             .as_deref()
-            .filter(|id| keyed_edit(self.scene.as_ref(), id, &self.keys))
+            .filter(|id| keyed_edit(self.scene.as_deref(), id, &self.keys))
             .map(str::to_owned);
         let ids = std::mem::take(&mut self.actions)
             .into_iter()
@@ -934,7 +953,7 @@ impl Ui {
         if self
             .interaction
             .held()
-            .is_some_and(|k| off(self.scene.as_ref(), k))
+            .is_some_and(|k| off(self.scene.as_deref(), k))
         {
             self.cancel();
         }
@@ -943,12 +962,12 @@ impl Ui {
         if self
             .focus
             .as_deref()
-            .is_some_and(|k| off(self.scene.as_ref(), k))
+            .is_some_and(|k| off(self.scene.as_deref(), k))
         {
             self.focus = None;
         }
         let prev_held = self.interaction.held().map(str::to_owned);
-        let last_scene = self.scene.as_ref();
+        let last_scene = self.scene.as_deref();
         self.interaction
             .update_with(&self.hit, self.pointer, |key, tag, p| {
                 if tag.is_some() {
@@ -1123,7 +1142,7 @@ impl Ui {
                     size: Size::new(s[2].value, s[3].value),
                 }
             },
-            self.scene.as_ref(),
+            self.scene.as_deref(),
         )?;
         if self
             .scene
@@ -1233,7 +1252,11 @@ impl Ui {
             )
         });
         self.delivered = std::mem::take(&mut self.edits);
-        if let Some(old) = self.scene.replace(scene) {
+        if let Some(old) = self.scene.replace(Arc::new(scene))
+            && let Ok(old) = Arc::try_unwrap(old)
+        {
+            // A host retaining the previous frame still owns its buffers.
+            // Recycling is an allocation optimization, never a scene clone.
             self.resolver.recycle(old);
         }
         let repaint_after = self.repaint_after();
@@ -1244,7 +1267,7 @@ impl Ui {
             && self
                 .focus
                 .as_deref()
-                .and_then(|key| self.scene.as_ref()?.surface(key))
+                .and_then(|key| self.scene.as_deref()?.surface(key))
                 .is_some_and(|surface| {
                     !surface.disabled
                         && matches!(
@@ -1254,7 +1277,7 @@ impl Ui {
                 });
         self.resolved = true;
         Frame {
-            scene: self.scene.as_ref().expect("just set"),
+            scene: self.scene.as_deref().expect("just set"),
             animating,
             repaint_after,
             tip,

@@ -13,6 +13,7 @@ fn a_transition_lands_between_the_two_fills_and_settles() {
         &ui.frame(tree(false), None, Input::default(), 0.016)
             .unwrap(),
     );
+    let snapshot = ui.scene_snapshot().unwrap();
     let mid = solid(&ui.frame(tree(true), None, Input::default(), 0.016).unwrap());
     assert_ne!(mid, from, "it left the old fill");
     let mut t = 0.0;
@@ -33,6 +34,10 @@ fn a_transition_lands_between_the_two_fills_and_settles() {
             .unwrap(),
     );
     assert_eq!(to, want, "it settles on the declared fill");
+    assert_eq!(
+        snapshot.paint[0].paint, from,
+        "the retained frame stays at rest"
+    );
 }
 
 #[test]

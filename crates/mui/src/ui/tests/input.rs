@@ -658,6 +658,7 @@ fn editable_wrap_and_candidate_caret_use_current_bounds_on_first_frame_and_resiz
             Point::new(field.frame.x + g.caret.x, field.frame.y + g.caret.y)
         );
     }
+    let snapshot = ui.scene_snapshot().unwrap();
     let root = tree(&mut ui, &mut value);
     let frame = ui
         .frame(root, Some(Size::new(260., 80.)), Input::default(), 0.016)
@@ -667,6 +668,18 @@ fn editable_wrap_and_candidate_caret_use_current_bounds_on_first_frame_and_resiz
     assert!(
         g.lines.len() < first_count,
         "the resize frame uses the new width"
+    );
+    assert_eq!(
+        snapshot
+            .surface("f")
+            .unwrap()
+            .text_geometry
+            .as_ref()
+            .unwrap()
+            .lines
+            .len(),
+        first_count,
+        "the snapshot keeps the previous width's editable geometry"
     );
     assert!(g.caret.x + 2. <= field.frame.size.width);
     let (at, _) = frame.ime.expect("candidate caret after focus intake");

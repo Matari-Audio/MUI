@@ -278,8 +278,6 @@ impl<V: View> Handler<V> {
         // The lock covers the frame and a snapshot of its scene, not the
         // present: acquiring a surface texture can wait out a vsync, and a
         // host-thread close() or state load must not wait with it.
-        // ponytail: one scene clone per painted frame; have `Ui` hand out an
-        // `Arc<ResolvedScene>` if it shows in a profile.
         let mut accessibility_update = None;
         let ime_configuration;
         let scene = {
@@ -316,7 +314,7 @@ impl<V: View> Handler<V> {
             }
             self.unpainted |= fresh;
             if self.unpainted && self.gpu.is_some() {
-                s.ui.scene().cloned()
+                s.ui.scene_snapshot()
             } else {
                 None
             }

@@ -53,7 +53,7 @@ fn native_surface_presents_and_reopens() {
                     let mut gpu = open_gpu(&self.cx, (240, 200))?;
                     let mut h = handler((240, 200), 1.0);
                     h.step();
-                    let scene = lock(&h.shared).ui.scene().cloned().ok_or("no scene")?;
+                    let scene = lock(&h.shared).ui.scene_snapshot().ok_or("no scene")?;
                     for recreated in [false, true] {
                         if recreated {
                             // SAFETY: cx outlives gpu and the replacement surface.
@@ -321,4 +321,15 @@ fn native_composition_reaches_the_driver_once() {
         s.view.text.is_empty(),
         "composition has its own channel, never duplicated as typed text"
     );
+}
+
+#[test]
+fn scene_snapshot_does_not_hold_the_model_lock() {
+    let mut h = handler((640, 400), 1.0);
+    h.step();
+    let snapshot = lock(&h.shared).ui.scene_snapshot().unwrap();
+    let mut model = h.shared.try_lock().expect("native callback can reenter");
+    assert!(Arc::ptr_eq(&snapshot, &model.ui.scene_snapshot().unwrap()));
+    model.ui.blur();
+    assert!(snapshot.surface("k").is_some());
 }
