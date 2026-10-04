@@ -41,5 +41,9 @@ required-features = ["cpu"]
 # the test cannot drift apart.
 test = true
 
+[[example]]
+name = "large_lists"
+required-features = ["cpu"]
+
 [lints]
 workspace = true

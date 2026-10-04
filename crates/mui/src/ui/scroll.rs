@@ -3,12 +3,43 @@ use super::*;
 use mui_scene::Id;
 
 impl Ui {
+    /// Read declarations from the actual tree, after memo placeholders are
+    /// spliced. The same spec/limit is used by every resolve_after layout pass.
+    pub(super) fn virtual_scroll_extent(root: &El) -> Result<f64, SceneError> {
+        let mut extent: f64 = 0.0;
+        if let Some(value) = root.payload().extras().virtual_scroll_extent {
+            if !root.is_scroll() || !value.is_finite() || value <= 0.0 {
+                return Err(mui_layout::Error::InvalidValue.into());
+            }
+            extent = value;
+        }
+        for child in root.children() {
+            extent = extent.max(Self::virtual_scroll_extent(child)?);
+        }
+        Ok(extent)
+    }
+
     /// How far `id`'s children are scrolled to: the settled offset, which
     /// the drawn one springs toward.
     pub fn scroll(&self, id: impl Into<Id>) -> [f64; 2] {
         let id: Id = id.into();
         let id = id.as_str();
         (self.nodes.get(id).and_then(|n| n.scroll)).map_or([0.0, 0.0], |s| s.map(|s| s.target))
+    }
+
+    /// Set both the drawn and target scroll offsets immediately.
+    ///
+    /// Returns `false` for non-finite offsets. Negative offsets clamp to zero;
+    /// the next frame clamps the upper bound against its new content, allowing
+    /// callers to scroll into content inserted during this build. This is useful
+    /// for virtual lists, whose constructed rows must match the drawn offset.
+    pub fn set_scroll(&mut self, id: impl Into<Id>, offset: [f64; 2]) -> bool {
+        if !offset.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let id: Id = id.into();
+        node(&mut self.nodes, id.as_str()).scroll = Some(offset.map(|v| Spring::at(v.max(0.0))));
+        true
     }
 
     /// The wheel over `id` last frame, if any: `Some` only while the

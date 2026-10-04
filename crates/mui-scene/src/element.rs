@@ -389,6 +389,11 @@ pub struct Extras {
     pub border_join: Option<Id>,
     /// Set by the runtime on the root of a memoised subtree (`Ui::memo`).
     pub memo: Option<Memo>,
+    /// Validated logical scroll-content extent declared by a virtual list.
+    /// Allows its spacers to exceed the ordinary layout extent, only in the
+    /// frame containing this scroll root. Retained with memoized subtrees;
+    /// never changes a native surface size or the node/depth budgets.
+    pub virtual_scroll_extent: Option<f64>,
 }
 
 /// The root of a memoised subtree. A resolve records where each memo's
@@ -418,6 +423,7 @@ impl Extras {
         inset_surface: None,
         border_join: None,
         memo: None,
+        virtual_scroll_extent: None,
     };
 }
 impl Default for Extras {

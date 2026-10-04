@@ -1091,6 +1091,10 @@ impl Ui {
         heats: rustc_hash::FxHashMap<Id, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme.clone());
+        spec.limits.extent = spec
+            .limits
+            .extent
+            .max(Self::virtual_scroll_extent(&spec.root)?);
         spec.offered = offered;
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();
