@@ -121,17 +121,17 @@ enum Heights {
 
 impl Heights {
     fn variable(values: Vec<f64>) -> Self {
-        let base = values.len().next_power_of_two();
-        let mut tree = vec![0.0; base * 2];
-        tree[base..base + values.len()].copy_from_slice(&values);
+        let len = values.len();
+        let base = len.next_power_of_two();
+        let mut tree = values;
+        tree.resize(base * 2, 0.0);
+        tree.copy_within(..len, base);
+        tree[..base].fill(0.0);
         for i in (1..base).rev() {
             tree[i] = tree[i * 2] + tree[i * 2 + 1];
         }
         assert!(tree[1].is_finite(), "invalid list height");
-        Self::Variable {
-            len: values.len(),
-            tree,
-        }
+        Self::Variable { len, tree }
     }
     fn height(&self, index: usize) -> f64 {
         match self {
@@ -156,7 +156,7 @@ impl Heights {
                     }
                     if !right.is_multiple_of(2) {
                         right -= 1;
-                        b = tree[right] + b;
+                        b += tree[right];
                     }
                     left /= 2;
                     right /= 2;
