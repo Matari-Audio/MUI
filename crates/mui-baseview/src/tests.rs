@@ -2,7 +2,7 @@
 use super::*;
 use keyboard_types::Code;
 use mui::Ui;
-use mui::prelude::{El, Input, Paints, knob};
+use mui::prelude::{El, Input, knob};
 
 /// A knob that claims Escape.
 struct Knob {
@@ -90,6 +90,7 @@ fn dialog_parent_is_cleared_on_close_and_old_handler_drop_preserves_reopen() {
 #[test]
 #[ignore = "requires a live X11 display and graphics driver"]
 fn native_surface_presents_and_reopens() {
+    use mui::prelude::Paints;
     use std::sync::mpsc::{Sender, channel};
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
