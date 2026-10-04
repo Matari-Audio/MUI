@@ -2,7 +2,6 @@
 //! edits the focused keys imply.
 use std::ops::Range;
 
-use mui_geometry::Point;
 use mui_input::Key;
 use mui_scene::prelude::*;
 
@@ -159,15 +158,75 @@ fn edit_keys(
     (anchor, caret): (&mut usize, &mut usize),
     newline: Newline,
     rows: Option<(&Rows, usize)>,
+    geometry: Option<&mui_scene::TextGeometry>,
+    goal: &mut Option<f64>,
+    upstream: &mut bool,
 ) -> bool {
     let multi = rows.is_some();
     let mut submitted = false;
     let committed = ui.text(id).to_owned();
     let has_committed_text = !committed.is_empty();
-    for c in committed.chars().filter(|c| !c.is_control()) {
+    let native = ui.take_native_text(id);
+    let native_bytes: usize = native
+        .iter()
+        .filter_map(|e| match e {
+            mui_input::Ime::Commit(s) => Some(s.len()),
+            _ => None,
+        })
+        .sum();
+    let typed = committed.len().saturating_sub(native_bytes);
+    for c in committed[..typed].chars().filter(|c| !c.is_control()) {
         (*caret, _) = take(value, *anchor, *caret);
         insert(value, caret, c);
         *anchor = *caret;
+    }
+    let mut committed_native = false;
+    for operation in native {
+        match operation {
+            mui_input::Ime::Selection(range) => {
+                let (mut start, mut end) = (range.start, range.end);
+                // Before the first commit, native offsets describe the marked
+                // display string; later offsets describe the edited buffer.
+                if !committed_native && let Some(g) = geometry {
+                    if range.end > g.text.len()
+                        || !g.text.is_char_boundary(range.start)
+                        || !g.text.is_char_boundary(range.end)
+                    {
+                        continue;
+                    }
+                    start = g.display_to_source(range.start);
+                    end = g.display_to_source(range.end);
+                    if range.start < g.state.marked.end
+                        && range.end > g.state.marked.start
+                        && let Some(replacement) = &g.state.replacement
+                    {
+                        start = start.min(replacement.start);
+                        end = end.max(replacement.end);
+                    }
+                }
+                if start > end
+                    || end > value.len()
+                    || !value.is_char_boundary(start)
+                    || !value.is_char_boundary(end)
+                {
+                    continue;
+                }
+                *anchor = grapheme::floor(value, chars(value, start));
+                *caret = grapheme::floor(value, chars(value, end));
+            }
+            mui_input::Ime::Commit(s) => {
+                (*caret, _) = take(value, *anchor, *caret);
+                for c in s
+                    .chars()
+                    .filter(|c| !c.is_control() || (multi && *c == '\n'))
+                {
+                    insert(value, caret, c);
+                }
+                *anchor = *caret;
+                committed_native = true;
+            }
+            _ => {}
+        }
     }
     for k in ui.keys(id).to_vec() {
         let cmd = k.mods.ctrl || k.mods.cmd;
@@ -241,12 +300,42 @@ fn edit_keys(
             }
             Key::Left if !k.mods.shift && anchor != caret => moved = Some((*anchor).min(*caret)),
             Key::Right if !k.mods.shift && anchor != caret => moved = Some((*anchor).max(*caret)),
-            Key::Left => moved = Some(grapheme::previous(value, *caret)),
-            Key::Right => moved = Some(grapheme::next(value, *caret)),
+            Key::Left | Key::Right => {
+                moved = Some(geometry.map_or_else(
+                    || {
+                        if k.key == Key::Right {
+                            grapheme::next(value, *caret)
+                        } else {
+                            grapheme::previous(value, *caret)
+                        }
+                    },
+                    |g| {
+                        chars(
+                            value,
+                            g.visual_move(byte(value, *caret), k.key == Key::Right),
+                        )
+                    },
+                ))
+            }
             Key::Home | Key::End => {
                 let end = k.key == Key::End;
+                *upstream = end && !cmd;
                 moved = Some(match rows {
-                    Some((r, _)) if !cmd => r.home_end(ui, value, *caret, end),
+                    Some((r, _)) if !cmd => geometry.map_or_else(
+                        || r.home_end(ui, value, *caret, end),
+                        |g| {
+                            let line = &g.lines[g.row(g.source_to_display(byte(value, *caret)))];
+                            let stop = if end {
+                                line.carets.stops.last()
+                            } else {
+                                line.carets.stops.first()
+                            };
+                            chars(
+                                value,
+                                g.display_to_source(line.range.start + stop.map_or(0, |p| p.0)),
+                            )
+                        },
+                    ),
                     _ if end => value.chars().count(),
                     _ => 0,
                 });
@@ -259,10 +348,23 @@ fn edit_keys(
                         Key::PageUp => -(page as isize),
                         _ => page as isize,
                     };
-                    moved = Some(r.vertical(ui, value, *caret, step));
+                    moved = Some(match geometry {
+                        Some(g) => {
+                            let (b, x) = g.vertical_move(byte(value, *caret), step, *goal);
+                            *goal = Some(x);
+                            chars(value, b)
+                        }
+                        None => r.vertical(ui, value, *caret, step),
+                    });
                 }
             }
             _ => {}
+        }
+        if !matches!(k.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown) {
+            *goal = None;
+            if !matches!(k.key, Key::Home | Key::End) {
+                *upstream = false;
+            }
         }
         if let Some(to) = moved {
             *caret = to;
@@ -332,38 +434,40 @@ pub fn text_edit(
         grapheme::floor(value, anchor.min(n)),
         grapheme::floor(value, caret.min(n)),
     );
-    // Last frame's field is the only inner box the widget can see.
-    let last = ui.scene().and_then(|s| s.surface(id)).map(|s| s.frame.size);
-    let room = last.map(|s| s.width - 2.0 * PAD);
+    // Input is hit against the exact text the user saw, including preedit,
+    // scroll and bidi order. Painting is resolved later against current bounds.
+    let geometry = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .and_then(|s| s.text_geometry.clone());
+    let room = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .map(|s| (s.frame.size.width - 2. * PAD).max(0.01));
     let rows = multi.then(|| Rows {
         size,
-        // ponytail: before the first frame there is no width to wrap to, so
-        // the first frame breaks at newlines only; the next one wraps.
-        width: room.filter(|w| *w > 0.0).unwrap_or(1e9),
+        width: room.unwrap_or(1e9),
     });
-    let view = last.map_or(opts.rows.max(1) as f64 * lh, |s| s.height - 2.0 * PAD_Y);
-    let mut scroll = if multi { ui.text_scroll(id) } else { 0.0 };
-
-    // The pointer, against last frame's field: the text starts `PAD` in,
-    // slid by what kept last frame's caret in the room.
-    // ponytail: a composition shown last frame is not in that shift; a click
-    // mid-composition lands as if the preedit were not there.
+    let view = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .map_or(opts.rows.max(1) as f64 * lh, |s| {
+            (s.frame.size.height - 2. * PAD_Y).max(lh)
+        });
+    let scroll = geometry
+        .as_ref()
+        .map_or_else(|| ui.text_scroll(id), |g| g.scroll);
     let r = ui.get(id);
+    let (mut goal, mut upstream) = ui.text_navigation(id);
     if (r.pressed || r.dragged)
         && let Some(p) = ui.local(id)
     {
-        caret = if let Some(rows) = &rows {
-            let lines = rows.lines(ui, value);
-            let row = ((p.y - PAD_Y + scroll) / lh).floor().max(0.0) as usize;
-            let l = &lines[row.min(lines.len() - 1)];
-            chars(value, l.start) + ui.hit(&value[l.clone()], size, p.x - PAD)
-        } else {
-            let shift = room.map_or(0.0, |room| {
-                (caret_at(&ui.carets(value, size), byte(value, caret)) - room).max(0.0)
-            });
-            ui.hit(value, size, p.x - PAD + shift)
-        };
+        caret = geometry
+            .as_ref()
+            .map_or(0, |g| chars(value, g.hit(p).min(value.len())));
         caret = grapheme::floor(value, caret);
+        goal = None;
+        upstream = false;
         if r.pressed {
             anchor = caret;
         }
@@ -377,6 +481,7 @@ pub fn text_edit(
     let typing = focused && !(ui.text(id).is_empty() && ui.keys(id).is_empty());
     let before = typing.then(|| value.clone());
     let page = ((view / lh).floor() as usize).max(1);
+    let geometry = geometry.filter(|g| &*g.state.value == value.as_str());
     let submitted = focused
         && edit_keys(
             ui,
@@ -385,8 +490,12 @@ pub fn text_edit(
             (&mut anchor, &mut caret),
             opts.newline,
             rows.as_ref().map(|r| (r, page)),
+            geometry.as_deref(),
+            &mut goal,
+            &mut upstream,
         );
     ui.set_sel(id, anchor, caret);
+    ui.set_text_navigation(id, goal, upstream);
     if submitted && opts.blur_on_submit {
         ui.blur();
     }
@@ -395,252 +504,84 @@ pub fn text_edit(
         submitted,
     };
 
-    // The input method's composing text is shown at the caret and measured
-    // with the value, but never joins it: only a commit, which arrives as
-    // typed text above, edits `value`.
+    let source_selection = byte(value, anchor.min(caret))..byte(value, anchor.max(caret));
     let pre = focused
         .then(|| ui.preedit())
         .flatten()
         .map(|(t, c)| (t.to_owned(), c));
-    let base = byte(value, caret);
     let mut shown = value.clone();
-    if let Some((t, _)) = &pre {
-        shown.insert_str(base, t);
-    }
-    // The caret sits inside the preedit, where the IME put its cursor.
-    let at = match &pre {
-        Some((t, c)) => base + c.map_or(t.len(), |(s, _)| s.min(t.len())),
-        None => base,
-    };
-    // ponytail: a selection is not painted under a composition -- its ends
-    // were measured against the value and the preedit sits between them, so
-    // the highlight is dropped for the frames the composition lasts. The
-    // commit still replaces the selection. Measure the two runs separately if
-    // composing over a selection ever needs to look right.
-    let sel = match &pre {
-        Some(_) => 0..0,
-        None => byte(value, anchor.min(caret))..byte(value, anchor.max(caret)),
-    };
-    let pre_range = pre.as_ref().map_or(0..0, |(t, _)| base..base + t.len());
-    let on = focused && ui.blink();
-
-    let (body, caret_at_px, reader) = match &rows {
-        None => {
-            let layers = Layers {
-                ui,
-                shown: &shown,
-                at,
-                sel,
-                pre: pre_range,
-                on,
-                lh,
+    let (replacement, marked, at, sel) = match pre {
+        Some((t, c)) => {
+            let base = source_selection.start;
+            shown.replace_range(source_selection.clone(), &t);
+            // Platform ranges are untrusted byte offsets. Snap them backwards
+            // to a valid grapheme boundary before measuring or slicing.
+            let snap = |b: usize| {
+                use unicode_segmentation::UnicodeSegmentation;
+                t.grapheme_indices(true)
+                    .map(|(i, _)| i)
+                    .chain([t.len()])
+                    .take_while(|i| *i <= b.min(t.len()))
+                    .last()
+                    .unwrap_or(0)
             };
-            one_line(layers, room, value, base)
+            let (a, b) = c.map_or((t.len(), t.len()), |(a, b)| (snap(a), snap(b)));
+            (
+                Some(source_selection.clone()),
+                base..base + t.len(),
+                base + b,
+                base + a.min(b)..base + a.max(b),
+            )
         }
-        Some(rows) => {
-            let lines = rows.lines(ui, &shown);
-            let row = row_of(&lines, at);
-            // The wheel scrolls; an edit or a click brings the caret back.
-            scroll += r.wheel.y;
-            if typing || r.pressed || r.dragged {
-                let top = row as f64 * lh;
-                scroll = scroll.min(top).max(top + lh - view);
-            }
-            let content = lines.len() as f64 * lh;
-            scroll = scroll.clamp(0.0, (content - view).max(0.0));
-            ui.set_text_scroll(id, scroll);
-            let layers = Layers {
-                ui,
-                shown: &shown,
-                at,
-                sel,
-                pre: pre_range,
-                on,
-                lh,
-            };
-            let (el, x) = many_lines(layers, &lines, scroll, view);
-            let el = el.when(content > view, mui_scene::Styled::captures_wheel);
-            // ponytail: no per-character carets for a reader across lines;
-            // the value and the selection are still reported.
-            (el, Point::new(x, row as f64 * lh - scroll), Vec::new())
-        }
+        None => (None, 0..0, byte(value, caret), source_selection.clone()),
     };
-    let el = body
+    let mut el = text(shown)
+        .h(if multi {
+            opts.rows.max(1) as f64 * lh + 2. * PAD_Y
+        } else {
+            lh + 2. * PAD_Y
+        })
         .clip()
         .pad((PAD, PAD_Y))
-        .radius(6.0)
+        .radius(6.)
         .fill(Role::Field)
-        // The ring is declared beside the resting look rather than rebuilt
-        // from `focused` every frame; the runtime knows who has the focus.
         .on(State::Focus, |s| s.stroke(Role::Primary))
         .cursor(Cursor::Text)
         .focusable()
-        .when(multi, |e| e.h(opts.rows.max(1) as f64 * lh + 2.0 * PAD_Y))
+        .when(multi, mui_scene::Styled::captures_wheel)
         .a11y(A11y::TextInput {
             value: value.as_str().into(),
             selection: (anchor, caret),
-            carets: reader,
+            carets: Vec::new(),
         })
         .id(id);
+    let follow_caret = typing
+        || r.pressed
+        || r.dragged
+        || geometry
+            .as_ref()
+            .is_none_or(|g| g.state.caret != at || g.state.marked != marked);
+    el.payload_mut().extras_mut().editable_text = Some(mui_scene::EditableText {
+        value: value.as_str().into(),
+        selection: sel,
+        caret: at,
+        caret_upstream: upstream,
+        marked,
+        replacement,
+        multiline: multi,
+        caret_visible: focused
+            && ui.blink()
+            && ui.preedit().is_none_or(|(_, cursor)| cursor.is_some()),
+        scroll: if multi { scroll + r.wheel.y } else { 0. },
+        follow_caret,
+        insets: [PAD, PAD_Y],
+        previous_viewport: geometry.as_ref().map(|g| g.viewport),
+    });
+    if multi {
+        ui.set_text_scroll(id, scroll);
+    }
     if focused {
-        ui.set_ime_caret(
-            id,
-            Point::new(PAD + caret_at_px.x, PAD_Y + caret_at_px.y),
-            lh,
-        );
+        ui.set_ime_caret(id, mui_geometry::Point::new(PAD, PAD_Y), lh);
     }
     Response { el, changed: edit }
-}
-
-/// What a field's layers are built from, one line or many: the shown text
-/// (the value with any preedit spliced in at the caret), the caret's byte,
-/// the selection and preedit as byte ranges of it, whether the caret is lit
-/// this frame, and the line height.
-struct Layers<'a> {
-    ui: &'a Ui,
-    shown: &'a str,
-    at: usize,
-    sel: Range<usize>,
-    pre: Range<usize>,
-    on: bool,
-    lh: f64,
-}
-
-/// The selected part of a run, re-inked: the selected text on its own, in
-/// a box of the selection's fill, so its ink resolves on that fill. It sits
-/// where the run put that text, so it paints over its own glyphs.
-// ponytail: shaped on its own, a ligature or kerning pair across the
-// selection's edge may land a hair off the run's; shape once and split the
-// glyphs if a script ever shows it.
-fn reinked(selected: &str, x0: f64, x1: f64, lh: f64) -> El {
-    stack([text(selected.to_owned())
-        .w(x1 - x0)
-        .lines(1)
-        .anchor(Align::Start, Align::Center)])
-    .w(x1 - x0)
-    .h(lh)
-    .radius(2.0)
-    .fill(Role::Primary)
-}
-
-/// One line, scrolled sideways so the caret never leaves the box. The
-/// children keep the keys the single-line field always had -- `/0`
-/// selection, `/1` value, `/2` caret, `/3` preedit underline -- and the
-/// re-inked selection comes last, over the value.
-fn one_line(layers: Layers, room: Option<f64>, value: &str, base: usize) -> (El, Point, Vec<f64>) {
-    let Layers {
-        ui,
-        shown,
-        at,
-        sel,
-        pre,
-        on,
-        lh,
-    } = layers;
-    let size = ui.theme().text;
-    let carets = ui.carets(shown, size);
-    let x = |b: usize| caret_at(&carets, b);
-    let (lo, hi) = (x(sel.start), x(sel.end));
-    let (plo, phi) = (x(pre.start), x(pre.end));
-    // The value keeps its whole measured advance so the field stays one line
-    // -- a plain `text()` would wrap to the frame and grow the field -- and
-    // the frame clips it. Room comes from last frame's field, and the caret
-    // scrolls the layers together so it never leaves the box.
-    // ponytail: the first frame of an over-long value shows its head; it
-    // catches up on the next one.
-    let run = x(shown.len());
-    let room = room.unwrap_or(run);
-    let caret_x = x(at);
-    let shift = (caret_x - room).max(0.0);
-    // What a screen reader follows: a caret before each character of the
-    // value and after the last, in the field's space. A composition sits in
-    // the value's gap at the caret, so the characters after it sit after it.
-    let tail = pre.len();
-    let reader = (value.char_indices().map(|(b, _)| b))
-        .chain([value.len()])
-        .map(|b| PAD - shift + x(if b < base { b } else { b + tail }))
-        .collect();
-    let mut children = vec![
-        block(hi - lo, size)
-            .anchor(Align::Start, Align::Center)
-            .offset(lo - shift, 0.0)
-            .when(hi > lo, |e| e.fill(Role::Primary)),
-        text(shown.to_owned())
-            .w(run)
-            .lines(1)
-            .anchor(Align::Start, Align::Center)
-            .offset(-shift, 0.0),
-        block(2.0, size)
-            .anchor(Align::Start, Align::Center)
-            .offset(caret_x - shift, 0.0)
-            .when(on, |e| e.fill(Role::Ink)),
-        block(phi - plo, 2.0)
-            .anchor(Align::Start, Align::End)
-            .offset(plo - shift, 0.0)
-            .when(phi > plo, |e| e.fill(Role::Ink)),
-    ];
-    if hi > lo {
-        children.push(
-            reinked(&shown[sel.clone()], lo, hi, lh)
-                .anchor(Align::Start, Align::Center)
-                .offset(lo - shift, 0.0),
-        );
-    }
-    (stack(children), Point::new(caret_x - shift, 0.0), reader)
-}
-
-/// Many lines, only the rows in view built: a line's run, the re-inked
-/// selection over it, then the caret and the preedit underline on top.
-fn many_lines(layers: Layers, lines: &[Range<usize>], scroll: f64, view: f64) -> (El, f64) {
-    let Layers {
-        ui,
-        shown,
-        at,
-        sel,
-        pre,
-        on,
-        lh,
-    } = layers;
-    let size = ui.theme().text;
-    let first = (scroll / lh).floor().max(0.0) as usize;
-    let last = (((scroll + view) / lh).ceil().max(0.0) as usize).min(lines.len());
-    let caret_row = row_of(lines, at);
-    let mut caret_x = 0.0;
-    let mut children = Vec::new();
-    for (row, l) in lines.iter().enumerate().take(last).skip(first) {
-        let line = &shown[l.clone()];
-        let carets = ui.carets(line, size);
-        let x = |b: usize| caret_at(&carets, b.clamp(l.start, l.end) - l.start);
-        let run = x(l.end);
-        let y = row as f64 * lh - scroll;
-        children.push(text(line.to_owned()).w(run).lines(1).at(0.0, y));
-        // A selection running on past this line's end takes a sliver more,
-        // so a selected newline is visible.
-        if sel.start < l.end.max(l.start + 1) && sel.end > l.start {
-            let x0 = x(sel.start);
-            let x1 = if sel.end > l.end {
-                run + size * 0.3
-            } else {
-                x(sel.end)
-            };
-            if x1 > x0 {
-                let (b0, b1) = (sel.start.max(l.start), sel.end.min(l.end));
-                children.push(reinked(&shown[b0..b1], x0, x1, lh).at(x0, y));
-            }
-        }
-        if row == caret_row {
-            caret_x = x(at);
-            let (plo, phi) = (x(pre.start), x(pre.end));
-            if phi > plo {
-                children.push(block(phi - plo, 2.0).at(plo, y + lh - 2.0).fill(Role::Ink));
-            }
-        }
-    }
-    let caret_y = caret_row as f64 * lh - scroll;
-    children.push(
-        block(2.0, lh)
-            .at(caret_x, caret_y)
-            .when(on, |e| e.fill(Role::Ink)),
-    );
-    (stack(children), caret_x)
 }

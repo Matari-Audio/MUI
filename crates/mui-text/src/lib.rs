@@ -17,13 +17,15 @@ mod caret;
 mod error;
 mod font;
 mod lines;
+mod offsets;
 mod outline;
 mod shape;
 
-pub use caret::{caret_positions, caret_x, hit_index};
+pub use caret::{CaretCluster, CaretMap, caret_positions, caret_x, hit_index};
 pub use error::Error;
 pub use font::{Axes, Axis, AxisInfo, Font, Weight, axes, normalized_coords};
 pub use lines::{Line, break_lines, break_lines_from_advances, char_advances, min_content_width};
+pub use offsets::{byte_to_utf16, utf16_range_to_bytes, utf16_to_byte};
 pub use outline::glyph_path;
 pub use shape::{Glyph, TextRun, shape_run, text_run};
 

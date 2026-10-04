@@ -20,6 +20,7 @@ use mui_scene::{
 use std::sync::Arc;
 
 mod input;
+pub use input::TextInputState;
 mod memo;
 mod motion;
 mod scroll;
@@ -1170,6 +1171,10 @@ impl Ui {
         // The caret area a field asked for, moved into the scene's space.
         let ime = self.ime_caret.take().and_then(|(id, at, h)| {
             let s = scene.surface(&id)?;
+            let (at, h) = s
+                .text_geometry
+                .as_ref()
+                .map_or((at, h), |g| (g.caret, g.line_height));
             let f = s.frame;
             let rect = s.transform.transform_rect_bbox(mui_geometry::Rect::new(
                 f.x + at.x,
@@ -1274,11 +1279,18 @@ struct NodeState {
     sel: Option<(usize, usize)>,
     /// How far a multi-line field's lines are scrolled up, in units.
     text_scroll: Option<f64>,
+    text_edit: Option<Box<TextEditState>>,
     /// What a widget keeps that is not the caller's value -- a picker's hue
     /// at zero saturation, a drag value's half-typed text.
     stash: Option<Box<dyn Any + Send>>,
 }
 
+#[derive(Default)]
+struct TextEditState {
+    goal: Option<f64>,
+    upstream: bool,
+    native: Vec<Ime>,
+}
 impl NodeState {
     /// End-of-frame upkeep: drop what nothing keeps. A seen part survives
     /// once more; so does an unseen one inside a reused memo (`kept`), whose
@@ -1315,6 +1327,7 @@ impl NodeState {
             self.scroll = None;
             self.sel = None;
             self.text_scroll = None;
+            self.text_edit = None;
             self.stash = None;
         }
         self.springs.is_some()
@@ -1327,6 +1340,7 @@ impl NodeState {
             || self.scroll.is_some()
             || self.sel.is_some()
             || self.text_scroll.is_some()
+            || self.text_edit.is_some()
             || self.stash.is_some()
     }
 }

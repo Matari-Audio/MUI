@@ -643,6 +643,9 @@ pub enum Ime {
         text: String,
         cursor: Option<(usize, usize)>,
     },
+    /// A native replacement selection in UTF-8 bytes of the displayed edit
+    /// buffer. Ordered with Commit/Preedit events in the same input batch.
+    Selection(std::ops::Range<usize>),
     Commit(String),
     Disabled,
 }

@@ -1,7 +1,96 @@
 //! Focus, keys, clipboard, IME, pointer states, tips and drag-and-drop.
 use super::*;
 
+/// Current focused native surrounding-text snapshot. Ranges use UTF-8 bytes;
+/// platforms using UTF-16 can convert with `mui_text::byte_to_utf16`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextInputState {
+    /// Editable field identity; native contexts reset when this changes.
+    pub id: String,
+    pub text: String,
+    pub selection: std::ops::Range<usize>,
+    pub marked: Option<std::ops::Range<usize>>,
+}
+
 impl Ui {
+    /// The displayed focused edit buffer, including marked composition. Its
+    /// selection and geometry come from the same resolved frame as `Frame::ime`.
+    pub fn text_input_state(&self) -> Option<TextInputState> {
+        let surface = self.scene()?.surface(self.focus_key()?)?;
+        let geometry = surface.text_geometry.as_ref()?;
+        Some(TextInputState {
+            id: self.focus_key()?.to_owned(),
+            text: geometry.text.to_string(),
+            selection: if geometry.state.selection.is_empty() {
+                geometry.state.caret..geometry.state.caret
+            } else {
+                geometry.state.selection.clone()
+            },
+            marked: (!geometry.state.marked.is_empty()).then(|| geometry.state.marked.clone()),
+        })
+    }
+
+    /// Set a native replacement selection in UTF-8 bytes of the displayed
+    /// buffer. Invalid ranges are rejected; offsets into a marked span map to
+    /// the original replacement range before the next commit edits the value.
+    pub fn set_text_input_selection(&mut self, range: std::ops::Range<usize>) -> bool {
+        use unicode_segmentation::UnicodeSegmentation;
+        let Some(id) = self.focus_key().map(str::to_owned) else {
+            return false;
+        };
+        let Some(g) = self
+            .scene()
+            .and_then(|s| s.surface(&id))
+            .and_then(|s| s.text_geometry.as_ref())
+        else {
+            return false;
+        };
+        if range.start > range.end
+            || range.end > g.text.len()
+            || !g.text.is_char_boundary(range.start)
+            || !g.text.is_char_boundary(range.end)
+        {
+            return false;
+        }
+        let collapsed = range.is_empty();
+        let mut start = g.display_to_source(range.start);
+        let mut end = g.display_to_source(range.end);
+        if range.start < g.state.marked.end
+            && range.end > g.state.marked.start
+            && let Some(replacement) = &g.state.replacement
+        {
+            start = start.min(replacement.start);
+            end = end.max(replacement.end);
+        }
+        let source = &g.state.value;
+        let floor = |byte: usize| {
+            source
+                .grapheme_indices(true)
+                .map(|(b, _)| b)
+                .chain([source.len()])
+                .take_while(|b| *b <= byte)
+                .last()
+                .unwrap_or(0)
+        };
+        let start = floor(start);
+        let end = if collapsed {
+            start
+        } else {
+            source
+                .grapheme_indices(true)
+                .map(|(b, _)| b)
+                .chain([source.len()])
+                .find(|b| *b >= end)
+                .unwrap_or(source.len())
+        };
+        let selection = (
+            source[..start].chars().count(),
+            source[..end].chars().count(),
+        );
+        self.set_sel(&id, selection.0, selection.1);
+        true
+    }
+
     /// The clipboard's text now, for an app's own Paste button: the
     /// [`Clipboard`] if the host gave one, else what the host handed in on
     /// this frame's [`Input::clipboard`].
@@ -377,6 +466,35 @@ impl Ui {
     pub fn dismissed(&self, ids: &[&str]) -> bool {
         self.clicked_outside(ids) || self.keys.iter().any(|k| k.key == Key::Escape)
     }
+    /// Keep a selection endpoint on the previous visual line when a soft
+    /// wrap shares the same logical byte offset with the next line's start.
+    /// Native accessibility clients call this beside their selection action.
+    pub fn set_text_selection_affinity(&mut self, id: impl Into<Id>, upstream: bool) {
+        let id = id.into();
+        node(&mut self.nodes, id.as_str())
+            .text_edit
+            .get_or_insert_with(Default::default)
+            .upstream = upstream;
+    }
+    pub(crate) fn text_navigation(&self, id: &str) -> (Option<f64>, bool) {
+        self.nodes
+            .get(id)
+            .and_then(|n| n.text_edit.as_ref())
+            .map_or((None, false), |e| (e.goal, e.upstream))
+    }
+    pub(crate) fn set_text_navigation(&mut self, id: &str, goal: Option<f64>, upstream: bool) {
+        let e = node(&mut self.nodes, id)
+            .text_edit
+            .get_or_insert_with(Default::default);
+        e.goal = goal;
+        e.upstream = upstream;
+    }
+    pub(crate) fn take_native_text(&mut self, id: &str) -> Vec<Ime> {
+        self.nodes
+            .get_mut(id)
+            .and_then(|n| n.text_edit.as_mut())
+            .map_or_else(Vec::new, |e| std::mem::take(&mut e.native))
+    }
     pub(crate) fn text_scroll(&self, id: &str) -> f64 {
         self.nodes
             .get(id)
@@ -630,6 +748,15 @@ impl Ui {
         self.keys = keys;
         self.typed = text;
         for e in ime {
+            if matches!(e, Ime::Selection(_) | Ime::Commit(_))
+                && let Some(id) = self.focus.as_deref()
+            {
+                node(&mut self.nodes, id)
+                    .text_edit
+                    .get_or_insert_with(Default::default)
+                    .native
+                    .push(e.clone());
+            }
             match e {
                 // A commit is typed text: it inserts at the caret and
                 // replaces the selection exactly as a keystroke would.
@@ -644,6 +771,7 @@ impl Ui {
                         .filter(|(s, e)| text.is_char_boundary(*s) && text.is_char_boundary(*e));
                     self.preedit = (!text.is_empty()).then_some((text, cursor));
                 }
+                Ime::Selection(_) => {}
                 Ime::Enabled | Ime::Disabled => self.preedit = None,
             }
         }

@@ -274,6 +274,8 @@ pub struct ResolvedSurface {
     /// Current authored text, used as the accessible name unless explicitly
     /// overridden by semantics. Live readout updates change this too.
     pub text_value: Option<Arc<str>>,
+    /// Final-frame editable layout, including composition and scroll.
+    pub text_geometry: Option<Arc<crate::TextGeometry>>,
     /// The nearest clipping ancestor's frame, for hit-testing.
     ///
     /// This is kept as a rectangle for compatibility with the input adapter.

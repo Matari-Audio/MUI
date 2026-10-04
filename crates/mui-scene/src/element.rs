@@ -348,6 +348,8 @@ pub struct Element {
 /// The rarely set half of an [`Element`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
+    /// Editing layers resolved against the final text frame.
+    pub editable_text: Option<crate::EditableText>,
     /// Paint-only clockwise radians about the final frame's centre.
     pub rotation: Option<f64>,
     /// A string this text node is at least as wide as, whatever it currently
@@ -399,6 +401,7 @@ pub struct Memo {
 }
 impl Extras {
     const NONE: Self = Self {
+        editable_text: None,
         rotation: None,
         reserve: None,
         tip: None,
