@@ -2,7 +2,90 @@
 use super::*;
 use mui_material::Capture;
 
+/// Policy for decorative and interactive UI motion. Explicit media timelines
+/// (`Keys::at`, CUT, and audio/video playback) keep their own clocks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MotionPolicy {
+    /// Follow the preference supplied by the host. Until supplied, animate.
+    #[default]
+    System,
+    /// Animate UI transitions even if the host requests reduced motion.
+    Full,
+    /// Show final UI states immediately, without animation wakeups.
+    Reduced,
+}
+
+/// Step UI motion without changing a spring's tuning when preferences change.
+pub(super) fn step_spring(s: &mut Spring, dt: f64, reduced: bool) -> bool {
+    if reduced {
+        s.value = s.target;
+        s.velocity = 0.;
+        false
+    } else {
+        s.step(dt)
+    }
+}
+
 impl Ui {
+    /// The configured UI motion policy.
+    pub fn motion_policy(&self) -> MotionPolicy {
+        self.motion_policy
+    }
+    /// Whether UI effects currently resolve directly to their endpoints.
+    pub fn reduced_motion(&self) -> bool {
+        match self.motion_policy {
+            MotionPolicy::System => self.system_reduced_motion,
+            MotionPolicy::Full => false,
+            MotionPolicy::Reduced => true,
+        }
+    }
+    /// Set an application override. Returns whether the effective preference
+    /// changed: a host should request a redraw only when this returns `true`.
+    pub fn set_motion_policy(&mut self, policy: MotionPolicy) -> bool {
+        let before = self.reduced_motion();
+        self.motion_policy = policy;
+        self.motion_changed(before)
+    }
+    /// Update the OS preference at startup or when its accessibility setting
+    /// changes. Overrides remain in effect. Returns whether a redraw is needed.
+    pub fn set_system_reduced_motion(&mut self, reduced: bool) -> bool {
+        let before = self.reduced_motion();
+        self.system_reduced_motion = reduced;
+        self.motion_changed(before)
+    }
+    fn motion_changed(&mut self, before: bool) -> bool {
+        let reduced = self.reduced_motion();
+        if before == reduced {
+            return false;
+        }
+        // Cached styled subtrees must be rebuilt with the new preference.
+        for kept in self.kept.values_mut() {
+            kept.still = false;
+        }
+        if reduced {
+            self.ghosts.clear();
+            self.play_until = self.time;
+            for n in self.nodes.values_mut() {
+                for s in n
+                    .springs
+                    .iter_mut()
+                    .flatten()
+                    .chain(n.scroll.iter_mut().flatten())
+                    .chain(n.glide.iter_mut().flat_map(|(_, s)| s))
+                    .chain(n.tween.iter_mut().map(|(_, s)| s))
+                    .chain(
+                        n.motion
+                            .iter_mut()
+                            .flat_map(|(_, ch)| ch.iter_mut().map(|(_, s)| s)),
+                    )
+                {
+                    step_spring(s, 0., true);
+                }
+            }
+        }
+        true
+    }
+
     /// A keyed spring anyone can read while building the tree: pass the value
     /// you want, get the value to draw. A knob's sweep drawn from
     /// `ui.tween("cutoff", v)` glides when a preset changes it and still
@@ -18,11 +101,15 @@ impl Ui {
     pub fn tween_with(&mut self, id: impl Into<Id>, target: f64, spring: Spring) -> f64 {
         let id: Id = id.into();
         let id = id.as_str();
+        let reduced = self.reduced_motion();
         let (seen, s) = node(&mut self.nodes, id)
             .tween
             .get_or_insert_with(|| (false, spring.seeded(target)));
         *seen = true;
         s.to(target);
+        if reduced {
+            step_spring(s, 0., true);
+        }
         let (value, rest) = (s.value, at_rest(s));
         self.reads(id, rest);
         value
@@ -41,7 +128,9 @@ impl Ui {
     /// read: an entrance, an onboarding reveal, a pulse on a beat. The frame
     /// keeps reporting `animating` until the last key lands. Stop reading
     /// `id` for a frame and it starts over the next time it is read; see
-    /// also [`Ui::replay`].
+    /// also [`Ui::replay`]. Reduced motion returns the final declared value
+    /// immediately. A completed UI play lands exactly on that value, while
+    /// direct `Keys::at` sampling can keep evaluating a spring past its last key.
     ///
     /// ```
     /// use mui::prelude::*;
@@ -52,14 +141,26 @@ impl Ui {
     pub fn play(&mut self, id: impl Into<Id>, keys: &Keys) -> f64 {
         let id: Id = id.into();
         let id = id.as_str();
+        let reduced = self.reduced_motion();
         let now = self.time;
         let (seen, start) = node(&mut self.nodes, id).play.get_or_insert((false, now));
         *seen = true;
+        if reduced {
+            // Mark completion until replay or an unread frame. This avoids
+            // subtract/add rounding restarting an entrance on preference changes.
+            *start = f64::NEG_INFINITY;
+            self.reads(id, true);
+            return keys.target();
+        }
         let end = *start + keys.end();
         if now < end {
             self.play_until = self.play_until.max(end);
         }
-        let value = keys.at(now - *start);
+        let value = if now >= end {
+            keys.target()
+        } else {
+            keys.at(now - *start)
+        };
         self.reads(id, now >= end);
         value
     }
@@ -74,6 +175,7 @@ impl Ui {
     /// Retarget and step the hover and press springs. Returns whether one is
     /// still moving.
     pub(super) fn hover_springs(&mut self, root: &El, dt: f64) -> bool {
+        let reduced = self.reduced_motion();
         let (hovered, held) = (self.interaction.hovered(), self.interaction.held());
         // Identity and state ownership are separate. A named layout surface
         // still participates in hit testing, while only an interactive role
@@ -92,7 +194,7 @@ impl Ui {
                 (hovered && hovered_policy[0]) || (held && held_policy[0]),
             ));
             p.to(f64::from(held && held_policy[1]));
-            animating |= h.step(dt) | p.step(dt);
+            animating |= step_spring(h, dt, reduced) | step_spring(p, dt, reduced);
         }
         // A target that just earned springs starts them from rest, stepped
         // as the rest were.
@@ -102,7 +204,7 @@ impl Ui {
                 let mut s = [Spring::at(0.0), Spring::at(0.0)];
                 for (s, on) in s.iter_mut().zip(on) {
                     s.to(f64::from(on));
-                    animating |= s.step(dt);
+                    animating |= step_spring(s, dt, reduced);
                 }
                 n.springs = Some(s);
             }
@@ -119,6 +221,7 @@ impl Ui {
     /// Style the tree by state and step every transition and tween. Returns
     /// whether one is still moving, and the shapes the styled tree declares.
     pub(super) fn sweep(&mut self, root: &mut El, dt: f64) -> (bool, Shapes) {
+        let reduced = self.reduced_motion();
         let pal = self.theme.palette;
         // Scrolls step before the walk slides the tree by them.
         let mut animating = false;
@@ -127,10 +230,10 @@ impl Ui {
                 // The tree already drew the value before this step: a step
                 // that snaps onto the target still owes the frame that shows it.
                 let drawn = s.value;
-                animating |= s.step(dt) || s.value != drawn;
+                animating |= step_spring(s, dt, reduced) || s.value != drawn;
             }
             for s in n.scroll.iter_mut().flatten() {
-                animating |= s.step(dt);
+                animating |= step_spring(s, dt, reduced);
             }
         }
         let mut path = std::mem::take(&mut self.path);
@@ -141,6 +244,7 @@ impl Ui {
             focus_visible: self.focus_visible,
             nodes: &mut self.nodes,
             dt,
+            reduced,
             shaped: Shapes::default(),
         };
         animating |= sweep.node(root, &mut path, false);
@@ -157,6 +261,10 @@ impl Ui {
         shaped: Shapes,
         dt: f64,
     ) -> bool {
+        let reduced = self.reduced_motion();
+        if reduced {
+            self.ghosts.clear();
+        }
         let mut animating = false;
         for (key, shape, spring) in shaped.morphs {
             let Some(surface) = scene.surface(&key) else {
@@ -185,7 +293,7 @@ impl Ui {
                 m.shown = target_local;
                 continue;
             };
-            let moving = m.t.step(dt);
+            let moving = step_spring(&mut m.t, dt, reduced);
             animating |= moving;
             m.shown = match mui_geometry::morph(from, &target_local, m.t.value) {
                 Ok(p) if moving => p,
@@ -213,6 +321,9 @@ impl Ui {
                     p.rect = None;
                 }
             }
+        }
+        if reduced {
+            return false;
         }
         // Gone this frame: last frame's paint of every appearing node that
         // left, kept to fade. One that came back is simply there again; one
@@ -395,6 +506,7 @@ pub(super) fn transitions(
     motion: &mut Option<Channels>,
     pal: &Palette,
     dt: f64,
+    reduced: bool,
 ) -> bool {
     let mut animating = false;
     if let Some(spring) = n.payload().extras().transition {
@@ -427,7 +539,7 @@ pub(super) fn transitions(
                 s.value += ((declared - s.value) / 360.0).round() * 360.0;
             }
             s.to(declared);
-            animating |= s.step(dt);
+            animating |= step_spring(s, dt, reduced);
             s.value
         });
         // A channel the node stopped declaring (a shadow removed, a stop
@@ -496,6 +608,7 @@ pub(super) struct Sweep<'a> {
     pub(super) focus_visible: bool,
     pub(super) nodes: &'a mut Nodes,
     pub(super) dt: f64,
+    pub(super) reduced: bool,
     /// What morphs, gathered on the way past.
     pub(super) shaped: Shapes,
 }
@@ -522,7 +635,7 @@ impl Sweep<'_> {
         declared_states(n, springs, [focused, focused && self.focus_visible], off);
         let mut animating = st
             .as_mut()
-            .is_some_and(|s| transitions(n, &mut s.motion, self.pal, self.dt));
+            .is_some_and(|s| transitions(n, &mut s.motion, self.pal, self.dt, self.reduced));
         state(
             n,
             self.pal,

@@ -19,6 +19,7 @@ use mui_scene::{
 };
 use std::sync::Arc;
 
+mod group;
 mod input;
 pub use input::TextInputState;
 mod memo;
@@ -27,6 +28,7 @@ mod scroll;
 mod text_runs;
 use input::*;
 use memo::*;
+pub use motion::MotionPolicy;
 use motion::*;
 pub use text_runs::TextRuns;
 
@@ -117,6 +119,8 @@ pub enum Edit {
 /// runtime remembers what is hovered, held, and mid-animation.
 pub struct Ui {
     theme: Theme,
+    motion_policy: MotionPolicy,
+    system_reduced_motion: bool,
     font: Option<Font>,
     /// Optional faces tried per grapheme after [`Self::font`].
     fallback_fonts: Vec<Font>,
@@ -265,6 +269,8 @@ impl Ui {
     pub fn new(theme: Theme) -> Self {
         Self {
             theme,
+            motion_policy: MotionPolicy::default(),
+            system_reduced_motion: false,
             font: None,
             fallback_fonts: Vec::new(),
             runs: TextRuns::default(),
@@ -805,7 +811,8 @@ impl Ui {
             // The view's, read in its build; the `Ui` hit-tests the newest.
             trail: _,
         } = input.into();
-        let was = std::mem::replace(&mut self.pointer, pointer).buttons;
+        let previous_pointer = std::mem::replace(&mut self.pointer, pointer);
+        let was = previous_pointer.buttons;
         let was_buttons = was;
         // A non-finite delta reaches no widget, as it reaches no scroller.
         self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
@@ -823,11 +830,15 @@ impl Ui {
             (c, _) => c,
         };
         let previous_blink = self.blink();
+        // Plays were read while building this tree, before advancing the clock.
+        // Even a frame crossing the last key owes the tree drawing its endpoint.
+        let playing = self.time < self.play_until;
         self.time += dt;
+        // Consume this build's request. An unread/removed play must not keep an
+        // otherwise idle UI awake until its old deadline.
+        self.play_until = self.time;
         // A release is read by the *next* tree, so that frame must come even
         // when nothing is moving.
-        // A key still to land wants the frame that shows it; the clock that
-        // decides is the one this frame advances to.
         // Inline ids: no heap copy for a key under 47 bytes.
         let before = [
             self.interaction.hovered().map(Id::runtime),
@@ -838,7 +849,23 @@ impl Ui {
         // the whole tree.
         let mut root = root;
         let mut memos = self.splice(&mut root);
-        let mut animating = self.reconcile() | (self.time < self.play_until);
+        let captured = self.reconcile();
+        // Reduced motion does not poll a stationary gesture. Capture edges and
+        // moved drag samples still owe the next tree its up-to-date response.
+        let capture_wake = if self.reduced_motion() {
+            before[1].as_deref() != self.interaction.held()
+                || (captured
+                    && (previous_pointer.pos != self.pointer.pos
+                        || previous_pointer.buttons != self.pointer.buttons
+                        || !keys.is_empty()
+                        || !text.is_empty()
+                        || !ime.is_empty()
+                        || self.wheel != Vec2::ZERO
+                        || self.pasted.is_some()))
+        } else {
+            captured
+        };
+        let mut animating = capture_wake | playing;
         // The tree just built read last frame's hover: a new target is owed
         // the tree that knows it, even with no spring to carry it there.
         animating |= self.interaction.hovered() != before[0].as_deref();
@@ -1071,6 +1098,7 @@ impl Ui {
         spec.weld_backend = self.weld_backend;
         spec.scroll_bars = Some(heats);
         let mut glided = false;
+        let reduced = self.reduced_motion();
         let nodes = &mut self.nodes;
         let scene = self.resolver.resolve_after(
             &spec,
@@ -1083,7 +1111,7 @@ impl Ui {
                 *seen = true;
                 for (s, t) in s.iter_mut().zip(t) {
                     s.to(t);
-                    glided |= s.step(dt);
+                    glided |= step_spring(s, dt, reduced);
                 }
                 mui_scene::Frame {
                     x: s[0].value,

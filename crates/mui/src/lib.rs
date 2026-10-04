@@ -40,7 +40,7 @@ pub mod widgets;
 pub use actions::SemanticAction;
 pub use widgets::presets;
 
-pub use ui::{Clipboard, Edit, Frame, Interaction, TextInputState, TextRuns, Ui};
+pub use ui::{Clipboard, Edit, Frame, Interaction, MotionPolicy, TextInputState, TextRuns, Ui};
 
 /// What a MUI app writes against, named one by one: the widgets, the DSL,
 /// the input a host hands in. No globs, so nothing arrives here because a
@@ -53,7 +53,7 @@ pub mod prelude {
         PickerShape, Response, TextEdit, TextOpts, Variant, bins, bins_hover, button, color_picker,
         curve, drag_value, knob, oklch_picker, slider, stepped, text_edit, text_input, toggle,
     };
-    pub use crate::{Edit, Frame, Interaction, SemanticAction, Ui};
+    pub use crate::{Edit, Frame, Interaction, MotionPolicy, SemanticAction, Ui};
     pub use mui_input::{
         Axis, Button, Buttons, FINE_DRAG, Ime, Input, Key, KeyPress, Mods, PointerInput, Vec2,
     };
