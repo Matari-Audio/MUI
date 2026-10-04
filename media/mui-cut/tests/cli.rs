@@ -921,6 +921,8 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/plain");
     let lock = std::fs::read(fixture.join("Cargo.lock")).unwrap();
     let dir = scratch("add");
+    // Reuse sound tests' adapter build cache without sharing mui-cut's target.
+    let adapter_cache = Path::new(env!("CARGO_TARGET_TMPDIR")).join("adapters");
     let project = dir.join("p.cut.json");
     std::fs::write(
         &project,
@@ -933,7 +935,7 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
         .arg("--project")
         .arg(&project)
         .arg("--json")
-        .env("MUI_CUT_CACHE", dir.join("cache"))
+        .env("MUI_CUT_CACHE", &adapter_cache)
         .output()
         .unwrap();
     assert!(
@@ -944,8 +946,9 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
     let r: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(r["framework"], "mui");
     assert_eq!(r["id"], "fixture-plain");
+    let adapter = Path::new(r["adapter"].as_str().unwrap());
     assert!(
-        Path::new(r["adapter"].as_str().unwrap()).is_file(),
+        adapter.is_file(),
         "the report names the built adapter: {}",
         r["adapter"]
     );
@@ -959,11 +962,15 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
         lock,
         "the plugin's lock is untouched"
     );
-    // The adapter's lock: MUI from the local path (no git source).
-    let adapters = std::fs::read_dir(dir.join("cache/adapters")).unwrap();
-    let built =
-        std::fs::read_to_string(adapters.flatten().next().unwrap().path().join("Cargo.lock"))
-            .unwrap();
+    // Use the reported artifact's exact adapter, since the cache contains other
+    // fixtures and checkouts. Its lock has MUI from the local path (no git source).
+    let built = std::fs::read_to_string(
+        adapter_cache
+            .join("adapters")
+            .join(adapter.file_stem().unwrap())
+            .join("Cargo.lock"),
+    )
+    .unwrap();
     let mui = built
         .split("[[package]]")
         .find(|b| b.contains("\nname = \"mui\"\n"))
@@ -1003,7 +1010,7 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
     let capture = Command::new(BIN)
         .arg("capture")
         .arg(&project)
-        .env("MUI_CUT_CACHE", dir.join("cache"))
+        .env("MUI_CUT_CACHE", &adapter_cache)
         .output()
         .unwrap();
     assert!(
