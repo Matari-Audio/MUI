@@ -1,6 +1,6 @@
 //! Headless: the driver with no window and no GPU.
 use super::*;
-use crate::prelude::{Styled, block, knob};
+use crate::prelude::{block, knob};
 
 struct NoClipboard;
 impl Clipboard for NoClipboard {
@@ -530,18 +530,10 @@ fn queued_ime_edges_survive_throttling_minimize_and_clock_regression() {
 
 #[test]
 fn ime_configuration_uses_utf8_boundaries_and_disables_after_blur() {
-    struct Text;
+    struct Text(String);
     impl View for Text {
         fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
-            ui.set_ime_caret("edit", Point::new(2., 3.), 20.);
-            block(100., 30.)
-                .id("edit")
-                .focusable()
-                .a11y(crate::prelude::A11y::TextInput {
-                    value: "aé🙂".into(),
-                    selection: (1, 3),
-                    carets: vec![0., 8., 16., 24.],
-                })
+            crate::widgets::text_input(ui, "edit", &mut self.0).el
         }
         fn changed(&mut self) -> bool {
             false
@@ -550,15 +542,39 @@ fn ime_configuration_uses_utf8_boundaries_and_disables_after_blur() {
             false
         }
     }
-    let mut r = Rig::new(Text, (400, 300), 1.);
+    let mut r = Rig::new(Text("aé🙂".into()), (400, 300), 1.);
+    r.s.ui =
+        Ui::default().font(crate::prelude::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     r.step();
     r.s.ui.focus("edit");
-    r.d.redraw();
+    r.d.ime_selection(1..7);
+    r.step();
+    assert!(r.d.next_wake().is_some());
     r.step();
     let config = r.d.ime_configuration(&r.s.ui).unwrap();
+    assert_eq!(config.id, "edit");
     assert_eq!(config.text, "aé🙂");
     assert_eq!(config.selection, 1..7);
     assert_eq!(r.d.ime_area(), Some(config.area));
+    r.d.ime(Ime::Preedit {
+        text: "日本".into(),
+        cursor: Some((3, 6)),
+    });
+    r.step();
+    r.step();
+    let config = r.d.ime_configuration(&r.s.ui).unwrap();
+    assert_eq!(config.text, "a日本");
+    assert_eq!(config.marked, Some(1..7));
+    assert_eq!(r.s.view.0, "aé🙂");
+    // Ordered replacements between two ticks target the appropriate text.
+    r.d.ime_selection(1..7);
+    r.d.ime(Ime::Commit("X".into()));
+    r.d.ime_selection(0..1);
+    r.d.ime(Ime::Commit("Y".into()));
+    r.step();
+    r.step();
+    assert_eq!(r.s.view.0, "YX");
+    assert!(r.d.ime_configuration(&r.s.ui).unwrap().marked.is_none());
     r.d.focus(false);
     assert!(r.d.ime_configuration(&r.s.ui).is_none());
     assert!(r.d.ime_area().is_none());

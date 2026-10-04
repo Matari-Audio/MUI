@@ -171,6 +171,7 @@ enum KeyOwner {
 /// Native IME configuration, using UTF-8 byte offsets in displayed text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImeConfiguration {
+    pub id: String,
     pub area: (Point, Size),
     pub text: String,
     pub selection: std::ops::Range<usize>,
@@ -298,6 +299,12 @@ impl Driver {
         self.pending.push_back(Pending::Input(input));
     }
 
+    /// Queue a native replacement/selection range in displayed UTF-8 bytes.
+    /// The range is applied in order before later commit/preedit events.
+    pub fn ime_selection(&mut self, range: std::ops::Range<usize>) {
+        self.ime(Ime::Selection(range));
+    }
+
     /// Last successful frame's candidate rectangle in scene units.
     pub fn ime_area(&self) -> Option<(Point, Size)> {
         self.focused.then_some(self.ime_area).flatten()
@@ -306,21 +313,13 @@ impl Driver {
     /// Native surrounding text and selection; byte offsets always lie on UTF-8 boundaries.
     pub fn ime_configuration(&self, ui: &Ui) -> Option<ImeConfiguration> {
         let area = self.ime_area()?;
-        let focus = ui.focus_key()?;
-        let role = &ui.scene()?.surface(focus)?.semantics.as_ref()?.role;
-        let mui_scene::prelude::A11y::TextInput {
-            value, selection, ..
-        } = role
-        else {
-            return None;
-        };
-        let byte = |n: usize| value.char_indices().nth(n).map_or(value.len(), |(i, _)| i);
-        let (anchor, caret) = (byte(selection.0), byte(selection.1));
+        let state = ui.text_input_state()?;
         Some(ImeConfiguration {
+            id: state.id,
             area,
-            text: value.to_string(),
-            selection: anchor.min(caret)..anchor.max(caret),
-            marked: None,
+            text: state.text,
+            selection: state.selection,
+            marked: state.marked,
         })
     }
 
@@ -655,6 +654,9 @@ impl Driver {
         }
         let offered = logical_size(self.size, self.ui_scale());
         let pos = input.pointer.pos;
+        // IME intake is read by the next widget build, including non-editing
+        // preedit/selection edges that do not create parameter gesture edits.
+        let ime_followup = !input.ime.is_empty();
         let start = self.profiler().map(|_| Instant::now());
         let result = s.ui.frame(root, Some(offered), input, dt);
         if let (Some(profile), Some(start)) = (self.profiler_mut(), start) {
@@ -667,7 +669,7 @@ impl Driver {
                 self.cursor = frame.cursor;
                 // An edge is dispatched by the tree after the frame that
                 // delivered it: that tree has to come even if nothing moves.
-                self.animating = frame.animating || !frame.edits.is_empty();
+                self.animating = frame.animating || !frame.edits.is_empty() || ime_followup;
                 self.wake_at = frame.repaint_after.map(|after| now + after);
                 if let Some(text) = frame.clipboard {
                     self.clipboard.set(&text);
