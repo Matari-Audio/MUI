@@ -610,12 +610,10 @@ fn prepare_frame<V: View>(
     driver: &mut Driver,
     shared: &Mutex<Shared<V>>,
     now: Instant,
-) -> (bool, Option<mui::scene::ResolvedScene>) {
+) -> (bool, Option<Arc<mui::scene::ResolvedScene>>) {
     let mut shared = lock(shared);
     let changed = driver.advance(&mut shared, now);
-    // ponytail: owned snapshot per redraw; an Arc scene API can remove this
-    // clone without holding model locks during surface waits.
-    (changed, shared.ui.scene().cloned())
+    (changed, shared.ui.scene_snapshot())
 }
 
 fn key_event(event: &WinitKeyEvent, mods: Mods, composing: bool) -> KeyEvent {

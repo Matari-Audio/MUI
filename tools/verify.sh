@@ -14,6 +14,7 @@ on() { [ "$section" = all ] || [ "$section" = "$1" ]; }
 
 if on root-lint; then
 python3 tools/test_verify.py
+python3 -m unittest discover -s tools/ci
 cargo fmt --all -- --check
 fi
 # Every workspace feature is additive (mui-vello's cpu/gpu-effects backends and

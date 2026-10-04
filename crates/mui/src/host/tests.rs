@@ -578,6 +578,26 @@ fn ime_configuration_uses_utf8_boundaries_and_disables_after_blur() {
     r.d.focus(false);
     assert!(r.d.ime_configuration(&r.s.ui).is_none());
     assert!(r.d.ime_area().is_none());
+    r.d.ime_selection(0..2);
+    r.d.ime(Ime::Preedit {
+        text: "late".into(),
+        cursor: None,
+    });
+    r.d.ime(Ime::Commit("late".into()));
+    for _ in 0..4 {
+        r.step();
+    }
+    assert_eq!(
+        r.s.view.0, "YX",
+        "late callbacks cannot edit an unfocused window"
+    );
+    assert!(r.s.ui.text_input_state().unwrap().marked.is_none());
+    r.d.focus(true);
+    r.d.ime_selection(0..2);
+    r.d.ime(Ime::Commit("resumed".into()));
+    r.step();
+    r.step();
+    assert_eq!(r.s.view.0, "resumed", "native input resumes with focus");
     r.s.ui.blur();
     r.d.redraw();
     r.step();

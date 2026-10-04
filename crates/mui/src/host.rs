@@ -293,6 +293,10 @@ impl Driver {
 
     /// Queue an IME edge without coalescing committed text with pointer moves.
     pub fn ime(&mut self, event: Ime) {
+        // Composition callbacks may arrive after the native field loses focus.
+        if !self.focused && !matches!(event, Ime::Disabled) {
+            return;
+        }
         self.input_enqueued();
         let mut input = Input::from(self.pointer);
         input.ime.push(event);
