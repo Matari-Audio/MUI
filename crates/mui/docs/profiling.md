@@ -8,8 +8,8 @@ the window's UI thread. No profiling API belongs in an audio callback.
 Driver samples cover view construction, `Ui::frame` resolution (input dispatch,
 layout, scene and cache work combined), and the complete `advance` call including
 skips. Queue latency is **oldest input in a batch to dispatch**, with timestamps
-from the real monotonic clock; synthetic animation timestamps are not latency
-measurements. Inert discarded hovers have counters but no dispatch latency.
+from the real monotonic clock at Driver enqueue (not an OS/device timestamp);
+synthetic animation timestamps are not latency measurements. Inert discarded hovers have counters but no dispatch latency.
 Counters distinguish idle/inert/throttled/minimized skips, explicit redraw/model
 changes/resizes, coalescing, failed layouts, and the existing measured layout and
 weld cache work.
@@ -54,10 +54,13 @@ The harness prints its workload contract and tail latencies and exports one CSV
 per scenario. It uses 800×800 physical pixels at scale 1, Hack font and synthetic
 60 Hz UI steps, with 120 settling ticks before collection. Scenarios are a
 knob/meter with four input samples per tick and 30-tick gesture cycles; an eager
-1000-row scroll list with 24-pixel rows; 64 vector paths of 128 points; settled
+1000-row eager scroll list and a matched virtual list, both with 24-pixel rows
+and a 600×600 viewport (virtual overscan 48 pixels); 64 vector paths of 128 points; settled
 idle; width resizing from 700 to 799; and recreation of the Ui/Driver with cold
 retained caches. Reopen explicitly aggregates profiling sessions across new
-windows. This eager-list case is a baseline, not a virtual-list benchmark.
+windows. `List` and `VirtualList` share row content, viewport, font and wheel
+input; the virtual case retains its `ListState` and constructs visible/overscan
+rows only, while the eager case builds all 1000 rows.
 
 Use the same sizes, node/path counts, font, inputs, settling ticks and backend
 when porting a workload to GPUI or a native MUI runner. Compare release builds on

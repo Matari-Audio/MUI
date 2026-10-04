@@ -18,6 +18,7 @@ impl mui::Clipboard for NoClipboard {
 enum Scenario {
     KnobMeter,
     List,
+    VirtualList,
     Vectors,
     Idle,
     Resize,
@@ -28,6 +29,7 @@ struct Panel {
     value: f64,
     tick: usize,
     changed: bool,
+    list: ListState,
 }
 impl View for Panel {
     fn changed(&mut self) -> bool {
@@ -44,6 +46,23 @@ impl View for Panel {
                     .h(600.)
                     .scroll()
                     .id("list")
+            }
+            Scenario::VirtualList => {
+                uniform_list(
+                    ui,
+                    "list",
+                    &mut self.list,
+                    ListOptions {
+                        overscan: 48.0,
+                        ..ListOptions::new(600.0, 600.0)
+                    },
+                    |_, item| {
+                        text(format!("Track {:04}", item.index))
+                            .h(24.)
+                            .id(item.id.field("label"))
+                    },
+                )
+                .el
             }
             Scenario::Vectors => {
                 let tick = self.tick;
@@ -98,7 +117,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("frames must be positive".into());
     }
     println!(
-        "CPU-only contract: 800x800 physical, scale 1, 60Hz logical ticks, Hack font; 1000 list rows x24px; 64 vector paths x128 points; profile ring 512/phase. No GPU/present timing."
+        "CPU-only contract: 800x800 physical, scale 1, 60Hz logical ticks, Hack font; eager/virtual 1000 list rows x24px (virtual overscan48px); 64 vector paths x128 points; profile ring 512/phase. No GPU/present timing."
     );
     println!(
         "scenario,scenes_ready,build_samples,resolve_samples,build_p50_us,build_p95_us,build_p99_us,resolve_p50_us,resolve_p95_us,resolve_p99_us,idle_skips"
@@ -106,6 +125,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for scenario in [
         Scenario::KnobMeter,
         Scenario::List,
+        Scenario::VirtualList,
         Scenario::Vectors,
         Scenario::Idle,
         Scenario::Resize,
@@ -118,6 +138,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 value: 0.5,
                 tick: 0,
                 changed: false,
+                list: ListState::uniform_count(1000, 24.0),
             },
         };
         let mut driver = driver();
@@ -146,7 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         driver.button(Button::Primary, false, Mods::default());
                     }
                 }
-                Scenario::List => {
+                Scenario::List | Scenario::VirtualList => {
                     driver.pointer_moved(Point::new(200., 200.), Mods::default());
                     driver.wheel(mui::host::Wheel::Pixels(0., -24.), Mods::default());
                 }
@@ -167,6 +188,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::hint::black_box(driver.advance(&mut shared, now));
         }
         let profile = driver.profiler().unwrap();
+        assert_eq!(
+            profile.counter(Counter::LayoutFailures),
+            0,
+            "{scenario:?} refused layout"
+        );
+        if matches!(scenario, Scenario::Idle) {
+            assert_eq!(profile.counter(Counter::Frames), 0, "idle rebuilt a scene");
+            assert_eq!(profile.counter(Counter::IdleSkips), frames as u64);
+        }
         let build = profile.percentiles(Phase::ViewBuild);
         let resolve = profile.percentiles(Phase::Resolve);
         let us = |d: Duration| d.as_secs_f64() * 1e6;
