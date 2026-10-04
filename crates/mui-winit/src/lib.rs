@@ -86,7 +86,10 @@ pub fn run_shared<V: View>(shared: Arc<Mutex<Shared<V>>>, options: Options) -> R
         driver: None,
         access: None,
         published: mui_access::Publisher::default(),
-        state: WindowState::default(),
+        state: WindowState {
+            focused: true,
+            ..WindowState::default()
+        },
         mods: Mods::default(),
         ime_on: false,
         composing: false,
@@ -104,6 +107,7 @@ struct WindowState {
     size: (u32, u32),
     scale: f64,
     occluded: bool,
+    focused: bool,
 }
 impl WindowState {
     fn visible(&self) -> bool {
@@ -149,6 +153,12 @@ impl<V: View> App<V> {
     fn cancel(&mut self) {
         self.mods = Mods::default();
         self.composing = false;
+        if self.ime_on {
+            if let Some(gpu) = &self.gpu {
+                gpu.window().set_ime_allowed(false);
+            }
+            self.ime_on = false;
+        }
         if let Some(driver) = &mut self.driver {
             driver.focus(false);
             // Deliver cancellation even while occluded; no presentation needed.
@@ -205,7 +215,7 @@ impl<V: View> App<V> {
         let window = gpu.window();
         window.set_cursor(cursor(driver.cursor()));
         let area = driver.ime_area();
-        let on = area.is_some();
+        let on = area.is_some() && self.state.focused && !self.state.occluded;
         if std::mem::replace(&mut self.ime_on, on) != on {
             window.set_ime_allowed(on);
         }
@@ -427,6 +437,7 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
                 }
             }
             WindowEvent::Focused(focused) => {
+                self.state.focused = focused;
                 if focused {
                     if let Some(driver) = &mut self.driver {
                         driver.focus(true);

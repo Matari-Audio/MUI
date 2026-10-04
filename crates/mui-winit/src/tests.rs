@@ -218,5 +218,13 @@ fn native_ime_preedit_stays_tentative_and_commit_is_not_duplicated() {
     assert_eq!(shared.view.0, "日本");
     driver.focus(false);
     driver.advance(&mut shared, Instant::now());
-    assert!(driver.ime_area().is_none(), "blur disables native IME");
+    // Losing window focus preserves the UI's focused field for return.
+    // An explicit field blur clears the candidate request.
+    shared.ui.blur();
+    driver.redraw();
+    driver.advance(&mut shared, Instant::now());
+    assert!(
+        driver.ime_area().is_none(),
+        "field blur clears candidate request"
+    );
 }
