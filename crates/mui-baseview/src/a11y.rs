@@ -32,8 +32,9 @@ pub struct NativeAccessibility {
     adapter: NativeAdapter,
     // Match the native window's thread confinement on every platform.
     thread: std::marker::PhantomData<std::rc::Rc<()>>,
-    #[cfg(target_os = "linux")]
+    alive: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
+    asked: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
     bounds: x11::BoundsPoll,
 }
@@ -41,7 +42,10 @@ pub struct NativeAccessibility {
 /// The portable accessibility endpoint. It may move to the thread that owns
 /// the UI, while [`NativeAccessibility`] stays on the native window thread.
 /// Activation and action callbacks only touch shared atomics and a channel.
+/// After the native endpoint drops, queued and late requests are ignored,
+/// `wants_tree` is false, and `prepare` produces no more updates.
 pub struct AccessibilityUi {
+    alive: Arc<AtomicBool>,
     actions: Receiver<ActionRequest>,
     asked: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
@@ -49,23 +53,29 @@ pub struct AccessibilityUi {
 }
 
 struct Asked {
+    alive: Arc<AtomicBool>,
     asked: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
 }
 impl ActivationHandler for Asked {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
+        if !self.alive.load(Ordering::Acquire) {
+            return None;
+        }
         self.active.store(true, Ordering::Release);
         self.asked.store(true, Ordering::Release);
         // No model lock from a native callback. A full tree follows next tick.
         None
     }
 }
-struct Actions(Sender<ActionRequest>);
+struct Actions(Sender<ActionRequest>, Arc<AtomicBool>);
 impl ActionHandler for Actions {
     fn do_action(&mut self, request: ActionRequest) {
         // The receiving editor may already have closed. No window/model is
         // retained by this callback, so reopening gets a fresh action queue.
-        let _ = self.0.send(request);
+        if self.1.load(Ordering::Acquire) {
+            let _ = self.0.send(request);
+        }
     }
 }
 #[cfg(target_os = "linux")]
@@ -94,9 +104,11 @@ impl NativeAccessibility {
     )]
     pub unsafe fn new(handle: RawWindowHandle) -> Option<(Self, AccessibilityUi)> {
         let (send, actions) = channel();
+        let alive = Arc::new(AtomicBool::new(true));
         let asked = Arc::new(AtomicBool::new(false));
         let active = Arc::new(AtomicBool::new(false));
         let activation = Asked {
+            alive: Arc::clone(&alive),
             asked: Arc::clone(&asked),
             active: Arc::clone(&active),
         };
@@ -108,7 +120,11 @@ impl NativeAccessibility {
             ) {
                 return None;
             }
-            accesskit_unix::Adapter::new(activation, Actions(send), Gone(Arc::clone(&active)))
+            accesskit_unix::Adapter::new(
+                activation,
+                Actions(send, Arc::clone(&alive)),
+                Gone(Arc::clone(&active)),
+            )
         };
         #[cfg(target_os = "macos")]
         let adapter = {
@@ -122,7 +138,7 @@ impl NativeAccessibility {
                 accesskit_macos::SubclassingAdapter::new(
                     handle.ns_view.as_ptr(),
                     activation,
-                    Actions(send),
+                    Actions(send, Arc::clone(&alive)),
                 )
             }
         };
@@ -132,18 +148,24 @@ impl NativeAccessibility {
                 return None;
             };
             let hwnd = accesskit_windows::HWND(handle.hwnd.get() as *mut std::ffi::c_void);
-            accesskit_windows::SubclassingAdapter::new(hwnd, activation, Actions(send))
+            accesskit_windows::SubclassingAdapter::new(
+                hwnd,
+                activation,
+                Actions(send, Arc::clone(&alive)),
+            )
         };
         Some((
             Self {
                 adapter,
                 thread: std::marker::PhantomData,
-                #[cfg(target_os = "linux")]
+                alive: Arc::clone(&alive),
                 active: Arc::clone(&active),
+                asked: Arc::clone(&asked),
                 #[cfg(target_os = "linux")]
                 bounds: x11::BoundsPoll::default(),
             },
             AccessibilityUi {
+                alive,
                 actions,
                 asked,
                 active,
@@ -209,16 +231,29 @@ impl NativeAccessibility {
     }
 }
 
+impl Drop for NativeAccessibility {
+    fn drop(&mut self) {
+        // Invalidate before the adapter unregisters: its final callbacks may
+        // reenter, while a panel's portable endpoint still lives elsewhere.
+        self.alive.store(false, Ordering::Release);
+        self.active.store(false, Ordering::Release);
+        self.asked.store(false, Ordering::Release);
+    }
+}
+
 impl AccessibilityUi {
     /// A native provider asked for a full tree; redraw even an idle UI.
     pub fn wants_tree(&self) -> bool {
-        self.asked.load(Ordering::Acquire)
+        self.alive.load(Ordering::Acquire) && self.asked.load(Ordering::Acquire)
     }
 
     /// Apply queued requests on the normal UI tick; no native calls occur.
     pub fn apply(&mut self, ui: &mut Ui) -> bool {
         let mut landed = false;
         while let Ok(request) = self.actions.try_recv() {
+            if !self.alive.load(Ordering::Acquire) {
+                continue;
+            }
             if let Some(action) = ui.scene().and_then(|scene| semantic(scene, &request)) {
                 let affinity = if let Some(ActionData::SetTextSelection(selection)) = &request.data
                 {
@@ -250,7 +285,7 @@ impl AccessibilityUi {
 
     /// Prepare under the model lock without calling the native adapter.
     pub fn prepare(&mut self, ui: &Ui) -> Option<TreeUpdate> {
-        if !self.active.load(Ordering::Acquire) {
+        if !self.alive.load(Ordering::Acquire) || !self.active.load(Ordering::Acquire) {
             return None;
         }
         let scene = ui.scene()?;
@@ -335,16 +370,22 @@ mod tests {
         let mut handler = crate::Handler::new(shared.clone(), Arc::default(), (100, 100), 1.);
         handler.step();
         let (send, actions) = channel();
+        let alive = Arc::new(AtomicBool::new(true));
         let asked = Arc::new(AtomicBool::new(false));
         let active = Arc::new(AtomicBool::new(false));
         let mut endpoint = AccessibilityUi {
+            alive: Arc::clone(&alive),
             actions,
             asked: asked.clone(),
             active: active.clone(),
             publisher: Publisher::default(),
         };
-        let mut activation = Asked { asked, active };
-        let mut callback = Actions(send);
+        let mut activation = Asked {
+            alive: Arc::clone(&alive),
+            asked,
+            active,
+        };
+        let mut callback = Actions(send, Arc::clone(&alive));
         let request = || ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -377,9 +418,11 @@ mod tests {
 
     #[test]
     fn activation_and_actions_never_need_the_model_or_native_window() {
+        let alive = Arc::new(AtomicBool::new(true));
         let asked = Arc::new(AtomicBool::new(false));
         let active = Arc::new(AtomicBool::new(false));
         let mut handler = Asked {
+            alive: Arc::clone(&alive),
             asked: asked.clone(),
             active: active.clone(),
         };
@@ -387,7 +430,7 @@ mod tests {
         assert!(asked.load(Ordering::Acquire));
         assert!(active.load(Ordering::Acquire));
         let (send, receive) = channel();
-        let mut handler = Actions(send);
+        let mut handler = Actions(send, Arc::clone(&alive));
         handler.do_action(ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -453,5 +496,148 @@ mod tests {
             semantic(&scene, &request("gain", Action::Increment, None)),
             Some(SemanticAction::increment("gain"))
         );
+    }
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "needs a native X11 display (run under Xvfb)"]
+    fn portable_endpoint_survives_two_native_window_teardowns() {
+        use baseview::{
+            Event, EventStatus, HandlerError, Window, WindowContext, WindowEvent, WindowHandler,
+            WindowSettings, WindowSize,
+        };
+        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+        use std::cell::RefCell;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+            mpsc::channel,
+        };
+        struct Probe {
+            native: RefCell<Option<NativeAccessibility>>,
+            closed: Arc<AtomicUsize>,
+            cx: WindowContext,
+        }
+        impl WindowHandler for Probe {
+            fn on_frame(&self) -> Result<(), HandlerError> {
+                if let Some(native) = self.native.borrow_mut().as_mut() {
+                    // SAFETY: both handles borrow our live context on this
+                    // native callback thread. No model is borrowed here.
+                    #[expect(unsafe_code, reason = "native bridge lifetime regression")]
+                    unsafe {
+                        native.update_bounds(
+                            self.cx.display_handle().unwrap().as_raw(),
+                            self.cx.window_handle().unwrap().as_raw(),
+                        );
+                    }
+                    native.focus(self.cx.has_focus());
+                }
+                Ok(())
+            }
+            fn resized(&self, _: WindowSize) -> Result<(), HandlerError> {
+                Ok(())
+            }
+            fn on_event(&self, event: Event) -> EventStatus {
+                if matches!(event, Event::Window(WindowEvent::WillClose)) {
+                    drop(self.native.borrow_mut().take());
+                    self.closed.fetch_add(1, Ordering::Release);
+                }
+                EventStatus::Captured
+            }
+        }
+        struct View;
+        impl crate::View for View {
+            fn build(&mut self, _: &mut Ui, _: &mui::prelude::Input) -> mui::prelude::El {
+                block(10., 10.)
+                    .focusable()
+                    .a11y(mui_access::A11y::Button)
+                    .id("field")
+            }
+            fn changed(&mut self) -> bool {
+                false
+            }
+            fn request_resize(&mut self, _: u32, _: u32) -> bool {
+                false
+            }
+        }
+        let closed = Arc::new(AtomicUsize::new(0));
+        for cycle in 1..=2 {
+            let (send, receive) = channel();
+            let native_closed = closed.clone();
+            let window = Window::create(
+                WindowSettings::new()
+                    .with_title("MUI accessibility bridge lifetime")
+                    .with_size(baseview::dpi::LogicalSize::new(120., 100.)),
+                move |cx| {
+                    // SAFETY: attach in the owning thread's pre-show builder;
+                    // Probe drops the adapter before native teardown/context.
+                    #[expect(unsafe_code, reason = "native bridge lifetime regression")]
+                    let (native, mut endpoint) =
+                        unsafe { NativeAccessibility::new(cx.window_handle().unwrap().as_raw()) }
+                            .unwrap();
+                    // Retain the actual provider's flags; test callback objects
+                    // use the same production handler types after native teardown.
+                    let activation = Asked {
+                        alive: endpoint.alive.clone(),
+                        asked: endpoint.asked.clone(),
+                        active: endpoint.active.clone(),
+                    };
+                    let (requests, actions) = channel();
+                    endpoint.actions = actions;
+                    let callback = Actions(requests, endpoint.alive.clone());
+                    send.send((endpoint, activation, callback)).unwrap();
+                    Ok(Probe {
+                        native: RefCell::new(Some(native)),
+                        closed: native_closed,
+                        cx,
+                    })
+                },
+            )
+            .unwrap();
+            // The UI endpoint moves from the native callback thread to this
+            // model thread, then remains valid after its native peer closes.
+            let (mut endpoint, mut activation, mut callback) = receive.recv().unwrap();
+            let shared = Arc::new(std::sync::Mutex::new(crate::Shared {
+                ui: Ui::default(),
+                view: View,
+            }));
+            let mut handler = crate::Handler::new(shared.clone(), Arc::default(), (100, 100), 1.);
+            handler.step();
+            let request = || ActionRequest {
+                action: Action::Focus,
+                target_tree: TreeId::ROOT,
+                target_node: mui_access::node_id("field"),
+                data: None,
+            };
+            assert!(activation.request_initial_tree().is_none());
+            assert!(endpoint.wants_tree());
+            assert!(
+                !endpoint
+                    .prepare(&crate::lock(&shared).ui)
+                    .unwrap()
+                    .nodes
+                    .is_empty()
+            );
+            callback.do_action(request());
+            window.show().unwrap();
+            window.close();
+            assert_eq!(closed.load(Ordering::Acquire), cycle);
+            // Late provider callbacks cannot reactivate this retained endpoint,
+            // and the focus request queued before close must also be discarded.
+            assert!(activation.request_initial_tree().is_none());
+            callback.do_action(request());
+            assert!(!endpoint.alive.load(Ordering::Acquire));
+            assert!(!endpoint.active.load(Ordering::Acquire));
+            assert!(!endpoint.asked.load(Ordering::Acquire));
+            assert!(!endpoint.wants_tree());
+            {
+                let mut model = crate::lock(&shared);
+                assert!(model.ui.scene().is_some());
+                assert!(!endpoint.apply(&mut model.ui));
+                assert!(endpoint.prepare(&model.ui).is_none());
+            }
+            handler.driver.redraw();
+            handler.step();
+            assert_eq!(crate::lock(&shared).ui.focus_key(), None);
+        }
     }
 }
