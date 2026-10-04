@@ -35,7 +35,7 @@ cargo clippy -p mui-vello --no-default-features --features gpu-effects --all-tar
 # truce-clap wants a native parent window, so it has no wasm build at all.
 # mui-baseview is a native window (baseview + a wgpu surface): no wasm either.
 # mui-truce itself stays in: its window/GPU half is cfg'd out on wasm32.
-cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --exclude mui-baseview --target wasm32-unknown-unknown --locked --offline
+cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --exclude mui-baseview --exclude mui-winit --target wasm32-unknown-unknown --locked --offline
 fi
 
 # ---------------------------------------------------------------------------
