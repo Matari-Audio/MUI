@@ -22,13 +22,24 @@ Closing explicitly drops the adapter before the model/native window, avoiding
 retained-view cycles and stale action queues on reopening.
 
 The native coordinate/reentry design was checked against GPUI's Apache-2.0
-`gpui_macos/src/window.rs` and `gpui_windows/src/window.rs` at
+`gpui_macos/src/window.rs`, `gpui_windows/src/window.rs`, and
+`gpui_linux/src/linux/x11/window.rs` at
 `a84689073d296dfd39987bc7dd478e43ef76d83a`. No GPUI source was copied.
 The Windows subclass handles native focus messages; macOS/Windows resolve
-screen coordinates using their associated native view/window. Linux still
-needs a host-provided screen-position integration for AT-SPI screen bounds.
+screen coordinates using their associated native view/window. Linux queries
+baseview's original X11 connection and child XID for physical screen bounds,
+including client-owned WM frame extents. Because baseview does not expose
+host move/reparent notifications, it polls at most every 100ms while AT-SPI
+is active and publishes only changes; inactive editors issue no X11 requests.
+The borrowed connection is never disconnected or used to consume events.
 
 `cargo test -p mui-access` checks the generated tree with AccessKit's consumer,
 including bidi caret bounds, hard/soft line breaks, reversed cross-run
 selections, preedit mapping and removal/reactivation. Native VoiceOver/UIA
 screen-reader interaction requires macOS/Windows runtime verification.
+
+X11 coordinate/lifetime smoke tests run with
+`xvfb-run -a cargo test -p mui-baseview --lib a11y::x11::tests -- --ignored`.
+They cover both raw Xlib and XCB handles, host movement, child reparenting,
+resizing, WM extents, destroyed windows, and the original connection remaining
+usable after each borrowed query. The poll/cache regression runs normally.

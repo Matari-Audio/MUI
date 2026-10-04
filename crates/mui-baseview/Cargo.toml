@@ -25,8 +25,10 @@ accesskit_macos = "0.26"
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.6", default-features = false }
-# The window's accessibility tree over AT-SPI; needs no window handle.
+# AT-SPI; screen bounds borrow baseview's original X11 connection below.
 accesskit_unix = "0.22"
+x11-dl = "2.21"
+x11rb = { version = "0.13.2", default-features = false, features = ["allow-unsafe-code", "dl-libxcb"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit_windows = "0.34"

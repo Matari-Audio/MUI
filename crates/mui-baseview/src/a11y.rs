@@ -15,6 +15,8 @@ use mui_access::accesskit::{
     Action, ActionData, ActionHandler, ActionRequest, ActivationHandler, TreeUpdate,
 };
 use raw_window_handle::RawWindowHandle;
+#[cfg(target_os = "linux")]
+mod x11;
 
 #[cfg(target_os = "linux")]
 type NativeAdapter = accesskit_unix::Adapter;
@@ -29,6 +31,8 @@ pub(crate) struct A11y {
     asked: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
     publisher: Publisher,
+    #[cfg(target_os = "linux")]
+    bounds: x11::BoundsPoll,
 }
 
 struct Asked {
@@ -111,6 +115,8 @@ impl A11y {
             asked,
             active,
             publisher: Publisher::default(),
+            #[cfg(target_os = "linux")]
+            bounds: x11::BoundsPoll::default(),
         })
     }
 
@@ -130,6 +136,32 @@ impl A11y {
         // modal loops itself, including dropping its borrow before raising.
         #[cfg(target_os = "windows")]
         let _ = focused;
+    }
+
+    /// Track the editor's X11 origin using baseview's own live connection.
+    /// Call outside Shared/model locks on the window's thread, every tick.
+    /// No X11 requests occur while accessibility is inactive.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn update_bounds(&mut self, window: &baseview::WindowContext) {
+        use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+        if !self.active.load(Ordering::Acquire) {
+            self.bounds.pause();
+            return;
+        }
+        let bounds = self.bounds.update(std::time::Instant::now(), || {
+            let display = window.display_handle().ok()?;
+            let handle = window.window_handle().ok()?;
+            // SAFETY: WindowContext owns this original connection and XID,
+            // remaining borrowed for the whole query on its owning thread.
+            #[expect(unsafe_code, reason = "query baseview's live borrowed X11 connection")]
+            unsafe {
+                x11::query(display.as_raw(), handle.as_raw())
+            }
+        });
+        if let Some(bounds) = bounds {
+            self.adapter
+                .set_root_window_bounds(bounds.outer, bounds.inner);
+        }
     }
 
     /// Apply queued requests on the normal UI tick; no native calls occur.
