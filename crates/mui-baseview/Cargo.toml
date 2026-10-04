@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
 baseview = { package = "moose-baseview", git = "https://github.com/Matari-Audio/moose" }
+mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }
 # baseview's handles; the same 0.6 wgpu takes.
 raw-window-handle = "0.6"
@@ -19,13 +20,16 @@ wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"
 # already pulls it in there.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
+accesskit_macos = "0.26"
 
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.6", default-features = false }
 # The window's accessibility tree over AT-SPI; needs no window handle.
 accesskit_unix = "0.22"
-mui-access.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+accesskit_windows = "0.34"
 
 [lints]
 workspace = true

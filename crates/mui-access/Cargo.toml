@@ -7,7 +7,13 @@ license.workspace = true
 
 [dependencies]
 accesskit = "0.24"
+unicode-bidi = "0.3"
 mui-scene.workspace = true
+mui-geometry.workspace = true
+
+[dev-dependencies]
+accesskit_consumer = "0.38"
+epaint_default_fonts.workspace = true
 
 [lints]
 workspace = true
