@@ -54,20 +54,24 @@ fn native_surface_presents_and_reopens() {
                     let mut h = handler((240, 200), 1.0);
                     h.step();
                     let scene = lock(&h.shared).ui.scene_snapshot().ok_or("no scene")?;
-                    for recreated in [false, true] {
-                        if recreated {
+                    for replacement in 0..3 {
+                        if replacement != 0 {
                             // SAFETY: cx outlives gpu and the replacement surface.
                             #[expect(unsafe_code, reason = "exercises native surface recovery")]
                             let surface = unsafe { surface::create(gpu.instance(), &self.cx) }
                                 .ok_or("surface recreation failed")?;
-                            gpu.replace_surface(surface);
+                            gpu.try_replace_surface(surface)
+                                .map_err(|e| format!("replacement {replacement}: {e}"))?;
+                            assert_eq!(gpu.generation(), replacement);
                         }
                         if !matches!(
                             gpu.present(&scene, Affine::IDENTITY)
                                 .map_err(|e| e.to_string())?,
                             Frame::Presented(_)
                         ) {
-                            return Err("frame was not presented".to_owned());
+                            return Err(format!(
+                                "frame after replacement {replacement} was not presented"
+                            ));
                         }
                     }
                     *self.gpu.borrow_mut() = Some(gpu);

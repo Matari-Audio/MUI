@@ -552,7 +552,8 @@ fn configure(
 /// A window's surface, the device painting it and the renderer.
 pub struct Host {
     instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
+    // None after a failed replacement; acquisition must wait for a new surface.
+    surface: Option<wgpu::Surface<'static>>,
     gpu: OnDevice,
     /// The size last asked for, in physical pixels: what a rebuilt device
     /// configures. `None` while there is nothing to draw into.
@@ -588,7 +589,7 @@ impl Host {
         let gpu = OnDevice::open(&instance, Some(&surface), size, transparency)?;
         Ok(Self {
             instance,
-            surface,
+            surface: Some(surface),
             gpu,
             wanted: target_size(size.0, size.1),
             retry_at: None,
@@ -679,7 +680,9 @@ impl Host {
         let extent = (surface_extent(width, limit), surface_extent(height, limit));
         if extent != (config.width, config.height) {
             (config.width, config.height) = extent;
-            self.surface.configure(device, config);
+            if let Some(surface) = &self.surface {
+                surface.configure(device, config);
+            }
         }
         Ok(())
     }
@@ -696,20 +699,24 @@ impl Host {
         }
     }
 
-    /// Validate a replacement against every candidate before installing it.
+    /// Release the previous surface, then validate a replacement against every candidate.
     /// Success changes the device generation; re-upload external textures.
-    /// Failure preserves the previous surface, device, and generation.
+    /// Failure preserves the device and generation, but leaves no surface;
+    /// presents return [`Frame::SurfaceLost`] until replacement succeeds.
     pub fn try_replace_surface(
         &mut self,
         surface: wgpu::Surface<'static>,
     ) -> Result<(), HostError> {
+        // EGL permits one configured window surface per native window. Wgpu
+        // creates it during configure, so release the old swapchain first.
+        self.surface = None;
         let gpu = OnDevice::open(
             &self.instance,
             Some(&surface),
             self.wanted.unwrap_or((1, 1)),
             self.transparency,
         )?;
-        self.surface = surface;
+        self.surface = Some(surface);
         self.gpu = gpu;
         self.generation = self.generation.wrapping_add(1);
         self.retry_at = None;
@@ -743,12 +750,15 @@ impl Host {
         let Some(size) = self.wanted else {
             return Ok(Frame::Skipped);
         };
+        let Some(surface) = &self.surface else {
+            return Ok(Frame::SurfaceLost);
+        };
         if self.gpu.poll_lost() {
             let now = Instant::now();
             if self.retry_at.is_some_and(|at| now < at) {
                 return Ok(Frame::Skipped);
             }
-            match OnDevice::open(&self.instance, Some(&self.surface), size, self.transparency) {
+            match OnDevice::open(&self.instance, Some(surface), size, self.transparency) {
                 Ok(gpu) => {
                     self.gpu = gpu;
                     self.generation = self.generation.wrapping_add(1);
@@ -771,10 +781,10 @@ impl Host {
         if overlay.is_none() && renderer.is_current(scene, xf) {
             return Ok(Frame::Current);
         }
-        let frame = match self.surface.get_current_texture() {
+        let frame = match surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
-                self.surface.configure(device, config);
+                surface.configure(device, config);
                 renderer.invalidate();
                 return Ok(Frame::Skipped);
             }
@@ -1056,5 +1066,42 @@ mod tests {
             .unwrap();
         assert!(pollster::block_on(scope.pop()).is_none());
         assert!(!gpu2.lost());
+    }
+
+    #[test]
+    #[ignore = "requires a native adapter with Vello compute support"]
+    fn a_failed_replacement_state_requires_a_surface_before_presenting() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let gpu = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque)
+            .expect("native adapter");
+        // A replacement failure retains the existing device and generation,
+        // but has released the previous surface. Do not acquire or rebuild a
+        // device until the caller supplies a new surface.
+        let mut host = Host {
+            instance,
+            surface: None,
+            gpu,
+            wanted: Some((16, 16)),
+            retry_at: None,
+            generation: 4,
+            transparency: Transparency::Opaque,
+        };
+        let root = block(16., 16.).fill(Role::Primary);
+        let scene = resolve(&SceneSpec::new(root).offered(Size::new(16., 16.))).unwrap();
+        assert!(matches!(
+            host.present(&scene, Affine::IDENTITY),
+            Ok(Frame::SurfaceLost)
+        ));
+        host.gpu.device.destroy();
+        assert!(matches!(
+            host.present(&scene, Affine::IDENTITY),
+            Ok(Frame::SurfaceLost)
+        ));
+        assert_eq!(
+            host.generation(),
+            4,
+            "missing surface cannot trigger a device rebuild"
+        );
     }
 }
