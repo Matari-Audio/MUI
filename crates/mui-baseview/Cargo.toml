@@ -8,7 +8,7 @@ license.workspace = true
 # A native window: nothing here builds for wasm.
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
-baseview = { package = "moose-baseview", git = "https://github.com/Matari-Audio/moose" }
+baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
 mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }
 # baseview's handles; the same 0.6 wgpu takes.

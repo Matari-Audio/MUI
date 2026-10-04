@@ -251,3 +251,74 @@ fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
         ]
     );
 }
+
+#[test]
+fn ime_configuration_converts_geometry_and_keeps_native_text_ranges() {
+    let source = mui::host::ImeConfiguration {
+        id: "field".into(),
+        area: (Point::new(10.0, 20.0), mui::scene::Size::new(1.0, 16.0)),
+        text: "a😀é".into(),
+        selection: 1..5,
+        marked: Some(1..5),
+    };
+    let a = native_ime(source.clone(), 1.5);
+    assert_eq!(a.position, PhysicalPosition::new(15.0, 30.0));
+    assert_eq!(a.size, baseview::dpi::PhysicalSize::new(1.5, 24.0));
+    assert_eq!((a.selection.clone(), a.marked.clone()), (1..5, Some(1..5)));
+    assert_eq!(a, native_ime(source.clone(), 1.5));
+    assert_ne!(
+        a,
+        native_ime(source, 2.0),
+        "DPI changes update candidate placement"
+    );
+}
+
+#[test]
+fn native_composition_reaches_the_driver_once() {
+    struct InputSpy {
+        seen: Vec<mui::prelude::Ime>,
+        text: String,
+    }
+    impl View for InputSpy {
+        fn build(&mut self, _: &mut Ui, input: &Input) -> El {
+            self.seen.extend(input.ime.clone());
+            self.text.push_str(&input.text);
+            mui::prelude::block(20.0, 20.0).into()
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: InputSpy {
+            seen: Vec::new(),
+            text: String::new(),
+        },
+    }));
+    let mut h = Handler::new(Arc::clone(&shared), Arc::default(), (200, 100), 1.0);
+    h.step();
+    for event in [
+        baseview::Ime::Enabled,
+        baseview::Ime::Selection(1..5),
+        baseview::Ime::Preedit {
+            text: "日本".into(),
+            cursor: Some((6, 6)),
+        },
+        baseview::Ime::Commit("日本".into()),
+        baseview::Ime::Disabled,
+    ] {
+        assert_eq!(h.on_event_inner(&Event::Ime(event)), EventStatus::Captured);
+    }
+    h.step();
+    let s = lock(&shared);
+    assert_eq!(s.view.seen.len(), 5);
+    assert!(matches!(&s.view.seen[3], mui::prelude::Ime::Commit(s) if s == "日本"));
+    assert!(
+        s.view.text.is_empty(),
+        "composition has its own channel, never duplicated as typed text"
+    );
+}

@@ -1,0 +1,73 @@
+# MUI native text-input patch
+
+This directory is the `crates/moose-baseview` source from Matari-Audio/moose
+revision **c1e0eed67159b61aea6e2ffeb905d5b4fbd452b0**, the revision in MUI's
+previous lockfile. Its original MIT and Apache-2.0 licenses and README are retained.
+Only this crate is vendored; it has no workspace-inherited manifest values.
+
+MUI additions expose `Event::Ime` and `WindowContext::set_ime_configuration`.
+Configuration includes physical client-relative candidate geometry, surrounding
+UTF-8 text, byte selection, and marked range. Platforms ignore identical values:
+changing the caret cannot repeatedly disable/enable an active composition.
+
+* Cocoa implements `NSTextInputClient` selectors and `interpretKeyEvents`, converts
+  UTF-16 ranges, returns attributed surrounding text and screen candidate bounds.
+* Windows uses IMM32 result/preedit strings and UTF-16 caret conversion,
+  associates/disassociates the thread input context only on enable changes,
+  positions composition/candidate windows, and serves `IMR_DOCUMENTFEED`.
+* X11 uses the maintained MIT-licensed `zed-xim` fork of xim-rs, pinned to
+  `16f35a2c881b815a2b6cdfd6687988e84f8447d8`. Its transport shares the original
+  owned XCB connection and creates one input context per window, processes
+  incremental preedit/caret callbacks, and positions the candidate spot. It reads
+  `XMODIFIERS` and locale variables; it never mutates the host's environment or
+  process-wide locale. An XIM server must be running before opening the window.
+
+The platform mechanism was cross-checked with Apache-2.0 GPUI sources at
+`a84689073d296dfd39987bc7dd478e43ef76d83a`, paths
+`crates/gpui_macos/src/window.rs`, `crates/gpui_windows/src/events.rs`, and
+`crates/gpui_linux/src/linux/x11/client.rs`. No GPUI source code is copied here;
+platform glue is newly written against baseview's existing ownership model.
+
+XIM has no standard surrounding-text selection protocol: X11 retains that
+configuration for change detection, but only sends supported spot attributes.
+This is not a native Wayland backend; XWayland does not provide Wayland
+text-input-v3 support. Cocoa explicit replacement ranges are translated to ordered
+UTF-8 selection events before their associated preedit/commit. Input identity
+changes cancel the preceding native context composition.
+
+## Maintaining this patch
+
+When updating baseview, diff against the exact revision above first, retain the
+plugin keyboard hooks, parent-window behavior, original display connection and
+handler-before-native-window teardown. Keep native callbacks outside MUI's model
+lock. Do not silently replace these APIs with no-ops on an OS.
+
+Run the vendored unit tests and platform checks separately:
+
+```
+cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib
+cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-gnu
+cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-apple-darwin
+cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target aarch64-apple-darwin
+cargo test -p mui-baseview
+```
+
+## Native acceptance recipe
+
+Run `cargo run -p mui-baseview --example ime` for two editable fields and a
+native commit counter. Use the same view embedded under a real host's raw
+parent, then repeat after closing/reopening the editor. Start Japanese/Chinese/
+Korean system IMEs (IBus/Fcitx XIM on X11, `XMODIFIERS=@im=...` at process startup).
+Check that preedit is visible without editing the value, candidate movement
+changes the underline/cursor, Enter commits exactly once, Escape cancels, and
+ordinary typing/dead keys still work. Try `a😀é`, non-Latin text and selection
+replacement; candidates must follow the actual caret at 1x/1.5x/2x, after zoom,
+resize, scrolling and parent movement. Switch field focus and native window focus
+mid-composition; no stale preedit should reach the newly focused field. With
+keyboard capture off, host shortcuts and held-key releases must keep working.
+Open two windows, compose in one and disable text input in the other; IMM32 must
+not cancel the first window's shared-thread composition. Confirm close/reopen
+recreates independent native input contexts and never keeps a dead connection.
+
+Cross-compilation proves API/type compatibility, not native IME usability; these
+manual checks remain required on each operating system and real plugin hosts.
