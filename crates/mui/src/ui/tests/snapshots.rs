@@ -50,7 +50,8 @@ fn snapshots_share_the_current_allocation_and_direct_updates_preserve_old_frames
 
 #[test]
 fn retaining_snapshots_preserves_layout_and_text_cache_reuse() {
-    let (mut retained, mut recycled) = (font_ui(), font_ui());
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let (mut retained, mut recycled) = (Ui::default().font(font.clone()), Ui::default().font(font));
     let tree = || row([text("cached text").id("label"), block(20., 20.).id("pad")]);
     let mut snapshots = Vec::new();
     for _ in 0..8 {
@@ -85,7 +86,7 @@ fn retaining_snapshots_preserves_layout_and_text_cache_reuse() {
 fn direct_weld_updates_do_not_change_retained_uniforms() {
     let mut ui = Ui::default().gpu_welding();
     ui.frame(
-        mui_scene::weld![Weld::default(); block(20., 20.), block(20., 20.)].id("w"),
+        mui_scene::weld![Weld::default(); block(20., 20.).fill(Role::Raised), block(20., 20.).fill(Role::Primary)].id("w"),
         None,
         Input::default(),
         0.016,
