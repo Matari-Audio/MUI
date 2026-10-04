@@ -333,3 +333,17 @@ fn scene_snapshot_does_not_hold_the_model_lock() {
     model.ui.blur();
     assert!(snapshot.surface("k").is_some());
 }
+
+#[test]
+fn queued_native_callbacks_can_reenter_and_preserve_event_order() {
+    let queue = RefCell::new(VecDeque::from([1, 2]));
+    let mut delivered = Vec::new();
+    drain_events(&queue, |event| {
+        delivered.push(event);
+        if event == 1 {
+            queue.borrow_mut().push_back(3);
+        }
+    });
+    assert_eq!(delivered, [1, 2, 3]);
+    assert!(queue.borrow().is_empty());
+}

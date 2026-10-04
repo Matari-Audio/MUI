@@ -245,6 +245,10 @@ impl<V: View> Handler<V> {
         if platform::should_skip_frame(handle) {
             return;
         }
+        #[cfg(target_os = "linux")]
+        if let Some(a11y) = self.a11y.as_mut() {
+            a11y.update_bounds(window);
+        }
         // macOS: keep the child pinned to the parent's top as it resizes.
         // A top-level window's view is its content view: leave it be.
         if self.parented {
@@ -280,6 +284,7 @@ impl<V: View> Handler<V> {
         // host-thread close() or state load must not wait with it.
         let mut accessibility_update = None;
         let ime_configuration;
+        let capture;
         let scene = {
             let mut s = lock(&self.shared);
             let a11y = self.a11y.as_mut();
@@ -302,11 +307,7 @@ impl<V: View> Handler<V> {
             // every other key does. Windows only; a no-op elsewhere, where an
             // ignored key already goes to the host. Only on a change: each
             // call also moves focus.
-            let capture = s.ui.focus_is_text();
-            if self.captured != Some(capture) {
-                window.set_keyboard_capture(capture);
-                self.captured = Some(capture);
-            }
+            capture = s.ui.focus_is_text();
             if let Some(a11y) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
@@ -319,6 +320,11 @@ impl<V: View> Handler<V> {
                 None
             }
         };
+        // Capturing the keyboard may synchronously move native focus.
+        if self.captured != Some(capture) {
+            window.set_keyboard_capture(capture);
+            self.captured = Some(capture);
+        }
         if let (Some(a11y), Some(update)) = (self.a11y.as_mut(), accessibility_update) {
             a11y.publish(update);
         }
@@ -515,9 +521,18 @@ impl<V: View> Adapter<V> {
         if let Some(size) = self.pending_resize.take() {
             guard(h, |h| h.resized(size));
         }
-        while let Some(event) = self.pending_events.borrow_mut().pop_front() {
+        drain_events(&self.pending_events, |event| {
             guard(h, |h| h.on_event_inner(&event));
-        }
+        });
+    }
+}
+
+fn drain_events<T>(queue: &RefCell<VecDeque<T>>, mut deliver: impl FnMut(T)) {
+    loop {
+        // Release the queue borrow before invoking reentrant native code.
+        let event = queue.borrow_mut().pop_front();
+        let Some(event) = event else { break };
+        deliver(event);
     }
 }
 

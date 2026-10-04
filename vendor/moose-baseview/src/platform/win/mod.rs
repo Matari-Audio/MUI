@@ -2,8 +2,8 @@ mod dpi;
 mod drop_target;
 mod error;
 mod hook;
-mod keyboard;
 mod ime;
+mod keyboard;
 mod window;
 mod window_state;
 

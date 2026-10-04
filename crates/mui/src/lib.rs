@@ -62,10 +62,10 @@ pub mod prelude {
     pub use mui_material::{Capture, Material};
     pub use mui_scene::prelude::{
         A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
-        CornerStyle, Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image,
-        IntoEl, Justify, Keys, L, Len, M, Match, Mix, Paints, Path, Pin, Point, Radius, Resolver,
-        Role, S, SceneSpec, Shadow, ShapeLayout, Size, Spacing, State, Style, Styled, Theme,
-        Weight, Weld, WeldBackend, WeldChannel, WeldQuality, Xl, Xs, block, body, canvas,
+        CornerStyle, Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, GridTrack, Id,
+        Image, IntoEl, Justify, Keys, L, Len, M, Match, Mix, Paints, Path, Pin, Point, Radius,
+        Resolver, Role, S, SceneSpec, Shadow, ShapeLayout, Size, Spacing, State, Style, Styled,
+        Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality, Xl, Xs, block, body, canvas,
         canvas_keyed, caption, clamp, col, cq, fits, grid, icon, pct, resolve, row, spacer, stack,
         step, sym, text, title, weld,
     };

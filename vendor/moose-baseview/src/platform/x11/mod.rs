@@ -16,8 +16,8 @@ mod cursor;
 mod drag_n_drop;
 mod error;
 mod event_loop;
-mod keyboard;
 mod ime;
+mod keyboard;
 mod visual_info;
 mod xcb_window;
 

@@ -274,12 +274,18 @@ struct DeviceErrors {
 }
 impl DeviceErrors {
     fn record(&self, message: String) {
-        let mut latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+        let mut latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         latest.0 = latest.0.wrapping_add(1);
         latest.1 = Some(message);
     }
     fn observe(&self, cursor: &mut u64) -> Option<String> {
-        let latest = self.latest.lock().unwrap_or_else(|e| e.into_inner());
+        let latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if *cursor == latest.0 {
             return None;
         }
@@ -521,7 +527,7 @@ fn configure(
     let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
     let configured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        surface.configure(device, config)
+        surface.configure(device, config);
     }));
     let errors = [internal, memory, validation]
         .into_iter()
