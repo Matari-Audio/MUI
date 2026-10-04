@@ -362,11 +362,16 @@ mod tests {
         let mut db = FontDatabase::new();
         let primary = hack();
         let query = FontQuery::default();
-        let before = db.prepare_with(&[primary.clone()], &query, "A😀").unwrap();
-        assert_eq!(before.fonts, [primary.clone()]);
-        assert_eq!(before.missing, [1..5]);
+        let before = db
+            .prepare_with(std::slice::from_ref(&primary), &query, "A😀")
+            .unwrap();
+        assert_eq!(before.fonts.as_slice(), std::slice::from_ref(&primary));
+        assert_eq!(before.missing.len(), 1);
+        assert_eq!(before.missing[0], 1..5);
         assert_eq!(db.add(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap(), 1);
-        let after = db.prepare_with(&[primary.clone()], &query, "A😀").unwrap();
+        let after = db
+            .prepare_with(std::slice::from_ref(&primary), &query, "A😀")
+            .unwrap();
         assert!(after.revision > before.revision);
         assert_eq!(after.fonts[0], primary);
         assert!(after.missing.is_empty());
@@ -401,7 +406,8 @@ mod tests {
         assert!(run.glyphs.iter().all(|glyph| glyph.font == 1));
         let absent = "a\u{10ffff}\u{301}";
         let selection = db.prepare(&query, absent).unwrap();
-        assert_eq!(selection.missing, [1..absent.len()]);
+        assert_eq!(selection.missing.len(), 1);
+        assert_eq!(selection.missing[0], 1..absent.len());
         assert!(db.prepare(&FontQuery::default(), "A").is_err());
         assert!(db.add(&b"not a font"[..]).is_err());
     }
@@ -476,7 +482,7 @@ mod tests {
             ..FontQuery::default()
         };
         assert_eq!(
-            db.prepare_with(&[primary.clone()], &query, "😀")
+            db.prepare_with(std::slice::from_ref(&primary), &query, "😀")
                 .unwrap()
                 .fonts[1],
             lookup(jp_id)

@@ -59,7 +59,7 @@ mod test_fonts {
             .into_iter()
             .enumerate()
         {
-            while bytes.len() % 4 != 0 {
+            while !bytes.len().is_multiple_of(4) {
                 bytes.push(0);
             }
             let start = bytes.len();
