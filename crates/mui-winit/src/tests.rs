@@ -321,3 +321,17 @@ fn native_file_drop_position_is_not_scaled_by_zoom_twice() {
         Point::new(30., 45.)
     );
 }
+
+#[test]
+fn recreated_native_windows_reset_occlusion_and_use_actual_focus() {
+    let mut state = WindowState {
+        occluded: true,
+        focused: true,
+        ..WindowState::default()
+    };
+    state.update((800, 600), 2.0);
+    assert!(!state.visible(), "resize preserves occlusion");
+    state.opened(false);
+    assert!(state.visible(), "new native surface starts drawable");
+    assert!(!state.focused, "unfocused siblings must not enable IME");
+}

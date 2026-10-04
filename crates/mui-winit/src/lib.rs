@@ -109,6 +109,11 @@ impl WindowState {
             self.scale = scale;
         }
     }
+    fn opened(&mut self, focused: bool) {
+        // A recreated native window does not inherit the old surface's visibility.
+        self.occluded = false;
+        self.focused = focused;
+    }
     fn points(&self, x: f64, y: f64) -> Point {
         Point::new(x / self.scale, y / self.scale)
     }
@@ -364,6 +369,11 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
                         .unwrap_or(Duration::from_secs_f64(1.0 / 60.0)),
                 );
                 gpu.window().set_visible(true);
+                self.state.opened(gpu.window().has_focus());
+                self.driver
+                    .as_mut()
+                    .expect("created above")
+                    .focus(self.state.focused);
                 gpu.window().request_redraw(); // First frame must not depend on mouse input.
                 self.gpu = Some(gpu);
                 self.next_poll = Instant::now() + self.interval();
