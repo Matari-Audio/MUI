@@ -77,6 +77,10 @@ pub(crate) struct Rare {
     /// The gap between wrapped lines and grid rows; `None` is `gap`. See
     /// [`Node::line_gap`].
     pub(crate) line_gap: Option<Spacing>,
+    pub(crate) grid_tracks: Option<Vec<crate::GridTrack>>,
+    pub(crate) grid_rows: Option<Vec<crate::GridTrack>>,
+    pub(crate) grid_position: Option<[usize; 2]>,
+    pub(crate) grid_row_span: usize,
     pub(crate) maximum: Option<Size>,
     pub(crate) aspect: Option<f64>,
     /// Contain the aspect in both offered axes rather than deriving height.
@@ -93,6 +97,10 @@ pub(crate) struct Rare {
 impl Rare {
     const NONE: Self = Self {
         line_gap: None,
+        grid_tracks: None,
+        grid_rows: None,
+        grid_position: None,
+        grid_row_span: 1,
         maximum: None,
         aspect: None,
         aspect_fit: false,
@@ -577,6 +585,39 @@ impl<P> Node<P> {
         self
     }
     /// How many grid columns this cell takes, clamped to the column count.
+    /// Use explicit column tracks instead of equal-width columns. The track
+    /// count becomes the grid's column count. An empty list is invalid;
+    /// `min_col` and explicit tracks cannot be combined.
+    pub fn grid_tracks(mut self, tracks: impl IntoIterator<Item = crate::GridTrack>) -> Self {
+        let tracks: Vec<_> = tracks.into_iter().collect();
+        if let Kind::Grid { cols, .. } = &mut self.kind {
+            *cols = tracks.len();
+        }
+        self.rare_mut().grid_tracks = Some(tracks);
+        self
+    }
+
+    /// Explicit row tracks; rows beyond this list use `GridTrack::Auto`.
+    /// Without explicit columns, columns retain equal fractional sizing.
+    pub fn grid_rows(mut self, tracks: impl IntoIterator<Item = crate::GridTrack>) -> Self {
+        self.rare_mut().grid_rows = Some(tracks.into_iter().collect());
+        self
+    }
+
+    /// Place a grid item at a zero-based column and row. Explicit items reserve
+    /// cells before automatic items. Overlap between explicit items is allowed;
+    /// a position outside the declared columns is invalid.
+    pub fn grid_at(mut self, column: usize, row: usize) -> Self {
+        self.rare_mut().grid_position = Some([column, row]);
+        self
+    }
+
+    /// Span adjacent grid rows. Automatic placement skips occupied cells.
+    pub fn grid_row_span(mut self, rows: usize) -> Self {
+        self.rare_mut().grid_row_span = rows.max(1);
+        self
+    }
+
     pub fn span(mut self, cols: usize) -> Self {
         self.span = cols.max(1);
         self

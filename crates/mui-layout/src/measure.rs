@@ -31,6 +31,9 @@ pub(crate) struct Measured<'a, P> {
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
     pub(crate) cols: usize,
+    /// Explicit column widths settled during measure and reused by arrange.
+    pub(crate) columns: Vec<f64>,
+    pub(crate) rows: Vec<f64>,
     /// A `Fits` node's chosen candidate; 0 for anything else. Picked once, at
     /// measure, for the same reason as `cols`.
     pub(crate) pick: usize,
@@ -89,7 +92,24 @@ impl<'a, P> Measured<'a, P> {
     /// parent, a height derived from its aspect, its declared `basis`, or what
     /// it measured. `inner` is `None` while the parent is still hugging.
     pub(crate) fn base(&self, vertical: bool, inner: Option<Size>) -> f64 {
-        let fallback = || self.node.basis.unwrap_or(self.size.main(vertical));
+        let value = self.flex_basis(vertical, inner);
+        self.node
+            .rare()
+            .maximum
+            .map_or(value, |m| value.min(m.main(vertical)))
+            .max(self.floor.main(vertical))
+    }
+    /// Unclamped basis: shrink weights use this, before min/max constraints.
+    pub(crate) fn flex_basis(&self, vertical: bool, inner: Option<Size>) -> f64 {
+        if let Some(basis) = self.node.basis {
+            return basis;
+        }
+        let fallback = || {
+            self.node
+                .len(vertical)
+                .px()
+                .unwrap_or(self.size.main(vertical))
+        };
         let Some(inner) = inner else {
             return fallback();
         };
@@ -126,7 +146,12 @@ impl<'a, P> Measured<'a, P> {
         if !matches!(n.height, Len::Auto) {
             return None;
         }
-        let cap = |v: f64| n.rare().maximum.map_or(v, |m| v.min(m.width));
+        let cap = |v: f64| {
+            n.rare()
+                .maximum
+                .map_or(v, |m| v.min(m.width))
+                .max(n.minimum.width)
+        };
         Some((
             cap(n
                 .width
@@ -198,8 +223,27 @@ pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
             .offset
             .iter()
             .all(|v| v.is_finite() && v.abs() <= l.extent)
-        || matches!(node.kind, Kind::Grid { cols: 0, .. })
+        || matches!(node.kind, Kind::Grid { cols, .. } if cols == 0 || cols > l.nodes.min(isize::MAX as usize / size_of::<crate::GridTrack>()))
         || node.rare().min_col.is_some_and(|v| !finite(v))
+        || node.rare().grid_tracks.as_ref().is_some_and(|tracks| {
+            !matches!(node.kind, Kind::Grid { .. })
+                || tracks.is_empty()
+                || tracks.len() > l.nodes
+                || tracks.iter().any(|t| !t.valid(l))
+                || node.rare().min_col.is_some()
+        })
+        || node.rare().grid_rows.as_ref().is_some_and(|tracks| {
+            !matches!(node.kind, Kind::Grid { .. })
+                || tracks.len() > l.nodes
+                || tracks.iter().any(|t| !t.valid(l))
+        })
+        || node.rare().grid_row_span
+            > l.nodes
+                .min(isize::MAX as usize / size_of::<crate::GridTrack>())
+        || node
+            .rare()
+            .grid_position
+            .is_some_and(|p| p.iter().any(|&v| v >= l.nodes))
     {
         return Err(Error::InvalidValue);
     }
@@ -345,6 +389,16 @@ pub(crate) fn measure_uncached<'a, P>(
         Some(_) => definite,
         None => [flex_width.or(definite[0]), node.height.px().or(definite[1])],
     };
+    if boxed.is_none() {
+        for (axis, value) in definite.iter_mut().enumerate() {
+            *value = value.map(|v| {
+                node.rare()
+                    .maximum
+                    .map_or(v, |m| v.min(m.main(axis == 1)))
+                    .max(node.minimum.main(axis == 1))
+            });
+        }
+    }
     if let Some(a) = node.rare().aspect.filter(|_| boxed.is_none()) {
         if node.rare().aspect_fit {
             if definite.iter().any(Option::is_some) {
@@ -399,6 +453,19 @@ pub(crate) fn measure_uncached<'a, P>(
         },
         _ => 0,
     };
+    let explicit_tracks = node.rare().grid_tracks.clone().or_else(|| {
+        if matches!(node.kind, Kind::Grid { .. })
+            && (node.rare().grid_rows.is_some()
+                || node
+                    .children()
+                    .iter()
+                    .any(|c| c.rare().grid_position.is_some() || c.rare().grid_row_span > 1))
+        {
+            Some(vec![crate::GridTrack::MinFr { min: 0.0, fr: 1.0 }; cols])
+        } else {
+            None
+        }
+    });
     // A box with a definite inner extent is the container everything under it
     // takes a `Len::Container` share of, until a nearer one says otherwise.
     // ponytail: a grid column is room, not a container; make it one if a
@@ -441,7 +508,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     offer(c, true, inner[1], sub[1], ay == Align::Stretch),
                 ]
             }
-            Kind::Grid { .. } => {
+            Kind::Grid { .. } if explicit_tracks.is_none() => {
                 let (ax, _) = c.anchor.unwrap_or(cell_default(node));
                 let span = c.span.clamp(1, cols) as f64;
                 let col = inner[0].map(|w| {
@@ -451,11 +518,94 @@ pub(crate) fn measure_uncached<'a, P>(
                 child_room = narrower(child_room, col);
                 [offer(c, false, col, sub[0], ax == Align::Stretch), None]
             }
+            Kind::Grid { .. } => {
+                child_room = None;
+                [None; 2]
+            }
             _ => [None; 2],
         };
         let mut m = measure(c, here, promise, child_room, sub, depth + 1, pass)?;
         m.index = index;
         children.push(m);
+    }
+    let mut grid_placements = Vec::new();
+    let columns = if let Some(tracks) = &explicit_tracks {
+        grid_placements = crate::grid::placements(&flow_of(&children), cols, l.nodes)?;
+        let widths = crate::grid::tracks(
+            tracks,
+            &flow_of(&children),
+            &grid_placements,
+            gap,
+            inner[0],
+            false,
+            false,
+        );
+        for p in &grid_placements {
+            let width = widths[p.column..p.column + p.column_span]
+                .iter()
+                .sum::<f64>()
+                + gap * (p.column_span - 1) as f64;
+            let child = &node.children()[p.index];
+            let (ax, _) = child.anchor.unwrap_or(cell_default(node));
+            let promise = [
+                offer(child, false, Some(width), sub[0], ax == Align::Stretch),
+                None,
+            ];
+            let was = std::mem::replace(&mut pass.redo, true);
+            let measured = measure(child, here, promise, Some(width), sub, depth + 1, pass);
+            pass.redo = was;
+            children[p.index] = measured?;
+            children[p.index].index = p.index;
+        }
+        widths
+    } else {
+        Vec::new()
+    };
+    let row_tracks = if explicit_tracks.is_some() {
+        let mut tracks = node.rare().grid_rows.clone().unwrap_or_default();
+        let count = grid_placements
+            .iter()
+            .map(|p| p.row + p.row_span)
+            .max()
+            .unwrap_or(0);
+        tracks.resize(tracks.len().max(count), crate::GridTrack::Auto);
+        tracks
+    } else {
+        Vec::new()
+    };
+    let rows = if explicit_tracks.is_some() {
+        crate::grid::tracks(
+            &row_tracks,
+            &flow_of(&children),
+            &grid_placements,
+            line_gap,
+            inner[1],
+            false,
+            true,
+        )
+    } else {
+        Vec::new()
+    };
+    // A stretched grid child must learn both axes before arranging its own
+    // descendants (percentage heights and nested row tracks depend on this).
+    for p in &grid_placements {
+        let width = columns[p.column..p.column + p.column_span]
+            .iter()
+            .sum::<f64>()
+            + gap * (p.column_span - 1) as f64;
+        let height = rows[p.row..p.row + p.row_span].iter().sum::<f64>()
+            + line_gap * (p.row_span - 1) as f64;
+        let child = &node.children()[p.index];
+        let (ax, ay) = child.anchor.unwrap_or(cell_default(node));
+        let promise = [
+            offer(child, false, Some(width), sub[0], ax == Align::Stretch),
+            offer(child, true, Some(height), sub[1], ay == Align::Stretch),
+        ];
+        let was = std::mem::replace(&mut pass.redo, true);
+        let measured = measure(child, here, promise, Some(width), sub, depth + 1, pass);
+        pass.redo = was;
+        children[p.index] = measured?;
+        children[p.index].index = p.index;
     }
     // Largest first, so the first candidate that clears both offered axes is
     // the richest one that fits. An axis with no offer never rejects. A float
@@ -477,15 +627,14 @@ pub(crate) fn measure_uncached<'a, P>(
     // -- a paragraph, a `min_col` grid -- is measured again at the share it
     // actually got. Doing it here, inside the one measure pass, is what makes
     // the row's own cross size right; a second solve outside cannot. A
-    // wrapping row deals lines, not shares: squeezing its items onto one
-    // line would break words instead of wrapping them.
+    // wrapping row distributes each line independently, then remeasures the
+    // fluid children at that line's final shares.
     if let (
         Kind::Branch {
             vertical: false, ..
         },
         Some(avail),
-        false,
-    ) = (&node.kind, inner[0], node.wrap)
+    ) = (&node.kind, inner[0])
     {
         // Per child: the width it was last measured at, once re-measured.
         let mut at: Vec<Option<f64>> = vec![None; children.len()];
@@ -509,8 +658,19 @@ pub(crate) fn measure_uncached<'a, P>(
                         avail
                     };
                     let inner = Size::new(avail, inner[1].unwrap_or(0.0));
-                    let main = distribute(&flow, gap, false, inner);
-                    flow.iter().map(|c| c.index).zip(main).collect()
+                    let lines = if node.wrap {
+                        wrap_lines(&flow, gap, false, avail)
+                    } else {
+                        vec![(0, flow.len())]
+                    };
+                    lines
+                        .into_iter()
+                        .flat_map(|(start, end)| {
+                            let line = &flow[start..end];
+                            let main = distribute(line, gap, false, inner);
+                            line.iter().map(|c| c.index).zip(main).collect::<Vec<_>>()
+                        })
+                        .collect()
                 } else {
                     Vec::new()
                 }
@@ -663,6 +823,36 @@ pub(crate) fn measure_uncached<'a, P>(
         Kind::Fits(_) => children
             .get(pick)
             .map_or((Size::ZERO, Size::ZERO), |c| (c.size, c.floor)),
+        Kind::Grid { .. } if explicit_tracks.is_some() => {
+            let floor_columns = crate::grid::tracks(
+                explicit_tracks.as_ref().unwrap(),
+                &flow,
+                &grid_placements,
+                gap,
+                inner[0],
+                true,
+                false,
+            );
+            let floor_rows = crate::grid::tracks(
+                &row_tracks,
+                &flow,
+                &grid_placements,
+                line_gap,
+                inner[1],
+                true,
+                true,
+            );
+            let width = |tracks: &[f64]| {
+                tracks.iter().sum::<f64>() + gap * tracks.len().saturating_sub(1) as f64
+            };
+            let height = |tracks: &[f64]| {
+                tracks.iter().sum::<f64>() + line_gap * tracks.len().saturating_sub(1) as f64
+            };
+            (
+                Size::new(width(&columns), height(&rows)),
+                Size::new(width(&floor_columns), height(&floor_rows)),
+            )
+        }
         Kind::Grid { .. } => {
             let rows = grid_rows(&flow, cols);
             let gaps = |n: f64| (n - 1.0).max(0.0) * gap;
@@ -710,8 +900,8 @@ pub(crate) fn measure_uncached<'a, P>(
     };
     let hug = pad(content);
     let size = Size::new(
-        definite[0].unwrap_or(hug.width),
-        definite[1].unwrap_or(hug.height),
+        definite[0].unwrap_or(hug.width).max(node.minimum.width),
+        definite[1].unwrap_or(hug.height).max(node.minimum.height),
     );
     let floor = match node.vertical() {
         Some(v) if node.scroll => Size::axes(
@@ -741,8 +931,8 @@ pub(crate) fn measure_uncached<'a, P>(
         own.map_or(f, |v| f.min(v))
     };
     let floor = Size::new(
-        cap(floor.width, node.width, definite[0]),
-        cap(floor.height, node.height, definite[1]),
+        cap(floor.width, node.width, definite[0]).max(node.minimum.width),
+        cap(floor.height, node.height, definite[1]).max(node.minimum.height),
     );
     if !size.valid(l.extent) {
         return Err(Error::BudgetExceeded);
@@ -830,6 +1020,7 @@ pub(crate) fn measure_uncached<'a, P>(
             && matches!(node.kind, Kind::Grid { .. }))
         || children.iter().any(|c| c.fluid && !c.node.float)
         || width_fluid
+        || explicit_tracks.is_some()
         || wrap_fluid;
     Ok(Measured {
         node,
@@ -843,6 +1034,8 @@ pub(crate) fn measure_uncached<'a, P>(
         floor,
         content,
         cols,
+        columns,
+        rows,
         pick,
         container,
         children,

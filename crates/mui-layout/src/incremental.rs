@@ -70,6 +70,8 @@ pub(crate) struct Frozen {
     content: Size,
     fluid: bool,
     cols: usize,
+    columns: Vec<f64>,
+    rows: Vec<f64>,
     pick: usize,
     container: [Option<f64>; 2],
     children: Vec<Arc<Frozen>>,
@@ -89,6 +91,8 @@ impl Frozen {
             floor: this.floor,
             content: this.content,
             cols: this.cols,
+            columns: this.columns.clone(),
+            rows: this.rows.clone(),
             pick: this.pick,
             container: this.container,
             children: this
@@ -115,6 +119,8 @@ impl Frozen {
             content: m.content,
             fluid: m.fluid,
             cols: m.cols,
+            columns: m.columns.clone(),
+            rows: m.rows.clone(),
             pick: m.pick,
             container: m.container,
             // Every child came through `measure_cached`, which froze it.
