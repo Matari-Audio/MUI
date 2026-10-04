@@ -244,3 +244,80 @@ fn prepared_scene_does_not_keep_the_model_locked_during_native_presentation() {
     model.ui.blur();
     assert!(snapshot.surface("pad").is_some());
 }
+
+#[test]
+fn multiwindow_options_fail_before_event_loop_creation() {
+    let empty: Vec<WindowSpec<Pad>> = Vec::new();
+    assert!(run_windows(empty, |_, _| panic!("must not start")).is_err());
+    let invalid = WindowSpec::new(
+        Pad {
+            frames: 0,
+            cancels: 0,
+        },
+        Ui::default(),
+        Options {
+            size: (0, 10),
+            ..Options::default()
+        },
+    );
+    assert!(run_windows(vec![invalid], |_, _| panic!("must not start")).is_err());
+}
+
+#[test]
+fn multiwindow_driver_focus_and_pointer_cancellation_are_independent() {
+    let (mut first, mut first_shared) = rig();
+    let (mut second, mut second_shared) = rig();
+    let now = Instant::now();
+    first.advance(&mut first_shared, now);
+    second.advance(&mut second_shared, now);
+    first.pointer_moved(Point::new(12., 15.), Mods::default());
+    first.button(Button::Primary, true, Mods::default());
+    second.pointer_moved(Point::new(42., 45.), Mods::default());
+    second.button(Button::Primary, true, Mods::default());
+    first.focus(false);
+    first.advance(&mut first_shared, now + Duration::from_millis(20));
+    assert_eq!(second.pointer().pos, Some(Point::new(42., 45.)));
+    assert_eq!(second_shared.view.cancels, 0);
+    assert!(first_shared.view.cancels > 0);
+}
+
+#[test]
+fn controller_commands_can_cross_threads_without_moving_main_thread_views() {
+    struct Local(std::rc::Rc<()>);
+    impl View for Local {
+        fn build(&mut self, _: &mut Ui, _: &Input) -> El {
+            block(10., 10.)
+        }
+        fn changed(&mut self) -> bool {
+            std::rc::Rc::strong_count(&self.0) == 0
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+    fn assert_send<T: Send>() {}
+    assert_send::<WindowController<Local>>();
+}
+
+#[test]
+fn multiwindow_rejects_aliasing_retained_ui_state() {
+    let (_, shared) = rig();
+    let shared = Arc::new(Mutex::new(shared));
+    let windows = vec![
+        WindowSpec::shared(shared.clone(), Options::default()),
+        WindowSpec::shared(shared, Options::default()),
+    ];
+    let error = run_windows(windows, |_, _| panic!("must not start")).unwrap_err();
+    assert!(error.contains("independent Shared"));
+}
+
+#[test]
+fn native_file_drop_position_is_not_scaled_by_zoom_twice() {
+    let mut state = WindowState::default();
+    state.update((800, 600), 2.0);
+    // At 2x OS scale and 1.5x UI zoom, the Driver stores scene coordinates.
+    assert_eq!(
+        state.window_point(Point::new(20., 30.), 3.0),
+        Point::new(30., 45.)
+    );
+}

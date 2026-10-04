@@ -11,6 +11,7 @@ use winit::window::Window;
 pub struct Gpu {
     window: Arc<Window>,
     host: Host,
+    current: bool,
 }
 
 impl Gpu {
@@ -28,7 +29,11 @@ impl Gpu {
         let size = window.inner_size();
         let host =
             Host::new(instance, surface, (size.width, size.height)).map_err(|e| e.to_string())?;
-        Ok(Self { window, host })
+        Ok(Self {
+            window,
+            host,
+            current: false,
+        })
     }
     pub fn window(&self) -> &Window {
         &self.window
@@ -46,6 +51,7 @@ impl Gpu {
         scene: &ResolvedScene,
         transform: Affine,
     ) -> Result<Option<EffectStats>, String> {
+        self.current = false;
         self.window.pre_present_notify();
         let frame = self
             .host
@@ -59,6 +65,7 @@ impl Gpu {
         transform: Affine,
         overlay: F,
     ) -> Result<Option<EffectStats>, String> {
+        self.current = false;
         self.window.pre_present_notify();
         let frame = self
             .host
@@ -66,8 +73,12 @@ impl Gpu {
             .map_err(|e| e.to_string())?;
         self.after(&frame)
     }
+    pub(crate) fn frame_was_current(&self) -> bool {
+        self.current
+    }
     /// A frame that did not reach the screen asks for another.
     fn after(&mut self, frame: &Frame) -> Result<Option<EffectStats>, String> {
+        self.current = matches!(frame, Frame::Current);
         match frame {
             Frame::Presented(stats) => return Ok(Some(*stats)),
             Frame::Current => return Ok(None),

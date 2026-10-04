@@ -8,8 +8,10 @@
 #![forbid(unsafe_code)]
 
 mod gpu;
+mod windows;
 pub use gpu::Gpu;
 pub use mui::host::{Shared, View, lock};
+pub use windows::{HostEvent, WindowController, WindowSpec, WindowToken, run_windows};
 pub use winit;
 
 use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindowEvent};
@@ -66,6 +68,16 @@ pub fn run<V: View>(view: V, ui: mui::Ui, options: Options) -> Result<(), String
 /// `View::changed` is polled at the current monitor cadence. Zero-sized initial
 /// windows and zero poll intervals are rejected before creating an event loop.
 pub fn run_shared<V: View>(shared: Arc<Mutex<Shared<V>>>, options: Options) -> Result<(), String> {
+    validate_options(&options)?;
+    let event_loop = EventLoop::<AccessEvent>::with_user_event()
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut app = App::new(shared, options, event_loop.create_proxy());
+    event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
+    app.error.map_or(Ok(()), Err)
+}
+
+fn validate_options(options: &Options) -> Result<(), String> {
     if options.size.0 == 0 || options.size.1 == 0 {
         return Err("MUI window must have a nonzero size".into());
     }
@@ -75,31 +87,7 @@ pub fn run_shared<V: View>(shared: Arc<Mutex<Shared<V>>>, options: Options) -> R
     {
         return Err("MUI poll interval must be nonzero".into());
     }
-    lock(&shared).ui.set_motion_policy(options.motion_policy);
-    let event_loop = EventLoop::<AccessEvent>::with_user_event()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let mut app = App {
-        shared,
-        options,
-        proxy: event_loop.create_proxy(),
-        gpu: None,
-        driver: None,
-        access: None,
-        published: mui_access::Publisher::default(),
-        state: WindowState {
-            focused: true,
-            ..WindowState::default()
-        },
-        mods: Mods::default(),
-        ime_on: false,
-        composing: false,
-        native_cursor: None,
-        next_poll: Instant::now(),
-        error: None,
-    };
-    event_loop.run_app(&mut app).map_err(|e| e.to_string())?;
-    app.error.map_or(Ok(()), Err)
+    Ok(())
 }
 
 /// Visibility and scale are independent: a resize must not unhide an occluded
@@ -124,12 +112,16 @@ impl WindowState {
     fn points(&self, x: f64, y: f64) -> Point {
         Point::new(x / self.scale, y / self.scale)
     }
+    fn window_point(&self, at: Point, ui_scale: f64) -> Point {
+        let zoom = ui_scale / self.scale;
+        Point::new(at.x * zoom, at.y * zoom)
+    }
 }
 
-struct App<V> {
+struct App<V, T: 'static = AccessEvent> {
     shared: Arc<Mutex<Shared<V>>>,
     options: Options,
-    proxy: EventLoopProxy<AccessEvent>,
+    proxy: EventLoopProxy<T>,
     gpu: Option<Gpu>,
     driver: Option<Driver>,
     access: Option<Adapter>,
@@ -141,9 +133,33 @@ struct App<V> {
     native_cursor: Option<Cursor>,
     next_poll: Instant,
     error: Option<String>,
+    presentations: u64,
 }
 
-impl<V: View> App<V> {
+impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
+    fn new(shared: Arc<Mutex<Shared<V>>>, options: Options, proxy: EventLoopProxy<T>) -> Self {
+        lock(&shared).ui.set_motion_policy(options.motion_policy);
+        Self {
+            shared,
+            options,
+            proxy,
+            gpu: None,
+            driver: None,
+            access: None,
+            published: mui_access::Publisher::default(),
+            state: WindowState {
+                focused: true,
+                ..WindowState::default()
+            },
+            mods: Mods::default(),
+            ime_on: false,
+            composing: false,
+            native_cursor: None,
+            next_poll: Instant::now(),
+            error: None,
+            presentations: 0,
+        }
+    }
     fn update_size(&mut self, size: (u32, u32), scale: f64) {
         self.state.update(size, scale);
         if let Some(driver) = &mut self.driver {
@@ -245,17 +261,46 @@ impl<V: View> App<V> {
         if let (Some(started), Some(profile)) = (backend_started, driver.profiler_mut()) {
             // Whole backend CPU call: includes encoding, submission and present.
             profile.record_since(mui::profiling::Phase::BackendDraw, started);
+            if matches!(&presented, Some(Ok(None))) && gpu.frame_was_current() {
+                profile.discard_pending_presentation();
+            }
             if matches!(&presented, Some(Ok(Some(_)))) {
                 // Only a frame submitted for presentation completes the input
                 // sample. This measures CPU return, not GPU completion/scanout.
                 profile.record_since(mui::profiling::Phase::PresentCall, started);
             }
         }
+        if matches!(&presented, Some(Ok(Some(_)))) {
+            self.presentations += 1;
+        }
         if let Some(Err(error)) = presented {
             lock(&self.shared).view.log(&format!("mui-winit: {error}"));
         }
         if changed {
             self.publish();
+        }
+    }
+    fn poll(&mut self, now: Instant) -> Option<Instant> {
+        if !self.state.visible() || self.gpu.is_none() {
+            return None;
+        }
+        let wake = self
+            .driver
+            .as_ref()
+            .and_then(Driver::next_wake)
+            .map_or(self.next_poll, |at| at.min(self.next_poll));
+        if now >= wake {
+            self.gpu
+                .as_ref()
+                .expect("checked above")
+                .window()
+                .request_redraw();
+            self.next_poll = now + self.interval();
+            // The Driver deadline is consumed on RedrawRequested. Wait for the
+            // next poll instead of spinning until winit delivers that redraw.
+            Some(self.next_poll)
+        } else {
+            Some(wake)
         }
     }
     fn interval(&self) -> Duration {
@@ -271,7 +316,7 @@ impl<V: View> App<V> {
     }
 }
 
-impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
+impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEvent> for App<V, T> {
     fn new_events(&mut self, _: &ActiveEventLoop, _: StartCause) {
         if let Some(profile) = self.driver.as_mut().and_then(Driver::profiler_mut) {
             profile.count(mui::profiling::Counter::NativeWakes, 1);
@@ -338,27 +383,10 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
         self.close();
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.state.visible() || self.gpu.is_none() {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
-        }
-        let now = Instant::now();
-        let wake = self
-            .driver
-            .as_ref()
-            .and_then(Driver::next_wake)
-            .map_or(self.next_poll, |at| at.min(self.next_poll));
-        if now >= wake {
-            if let Some(gpu) = &self.gpu {
-                gpu.window().request_redraw();
-            }
-            self.next_poll = now + self.interval();
-            // A due Driver deadline is consumed on RedrawRequested; waiting
-            // until next_poll avoids spinning before winit delivers that redraw.
-            event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_poll));
-        } else {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
-        }
+        event_loop.set_control_flow(
+            self.poll(Instant::now())
+                .map_or(ControlFlow::Wait, ControlFlow::WaitUntil),
+        );
     }
     fn user_event(&mut self, _: &ActiveEventLoop, event: AccessEvent) {
         let Some(gpu) = &self.gpu else { return };
@@ -379,6 +407,22 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
                     .and_then(|scene| mui_access::surface_of(scene, request.target_node))
                     .map(|s| s.key.to_string());
                 if let Some(key) = key {
+                    let affinity =
+                        if let Some(ActionData::SetTextSelection(selection)) = &request.data {
+                            shared
+                                .ui
+                                .scene()
+                                .and_then(|scene| {
+                                    mui_access::selection_is_upstream(
+                                        scene,
+                                        request.target_node,
+                                        &selection.focus,
+                                    )
+                                })
+                                .map(|upstream| (key.clone(), upstream))
+                        } else {
+                            None
+                        };
                     let action = match (request.action, request.data) {
                         (Action::Focus, _) => Some(SemanticAction::focus(key)),
                         (Action::Click, _) => Some(SemanticAction::activate(key)),
@@ -401,8 +445,11 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
                             }),
                         _ => None,
                     };
-                    if let Some(action) = action {
-                        shared.ui.request_action(action);
+                    if let Some(action) = action
+                        && shared.ui.request_action(action)
+                        && let Some((key, upstream)) = affinity
+                    {
+                        shared.ui.set_text_selection_affinity(key, upstream);
                     }
                     if let Some(driver) = &mut self.driver {
                         driver.redraw();
@@ -477,8 +524,10 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
                 if let Some(driver) = &mut self.driver {
                     let at = driver.pointer().pos;
                     if let Some(at) = at {
-                        let zoom = driver.ui_scale() / self.state.scale;
-                        driver.pointer_moved(Point::new(at.x * zoom, at.y * zoom), self.mods);
+                        driver.pointer_moved(
+                            self.state.window_point(at, driver.ui_scale()),
+                            self.mods,
+                        );
                     }
                 }
             }
@@ -532,12 +581,18 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
             }
             WindowEvent::HoveredFile(path) => {
                 if let Some(driver) = &mut self.driver {
-                    driver.drop_files(&mut lock(&self.shared), &[path], false);
+                    let at = self
+                        .state
+                        .window_point(driver.pointer().pos.unwrap_or_default(), driver.ui_scale());
+                    driver.drop_files(&mut lock(&self.shared), at, self.mods, &[path], false);
                 }
             }
             WindowEvent::DroppedFile(path) => {
                 if let Some(driver) = &mut self.driver {
-                    driver.drop_files(&mut lock(&self.shared), &[path], true);
+                    let at = self
+                        .state
+                        .window_point(driver.pointer().pos.unwrap_or_default(), driver.ui_scale());
+                    driver.drop_files(&mut lock(&self.shared), at, self.mods, &[path], true);
                 }
             }
             _ => return,
