@@ -10,7 +10,7 @@ mui = { workspace = true, features = ["gpu-effects"] }
 mui-access.workspace = true
 wgpu = { workspace = true, features = ["default"] }
 winit = "0.30"
-accesskit_winit = "0.33"
+accesskit_winit = { path = "../../vendor/accesskit_winit" }
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 
 [dev-dependencies]

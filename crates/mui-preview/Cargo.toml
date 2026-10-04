@@ -25,7 +25,7 @@ pollster.workspace = true
 # Zero dependencies of its own -- no egui reaches the graph through it.
 epaint_default_fonts.workspace = true
 mui-access.workspace = true
-accesskit_winit = "0.33"
+accesskit_winit = { path = "../../vendor/accesskit_winit" }
 
 [lints]
 workspace = true
