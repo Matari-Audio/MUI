@@ -471,8 +471,9 @@ fn profiling_tracks_invalidation_skips_coalescing_and_clock_regressions() {
         assert!(!r.step());
     }
     assert!(r.d.next_wake().is_none());
-    r.d.pointer_moved(at(200., 200.), none());
-    r.d.pointer_moved(at(210., 200.), none());
+    // Outside the offered root: changing its hover target would legitimately build.
+    r.d.pointer_moved(at(1000., 1000.), none());
+    r.d.pointer_moved(at(1010., 1000.), none());
     assert!(!r.step());
     r.d.redraw();
     assert!(r.d.next_wake().is_some());
