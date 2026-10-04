@@ -460,3 +460,148 @@ fn shared_state_with_canvas_caches_is_send() {
     // A view that is nothing but a cache stands in for one that keeps some.
     shared::<std::sync::Arc<Mutex<Shared<Cache>>>>();
 }
+
+#[test]
+fn profiling_tracks_invalidation_skips_coalescing_and_clock_regressions() {
+    let mut r = Rig::new(Pad, (400, 300), 1.0);
+    assert!(r.d.profiler().is_none());
+    r.d.enable_profiling(ProfileConfig { capacity: 4 });
+    assert!(r.step());
+    for _ in 0..8 {
+        assert!(!r.step());
+    }
+    assert!(r.d.next_wake().is_none());
+    // Outside the offered root: changing its hover target would legitimately build.
+    r.d.pointer_moved(at(1000., 1000.), none());
+    r.d.pointer_moved(at(1010., 1000.), none());
+    assert!(!r.step());
+    r.d.redraw();
+    assert!(r.d.next_wake().is_some());
+    assert!(r.step());
+    let now = r.d.last_frame();
+    assert!(!r.d.advance(&mut r.s, now - Duration::from_secs(1)));
+    assert_eq!(r.d.last_frame(), now);
+    let profile = r.d.profiler().unwrap();
+    assert_eq!(profile.counter(Counter::Invalidations), 1);
+    assert_eq!(profile.counter(Counter::InputsEnqueued), 2);
+    assert_eq!(profile.counter(Counter::HoverCoalesced), 1);
+    assert_eq!(profile.counter(Counter::InertHoverSkips), 1);
+    assert_eq!(profile.counter(Counter::IdleSkips), 8);
+    assert_eq!(profile.counter(Counter::ClockRegressions), 1);
+    assert_eq!(profile.counter(Counter::Frames), 2);
+    assert_eq!(profile.percentiles(Phase::Advance).retained, 4);
+    assert!(profile.percentiles(Phase::Resolve).total >= 2);
+    assert_eq!(profile.percentiles(Phase::PresentCall).total, 0);
+    r.d.disable_profiling();
+    assert!(r.d.profiler().is_none());
+}
+
+#[test]
+fn queued_ime_edges_survive_throttling_minimize_and_clock_regression() {
+    let mut r = Rig::new(Pad, (400, 300), 1.0);
+    assert!(r.step());
+    r.d.enable_profiling(ProfileConfig::default());
+    r.d.min_interval = Some(Duration::from_millis(100));
+    r.d.ime(Ime::Preedit {
+        text: "あ".into(),
+        cursor: Some((0, 3)),
+    });
+    r.d.ime(Ime::Commit("あ".into()));
+    assert_eq!(inputs(&r.d).len(), 2);
+    assert!(!r.step());
+    assert_eq!(
+        r.d.next_wake(),
+        Some(r.d.last_frame() + Duration::from_millis(100))
+    );
+    r.d.resized((0, 0), 1.0);
+    assert!(!r.step());
+    assert_eq!(r.d.next_wake(), None);
+    assert_eq!(inputs(&r.d).len(), 2);
+    r.d.resized((400, 300), 1.0);
+    let now = r.d.last_frame() + Duration::from_millis(100);
+    assert!(r.d.advance(&mut r.s, now));
+    assert!(r.d.pending.is_empty());
+    let profile = r.d.profiler().unwrap();
+    assert_eq!(profile.counter(Counter::InputsDispatched), 2);
+    assert_eq!(profile.counter(Counter::MinimizedSkips), 1);
+    assert_eq!(profile.counter(Counter::ThrottledSkips), 1);
+    assert_eq!(profile.percentiles(Phase::InputQueueWait).total, 1);
+}
+
+#[test]
+fn ime_configuration_uses_utf8_boundaries_and_disables_after_blur() {
+    struct Text(String);
+    impl View for Text {
+        fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+            crate::widgets::text_input(ui, "edit", &mut self.0).el
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+    let mut r = Rig::new(Text("aé🙂".into()), (400, 300), 1.);
+    r.s.ui =
+        Ui::default().font(crate::prelude::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    r.step();
+    r.s.ui.focus("edit");
+    r.d.ime_selection(1..7);
+    r.step();
+    assert!(r.d.next_wake().is_some());
+    r.step();
+    let config = r.d.ime_configuration(&r.s.ui).unwrap();
+    assert_eq!(config.id, "edit");
+    assert_eq!(config.text, "aé🙂");
+    assert_eq!(config.selection, 1..7);
+    assert_eq!(r.d.ime_area(), Some(config.area));
+    r.d.ime(Ime::Preedit {
+        text: "日本".into(),
+        cursor: Some((3, 6)),
+    });
+    r.step();
+    r.step();
+    let config = r.d.ime_configuration(&r.s.ui).unwrap();
+    assert_eq!(config.text, "a日本");
+    assert_eq!(config.marked, Some(1..7));
+    assert_eq!(r.s.view.0, "aé🙂");
+    // Ordered replacements between two ticks target the appropriate text.
+    r.d.ime_selection(1..7);
+    r.d.ime(Ime::Commit("X".into()));
+    r.d.ime_selection(0..1);
+    r.d.ime(Ime::Commit("Y".into()));
+    r.step();
+    r.step();
+    assert_eq!(r.s.view.0, "YX");
+    assert!(r.d.ime_configuration(&r.s.ui).unwrap().marked.is_none());
+    r.d.focus(false);
+    assert!(r.d.ime_configuration(&r.s.ui).is_none());
+    assert!(r.d.ime_area().is_none());
+    r.d.ime_selection(0..2);
+    r.d.ime(Ime::Preedit {
+        text: "late".into(),
+        cursor: None,
+    });
+    r.d.ime(Ime::Commit("late".into()));
+    for _ in 0..4 {
+        r.step();
+    }
+    assert_eq!(
+        r.s.view.0, "YX",
+        "late callbacks cannot edit an unfocused window"
+    );
+    assert!(r.s.ui.text_input_state().unwrap().marked.is_none());
+    r.d.focus(true);
+    r.d.ime_selection(0..2);
+    r.d.ime(Ime::Commit("resumed".into()));
+    r.step();
+    r.step();
+    assert_eq!(r.s.view.0, "resumed", "native input resumes with focus");
+    r.s.ui.blur();
+    r.d.redraw();
+    r.step();
+    assert!(r.d.ime_configuration(&r.s.ui).is_none());
+    r.d.close(&mut r.s);
+    assert!(r.d.ime_area().is_none());
+}

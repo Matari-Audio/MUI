@@ -134,9 +134,15 @@ impl<'a> Walk<'a> {
             }
             _ => None,
         };
-        let hits = self.content(e, at, &key, &contour, &mut bg, under)?;
-        let (shape_bounds, content) =
-            self.surface(n, (&key, at), frame, &contour, hits, (&inner, ancestors))?;
+        let (hits, text_geometry) = self.content(e, at, &key, &contour, &mut bg, under)?;
+        let (shape_bounds, content) = self.surface(
+            n,
+            (&key, at),
+            frame,
+            &contour,
+            (hits, text_geometry),
+            (&inner, ancestors),
+        )?;
         if n.key().is_some_and(crate::Id::is_named) {
             inner.parent = Some(key.clone());
         }
@@ -278,7 +284,7 @@ impl<'a> Walk<'a> {
         (key, at): (&crate::Id, usize),
         frame: Frame,
         contour: &Contour,
-        hits: Hits,
+        (hits, text_geometry): (Hits, Option<Arc<crate::TextGeometry>>),
         (inner, ancestors): (&Ancestors, &Ancestors),
     ) -> Result<(Option<Rect>, Size), SceneError> {
         let e = n.payload();
@@ -309,7 +315,7 @@ impl<'a> Walk<'a> {
                 .collect::<Result<_, _>>()?
         };
         self.out.at.insert(key.clone(), self.out.surfaces.len());
-        let (semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
+        let (mut semantics, semantic_label_implicit) = match (&e.semantics, &e.content) {
             (Some(semantics), Content::Text(text)) if semantics.label.is_none() => {
                 let mut semantics = crate::Semantics::clone(semantics);
                 semantics.label = Some(text.clone());
@@ -317,6 +323,20 @@ impl<'a> Walk<'a> {
             }
             (semantics, _) => (semantics.as_deref().cloned(), false),
         };
+        if let (Some(g), Some(semantics)) = (&text_geometry, &mut semantics)
+            && let crate::A11y::TextInput { carets, .. } = &mut semantics.role
+            && g.lines.len() == 1
+        {
+            let line = &g.lines[0];
+            *carets = g
+                .state
+                .value
+                .char_indices()
+                .map(|(b, _)| b)
+                .chain([g.state.value.len()])
+                .map(|b| line.origin.x + line.carets.x(g.source_to_display(b)))
+                .collect();
+        }
         self.out.surfaces.push(ResolvedSurface {
             key: key.clone(),
             frame,
@@ -340,6 +360,7 @@ impl<'a> Walk<'a> {
             disabled: inner.disabled,
             semantics,
             semantic_label_implicit,
+            text_geometry,
             text_value: match &e.content {
                 Content::Text(t) => Some(t.clone()),
                 _ => None,
@@ -588,8 +609,9 @@ impl<'a> Walk<'a> {
         contour: &Contour,
         bg: &mut Color,
         under: Color,
-    ) -> Result<Hits, SceneError> {
+    ) -> Result<(Hits, Option<Arc<crate::TextGeometry>>), SceneError> {
         let mut hits = Vec::new();
+        let mut text_geometry = None;
         let shaped = self.plan.regions.contains(at) && !matches!(e.content, Content::None);
         if shaped {
             self.mark_on(Layer::Clip, contour);
@@ -597,8 +619,12 @@ impl<'a> Walk<'a> {
         let frame = self.tree.frames[at];
         match &e.content {
             Content::Text(t) => {
-                *bg = under;
-                self.text(e, t, frame, key, under)?;
+                if let Some(edit) = &e.extras().editable_text {
+                    text_geometry = Some(self.editable_text(e, t, edit, frame, key, *bg)?);
+                } else {
+                    *bg = under;
+                    self.text(e, t, frame, key, under)?;
+                }
             }
             Content::Canvas(c) => {
                 // Local to the frame corner, where the canvas draws from.
@@ -661,7 +687,7 @@ impl<'a> Walk<'a> {
         if shaped {
             self.mark(Layer::Unclip, empty(), None);
         }
-        Ok(hits)
+        Ok((hits, text_geometry))
     }
 
     /// A label: one run per line, each on its own baseline.
@@ -851,6 +877,7 @@ impl<'a> Walk<'a> {
                 semantics: None,
                 semantic_label_implicit: false,
                 text_value: None,
+                text_geometry: None,
                 clip: inner.clip,
                 clip_path: inner.clip_paths.clone(),
                 parent: None,

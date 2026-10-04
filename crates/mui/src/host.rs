@@ -19,9 +19,10 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use mui_input::{Button, Input, Key, KeyPress, Mods, PointerInput, Vec2};
+use mui_input::{Button, Ime, Input, Key, KeyPress, Mods, PointerInput, Vec2};
 use mui_scene::prelude::{Cursor, El, Point, Size};
 
+use crate::profiling::{Counter, Phase, ProfileConfig, Profiler};
 use crate::{Clipboard, Ui};
 
 pub mod headless;
@@ -167,9 +168,22 @@ enum KeyOwner {
     Text,
 }
 
+/// Native IME configuration, using UTF-8 byte offsets in displayed text.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ImeConfiguration {
+    pub id: String,
+    pub area: (Point, Size),
+    pub text: String,
+    pub selection: std::ops::Range<usize>,
+    pub marked: Option<std::ops::Range<usize>>,
+}
+
 /// The event queue and the frame schedule of one window.
 pub struct Driver {
     pending: VecDeque<Pending>,
+    profiler: Option<Box<Profiler>>,
+    ime_area: Option<(Point, Size)>,
+    focused: bool,
     pointer: PointerInput,
     clipboard: Box<dyn Clipboard>,
     /// Physical pixels, and physical per window point.
@@ -201,6 +215,9 @@ impl Driver {
     pub fn new(size: (u32, u32), scale: f64, clipboard: Box<dyn Clipboard>) -> Self {
         Self {
             pending: VecDeque::new(),
+            profiler: None,
+            ime_area: None,
+            focused: true,
             pointer: PointerInput::default(),
             clipboard,
             size,
@@ -218,6 +235,96 @@ impl Driver {
             framed: None,
             min_interval: None,
         }
+    }
+
+    /// Enable bounded per-window CPU profiling, replacing any earlier session.
+    pub fn enable_profiling(&mut self, config: ProfileConfig) {
+        self.profiler = Some(Box::new(Profiler::new(config)));
+    }
+
+    /// Move a finished session out of the UI callback for deferred export.
+    pub fn take_profiler(&mut self) -> Option<Profiler> {
+        self.profiler.take().map(|p| *p)
+    }
+
+    /// Attach an existing session (for example an explicitly aggregated reopen benchmark).
+    pub fn set_profiler(&mut self, profiler: Option<Profiler>) {
+        self.profiler = profiler.map(Box::new);
+    }
+
+    pub fn disable_profiling(&mut self) {
+        self.profiler = None;
+    }
+    pub fn profiler(&self) -> Option<&Profiler> {
+        self.profiler.as_deref()
+    }
+    pub fn profiler_mut(&mut self) -> Option<&mut Profiler> {
+        self.profiler.as_deref_mut()
+    }
+
+    fn count(&mut self, counter: Counter, amount: u64) {
+        if let Some(profile) = self.profiler_mut() {
+            profile.count(counter, amount);
+        }
+    }
+    fn input_enqueued(&mut self) {
+        if let Some(profile) = self.profiler_mut() {
+            profile.input_enqueued();
+        }
+    }
+
+    /// The next scheduler deadline, including queued input and animation.
+    /// None means an idle window can sleep until a native/model event arrives.
+    pub fn next_wake(&self) -> Option<Instant> {
+        if self.size.0 == 0 || self.size.1 == 0 {
+            return None;
+        }
+        let immediate = self.dirty || self.animating || !self.pending.is_empty();
+        let deadline = if immediate {
+            Some(self.last_frame)
+        } else {
+            self.wake_at
+        };
+        deadline.map(|at| {
+            self.min_interval
+                .map_or(at, |min| at.max(self.last_frame + min))
+        })
+    }
+
+    /// Queue an IME edge without coalescing committed text with pointer moves.
+    pub fn ime(&mut self, event: Ime) {
+        // Composition callbacks may arrive after the native field loses focus.
+        if !self.focused && !matches!(event, Ime::Disabled) {
+            return;
+        }
+        self.input_enqueued();
+        let mut input = Input::from(self.pointer);
+        input.ime.push(event);
+        self.pending.push_back(Pending::Input(input));
+    }
+
+    /// Queue a native replacement/selection range in displayed UTF-8 bytes.
+    /// The range is applied in order before later commit/preedit events.
+    pub fn ime_selection(&mut self, range: std::ops::Range<usize>) {
+        self.ime(Ime::Selection(range));
+    }
+
+    /// Last successful frame's candidate rectangle in scene units.
+    pub fn ime_area(&self) -> Option<(Point, Size)> {
+        self.focused.then_some(self.ime_area).flatten()
+    }
+
+    /// Native surrounding text and selection; byte offsets always lie on UTF-8 boundaries.
+    pub fn ime_configuration(&self, ui: &Ui) -> Option<ImeConfiguration> {
+        let area = self.ime_area()?;
+        let state = ui.text_input_state()?;
+        Some(ImeConfiguration {
+            id: state.id,
+            area,
+            text: state.text,
+            selection: state.selection,
+            marked: state.marked,
+        })
     }
 
     /// Physical pixels.
@@ -248,11 +355,13 @@ impl Driver {
 
     /// Rebuild the tree on the next tick even if nothing it polls moved.
     pub fn redraw(&mut self) {
+        self.count(Counter::Invalidations, 1);
         self.dirty = true;
     }
 
     /// The window is now `size` physical pixels at `scale` per point.
     pub fn resized(&mut self, size: (u32, u32), scale: f64) {
+        self.count(Counter::Resizes, 1);
         self.size = size;
         self.scale = scale;
         self.dirty = true;
@@ -273,6 +382,7 @@ impl Driver {
 
     /// A button went down or up.
     pub fn button(&mut self, button: Button, down: bool, mods: Mods) {
+        self.input_enqueued();
         self.pointer.buttons = self.pointer.buttons.set(button, down);
         self.pointer.mods = mods;
         self.pending
@@ -281,6 +391,7 @@ impl Driver {
 
     /// A wheel or trackpad scroll.
     pub fn wheel(&mut self, wheel: Wheel, mods: Mods) {
+        self.input_enqueued();
         let (x, y) = match wheel {
             Wheel::Lines(x, y) => (x * self.line, y * self.line),
             Wheel::Pixels(x, y) => (x / self.zoom, y / self.zoom),
@@ -294,6 +405,8 @@ impl Driver {
     /// The window gained or lost keyboard focus. Losing it cancels the
     /// gesture in flight and forgets the keys held.
     pub fn focus(&mut self, focused: bool) {
+        self.focused = focused;
+        self.input_enqueued();
         if focused {
             self.pending
                 .push_back(Pending::Input(Input::from(self.pointer)));
@@ -307,6 +420,11 @@ impl Driver {
     /// The window closes: no tree is built from here on.
     pub fn close<V: View>(&mut self, s: &mut Shared<V>) {
         self.pending.clear();
+        self.focused = false;
+        self.ime_area = None;
+        if let Some(profile) = self.profiler_mut() {
+            profile.finish_inputs();
+        }
         self.pointer = PointerInput::default();
         s.view.cancel(&s.ui);
     }
@@ -357,6 +475,7 @@ impl Driver {
     }
 
     fn push_key(&mut self, key: &KeyEvent, kept: bool) {
+        self.input_enqueued();
         let mut mods = key.mods;
         // X11 reports a press without its own modifier and a release still
         // with it: make the edge explicit, so Shift alone works.
@@ -383,12 +502,14 @@ impl Driver {
     /// same modifiers. Drag samples all stay; [`Driver::advance`] folds them
     /// into one frame with a trail.
     fn push_move(&mut self) {
+        self.input_enqueued();
         let input = Input::from(self.pointer);
         if input.pointer.buttons.is_empty() {
             if let Some(Pending::Move(previous)) = self.pending.back_mut()
                 && previous.pointer.mods == input.pointer.mods
             {
                 *previous = input;
+                self.count(Counter::HoverCoalesced, 1);
                 return;
             }
             self.pending.push_back(Pending::Move(input));
@@ -400,9 +521,32 @@ impl Driver {
     /// Run the queued events and whatever else is due through `Ui::frame`.
     /// Returns whether there is a new scene to paint.
     pub fn advance<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
-        self.dirty |= s.view.changed();
+        let start = self.profiler().map(|_| Instant::now());
+        let painted = self.advance_inner(s, now);
+        if let Some(profile) = self.profiler_mut() {
+            if let Some(start) = start {
+                profile.record_since(Phase::Advance, start);
+            }
+            if painted {
+                profile.count(Counter::Frames, 1);
+            }
+        }
+        painted
+    }
+
+    fn advance_inner<V: View>(&mut self, s: &mut Shared<V>, now: Instant) -> bool {
+        if now < self.last_frame {
+            self.count(Counter::ClockRegressions, 1);
+            return false;
+        }
+        let changed = s.view.changed();
+        if changed {
+            self.count(Counter::ModelChanges, 1);
+        }
+        self.dirty |= changed;
         if self.size.0 == 0 || self.size.1 == 0 {
             // Minimised: hold the input edges until there is a size again.
+            self.count(Counter::MinimizedSkips, 1);
             return false;
         }
         let zoom = s.view.zoom(logical_size(self.size, self.scale));
@@ -419,7 +563,16 @@ impl Driver {
                 matches!(p, Pending::Move(i)
                     if ui.inert(i) && view.still(ui, framed, i.pointer.pos))
             }) {
+                let counter = if self.pending.is_empty() {
+                    Counter::IdleSkips
+                } else {
+                    Counter::InertHoverSkips
+                };
+                self.count(counter, 1);
                 self.pending.clear();
+                if let Some(profile) = self.profiler_mut() {
+                    profile.discard_inputs();
+                }
                 return false;
             }
         }
@@ -427,6 +580,7 @@ impl Driver {
             .min_interval
             .is_some_and(|min| s.ui.scene().is_some() && now < self.last_frame + min)
         {
+            self.count(Counter::ThrottledSkips, 1);
             return false;
         }
         let dt = (now - self.last_frame).as_secs_f64().min(MAX_DT);
@@ -438,7 +592,11 @@ impl Driver {
         }
         let mut timed = false;
         let mut laid_out = true;
+        if let Some(profile) = self.profiler_mut() {
+            profile.dispatch_batch();
+        }
         while let Some(event) = self.pending.pop_front() {
+            self.count(Counter::InputsDispatched, 1);
             let input = match event {
                 Pending::Input(input) | Pending::Move(input) => input,
                 Pending::Drag(mut input) => {
@@ -449,6 +607,8 @@ impl Driver {
                         let Some(Pending::Drag(next)) = self.pending.pop_front() else {
                             unreachable!()
                         };
+                        self.count(Counter::InputsDispatched, 1);
+                        self.count(Counter::DragCoalesced, 1);
                         input.trail.extend(input.pointer.pos);
                         input.pointer = next.pointer;
                     }
@@ -490,27 +650,53 @@ impl Driver {
     ) -> Result<(), ()> {
         s.ui.set_scale(Some(self.ui_scale()));
         self.line = s.ui.theme().text;
+        let weld_before = self.profiler().map(|_| s.ui.weld_cache_stats());
+        let start = self.profiler().map(|_| Instant::now());
         let root = s.view.build(&mut s.ui, &input);
+        if let (Some(profile), Some(start)) = (self.profiler_mut(), start) {
+            profile.record_since(Phase::ViewBuild, start);
+        }
         let offered = logical_size(self.size, self.ui_scale());
         let pos = input.pointer.pos;
-        match s.ui.frame(root, Some(offered), input, dt) {
+        // IME intake is read by the next widget build, including non-editing
+        // preedit/selection edges that do not create parameter gesture edits.
+        let ime_followup = !input.ime.is_empty();
+        let start = self.profiler().map(|_| Instant::now());
+        let result = s.ui.frame(root, Some(offered), input, dt);
+        if let (Some(profile), Some(start)) = (self.profiler_mut(), start) {
+            profile.record_since(Phase::Resolve, start);
+        }
+        match result {
             Ok(frame) => {
                 self.failing = false;
                 self.framed = pos;
                 self.cursor = frame.cursor;
                 // An edge is dispatched by the tree after the frame that
                 // delivered it: that tree has to come even if nothing moves.
-                self.animating = frame.animating || !frame.edits.is_empty();
+                self.animating = frame.animating || !frame.edits.is_empty() || ime_followup;
                 self.wake_at = frame.repaint_after.map(|after| now + after);
                 if let Some(text) = frame.clipboard {
                     self.clipboard.set(&text);
                 }
-                // ponytail: `frame.ime` is dropped; no window crate here has
-                // a candidate-window API to hand it to.
+                self.ime_area = frame.ime;
                 s.view.after_frame(&mut s.ui);
+                if let Some(profile) = self.profiler_mut() {
+                    let stats = s.ui.layout_stats();
+                    profile.count(Counter::ValidatedNodes, stats.validated_nodes as u64);
+                    profile.count(Counter::MeasuredNodes, stats.measured_nodes as u64);
+                    profile.count(Counter::MeasureHits, stats.measure_hits as u64);
+                    profile.count(Counter::ArrangedNodes, stats.arranged_nodes as u64);
+                    profile.count(Counter::ReboundNodes, stats.rebound_nodes as u64);
+                    let (hits, misses, _) = s.ui.weld_cache_stats();
+                    if let Some((before_hits, before_misses, _)) = weld_before {
+                        profile.count(Counter::WeldHits, hits.saturating_sub(before_hits));
+                        profile.count(Counter::WeldMisses, misses.saturating_sub(before_misses));
+                    }
+                }
                 Ok(())
             }
             Err(e) => {
+                self.count(Counter::LayoutFailures, 1);
                 if !self.failing {
                     s.view
                         .log(&format!("mui: layout refused at {offered:?}: {e}"));

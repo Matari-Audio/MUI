@@ -151,7 +151,13 @@ fn build<V: View + Send + 'static>(
         let size = cx.size();
         let physical = (size.physical.width, size.physical.height);
         let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
-        handler.a11y = Some(A11y::new());
+        handler.a11y = cx
+            .window_handle()
+            .ok()
+            .and_then(|handle| A11y::new(handle.as_raw()));
+        if let Some(a11y) = handler.a11y.as_mut() {
+            a11y.focus(cx.has_focus());
+        }
         handler.parented = parented;
         Ok(Adapter {
             cx,
@@ -182,6 +188,8 @@ pub struct Handler<V> {
     scale: f64,
     /// The keyboard capture last asked of baseview.
     captured: Option<bool>,
+    /// Last successful native text input configuration; changes preserve composition.
+    applied_ime: Option<Option<baseview::ImeConfiguration>>,
     /// The queue and the frame schedule.
     pub driver: Driver,
 }
@@ -205,6 +213,7 @@ impl<V: View> Handler<V> {
             parented: false,
             scale,
             captured: None,
+            applied_ime: None,
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
         }
     }
@@ -235,6 +244,10 @@ impl<V: View> Handler<V> {
         };
         if platform::should_skip_frame(handle) {
             return;
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(a11y) = self.a11y.as_mut() {
+            a11y.update_bounds(window);
         }
         // macOS: keep the child pinned to the parent's top as it resizes.
         // A top-level window's view is its content view: leave it be.
@@ -269,8 +282,9 @@ impl<V: View> Handler<V> {
         // The lock covers the frame and a snapshot of its scene, not the
         // present: acquiring a surface texture can wait out a vsync, and a
         // host-thread close() or state load must not wait with it.
-        // ponytail: one scene clone per painted frame; have `Ui` hand out an
-        // `Arc<ResolvedScene>` if it shows in a profile.
+        let mut accessibility_update = None;
+        let ime_configuration;
+        let capture;
         let scene = {
             let mut s = lock(&self.shared);
             let a11y = self.a11y.as_mut();
@@ -285,33 +299,61 @@ impl<V: View> Handler<V> {
                 self.driver.redraw();
             }
             let fresh = self.driver.advance(&mut s, now);
+            ime_configuration = self
+                .driver
+                .ime_configuration(&s.ui)
+                .map(|config| native_ime(config, self.driver.ui_scale()));
             // Keys typed into a field must not reach the host's shortcuts;
             // every other key does. Windows only; a no-op elsewhere, where an
             // ignored key already goes to the host. Only on a change: each
             // call also moves focus.
-            let capture = s.ui.focus_is_text();
-            if self.captured != Some(capture) {
-                window.set_keyboard_capture(capture);
-                self.captured = Some(capture);
-            }
+            capture = s.ui.focus_is_text();
             if let Some(a11y) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
-                a11y.publish(&s.ui);
+                accessibility_update = a11y.prepare(&s.ui);
             }
             self.unpainted |= fresh;
             if self.unpainted && self.gpu.is_some() {
-                s.ui.scene().cloned()
+                s.ui.scene_snapshot()
             } else {
                 None
             }
         };
+        // Capturing the keyboard may synchronously move native focus.
+        if self.captured != Some(capture) {
+            window.set_keyboard_capture(capture);
+            self.captured = Some(capture);
+        }
+        if let (Some(a11y), Some(update)) = (self.a11y.as_mut(), accessibility_update) {
+            a11y.publish(update);
+        }
+        // Native IME APIs may synchronously call the adapter. No model lock is held.
+        if self.applied_ime.as_ref() != Some(&ime_configuration) {
+            window.set_ime_configuration(ime_configuration.clone());
+            self.applied_ime = Some(ime_configuration);
+        }
         if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
             if let Err(e) = gpu.resize(size.0, size.1) {
                 log(&self.shared, &format!("mui-baseview: {e}"));
             }
-            match gpu.present(&scene, Affine::scale(self.driver.ui_scale())) {
-                Ok(Frame::Presented(_) | Frame::Current) => self.unpainted = false,
+            let draw_start = self.driver.profiler().map(|_| Instant::now());
+            let frame = gpu.present(&scene, Affine::scale(self.driver.ui_scale()));
+            if let (Some(profiler), Some(start)) = (self.driver.profiler_mut(), draw_start) {
+                profiler.record_since(mui::profiling::Phase::BackendDraw, start);
+                if matches!(&frame, Ok(Frame::Presented(_))) {
+                    // CPU interval through host present return; never a scanout timestamp.
+                    profiler.record_since(mui::profiling::Phase::PresentCall, start);
+                }
+            }
+            match frame {
+                Ok(Frame::Presented(_)) => self.unpainted = false,
+                Ok(Frame::Current) => {
+                    self.unpainted = false;
+                    if let Some(profiler) = self.driver.profiler_mut() {
+                        profiler.discard_pending_presentation();
+                    }
+                }
                 Ok(Frame::Skipped) => {}
                 Ok(Frame::SurfaceLost) => {
                     // SAFETY: the surface comes from this window's live
@@ -365,6 +407,16 @@ impl<V: View> Handler<V> {
         let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
         let d = &mut self.driver;
         match event {
+            Event::Ime(event) => d.ime(match event {
+                baseview::Ime::Selection(range) => mui::prelude::Ime::Selection(range.clone()),
+                baseview::Ime::Enabled => mui::prelude::Ime::Enabled,
+                baseview::Ime::Preedit { text, cursor } => mui::prelude::Ime::Preedit {
+                    text: text.clone(),
+                    cursor: *cursor,
+                },
+                baseview::Ime::Commit(text) => mui::prelude::Ime::Commit(text.clone()),
+                baseview::Ime::Disabled => mui::prelude::Ime::Disabled,
+            }),
             Event::Keyboard(key) => {
                 let event = key_event(key);
                 let hook = self.requests.keys.lock().ok().and_then(|h| h.clone());
@@ -440,7 +492,12 @@ impl<V: View> Handler<V> {
                     a11y.focus(focused);
                 }
             }
-            Event::Window(WindowEvent::WillClose) => d.close(&mut lock(&self.shared)),
+            Event::Window(WindowEvent::WillClose) => {
+                // Drop retained native accessibility views before locking the model.
+                drop(self.a11y.take());
+                self.applied_ime = None;
+                d.close(&mut lock(&self.shared));
+            }
             // A scale change arrives as a resize too.
             _ => {}
         }
@@ -453,8 +510,9 @@ impl<V: View> Handler<V> {
 /// returns). A call that finds the handler busy is kept, the latest resize
 /// and every event, and delivered once the outer call returns.
 struct Adapter<V> {
-    cx: WindowContext,
+    // Drop graphics and native accessibility before their window context.
     handler: RefCell<Handler<V>>,
+    cx: WindowContext,
     pending_resize: Cell<Option<WindowSize>>,
     pending_events: RefCell<VecDeque<Event>>,
 }
@@ -464,9 +522,18 @@ impl<V: View> Adapter<V> {
         if let Some(size) = self.pending_resize.take() {
             guard(h, |h| h.resized(size));
         }
-        while let Some(event) = self.pending_events.borrow_mut().pop_front() {
+        drain_events(&self.pending_events, |event| {
             guard(h, |h| h.on_event_inner(&event));
-        }
+        });
+    }
+}
+
+fn drain_events<T>(queue: &RefCell<VecDeque<T>>, mut deliver: impl FnMut(T)) {
+    loop {
+        // Release the queue borrow before invoking reentrant native code.
+        let event = queue.borrow_mut().pop_front();
+        let Some(event) = event else { break };
+        deliver(event);
     }
 }
 
@@ -488,9 +555,13 @@ fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -
 impl<V: View + 'static> WindowHandler for Adapter<V> {
     fn on_frame(&self) -> Result<(), HandlerError> {
         if let Ok(mut h) = self.handler.try_borrow_mut() {
+            let wake_start = h.driver.profiler().map(|_| Instant::now());
             self.drain(&mut h);
             guard(&mut h, |h| h.tick(&self.cx));
             self.drain(&mut h);
+            if let (Some(profiler), Some(start)) = (h.driver.profiler_mut(), wake_start) {
+                profiler.record_since(mui::profiling::Phase::NativeWake, start);
+            }
         }
         Ok(())
     }
@@ -514,6 +585,21 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
         let status = guard(&mut h, |h| h.on_event_inner(&event)).unwrap_or(EventStatus::Ignored);
         self.drain(&mut h);
         status
+    }
+}
+
+/// Scene geometry is in UI points; baseview's IME contract uses client pixels.
+fn native_ime(config: mui::host::ImeConfiguration, scale: f64) -> baseview::ImeConfiguration {
+    baseview::ImeConfiguration {
+        id: config.id,
+        position: PhysicalPosition::new(config.area.0.x * scale, config.area.0.y * scale),
+        size: baseview::dpi::PhysicalSize::new(
+            config.area.1.width * scale,
+            config.area.1.height * scale,
+        ),
+        text: config.text,
+        selection: config.selection,
+        marked: config.marked,
     }
 }
 
@@ -632,10 +718,14 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 /// `panic = "abort"` it is the host's crash.
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        // SAFETY: the surface comes from this window's live native handle,
-        // and baseview drops the handler that owns it before the window.
+        let display = surface::Display::new(window).map_err(|e| e.to_string())?;
+        let instance = wgpu::Instance::new(
+            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)),
+        );
+        // SAFETY: the surface uses this window's live native handle. Baseview's
+        // owned close paths drop the handler/renderer before destroying it.
+        // An embedding host must keep that handle alive during callbacks;
+        // forced external destruction cannot satisfy the surface lifetime.
         #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
         let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;

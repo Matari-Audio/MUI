@@ -140,6 +140,10 @@ impl Keys {
     pub fn end(&self) -> f64 {
         self.keys.last().map_or(self.from, |k| k.0)
     }
+    /// The final declared value, independent of spring overshoot or time.
+    pub fn target(&self) -> f64 {
+        self.keys.last().map_or(self.start, |k| k.1)
+    }
     /// The value at `time` seconds.
     pub fn at(&self, time: f64) -> f64 {
         let (mut begin, mut v0) = (self.from, self.start);

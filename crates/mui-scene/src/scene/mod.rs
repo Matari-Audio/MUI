@@ -5,6 +5,7 @@
 //! of its [`Style`](crate::Style) becomes one [`Painted`] entry. Children
 //! paint after their parent, so a list index is a z-order.
 pub mod bar;
+mod editable;
 mod material;
 mod outline;
 mod paint;
@@ -552,6 +553,29 @@ fn resolve_with(
         &mut frames,
         glide,
     );
+    // A transition can carry dimensions from a formerly larger virtual scope.
+    // Validate its output before constructing paint, including anonymous nodes.
+    if matches!(&frames, Cow::Owned(_)) {
+        let mut pending = vec![&spec.root];
+        let mut at_frame = 0;
+        while let Some(node) = pending.pop() {
+            let frame = frames
+                .get(at_frame)
+                .ok_or(mui_layout::Error::InvalidValue)?;
+            let cap = node
+                .layout_extent_limit()
+                .map_or(spec.limits.extent, |cap| cap.min(spec.limits.extent));
+            if ![frame.size.width, frame.size.height]
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=cap).contains(value))
+                || ![frame.x, frame.y].iter().all(|value| value.is_finite())
+            {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            at_frame += 1;
+            pending.extend(node.children().iter().rev());
+        }
+    }
     let (paint, mut surfaces, mut at) = std::mem::take(&mut text.spare);
     surfaces.reserve(nodes);
     at.reserve(nodes);

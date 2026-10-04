@@ -13,6 +13,7 @@ fn a_transition_lands_between_the_two_fills_and_settles() {
         &ui.frame(tree(false), None, Input::default(), 0.016)
             .unwrap(),
     );
+    let snapshot = ui.scene_snapshot().unwrap();
     let mid = solid(&ui.frame(tree(true), None, Input::default(), 0.016).unwrap());
     assert_ne!(mid, from, "it left the old fill");
     let mut t = 0.0;
@@ -33,6 +34,10 @@ fn a_transition_lands_between_the_two_fills_and_settles() {
             .unwrap(),
     );
     assert_eq!(to, want, "it settles on the declared fill");
+    assert_eq!(
+        snapshot.paint[0].paint, from,
+        "the retained frame stays at rest"
+    );
 }
 
 #[test]
@@ -45,7 +50,7 @@ fn a_transitioning_weld_morph_springs_between_its_declarations() {
     let (pal, mut motion) = (Theme::DEFAULT.palette, None);
     let mut step = |p: f64| {
         let mut n = tree(p);
-        let moving = transitions(&mut n, &mut motion, &pal, 0.016);
+        let moving = transitions(&mut n, &mut motion, &pal, 0.016, false);
         (n.payload().extras().welding.unwrap().progress, moving)
     };
     assert_eq!(step(1.0), (1.0, false), "seeded, not flown in");
@@ -315,5 +320,173 @@ fn an_unnamed_stateful_node_routes_like_a_named_one_and_decoration_not_at_all() 
     assert_eq!(
         press_stack(&control(), &plain().id("top")),
         (Some("top".into()), false)
+    );
+}
+
+#[test]
+fn reduced_motion_resolves_interaction_layout_paint_and_exits_without_idle_wakeups() {
+    let mut ui = Ui::default();
+    let tree = |changed: bool| {
+        block(if changed { 80. } else { 40. }, 40.)
+            .fill(if changed { Role::Primary } else { Role::Field })
+            .radius(if changed { 15. } else { 2. })
+            .on(State::Hover, |s| s.stroke(Role::Primary))
+            .on(State::Press, |s| s.stroke_width(3.))
+            .animate()
+            .animate_layout()
+            .appear(Appear::Scale(0.5))
+            .morph(changed)
+            .a11y(A11y::Button)
+            .id("b")
+    };
+    ui.frame(tree(false), None, Input::default(), 0.016)
+        .unwrap();
+    assert!(
+        ui.frame(tree(true), None, at(20., 20., true), 0.016)
+            .unwrap()
+            .animating
+    );
+    assert!(ui.set_motion_policy(MotionPolicy::Reduced));
+    let f = ui.frame(tree(true), None, at(20., 20., true), 0.).unwrap();
+    assert_eq!(f.scene.surface("b").unwrap().frame.size.width, 80.);
+    assert_eq!(corner(&f), 15.);
+    assert!(
+        !f.animating,
+        "no animation after reducing motion mid-flight"
+    );
+    assert_eq!(
+        ui.state("b"),
+        Interaction {
+            hover: 1.,
+            press: 1.
+        }
+    );
+    assert!(
+        ui.frame(tree(true), None, at(25., 20., true), 0.)
+            .unwrap()
+            .animating,
+        "a moved drag sample still owes the tree its response"
+    );
+    for _ in 0..3 {
+        let f = ui
+            .frame(tree(true), None, at(25., 20., true), 0.016)
+            .unwrap();
+        assert!(!f.animating);
+        assert_eq!(f.repaint_after, None);
+    }
+    ui.frame(block(1., 1.), None, Input::default(), 0.).unwrap();
+    assert!(
+        ui.ghosts.is_empty(),
+        "exits do not fade under reduced motion"
+    );
+    assert!(
+        !ui.frame(block(1., 1.), None, Input::default(), 0.)
+            .unwrap()
+            .animating
+    );
+}
+
+#[test]
+fn motion_preference_changes_invalidate_memos_only_when_effective_policy_changes() {
+    let mut ui = Ui::default();
+    let mut builds = 0;
+    let mut build = |ui: &mut Ui| {
+        ui.memo("panel", (), |_| {
+            builds += 1;
+            block(20., 20.).fill(Role::Primary).animate()
+        })
+    };
+    for _ in 0..2 {
+        let tree = build(&mut ui);
+        ui.frame(tree, None, Input::default(), 0.).unwrap();
+    }
+    assert!(ui.set_system_reduced_motion(true));
+    let tree = build(&mut ui);
+    ui.frame(tree, None, Input::default(), 0.).unwrap();
+    assert!(!ui.set_system_reduced_motion(true));
+    assert!(!ui.set_motion_policy(MotionPolicy::Reduced));
+    assert!(
+        !ui.set_system_reduced_motion(false),
+        "override masks OS changes"
+    );
+    let tree = build(&mut ui);
+    ui.frame(tree, None, Input::default(), 0.).unwrap();
+    assert!(ui.set_motion_policy(MotionPolicy::System));
+    let tree = build(&mut ui);
+    ui.frame(tree, None, Input::default(), 0.).unwrap();
+    assert_eq!(builds, 3, "one rebuild per effective preference change");
+}
+
+#[test]
+fn reduced_ui_tweens_and_plays_snap_but_explicit_timeline_samples_keep_their_time() {
+    let keys = Keys::new(0.).to(0.5, 1., Ease::Spring(Spring::new(0.4, 0.3)));
+    let sampled = keys.at(0.2);
+    assert_ne!(sampled, keys.target());
+    let mut ui = Ui::default();
+    ui.tween("gain", 0.);
+    ui.play("intro", &keys);
+    assert!(ui.set_motion_policy(MotionPolicy::Reduced));
+    assert_eq!(ui.tween("gain", 1.), 1.);
+    assert_eq!(ui.play("intro", &keys), 1.);
+    assert!(
+        !ui.frame(block(1., 1.), None, Input::default(), 0.)
+            .unwrap()
+            .animating
+    );
+    assert_eq!(
+        keys.at(0.2),
+        sampled,
+        "explicit sampling does not use UI policy"
+    );
+    assert!(ui.set_motion_policy(MotionPolicy::Full));
+    assert_eq!(ui.tween("gain", 1.), 1.);
+    assert_eq!(
+        ui.play("intro", &keys),
+        1.,
+        "completed entrances do not restart"
+    );
+    assert!(
+        !ui.frame(block(1., 1.), None, Input::default(), 0.)
+            .unwrap()
+            .animating
+    );
+    ui.tween("gain", 0.);
+    assert!(
+        ui.frame(block(1., 1.), None, Input::default(), 0.016)
+            .unwrap()
+            .animating,
+        "reenabling motion preserves spring tuning"
+    );
+}
+
+#[test]
+fn ui_plays_draw_the_endpoint_then_sleep_and_removed_plays_stop_requesting_frames() {
+    let keys = Keys::new(0.).to(0.5, 1., Ease::Spring(Spring::new(0.4, 0.3)));
+    let mut ui = Ui::default();
+    let mut settled = false;
+    for _ in 0..100 {
+        let drawn = ui.play("intro", &keys);
+        let f = ui
+            .frame(block(1., 1.), None, Input::default(), 0.016)
+            .unwrap();
+        if !f.animating {
+            assert_eq!(drawn, 1., "the final UI frame draws the endpoint");
+            settled = true;
+            break;
+        }
+    }
+    assert!(settled, "play never stopped scheduling");
+    ui.replay("intro");
+    ui.play("intro", &keys);
+    assert!(
+        ui.frame(block(1., 1.), None, Input::default(), 0.016)
+            .unwrap()
+            .animating
+    );
+    assert!(
+        !ui.frame(block(1., 1.), None, Input::default(), 0.016)
+            .unwrap()
+            .animating,
+        "a play absent from the next build no longer schedules animation"
     );
 }

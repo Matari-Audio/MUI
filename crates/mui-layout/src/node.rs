@@ -77,7 +77,12 @@ pub(crate) struct Rare {
     /// The gap between wrapped lines and grid rows; `None` is `gap`. See
     /// [`Node::line_gap`].
     pub(crate) line_gap: Option<Spacing>,
+    pub(crate) grid_tracks: Option<Vec<crate::GridTrack>>,
+    pub(crate) grid_rows: Option<Vec<crate::GridTrack>>,
+    pub(crate) grid_position: Option<[usize; 2]>,
+    pub(crate) grid_row_span: usize,
     pub(crate) maximum: Option<Size>,
+    pub(crate) layout_extent_limit: Option<f64>,
     pub(crate) aspect: Option<f64>,
     /// Contain the aspect in both offered axes rather than deriving height.
     pub(crate) aspect_fit: bool,
@@ -93,7 +98,12 @@ pub(crate) struct Rare {
 impl Rare {
     const NONE: Self = Self {
         line_gap: None,
+        grid_tracks: None,
+        grid_rows: None,
+        grid_position: None,
+        grid_row_span: 1,
         maximum: None,
+        layout_extent_limit: None,
         aspect: None,
         aspect_fit: false,
         pin: None,
@@ -226,6 +236,33 @@ impl<P> Node<P> {
         self.id = Some(id.into());
         self
     }
+    /// Set this node's local layout extent ceiling. It can narrow the solve's
+    /// global ceiling, never raise it. Descendants keep their own ceilings;
+    /// runtime virtual collections set these individually for viewport and
+    /// content. Invalid ceilings are rejected when validating or resolving.
+    pub fn set_layout_extent_limit(&mut self, extent: f64) {
+        self.rare_mut().layout_extent_limit = Some(extent);
+    }
+
+    /// This node's local ceiling, before the solve's global ceiling is applied.
+    pub fn layout_extent_limit(&self) -> Option<f64> {
+        self.rare().layout_extent_limit
+    }
+
+    /// Validate this node's authored layout values against its local/global
+    /// ceiling. This is shallow: it does not walk children, check duplicate
+    /// IDs, measure intrinsic content, or resolve spacing tokens.
+    pub fn validate_layout_values(&self, limits: crate::Limits) -> Result<(), crate::Error> {
+        if !limits.extent.is_finite()
+            || limits.extent <= 0.0
+            || limits.nodes == 0
+            || limits.depth > 256
+        {
+            return Err(crate::Error::InvalidValue);
+        }
+        crate::measure::validate_node(self, limits)
+    }
+
     pub fn key(&self) -> Option<&str> {
         self.id.as_deref()
     }
@@ -577,6 +614,39 @@ impl<P> Node<P> {
         self
     }
     /// How many grid columns this cell takes, clamped to the column count.
+    /// Use explicit column tracks instead of equal-width columns. The track
+    /// count becomes the grid's column count. An empty list is invalid;
+    /// `min_col` and explicit tracks cannot be combined.
+    pub fn grid_tracks(mut self, tracks: impl IntoIterator<Item = crate::GridTrack>) -> Self {
+        let tracks: Vec<_> = tracks.into_iter().collect();
+        if let Kind::Grid { cols, .. } = &mut self.kind {
+            *cols = tracks.len();
+        }
+        self.rare_mut().grid_tracks = Some(tracks);
+        self
+    }
+
+    /// Explicit row tracks; rows beyond this list use `GridTrack::Auto`.
+    /// Without explicit columns, columns retain equal fractional sizing.
+    pub fn grid_rows(mut self, tracks: impl IntoIterator<Item = crate::GridTrack>) -> Self {
+        self.rare_mut().grid_rows = Some(tracks.into_iter().collect());
+        self
+    }
+
+    /// Place a grid item at a zero-based column and row. Explicit items reserve
+    /// cells before automatic items. Overlap between explicit items is allowed;
+    /// a position outside the declared columns is invalid.
+    pub fn grid_at(mut self, column: usize, row: usize) -> Self {
+        self.rare_mut().grid_position = Some([column, row]);
+        self
+    }
+
+    /// Span adjacent grid rows. Automatic placement skips occupied cells.
+    pub fn grid_row_span(mut self, rows: usize) -> Self {
+        self.rare_mut().grid_row_span = rows.max(1);
+        self
+    }
+
     pub fn span(mut self, cols: usize) -> Self {
         self.span = cols.max(1);
         self

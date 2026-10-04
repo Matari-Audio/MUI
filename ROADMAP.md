@@ -270,9 +270,18 @@ public function and a test behind it.
       and clap-validator on Linux, but nobody has yet opened it by hand in
       Bitwig, Reaper or Ableton, on any OS. macOS and Windows are only
       compiled for, never run.
-- [ ] `mui-truce` has no IME: baseview has no composition or candidate-window
-      API, so `Frame::ime` is dropped and CJK input does not work in a
-      plugin text field.
+- [x] `mui-truce` forwards native composition and candidate-window state
+      through the pinned baseview patch: Cocoa text services, Windows IMM32,
+      and X11 XIM. Ordered preedit, commit and selection events share the
+      editable field's shaped geometry. See `vendor/moose-baseview/README-MUI.md`.
+- [ ] Native IME acceptance in real DAW editors on Linux, Windows and macOS:
+      cross-compilation and protocol regressions do not establish CJK input,
+      candidate positioning, focus changes or close/reopen behavior in a host.
+- [x] Standalone native windows: `mui-winit` owns independent windows with
+      native Wayland/X11, Windows and macOS backends, clipboard, AccessKit,
+      IME and typed open/resize/redraw/close commands. Linux presentation has
+      been exercised on X11 and Wayland; Windows/macOS runtime acceptance
+      remains open. Native Wayland DAW embedding needs a separate host contract.
 - [ ] `mui-truce` has no AU or AAX: truce builds them, but only CLAP and VST3
       are wired and validated.
 - [x] `mui-truce` swallowed every key while focused. On moose-baseview a key

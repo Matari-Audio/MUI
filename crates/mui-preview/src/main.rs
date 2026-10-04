@@ -655,12 +655,27 @@ impl ApplicationHandler<AccessEvent> for App {
                         AccessAction::SetTextSelection => {
                             if let Some(mui_access::accesskit::ActionData::SetTextSelection(s)) =
                                 r.data
+                                && let Some((anchor, caret, upstream)) =
+                                    self.ui.scene().and_then(|scene| {
+                                        let (anchor, caret) =
+                                            mui_access::selection_of(scene, r.target_node, &s)?;
+                                        Some((
+                                            anchor,
+                                            caret,
+                                            mui_access::selection_is_upstream(
+                                                scene,
+                                                r.target_node,
+                                                &s.focus,
+                                            )?,
+                                        ))
+                                    })
+                                && self.ui.request_action(SemanticAction::set_selection(
+                                    key.clone(),
+                                    anchor,
+                                    caret,
+                                ))
                             {
-                                self.ui.request_action(SemanticAction::set_selection(
-                                    key,
-                                    s.anchor.character_index,
-                                    s.focus.character_index,
-                                ));
+                                self.ui.set_text_selection_affinity(key, upstream);
                             }
                         }
                         _ => {}
@@ -688,6 +703,7 @@ impl ApplicationHandler<AccessEvent> for App {
             self.access = Some(Adapter::with_event_loop_proxy(event_loop, &window, proxy));
         }
         window.set_visible(true);
+        window.request_redraw();
         let display = Box::new(event_loop.owned_display_handle());
         self.gpu = Some(Gpu::new(window, display));
     }
@@ -731,6 +747,12 @@ impl ApplicationHandler<AccessEvent> for App {
             WindowEvent::Resized(size) => {
                 self.visible = size.width > 0 && size.height > 0;
                 if let Some(gpu) = &mut self.gpu {
+                    gpu.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                if let Some(gpu) = &mut self.gpu {
+                    let size = gpu.window().inner_size();
                     gpu.resize(size.width, size.height);
                 }
             }

@@ -23,10 +23,10 @@
 #![forbid(unsafe_code)]
 
 pub use accesskit;
+mod text;
 
 use accesskit::{
-    Action, Affine, Node, NodeId, Rect, Role, TextDirection, TextPosition, TextSelection, Tree,
-    TreeId, TreeUpdate,
+    Action, Affine, Node, NodeId, Rect, Role, TextPosition, TextSelection, Tree, TreeId, TreeUpdate,
 };
 pub use mui_scene::{A11y, Semantics};
 use mui_scene::{ResolvedScene, ResolvedSurface};
@@ -38,7 +38,7 @@ pub fn node_id(key: &str) -> NodeId {
     fnv(key.bytes())
 }
 
-/// The id of text field `key`'s `TextRun` child: the key's hash continued
+/// The id of text field `key`'s first `TextRun` child: the key's hash continued
 /// over a NUL-led suffix, so it never meets a surface's [`node_id`] in
 /// practice.
 pub fn run_id(key: &str) -> NodeId {
@@ -57,52 +57,13 @@ fn fnv(bytes: impl Iterator<Item = u8>) -> NodeId {
 
 const WINDOW: NodeId = NodeId(0);
 
-/// A text field's line as AccessKit reads text: one `TextRun` with each
-/// character's byte length and, when the field measured them, its x and
-/// advance in the field's space; the selection lands on the field.
-///
-/// ponytail: a character here is a `char`, which is what the runtime's
-/// selection counts. A reader stepping by character can stop inside a
-/// cluster the field's arrows step over; report graphemes if that matters.
-fn text_run(
-    field: &mut Node,
-    s: &ResolvedSurface,
-    value: &str,
-    sel: (usize, usize),
-    carets: &[f64],
-) -> Node {
-    let run = run_id(&s.key);
-    let n = value.chars().count();
-    let at = |i: usize| TextPosition {
-        node: run,
-        character_index: i.min(n),
-    };
-    field.push_child(run);
-    field.set_text_selection(TextSelection {
-        anchor: at(sel.0),
-        focus: at(sel.1),
-    });
-    let mut t = Node::new(Role::TextRun);
-    t.set_value(value);
-    t.set_character_lengths(
-        value
-            .chars()
-            .map(|c| c.len_utf8() as u8)
-            .collect::<Vec<_>>(),
-    );
-    if carets.len() == n + 1 {
-        t.set_character_positions(carets[..n].iter().map(|&x| x as f32).collect::<Vec<_>>());
-        t.set_character_widths(
-            carets
-                .windows(2)
-                .map(|w| (w[1] - w[0]) as f32)
-                .collect::<Vec<_>>(),
-        );
+/// Normalize a host-provided scale before exporting transform coordinates.
+fn valid_scale(scale: f64) -> f64 {
+    if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
     }
-    t.set_text_direction(TextDirection::LeftToRight);
-    let f = s.frame;
-    t.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
-    t
 }
 
 fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, Node)>) -> Node {
@@ -148,11 +109,7 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
             selection,
             carets,
         } => {
-            n.set_value(&**value);
-            runs.push((
-                run_id(&s.key),
-                text_run(&mut n, s, value, *selection, carets),
-            ));
+            text::export(&mut n, s, value, *selection, carets, runs);
             if !s.disabled {
                 n.add_action(Action::SetTextSelection);
             }
@@ -171,7 +128,10 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
         n.set_label(name);
     }
     let f = s.frame;
-    n.set_bounds(Rect::new(f.x, f.y, f.right(), f.bottom()));
+    let bounds =
+        s.transform
+            .transform_rect_bbox(mui_geometry::Rect::new(f.x, f.y, f.right(), f.bottom()));
+    n.set_bounds(Rect::new(bounds.x0, bounds.y0, bounds.x1, bounds.y1));
     if s.focusable && !s.disabled {
         n.add_action(Action::Focus);
     }
@@ -190,8 +150,11 @@ fn node(s: &ResolvedSurface, sem: Option<&Semantics>, runs: &mut Vec<(NodeId, No
 /// Hierarchy follows authored semantic parentage, including floated and
 /// overlapping elements. Geometry never determines ownership.
 ///
-/// A text input carries its line as a `TextRun` child, [`run_id`], with the
-/// selection on the field, so a reader follows the caret.
+/// Text inputs carry one `TextRun` per direction and visual line (the first
+/// has [`run_id`]), with selection on the field. Resolved editable geometry
+/// provides character bounds, wrapping and preedit; authored `TextInput`
+/// semantics without geometry still provide direction, text and selection.
+/// Route returned run-local positions through [`selection_of`].
 pub fn tree_update(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> TreeUpdate {
     build(scene, focus, scale).0
 }
@@ -234,6 +197,34 @@ pub fn surface_of(scene: &ResolvedScene, target: NodeId) -> Option<&ResolvedSurf
     Some(named[i])
 }
 
+/// Convert a reader's text positions to source scalar offsets in a field.
+/// Reject positions in another field instead of applying its offsets here.
+pub fn selection_of(
+    scene: &ResolvedScene,
+    target: NodeId,
+    selection: &TextSelection,
+) -> Option<(usize, usize)> {
+    let surface = surface_of(scene, target)?;
+    let A11y::TextInput { value, carets, .. } = &surface.semantics.as_ref()?.role else {
+        return None;
+    };
+    text::selection(surface, value, carets, selection)
+}
+
+/// Whether a native caret at a soft wrap belongs to the preceding line.
+/// Apply with `Ui::set_text_selection_affinity` when routing selection actions.
+pub fn selection_is_upstream(
+    scene: &ResolvedScene,
+    target: NodeId,
+    position: &TextPosition,
+) -> Option<bool> {
+    let surface = surface_of(scene, target)?;
+    let A11y::TextInput { value, carets, .. } = &surface.semantics.as_ref()?.role else {
+        return None;
+    };
+    text::is_upstream(surface, value, carets, position)
+}
+
 /// [`tree_update`], and the ids that were salted, by key.
 fn build(
     scene: &ResolvedScene,
@@ -265,7 +256,13 @@ fn build(
 
     let mut window = Node::new(Role::Window);
     window.set_children(root_kids);
-    window.set_transform(Affine::scale(scale));
+    window.set_bounds(Rect::new(
+        0.0,
+        0.0,
+        scene.layout.size.width,
+        scene.layout.size.height,
+    ));
+    window.set_transform(Affine::scale(valid_scale(scale)));
     nodes.push((WINDOW, window));
     nodes.extend(runs);
 
@@ -329,7 +326,7 @@ impl Publisher {
     /// assert_eq!(p.update(&scene, None, 1.0).nodes.len(), 2);
     /// ```
     pub fn update(&mut self, scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> TreeUpdate {
-        let hash = tree_hash(scene, focus, scale);
+        let hash = tree_hash(scene, scale);
         if self.last.replace(hash) == Some(hash) {
             return TreeUpdate {
                 nodes: Vec::new(),
@@ -353,15 +350,48 @@ impl Publisher {
 /// Everything [`tree_update`] reads, hashed without building a node: the
 /// named surfaces only (an unnamed meter ticking is no tree change), and
 /// only the fields a node is built from.
-fn tree_hash(scene: &ResolvedScene, focus: Option<&str>, scale: f64) -> u64 {
+fn tree_hash(scene: &ResolvedScene, scale: f64) -> u64 {
     let mut h = DefaultHasher::new();
-    focus.hash(&mut h);
-    scale.to_bits().hash(&mut h);
+    valid_scale(scale).to_bits().hash(&mut h);
+    scene.layout.size.width.to_bits().hash(&mut h);
+    scene.layout.size.height.to_bits().hash(&mut h);
     for s in scene.surfaces().filter(|s| mui_scene::Id::is_named(&s.key)) {
         s.key.hash(&mut h);
         let f = s.frame;
         for v in [f.x, f.y, f.size.width, f.size.height] {
             v.to_bits().hash(&mut h);
+        }
+        s.transform
+            .as_coeffs()
+            .iter()
+            .for_each(|x| x.to_bits().hash(&mut h));
+        s.text_geometry.is_some().hash(&mut h);
+        if let Some(g) = &s.text_geometry {
+            g.lines.len().hash(&mut h);
+            g.state.multiline.hash(&mut h);
+            g.text.hash(&mut h);
+            g.state.value.hash(&mut h);
+            g.state.selection.hash(&mut h);
+            g.state.caret.hash(&mut h);
+            g.state.caret_upstream.hash(&mut h);
+            g.state.marked.hash(&mut h);
+            g.state.replacement.hash(&mut h);
+            for line in &g.lines {
+                line.range.hash(&mut h);
+                for x in [line.origin.x, line.origin.y, line.height] {
+                    x.to_bits().hash(&mut h);
+                }
+                for &(byte, x) in &line.carets.positions {
+                    byte.hash(&mut h);
+                    x.to_bits().hash(&mut h);
+                }
+                for cluster in &line.carets.clusters {
+                    cluster.range.hash(&mut h);
+                    cluster.rtl.hash(&mut h);
+                    cluster.left.to_bits().hash(&mut h);
+                    cluster.right.to_bits().hash(&mut h);
+                }
+            }
         }
         s.parent.as_deref().hash(&mut h);
         (s.focusable, s.disabled).hash(&mut h);
@@ -409,7 +439,8 @@ mod tests {
             let tree = row([
                 block(4., 4.).id("a"),
                 block(w, 4.).fill(mui_scene::Role::Primary),
-            ]);
+            ])
+            .w(100.);
             resolve(&SceneSpec::new(tree)).unwrap()
         };
         assert!(at(9.).surfaces().any(|s| !mui_scene::Id::is_named(&s.key)));

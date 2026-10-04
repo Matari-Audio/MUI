@@ -7,12 +7,13 @@ use mui_layout::{Intrinsic, Size};
 use mui_text::{Axes, Font, TextRun};
 
 use super::outline::OutlineCache;
-use super::{SceneSpec, TextGlyph};
+use super::{SceneError, SceneSpec, TextGlyph};
 use crate::{Content, Element, Theme};
 
 /// One shaped string, kept in [`TextState`] while the font stays the same.
 #[derive(Debug, Clone)]
 pub(super) struct CachedRun {
+    pub(super) caret_map: Option<Arc<mui_text::CaretMap>>,
     pub(super) advance: f64,
     pub(super) ascent: f64,
     pub(super) descent: f64,
@@ -28,6 +29,7 @@ pub(super) struct CachedRun {
 impl CachedRun {
     pub(super) fn from_run(run: TextRun) -> Self {
         Self {
+            caret_map: None,
             advance: run.advance,
             ascent: run.ascent,
             descent: run.descent,
@@ -268,6 +270,60 @@ impl<'a> Runs<'a> {
     /// a label that fits -- allocates the `Vec` and nothing else. Only an
     /// ellipsised last line owns its bytes. The breaks are cached like runs:
     /// a steady paragraph is broken once, not once per frame.
+    pub(super) fn caret_map(
+        &mut self,
+        text: &str,
+        face: Face<'_>,
+    ) -> Result<Arc<mui_text::CaretMap>, SceneError> {
+        self.run(text, face)?;
+        let fonts = self.fonts_for(face);
+        let coords = self.coords(&fonts, face);
+        let key = fonts.first().map(|f| (face.size.to_bits(), f.id(), coords));
+        if let Some(map) = key
+            .as_ref()
+            .and_then(|key| self.cache.get(text)?.get(key)?.0.caret_map.clone())
+        {
+            return Ok(map);
+        }
+        let map = Arc::new(if fonts.is_empty() {
+            mui_text::CaretMap::fallback(text, face.size * 0.6)
+        } else {
+            mui_text::CaretMap::new(&fonts, text, face.size, &face.axes.to_vec())?
+        });
+        if let Some(run) = key.and_then(|key| self.cache.get_mut(text)?.get_mut(&key)) {
+            run.0.caret_map = Some(map.clone());
+        }
+        Ok(map)
+    }
+
+    pub(super) fn line_ranges(
+        &mut self,
+        text: &str,
+        face: Face<'_>,
+        width: f64,
+    ) -> Vec<std::ops::Range<usize>> {
+        let _ = self.lines(text, face, width, None);
+        let fonts = self.fonts_for(face);
+        if let Some(font) = fonts.first() {
+            let key = (
+                (face.size.to_bits(), font.id(), self.coords(&fonts, face)),
+                width.to_bits(),
+                None,
+            );
+            if let Some(((ranges, _), _)) = self.breaks.get(text).and_then(|m| m.get(&key)) {
+                return ranges.clone();
+            }
+        }
+        let mut at = 0;
+        text.split('\n')
+            .map(|s| {
+                let range = at..at + s.len();
+                at = range.end + 1;
+                range
+            })
+            .collect()
+    }
+
     pub(super) fn lines<'t>(
         &mut self,
         text: &'t str,
@@ -402,6 +458,7 @@ pub(super) fn layout_key(e: &Element, th: &Theme, scale: Option<f64>, out: &mut 
     out.extend_from_slice(&e.face_font(th).map_or(0, |f| f.id() + 1).to_le_bytes());
     // usize::MAX is "no cap".
     out.extend_from_slice(&e.lines.unwrap_or(usize::MAX).to_le_bytes());
+    out.push(u8::from(e.extras().editable_text.is_some()));
     // Line heights snap to the device scale, so a scale change remeasures.
     out.extend_from_slice(&scale.map_or(u64::MAX, f64::to_bits).to_le_bytes());
 }
@@ -415,6 +472,12 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
     };
     let (t, face) = (&**t, Face::of(e, th));
     let (one_line, word) = runs.measured(t, face);
+    if e.extras().editable_text.is_some() {
+        return Intrinsic {
+            size: Size::new(room.unwrap_or(one_line.width + 2.), one_line.height),
+            min_width: 0.0,
+        };
+    }
     let min_width = if e.lines.is_some() { 0.0 } else { word };
     // A room narrower than a word is overflowed, not broken mid-word.
     let room = room.map(|r| r.max(min_width));

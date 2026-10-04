@@ -348,6 +348,8 @@ pub struct Element {
 /// The rarely set half of an [`Element`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
+    /// Editing layers resolved against the final text frame.
+    pub editable_text: Option<crate::EditableText>,
     /// Paint-only clockwise radians about the final frame's centre.
     pub rotation: Option<f64>,
     /// A string this text node is at least as wide as, whatever it currently
@@ -387,6 +389,13 @@ pub struct Extras {
     pub border_join: Option<Id>,
     /// Set by the runtime on the root of a memoised subtree (`Ui::memo`).
     pub memo: Option<Memo>,
+    /// Validated logical scroll-content extent declared by a virtual list.
+    /// Allows content descendants to exceed the ordinary layout extent while
+    /// the viewport and unrelated nodes keep their normal cap. The Ui runtime
+    /// accepts finite positive logical and scaled values up to `f32::MAX / 1024`.
+    /// Retained with memoized subtrees; never changes native surface sizes or
+    /// tree budgets.
+    pub virtual_scroll_extent: Option<f64>,
 }
 
 /// The root of a memoised subtree. A resolve records where each memo's
@@ -399,6 +408,7 @@ pub struct Memo {
 }
 impl Extras {
     const NONE: Self = Self {
+        editable_text: None,
         rotation: None,
         reserve: None,
         tip: None,
@@ -415,6 +425,7 @@ impl Extras {
         inset_surface: None,
         border_join: None,
         memo: None,
+        virtual_scroll_extent: None,
     };
 }
 impl Default for Extras {

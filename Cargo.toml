@@ -14,6 +14,7 @@ members = [
   "crates/mui-vello",
   "crates/mui-truce",
   "crates/mui-baseview",
+  "crates/mui-winit",
   "crates/mui-input",
   "crates/mui-access",
   "crates/mui-symbols",
@@ -21,6 +22,7 @@ members = [
   "vendor/vello",
   "vendor/vello_encoding",
 ]
+exclude = ["vendor/moose-baseview", "vendor/xim-rs"]
 resolver = "2"
 # The trailer/film crates (mui-stage, mui-reel, mui-motion-bridge) live in
 # media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.
@@ -36,6 +38,7 @@ license = "MIT"
 mui = { path = "crates/mui" }
 mui-access = { path = "crates/mui-access" }
 mui-baseview = { path = "crates/mui-baseview" }
+mui-winit = { path = "crates/mui-winit" }
 mui-geometry = { path = "crates/mui-geometry" }
 mui-input = { path = "crates/mui-input" }
 mui-layout = { path = "crates/mui-layout" }

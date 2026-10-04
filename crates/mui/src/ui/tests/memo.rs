@@ -103,6 +103,8 @@ fn a_moved_memo_paints_and_hits_where_it_went() {
         let t = memo_tree(&mut ui, 1, 50., &mut built);
         ui.frame(t, ROOM, PointerInput::default(), 0.016).unwrap();
     }
+    let snapshot = ui.scene_snapshot().unwrap();
+    let previous_paint = snapshot.paint.clone();
     let t = memo_tree(&mut ui, 1, 90., &mut built);
     let f = ui.frame(t, ROOM, PointerInput::default(), 0.016).unwrap();
     assert_eq!(built, 1);
@@ -111,6 +113,8 @@ fn a_moved_memo_paints_and_hits_where_it_went() {
             .unwrap();
     assert_eq!(f.scene.paint, walked.paint);
     assert_eq!(f.scene.surface("m.b").unwrap().frame.x, 90.);
+    assert_eq!(snapshot.surface("m.b").unwrap().frame.x, 50.);
+    assert_eq!(snapshot.paint, previous_paint);
     let t = memo_tree(&mut ui, 1, 90., &mut built);
     ui.frame(t, ROOM, at(110., 60., false), 0.016).unwrap();
     assert!(

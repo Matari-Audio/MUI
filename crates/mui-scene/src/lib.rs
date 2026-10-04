@@ -34,7 +34,9 @@ pub use regions::ShapeLayout;
 mod border_ramp;
 pub use border_ramp::BorderRamp;
 mod dsl;
+mod editable;
 mod element;
+pub use editable::{EditableText, TextGeometry, TextLineGeometry};
 mod external;
 mod material_weld;
 mod scene;
@@ -57,8 +59,8 @@ pub use element::{
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
-    Align, Area, Frame, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pad, Pin, Px, Size,
-    Spacing, SpacingScale, SpacingToken,
+    Align, Area, Frame, GridTrack, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pad, Pin,
+    Px, Size, Spacing, SpacingScale, SpacingToken,
 };
 pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
@@ -80,11 +82,11 @@ pub mod prelude {
     pub use crate::material::Material;
     pub use crate::{
         A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
-        Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, Id, Image, IntoEl, Justify,
-        Keys, Len, Match, Mix, Paints, Pin, Radius, Resolver, Role, SceneSpec, Shadow, ShapeLayout,
-        Size, State, Style, Styled, Theme, Weight, Weld, WeldBackend, WeldChannel, WeldQuality,
-        block, body, canvas, canvas_keyed, caption, col, fits, grid, icon, resolve, row, spacer,
-        stack, text, title, weld,
+        Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, GridTrack, Id, Image, IntoEl,
+        Justify, Keys, Len, Match, Mix, Paints, Pin, Radius, Resolver, Role, SceneSpec, Shadow,
+        ShapeLayout, Size, State, Style, Styled, Theme, Weight, Weld, WeldBackend, WeldChannel,
+        WeldQuality, block, body, canvas, canvas_keyed, caption, col, fits, grid, icon, resolve,
+        row, spacer, stack, text, title, weld,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

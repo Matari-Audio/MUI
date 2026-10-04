@@ -6,104 +6,99 @@
 
 use super::*;
 
-/// Hand every child its main-axis size. Surplus goes out by `grow`; a deficit
-/// comes back by `shrink` scaled by basis, which is how flexbox weights it, and
-/// never takes a child below its declared `minimum`. Either way a child that
-/// can absorb no more stops at its limit and the remainder redistributes over
-/// the rest; see [`deal`].
-///
-/// Only one direction runs. A row that overflows never grew.
+/// Resolve flexible lengths from unclamped bases and constrained hypothetical
+/// sizes. Frozen items keep their min/max bound; remaining items redistribute
+/// free space using grow factors or basis-scaled shrink factors.
 pub(crate) fn distribute<P>(
     children: &[&Measured<'_, P>],
     gap: f64,
     vertical: bool,
     inner: Size,
 ) -> Vec<f64> {
-    let base: Vec<f64> = children
+    let available = inner.main(vertical) - gap * children.len().saturating_sub(1) as f64;
+    let bases: Vec<_> = children
+        .iter()
+        .map(|c| c.flex_basis(vertical, Some(inner)))
+        .collect();
+    let hypothetical: Vec<_> = children
         .iter()
         .map(|c| c.base(vertical, Some(inner)))
         .collect();
-    let gaps = gap * children.len().saturating_sub(1) as f64;
-    let free = inner.main(vertical) - base.iter().sum::<f64>() - gaps;
-    let growing = free > 0.0;
-    deal(
-        &base,
-        |i| {
-            let c = children[i];
-            if growing {
-                c.node.grow
-            } else {
-                c.node.shrink * base[i]
-            }
-        },
-        |i| {
-            let c = children[i];
-            if growing {
-                c.node
-                    .rare()
-                    .maximum
-                    .map_or(f64::INFINITY, |s| s.main(vertical))
-            } else {
-                c.floor.main(vertical)
-            }
-        },
-        free,
-    )
-}
-
-/// Deal `free` out over `base` in proportion to `weight`, never past a
-/// child's `edge` (its maximum when growing, its floor when shrinking).
-///
-/// Water-filling: the children that would reach their edge first -- least
-/// room per unit of weight -- are clamped one after another, each against
-/// the level what is left sets, until the next one fits; everyone from there
-/// on takes the same share of what remains. One sort, O(n log n), where
-/// clamping round by round was O(n x rounds). The unclamped shares are
-/// dealt in declaration order in one pass, so a row nothing clamps comes out
-/// bit for bit as it did.
-fn deal(
-    base: &[f64],
-    weight: impl Fn(usize) -> f64,
-    edge: impl Fn(usize) -> f64,
-    mut free: f64,
-) -> Vec<f64> {
-    let growing = free > 0.0;
-    let room = |i: usize| {
+    let growing = hypothetical.iter().sum::<f64>() < available;
+    let factor = |i: usize| {
         if growing {
-            edge(i) - base[i]
+            children[i].node.grow
         } else {
-            base[i] - edge(i)
+            children[i].node.shrink
         }
-        .max(0.0)
     };
-    let mut allocated = base.to_vec();
-    let mut active: Vec<usize> = (0..base.len())
-        .filter(|&i| weight(i) > 0.0 && room(i) > 1e-8)
+    let weight = |i: usize| factor(i) * if growing { 1.0 } else { bases[i] };
+    let mut sizes = hypothetical.clone();
+    let mut frozen: Vec<_> = (0..children.len())
+        .map(|i| {
+            factor(i) == 0.0
+                || if growing {
+                    bases[i] > hypothetical[i]
+                } else {
+                    bases[i] < hypothetical[i]
+                }
+        })
         .collect();
-    active.sort_by(|&a, &b| (room(a) / weight(a)).total_cmp(&(room(b) / weight(b))));
-    let mut total = active.iter().map(|&i| weight(i)).sum::<f64>();
-    let mut clamped = 0;
-    for &i in &active {
-        let limit = room(i);
-        if free.abs() < 1e-8 || total <= 0.0 || (free * weight(i) / total).abs() < limit {
-            break;
+    let remaining = |sizes: &[f64], frozen: &[bool]| {
+        available
+            - (0..children.len())
+                .map(|i| if frozen[i] { sizes[i] } else { bases[i] })
+                .sum::<f64>()
+    };
+    let initial_free = remaining(&sizes, &frozen);
+    // ponytail: CSS's freeze loop is O(n²) in the worst case (one bound per
+    // round). Keep this direct algorithm until large constrained rows warrant
+    // a sorted solver that also handles mixed min/max violations.
+    let mut violations = vec![0.0; children.len()];
+    while frozen.iter().any(|f| !f) {
+        let mut free = remaining(&sizes, &frozen);
+        let factors: f64 = (0..children.len())
+            .filter(|&i| !frozen[i])
+            .map(factor)
+            .sum();
+        if factors < 1.0 && (initial_free * factors).abs() < free.abs() {
+            free = initial_free * factors;
         }
-        let delta = limit.copysign(free);
-        allocated[i] += delta;
-        free -= delta;
-        total -= weight(i);
-        clamped += 1;
-    }
-    let rest = &mut active[clamped..];
-    rest.sort_unstable();
-    let total = rest.iter().map(|&i| weight(i)).sum::<f64>();
-    if free.abs() >= 1e-8 && total > 0.0 {
-        for &i in rest.iter() {
-            let limit = room(i);
-            allocated[i] += (free * weight(i) / total).clamp(-limit, limit);
+        let total: f64 = (0..children.len())
+            .filter(|&i| !frozen[i])
+            .map(weight)
+            .sum();
+        violations.fill(0.0);
+        for i in 0..children.len() {
+            if frozen[i] {
+                continue;
+            }
+            let target = bases[i]
+                + if total > 0.0 {
+                    free * weight(i) / total
+                } else {
+                    0.0
+                };
+            let c = children[i];
+            sizes[i] = c
+                .node
+                .rare()
+                .maximum
+                .map_or(target, |m| target.min(m.main(vertical)))
+                .max(c.floor.main(vertical));
+            violations[i] = sizes[i] - target;
+        }
+        let violation: f64 = violations.iter().sum();
+        for i in 0..children.len() {
+            if violation.abs() < 1e-9
+                || (violation > 0.0 && violations[i] > 0.0)
+                || (violation < 0.0 && violations[i] < 0.0)
+            {
+                frozen[i] = true;
+            }
         }
     }
-    allocated
+    sizes
 }
 
 /// A child in a rect of its own: an overlay layer or a grid cell. Returns the
@@ -116,7 +111,13 @@ pub(crate) fn cell<P>(
     let n = c.node;
     let (ax, ay) = n.anchor.unwrap_or(default);
     let (w, h) = match c.aspect_width(cell) {
-        Some((w, a)) => (w, w / a),
+        Some((w, a)) => (
+            w,
+            n.rare()
+                .maximum
+                .map_or(w / a, |m| (w / a).min(m.height))
+                .max(c.floor.height),
+        ),
         None => (
             c.extent(false, cell.width, ax),
             c.extent(true, cell.height, ay),
@@ -164,6 +165,9 @@ pub(crate) fn arrange<P>(
     out: &mut (Vec<(Id, u32)>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
+    if !size.valid(m.extent_limit) || !origin.iter().all(|v| v.is_finite()) {
+        return Err(Error::BudgetExceeded);
+    }
     // A box handed less than its floor is not refused: `distribute` and
     // `extent` keep every child at its own floor, so the content overflows.
     let here = n.id.as_deref().unwrap_or(ancestor);
@@ -231,11 +235,38 @@ pub(crate) fn arrange<P>(
                 }
             }
         }
+        Kind::Grid { .. } if !m.columns.is_empty() => {
+            for p in crate::grid::placements(&flow, m.cols, usize::MAX)? {
+                let child = &m.children[p.index];
+                let width = m.columns[p.column..p.column + p.column_span]
+                    .iter()
+                    .sum::<f64>()
+                    + m.gap * (p.column_span - 1) as f64;
+                let height = m.rows[p.row..p.row + p.row_span].iter().sum::<f64>()
+                    + m.line_gap * (p.row_span - 1) as f64;
+                let (offset, mut size) = cell(child, Size::new(width, height), default);
+                size = Size::new(size.width.min(width), size.height.min(height));
+                let x = m.columns[..p.column].iter().sum::<f64>() + m.gap * p.column as f64;
+                let y = m.rows[..p.row].iter().sum::<f64>() + m.line_gap * p.row as f64;
+                placed[p.index] = Some((
+                    at(
+                        x + (offset[0] - child.node.offset[0]).max(0.0) + child.node.offset[0],
+                        y + (offset[1] - child.node.offset[1]).max(0.0) + child.node.offset[1],
+                    ),
+                    size,
+                ));
+            }
+        }
         Kind::Grid { .. } => {
             let cols = m.cols;
             let grid = grid_rows(&flow, cols);
             let col_w =
                 (inner.width - m.gap * cols.saturating_sub(1) as f64).max(0.0) / cols as f64;
+            let columns = if m.columns.is_empty() {
+                vec![col_w; cols]
+            } else {
+                m.columns.clone()
+            };
             let heights: Vec<f64> = grid
                 .iter()
                 .map(|r| r.iter().map(|c| c.size.height).fold(0.0, f64::max))
@@ -250,8 +281,10 @@ pub(crate) fn arrange<P>(
                 let mut col = 0;
                 for c in *row {
                     let span = c.node.span.clamp(1, cols.max(1));
-                    let cell_size =
-                        Size::new(col_w * span as f64 + m.gap * (span - 1) as f64, h + surplus);
+                    let cell_size = Size::new(
+                        columns[col..col + span].iter().sum::<f64>() + m.gap * (span - 1) as f64,
+                        h + surplus,
+                    );
                     let (p, mut s) = cell(c, cell_size, default);
                     // A cell never outgrows its track: a fixed size larger than
                     // the column would otherwise paint straight through the
@@ -265,7 +298,9 @@ pub(crate) fn arrange<P>(
                     let safe = |v: f64, o: f64| (v - o).max(0.0) + o;
                     placed[c.index] = Some((
                         at(
-                            col as f64 * (col_w + m.gap) + safe(p[0], c.node.offset[0]),
+                            columns[..col].iter().sum::<f64>()
+                                + col as f64 * m.gap
+                                + safe(p[0], c.node.offset[0]),
                             y + safe(p[1], c.node.offset[1]),
                         ),
                         s,
@@ -346,6 +381,12 @@ pub(crate) fn arrange<P>(
                         Some((_, a)) => main / a,
                         None => c.extent(!v, line_cross, align),
                     };
+                    let cross = c
+                        .node
+                        .rare()
+                        .maximum
+                        .map_or(cross, |m| cross.min(m.cross(v)))
+                        .max(c.floor.cross(v));
                     let cross_pos = line_start + place(line_cross, cross, align);
                     let pos = if v {
                         at(cross_pos, cursor)
@@ -414,94 +455,4 @@ pub(crate) fn arrange<P>(
         arrange(c, here, pos, s, pins, viewport, out)?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::deal;
-
-    /// The round-by-round clamp `deal` replaced, kept only to hold it to the
-    /// same answers.
-    fn rounds(base: &[f64], weight: &[f64], edge: &[f64], mut free: f64) -> Vec<f64> {
-        let mut allocated = base.to_vec();
-        let growing = free > 0.0;
-        let room = |i: usize, allocated: &[f64]| {
-            if growing {
-                edge[i] - allocated[i]
-            } else {
-                allocated[i] - edge[i]
-            }
-            .max(0.0)
-        };
-        for _ in 0..=base.len() {
-            let active: Vec<usize> = (0..base.len())
-                .filter(|i| weight[*i] > 0.0 && room(*i, &allocated) > 1e-8)
-                .collect();
-            let total = active.iter().map(|i| weight[*i]).sum::<f64>();
-            if free.abs() < 1e-8 || total <= 0.0 {
-                break;
-            }
-            let budget = free;
-            for i in active {
-                let limit = room(i, &allocated);
-                let delta = (budget * weight[i] / total).clamp(-limit, limit);
-                allocated[i] += delta;
-                free -= delta;
-            }
-        }
-        allocated
-    }
-
-    #[test]
-    fn water_filling_deals_what_clamping_round_by_round_dealt() {
-        // xorshift: no dependency, and the same cases every run.
-        let mut seed = 0x9e37_79b9_7f4a_7c15_u64;
-        let mut next = move || {
-            seed ^= seed << 13;
-            seed ^= seed >> 7;
-            seed ^= seed << 17;
-            (seed >> 11) as f64 / (1u64 << 53) as f64
-        };
-        for case in 0..20_000 {
-            let n = 1 + (next() * 12.) as usize;
-            let base: Vec<f64> = (0..n).map(|_| (next() * 200.).floor()).collect();
-            // Some weightless, some tied, the rest anything.
-            let weight: Vec<f64> = (0..n)
-                .map(|_| match (next() * 4.) as u8 {
-                    0 => 0.,
-                    1 => 1.,
-                    _ => next() * 3.,
-                })
-                .collect();
-            let growing = next() < 0.5;
-            let edge: Vec<f64> = base
-                .iter()
-                .map(|b| match (next() * 3.) as u8 {
-                    0 if growing => f64::INFINITY,
-                    0 => 0.,
-                    _ if growing => b + (next() * 80.).floor(),
-                    _ => (b - (next() * 80.).floor()).max(0.),
-                })
-                .collect();
-            let free = (next() * 400.).floor() * if growing { 1. } else { -1. };
-            let w = weight.clone();
-            let e = edge.clone();
-            let new = deal(&base, |i| w[i], |i| e[i], free);
-            let old = rounds(&base, &weight, &edge, free);
-            for (a, b) in new.iter().zip(&old) {
-                assert!(
-                    (a - b).abs() <= 1e-9 * b.abs().max(1.),
-                    "case {case}: {new:?} != {old:?} for base {base:?} weight {weight:?} edge {edge:?} free {free}"
-                );
-            }
-            // Nothing clamped: the very same bits.
-            let unclamped = (0..n).all(|i| {
-                weight[i] == 0.
-                    || (old[i] - edge[i]).abs() > 1e-6 && (old[i] - base[i]).abs() > 1e-9
-            });
-            if unclamped {
-                assert_eq!(new, old, "case {case}");
-            }
-        }
-    }
 }

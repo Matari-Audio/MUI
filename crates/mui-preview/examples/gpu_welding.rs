@@ -11,10 +11,6 @@ use winit::{
     keyboard::{Key as WinitKey, NamedKey},
     window::{Window, WindowId},
 };
-#[expect(
-    dead_code,
-    reason = "the shared gallery host has debug-overlay methods this lab never calls"
-)]
 #[path = "../src/host.rs"]
 mod host;
 

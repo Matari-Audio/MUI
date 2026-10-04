@@ -281,8 +281,22 @@ fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
         .frame(root, None, PointerInput::default(), 0.016)
         .unwrap();
     assert_eq!(value, "ab", "a preedit never touches the value");
-    let under = f.scene.surface("/3").expect("underline").frame;
-    assert!(under.size.width > 0., "the composing span is underlined");
+    let geometry = f
+        .scene
+        .surface("f")
+        .unwrap()
+        .text_geometry
+        .as_ref()
+        .unwrap();
+    assert_eq!(geometry.text.as_ref(), "axyb");
+    assert_eq!(geometry.state.marked, 1..3);
+    assert!(
+        f.scene
+            .paint
+            .iter()
+            .any(|p| p.key.as_str() == "f" && matches!(p.layer, mui_scene::Layer::Draw(_))),
+        "preedit underline"
+    );
 
     let root = tree(&mut ui, &mut value);
     ui.frame(root, None, ime(mui_input::Ime::Commit("xy".into())), 0.016)
@@ -293,7 +307,15 @@ fn a_composition_paints_without_editing_the_value_and_the_commit_inserts() {
         .unwrap();
     assert_eq!(value, "axyb", "the commit landed at the caret");
     assert!(
-        f.scene.surface("/3").is_none(),
+        f.scene
+            .surface("f")
+            .unwrap()
+            .text_geometry
+            .as_ref()
+            .unwrap()
+            .state
+            .marked
+            .is_empty(),
         "and the composition, with it the underline, is gone"
     );
 }
@@ -309,18 +331,12 @@ fn a_long_value_scrolls_under_the_clip_instead_of_wrapping() {
     ui.set_sel("f", 60, 60);
     let root = tree(&mut ui, &mut value);
     let f = ui.frame(root, win, PointerInput::default(), 0.016).unwrap();
-    // The value, the caret and the field: unnamed children are keyed by
-    // their slot under the root.
-    let field = f.scene.surface("f").expect("field").frame;
-    let text = f.scene.surface("/1").expect("value").frame;
-    let caret = f.scene.surface("/2").expect("caret").frame;
+    let field = f.scene.surface("f").expect("field");
+    let geometry = field.text_geometry.as_ref().unwrap();
+    assert_eq!(geometry.lines.len(), 1, "one visual line");
     assert!(
-        text.size.height < 2. * ui.theme().text,
-        "one line, not wrapped: {text:?}"
-    );
-    assert!(
-        caret.right() <= field.right() && caret.x >= field.x,
-        "the caret stayed in the field: {caret:?} in {field:?}"
+        geometry.caret.x + 2. <= field.frame.size.width && geometry.caret.x >= 0.,
+        "the caret stayed in the field: {geometry:?}"
     );
 }
 
@@ -606,4 +622,360 @@ fn a_click_in_a_scrolled_field_lands_on_the_painted_character() {
     tree(&mut ui, &mut value);
     let (_, caret) = ui.sel("f");
     assert!(caret >= 58, "the tail was under the pointer, got {caret}");
+}
+
+#[test]
+fn editable_wrap_and_candidate_caret_use_current_bounds_on_first_frame_and_resize() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "one two three four five six seven eight nine".to_owned();
+    ui.set_sel("f", value.chars().count(), value.chars().count());
+    ui.focus("f");
+    let tree = |ui: &mut Ui, value: &mut String| {
+        widgets::text_edit(
+            ui,
+            "f",
+            value,
+            widgets::TextOpts {
+                newline: widgets::Newline::Enter,
+                rows: 2,
+                ..Default::default()
+            },
+        )
+        .el
+    };
+    let root = tree(&mut ui, &mut value);
+    let frame = ui
+        .frame(root, Some(Size::new(110., 80.)), Input::default(), 0.016)
+        .unwrap();
+    let field = frame.scene.surface("f").unwrap();
+    let g = field.text_geometry.as_ref().unwrap();
+    assert!(g.lines.len() > 2, "the first frame wraps: {g:?}");
+    assert!(g.scroll > 0., "first-frame caret is brought into view");
+    let first_count = g.lines.len();
+    if let Some((at, _)) = frame.ime {
+        assert_eq!(
+            at,
+            Point::new(field.frame.x + g.caret.x, field.frame.y + g.caret.y)
+        );
+    }
+    let snapshot = ui.scene_snapshot().unwrap();
+    let root = tree(&mut ui, &mut value);
+    let frame = ui
+        .frame(root, Some(Size::new(260., 80.)), Input::default(), 0.016)
+        .unwrap();
+    let field = frame.scene.surface("f").unwrap();
+    let g = field.text_geometry.as_ref().unwrap();
+    assert!(
+        g.lines.len() < first_count,
+        "the resize frame uses the new width"
+    );
+    assert_eq!(
+        snapshot
+            .surface("f")
+            .unwrap()
+            .text_geometry
+            .as_ref()
+            .unwrap()
+            .lines
+            .len(),
+        first_count,
+        "the snapshot keeps the previous width's editable geometry"
+    );
+    assert!(g.caret.x + 2. <= field.frame.size.width);
+    let (at, _) = frame.ime.expect("candidate caret after focus intake");
+    assert_eq!(
+        at,
+        Point::new(field.frame.x + g.caret.x, field.frame.y + g.caret.y)
+    );
+}
+
+#[test]
+fn composition_replaces_selection_and_maps_display_hits_back_to_source() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "a😀bc".to_owned();
+    let tree = |ui: &mut Ui, value: &mut String| widgets::text_input(ui, "f", value).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(180., 50.)), Input::default(), 0.016)
+        .unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 1, 3);
+    let root = tree(&mut ui, &mut value);
+    ui.frame(
+        root,
+        None,
+        Input {
+            ime: vec![mui_input::Ime::Preedit {
+                text: "e\u{301}字".into(),
+                cursor: Some((1, 3)),
+            }],
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    let root = tree(&mut ui, &mut value);
+    let frame = ui
+        .frame(root, Some(Size::new(100., 50.)), Input::default(), 0.016)
+        .unwrap();
+    let g = frame
+        .scene
+        .surface("f")
+        .unwrap()
+        .text_geometry
+        .as_ref()
+        .unwrap();
+    assert_eq!(value, "a😀bc");
+    assert_eq!(g.text.as_ref(), "ae\u{301}字c");
+    assert_eq!(g.state.marked, 1..7);
+    assert_eq!(g.state.caret, 4, "cursor snapped to grapheme boundary");
+    assert_eq!(
+        g.display_to_source(7),
+        6,
+        "after preedit maps past the replaced emoji and b"
+    );
+    assert_eq!(
+        g.display_to_source(3),
+        1,
+        "inside composition maps to replacement start"
+    );
+    let last = &g.lines[0];
+    let point = Point::new(
+        last.origin.x + last.carets.x(g.text.len()),
+        last.origin.y + g.line_height / 2.,
+    );
+    assert_eq!(g.hit(point), value.len());
+    assert!(
+        g.lines[0]
+            .carets
+            .selection_spans(1..4)
+            .iter()
+            .all(|s| s.end >= s.start)
+    );
+    let native = ui.text_input_state().unwrap();
+    assert_eq!(native.text, "ae\u{301}字c");
+    assert_eq!(native.marked, Some(1..7));
+}
+
+#[test]
+fn multiline_visual_movement_preserves_goal_x_across_short_lines() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "abcdef\nx\nabcdef".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| {
+        widgets::text_edit(
+            ui,
+            "f",
+            v,
+            widgets::TextOpts {
+                newline: widgets::Newline::Enter,
+                ..Default::default()
+            },
+        )
+        .el
+    };
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(220., 100.)), Input::default(), 0.016)
+        .unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 5, 5);
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(220., 100.)), key(Key::Down), 0.016)
+        .unwrap();
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(220., 100.)), key(Key::Down), 0.016)
+        .unwrap();
+    assert_eq!(ui.sel("f"), (8, 8), "short middle line clamps caret");
+    tree(&mut ui, &mut value);
+    assert_eq!(ui.sel("f"), (14, 14), "second move restores goal column");
+}
+
+#[test]
+fn native_replacement_selection_and_commits_keep_batch_order() {
+    use mui_input::Ime;
+    let mut ui = Ui::default();
+    let mut value = "a😀bc".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, Input::default(), 0.016).unwrap();
+    ui.focus("f");
+    assert!(
+        !ui.set_text_input_selection(2..3),
+        "reject interior UTF8 byte ranges"
+    );
+    assert!(ui.set_text_input_selection(1..5));
+    assert_eq!(ui.sel("f"), (1, 2));
+    let root = tree(&mut ui, &mut value);
+    ui.frame(
+        root,
+        None,
+        Input {
+            ime: vec![
+                Ime::Selection(1..5),
+                Ime::Commit("xy".into()),
+                Ime::Selection(0..1),
+                Ime::Commit("字".into()),
+            ],
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    let response = widgets::text_input(&mut ui, "f", &mut value);
+    assert!(response.changed);
+    assert_eq!(
+        value, "字xybc",
+        "second replacement acts on first commit's buffer"
+    );
+    assert_eq!(ui.sel("f"), (1, 1));
+}
+
+#[test]
+fn end_at_a_soft_wrap_keeps_the_caret_on_the_previous_visual_line() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "abcdefghijk".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| {
+        widgets::text_edit(
+            ui,
+            "f",
+            v,
+            widgets::TextOpts {
+                newline: widgets::Newline::Enter,
+                ..Default::default()
+            },
+        )
+        .el
+    };
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(65., 100.)), Input::default(), 0.016)
+        .unwrap();
+    ui.focus("f");
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(65., 100.)), key(Key::End), 0.016)
+        .unwrap();
+    let root = tree(&mut ui, &mut value);
+    let f = ui
+        .frame(root, Some(Size::new(65., 100.)), Input::default(), 0.016)
+        .unwrap();
+    let g = f
+        .scene
+        .surface("f")
+        .unwrap()
+        .text_geometry
+        .as_ref()
+        .unwrap();
+    assert_eq!(g.state.caret, g.lines[0].range.end);
+    assert_eq!(g.row(g.state.caret), 0);
+    assert_eq!(g.caret.y, g.lines[0].origin.y);
+}
+
+#[test]
+fn selecting_hard_breaks_and_empty_lines_paints_each_newline() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "ab\n\ncd".to_owned();
+    ui.set_sel("f", 2, 4);
+    let root = widgets::text_edit(
+        &mut ui,
+        "f",
+        &mut value,
+        widgets::TextOpts {
+            newline: widgets::Newline::Enter,
+            ..Default::default()
+        },
+    )
+    .el;
+    let f = ui
+        .frame(root, Some(Size::new(100., 100.)), Input::default(), 0.016)
+        .unwrap();
+    assert_eq!(
+        f.scene
+            .surface("f")
+            .unwrap()
+            .text_geometry
+            .as_ref()
+            .unwrap()
+            .lines
+            .len(),
+        3
+    );
+    assert_eq!(
+        f.scene
+            .paint
+            .iter()
+            .filter(|p| p.key.as_str() == "f" && matches!(p.layer, mui_scene::Layer::Draw(_)))
+            .count(),
+        2,
+        "both the first and empty line's selected newline have a visible band"
+    );
+}
+
+#[test]
+fn a_rtl_selection_collapses_toward_the_visual_arrow_edge() {
+    let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let mut value = "אבג".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, Input::default(), 0.016).unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 0, 3);
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, key(Key::Right), 0.016).unwrap();
+    tree(&mut ui, &mut value);
+    assert_eq!(
+        ui.sel("f"),
+        (0, 0),
+        "rightmost selection endpoint is logical start"
+    );
+}
+
+#[test]
+fn a_pointer_during_preedit_keeps_the_pending_replacement_selection() {
+    let mut ui = Ui::default();
+    let mut value = "abcdef".to_owned();
+    let tree = |ui: &mut Ui, v: &mut String| widgets::text_input(ui, "f", v).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(150., 60.)), Input::default(), 0.016)
+        .unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 1, 4);
+    let root = tree(&mut ui, &mut value);
+    ui.frame(
+        root,
+        Some(Size::new(150., 60.)),
+        Input {
+            ime: vec![mui_input::Ime::Preedit {
+                text: "XY".into(),
+                cursor: Some((1, 1)),
+            }],
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    let root = tree(&mut ui, &mut value);
+    let f = ui
+        .frame(root, Some(Size::new(150., 60.)), Input::default(), 0.016)
+        .unwrap();
+    let field = f.scene.surface("f").unwrap();
+    let g = field.text_geometry.as_ref().unwrap();
+    let p = Point::new(
+        field.frame.x + g.lines[0].origin.x + g.lines[0].carets.x(2),
+        field.frame.y + g.lines[0].origin.y + g.line_height / 2.,
+    );
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, Some(Size::new(150., 60.)), at(p.x, p.y, true), 0.016)
+        .unwrap();
+    tree(&mut ui, &mut value);
+    assert_eq!(ui.sel("f"), (1, 4), "composition still replaces bcd");
+    let root = tree(&mut ui, &mut value);
+    ui.frame(
+        root,
+        Some(Size::new(150., 60.)),
+        Input {
+            ime: vec![mui_input::Ime::Commit("XY".into())],
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    tree(&mut ui, &mut value);
+    assert_eq!(value, "aXYef");
 }

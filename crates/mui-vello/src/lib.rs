@@ -263,7 +263,7 @@ impl Cache {
             frames.used = now;
             return (f.clone(), frames.born < now);
         }
-        let f = FontData::new(Blob::new(Arc::new(font.clone())), 0);
+        let f = FontData::new(Blob::new(Arc::new(font.clone())), font.index());
         self.fonts.push((
             key,
             f.clone(),
@@ -1061,6 +1061,33 @@ mod seam {
 
     /// A font unused for `FONT_FRAMES` frames lets go of its `FontData`; one
     /// drawn every frame keeps it, blob id and all.
+    #[test]
+    fn the_font_cache_preserves_collection_face_indices_and_identity() {
+        // Two faces may share one sfnt and its tables inside a TTC. Rebase
+        // Hack's table offsets from the standalone font into that container.
+        let font = epaint_default_fonts::HACK_REGULAR;
+        let mut collection = Vec::from(&b"ttcf\0\x01\0\0\0\0\0\x02\0\0\0\x14\0\0\0\x14"[..]);
+        collection.extend_from_slice(font);
+        let tables = u16::from_be_bytes(font[4..6].try_into().unwrap());
+        for table in 0..usize::from(tables) {
+            let offset = 20 + 12 + table * 16 + 8;
+            let value = u32::from_be_bytes(collection[offset..offset + 4].try_into().unwrap());
+            collection[offset..offset + 4].copy_from_slice(&(value + 20).to_be_bytes());
+        }
+        let bytes: Arc<[u8]> = collection.into();
+        let first = mui_scene::Font::from_index(Arc::clone(&bytes), 0).unwrap();
+        let second = mui_scene::Font::from_index(bytes, 1).unwrap();
+        let mut cache = Cache::default();
+        let (a, _) = cache.font(&first);
+        let (b, _) = cache.font(&second);
+        assert_eq!((a.index, b.index), (0, 1));
+        assert_ne!(first.id(), second.id());
+        assert_ne!(a.data.id(), b.data.id());
+        assert_eq!(cache.fonts.len(), 2);
+        assert_eq!(cache.font(&second).0.index, 1);
+        assert_eq!(cache.font(&second).0.data.id(), b.data.id());
+    }
+
     #[test]
     fn an_unused_font_ages_out() {
         let font = |bytes| mui_scene::Font::new(bytes).unwrap();

@@ -73,3 +73,4 @@ mod memo;
 mod motion;
 mod pointer;
 mod scroll;
+mod snapshots;

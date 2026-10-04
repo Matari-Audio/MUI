@@ -121,6 +121,30 @@ impl Ui {
     /// Put every kept memo subtree back where the build left its
     /// placeholder, and return where each memo's root is, by child-index
     /// path. Walks only until it has met every root the build handed out.
+    /// Check the tree as it will appear after memo expansion without moving
+    /// retained trees or descending beyond the frame's depth budget.
+    pub(super) fn validate_expanded_tree_budget(&mut self, root: &El) -> Result<(), SceneError> {
+        if self.issued == 0 {
+            return Ok(());
+        }
+        let limits = mui_layout::Limits::default();
+        self.expanded_memos.clear();
+        TREES.with(|trees| {
+            let trees = trees.borrow();
+            Self::validate_tree_budget_with(root, limits, |node| {
+                if let Some(memo) = node.payload().extras().memo
+                    && memo.reused
+                    && self.expanded_memos.insert(memo.id)
+                    && let Some(tree) = trees.get(&(self.me, memo.id))
+                {
+                    tree
+                } else {
+                    node
+                }
+            })
+        })
+    }
+
     pub(super) fn splice(&mut self, root: &mut El) -> Vec<(Vec<usize>, u64)> {
         let mut found = Vec::new();
         let mut left = std::mem::take(&mut self.issued);

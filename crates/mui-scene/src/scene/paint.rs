@@ -70,9 +70,10 @@ impl Walk<'_> {
             ),
             // Text's own fill is its ink, not a box behind it: never pushed,
             // though its colour still grounds the shells as before.
-            None if matches!(e.content, Content::Text(_)) => self
-                .paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
-                .map_or(under, |p| p.solid()),
+            None if matches!(e.content, Content::Text(_)) && e.extras().editable_text.is_none() => {
+                self.paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
+                    .map_or(under, |p| p.solid())
+            }
             // A joined tab takes the owner's border material; its fill only
             // grounds its content.
             None if e.extras().border_join.is_some() => self
