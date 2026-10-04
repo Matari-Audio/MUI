@@ -35,12 +35,12 @@ impl ClassBuilder {
             // SAFETY: class_getSuperclass is valid before registration too.
             let superclass = unsafe { ffi::class_getSuperclass(self.cls.as_ptr()) };
             // SAFETY: A non-null superclass points to a registered class.
-            if let Some(superclass) = unsafe { superclass.cast::<AnyClass>().as_ref() }
-                && superclass.instance_method(sel).is_some()
-            {
-                superclass
-                    .verify_sel::<F::Arguments, F::Return>(sel)
-                    .unwrap();
+            if let Some(superclass) = unsafe { superclass.cast::<AnyClass>().as_ref() } {
+                if superclass.instance_method(sel).is_some() {
+                    superclass
+                        .verify_sel::<F::Arguments, F::Return>(sel)
+                        .unwrap();
+                }
             }
         }
         let encs = F::Arguments::ENCODINGS;
