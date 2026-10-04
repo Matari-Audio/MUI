@@ -26,10 +26,11 @@ pub(crate) struct Measured<'a, P> {
     /// The children's extent inside the padding, before any definite size
     /// overrides it: what a scroll node lays its children into.
     pub(crate) content: Size,
-    /// This subtree's measured size can still change if its main extent does:
-    /// a content leaf that wraps, a percentage-sized descendant, an
-    /// aspect-ratio node, or a `min_col` grid with no width yet.
-    pub(crate) fluid: bool,
+    /// Dependencies on the final flex share, separately for width and height:
+    /// wrapped content, percentage descendants, aspect ratios or grid tracks.
+    pub(crate) fluid: [bool; 2],
+    /// Whether descendants were measured with a definite height.
+    pub(crate) definite_height: bool,
     /// A grid's resolved column count, after `min_col`; 0 for anything else.
     /// Measured once so arrange cannot re-derive a different one.
     pub(crate) cols: usize,
@@ -387,20 +388,26 @@ pub(crate) fn measure_uncached<'a, P>(
     let here = node.id.as_deref().unwrap_or(ancestor);
     // Aspect is width-first, like CSS: a definite width settles the height,
     // and only a definite height with no width settles the width.
-    // A flex item may use an explicit width as its intrinsic basis while its
-    // parent is still measuring the row. Once that item is re-measured at the
-    // share the parent actually assigned, the share is the authoritative width
-    // for descendants whose layout depends on it. Keep the declared width for
-    // the first pass and for nodes that opted out of both growth and shrink;
+    // A flex item may use an explicit extent as its intrinsic basis while its
+    // parent is still measuring the branch. Once remeasured at the final flex
+    // share, that share is authoritative for dependent descendants. Keep the
+    // declared extent for the first pass and for nodes that opted out of both growth and shrink;
     // those are genuinely fixed even when a parent has spare room.
-    let flex_width = node
-        .width
-        .px()
-        .filter(|_| !(pass.redo && (node.grow > 0.0 || node.shrink > 0.0)));
+    let flex_width = node.width.px().filter(|_| {
+        !(pass.redo && definite[0].is_some() && (node.grow > 0.0 || node.shrink > 0.0))
+    });
     // A given box is the offered size on both axes, whatever the node says.
     let mut definite = match boxed {
         Some(_) => definite,
-        None => [flex_width.or(definite[0]), node.height.px().or(definite[1])],
+        None => [
+            flex_width.or(definite[0]),
+            node.height
+                .px()
+                .filter(|_| {
+                    !(pass.redo && definite[1].is_some() && (node.grow > 0.0 || node.shrink > 0.0))
+                })
+                .or(definite[1]),
+        ],
     };
     if boxed.is_none() {
         for (axis, value) in definite.iter_mut().enumerate() {
@@ -635,21 +642,20 @@ pub(crate) fn measure_uncached<'a, P>(
         }
         _ => 0,
     };
-    // A flex item only learns its final main size once the row's surplus (or
-    // deficit) is dealt, so anything whose measured cross depends on its main
-    // -- a paragraph, a `min_col` grid -- is measured again at the share it
-    // actually got. Doing it here, inside the one measure pass, is what makes
-    // the row's own cross size right; a second solve outside cannot. A
-    // wrapping row distributes each line independently, then remeasures the
-    // fluid children at that line's final shares.
-    if let (
-        Kind::Branch {
-            vertical: false, ..
-        },
-        Some(avail),
-    ) = (&node.kind, inner[0])
+    // A flex item only learns its final main size once the branch's surplus
+    // or deficit is dealt. Subtrees that depend on that axis (wrapped text,
+    // percentage descendants, or explicit grid tracks) must be measured at
+    // the share they actually got. This settles the branch's cross size and
+    // cached descendant tracks in the same pass. Wrapped branches distribute
+    // each line independently before remeasuring that line's fluid children.
+    if let Kind::Branch { vertical, .. } = node.kind
+        && let Some(avail) = inner[usize::from(vertical)]
+        && children
+            .iter()
+            .any(|c| c.fluid[usize::from(vertical)] && !c.node.float)
     {
-        // Per child: the width it was last measured at, once re-measured.
+        let axis = usize::from(vertical);
+        // Per child: the main extent it was last remeasured at.
         let mut at: Vec<Option<f64>> = vec![None; children.len()];
         // A re-measure can change what a child may be squeezed to -- a
         // `min_col` grid drops columns and its floor with them -- so the row
@@ -660,19 +666,19 @@ pub(crate) fn measure_uncached<'a, P>(
         for _ in 0..3 {
             let shares: Vec<(usize, f64)> = {
                 let flow = flow_of(&children);
-                if flow.iter().any(|c| c.fluid) {
-                    // A scrolling row deals what arrange will lay it into: its
+                if flow.iter().any(|c| c.fluid[axis]) {
+                    // A scrolling branch deals what arrange will lay it into: its
                     // content where that overflows, so nothing is squeezed to
                     // the viewport and wrapped a letter a line.
                     let avail = if node.scroll {
-                        let bases = flow.iter().map(|c| c.base(false, None)).sum::<f64>();
+                        let bases = flow.iter().map(|c| c.base(vertical, None)).sum::<f64>();
                         avail.max(bases + gap * flow.len().saturating_sub(1) as f64)
                     } else {
                         avail
                     };
-                    let inner = Size::new(avail, inner[1].unwrap_or(0.0));
+                    let inner = Size::axes(avail, inner[1 - axis].unwrap_or(0.0), vertical);
                     let lines = if node.wrap {
-                        wrap_lines(&flow, gap, false, avail)
+                        wrap_lines(&flow, gap, vertical, avail)
                     } else {
                         vec![(0, flow.len())]
                     };
@@ -680,7 +686,7 @@ pub(crate) fn measure_uncached<'a, P>(
                         .into_iter()
                         .flat_map(|(start, end)| {
                             let line = &flow[start..end];
-                            let main = distribute(line, gap, false, inner);
+                            let main = distribute(line, gap, vertical, inner);
                             line.iter().map(|c| c.index).zip(main).collect::<Vec<_>>()
                         })
                         .collect()
@@ -691,28 +697,46 @@ pub(crate) fn measure_uncached<'a, P>(
             let mut moved = false;
             for (index, main) in shares {
                 let c = &node.children()[index];
-                let main = c.rare().maximum.map_or(main, |m| main.min(m.width));
-                // Half a pixel more is not worth a re-measure: nothing breaks
-                // differently in more room than it measured in. Any less is,
-                // or a wrapping row arranges a line its measured height has
-                // no room for.
-                let basis = children[index].size.width;
+                let main = c
+                    .rare()
+                    .maximum
+                    .map_or(main, |m| main.min(m.main(vertical)));
+                // Width reflow keeps its half-pixel growth tolerance. Explicit
+                // row tracks depend on every change of the final height.
+                let basis = children[index].size.main(vertical);
                 let was_at = at[index].unwrap_or(basis);
-                if !children[index].fluid || (0.0..=0.5).contains(&(main - was_at)) {
+                // An intrinsic basis (including a capped one) can equal the
+                // final share while descendants still have no definite height.
+                let unsettled_height =
+                    vertical && at[index].is_none() && !children[index].definite_height;
+                let unchanged = if vertical {
+                    (main - was_at).abs() < 1e-8
+                } else {
+                    (0.0..=0.5).contains(&(main - was_at))
+                };
+                if !children[index].fluid[axis] || unchanged && !unsettled_height {
                     continue;
                 }
                 let align = c.align_self.unwrap_or(node.align);
-                let cross = offer(c, true, inner[1], sub[1], align == Align::Stretch);
-                let was = std::mem::replace(&mut pass.redo, true);
-                let m = measure(
+                let cross = offer(
                     c,
-                    here,
-                    [Some(main), cross],
-                    Some(main),
-                    sub,
-                    depth + 1,
-                    pass,
+                    !vertical,
+                    inner[1 - axis],
+                    sub[1 - axis],
+                    align == Align::Stretch,
                 );
+                let promise = if vertical {
+                    [cross, Some(main)]
+                } else {
+                    [Some(main), cross]
+                };
+                let was = std::mem::replace(&mut pass.redo, true);
+                let child_room = if vertical {
+                    narrower(room.filter(|_| !node.scroll), cross)
+                } else {
+                    Some(main)
+                };
+                let m = measure(c, here, promise, child_room, sub, depth + 1, pass);
                 pass.redo = was;
                 // The re-measure settles what is inside, the cross size and
                 // the floor; the basis stays the first pass's. Dealt from the
@@ -721,7 +745,7 @@ pub(crate) fn measure_uncached<'a, P>(
                 let slot = &mut children[index];
                 *slot = m?;
                 let m = slot;
-                (m.size.width, m.index) = (basis, index);
+                (m.size, m.index) = (Size::axes(basis, m.size.cross(vertical), vertical), index);
                 // The cached snapshot is the re-measure's own; this one differs.
                 m.frozen = None;
                 at[index] = Some(main);
@@ -1044,15 +1068,24 @@ pub(crate) fn measure_uncached<'a, P>(
         || (node.rare().min_col.is_some()
             && inner[0].is_none()
             && matches!(node.kind, Kind::Grid { .. }))
-        || children.iter().any(|c| c.fluid && !c.node.float)
+        || children.iter().any(|c| c.fluid[0] && !c.node.float)
         || width_fluid
         || explicit_tracks.is_some()
         || wrap_fluid;
+    let height_fluid = matches!(
+        node.height,
+        Len::Pct(_) | Len::Clamp { .. } | Len::Container(_)
+    ) || node.rare().aspect.is_some()
+        || node.rare().grid_rows.is_some()
+        || matches!(node.kind, Kind::Fits(_))
+        || matches!(node.kind, Kind::Branch { vertical: true, .. }) && node.wrap
+        || children.iter().any(|c| c.fluid[1] && !c.node.float);
     Ok(Measured {
         node,
         frozen: None,
         index: 0,
-        fluid,
+        fluid: [fluid, height_fluid],
+        definite_height: definite[1].is_some(),
         gap,
         line_gap,
         padding,

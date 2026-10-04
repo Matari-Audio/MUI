@@ -54,20 +54,6 @@ fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
         .unwrap_or(P::Fifo)
 }
 
-/// The swapchain extent for a `v`-pixel side. Linux steps it up to a
-/// multiple of 256 so a live resize reconfigures every 256 px, not every
-/// pixel; the renderer keeps the exact size and the present writes only
-/// its corner. Elsewhere the exact size.
-// ponytail: X11 crops the oversized buffer to the window; a Wayland
-// surface takes its size from the buffer, so gate on X11 if one shows it.
-fn surface_extent(v: u32, limit: u32) -> u32 {
-    if cfg!(target_os = "linux") {
-        v.next_multiple_of(256).min(limit)
-    } else {
-        v
-    }
-}
-
 /// Whether a window shows what is behind it where the scene is not opaque.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Transparency {
@@ -345,7 +331,7 @@ struct OnDevice {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    /// The renderer's exact size; the surface may be larger (Linux steps).
+    /// The renderer's exact physical size, matching the native surface.
     size: (u32, u32),
     renderer: GpuRenderer,
     /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
@@ -422,11 +408,7 @@ impl OnDevice {
                 alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
                 desired_maximum_frame_latency: 1,
                 ..surface
-                    .get_default_config(
-                        adapter,
-                        surface_extent(width, limit),
-                        surface_extent(height, limit),
-                    )
+                    .get_default_config(adapter, width, height)
                     .ok_or("no default surface configuration")?
             }
         } else {
@@ -609,8 +591,7 @@ impl Host {
         &self.instance
     }
 
-    /// The rendered size, physical pixels. The configured surface can be
-    /// larger (Linux steps it to 256 px).
+    /// The rendered size in physical pixels, matching the native surface.
     pub fn size(&self) -> (u32, u32) {
         self.gpu.size
     }
@@ -677,7 +658,10 @@ impl Host {
             .resize([width, height])
             .map_err(HostError::Render)?;
         *size = (width, height);
-        let extent = (surface_extent(width, limit), surface_extent(height, limit));
+        // The drawable and renderer must have the same physical extent. An
+        // oversized GL framebuffer shifts its top-left image upward, while
+        // Wayland surfaces take their dimensions from the submitted buffer.
+        let extent = (width, height);
         if extent != (config.width, config.height) {
             (config.width, config.height) = extent;
             if let Some(surface) = &self.surface {
@@ -849,19 +833,14 @@ mod tests {
     }
 
     #[test]
-    fn present_mode_and_swapchain_steps_follow_the_platform() {
+    fn present_mode_follows_the_platform() {
         use wgpu::PresentMode as P;
         let mode = present_mode(&[P::Fifo, P::FifoRelaxed]);
         if cfg!(windows) {
             assert_eq!(mode, P::AutoNoVsync);
-            assert_eq!(surface_extent(300, 8192), 300);
         } else {
             assert_eq!(mode, P::FifoRelaxed);
             assert_eq!(present_mode(&[P::Fifo]), P::Fifo);
-        }
-        if cfg!(target_os = "linux") {
-            assert_eq!(surface_extent(300, 8192), 512);
-            assert_eq!(surface_extent(8000, 8192), 8192);
         }
     }
 

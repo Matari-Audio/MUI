@@ -2,7 +2,7 @@
 use super::*;
 use keyboard_types::Code;
 use mui::Ui;
-use mui::prelude::{El, Input, knob};
+use mui::prelude::{El, Input, Paints, knob};
 
 /// A knob that claims Escape.
 struct Knob {
@@ -32,6 +32,58 @@ fn handler(size: (u32, u32), scale: f64) -> Handler<Knob> {
     Handler::new(shared, Arc::default(), size, scale)
 }
 
+#[test]
+fn native_close_signal_is_model_free_and_fires_once_before_drop() {
+    let model = Arc::new(Mutex::new(()));
+    let called = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hook: CloseHook = {
+        let model = Arc::clone(&model);
+        let called = Arc::clone(&called);
+        Arc::new(move || {
+            assert!(
+                model.try_lock().is_err(),
+                "fixture must retain the model borrow"
+            );
+            called.fetch_add(1, Ordering::Relaxed);
+        })
+    };
+    let _borrow = model.lock().unwrap();
+    let signal = NativeClose {
+        hook: Some(Arc::clone(&hook)),
+        fired: Cell::new(false),
+    };
+    signal.fire();
+    signal.fire();
+    drop(signal);
+    assert_eq!(called.load(Ordering::Relaxed), 1);
+    drop(NativeClose {
+        hook: Some(hook),
+        fired: Cell::new(false),
+    });
+    assert_eq!(called.load(Ordering::Relaxed), 2);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn dialog_parent_is_cleared_on_close_and_old_handler_drop_preserves_reopen() {
+    let mut old = handler((240, 200), 1.0);
+    assert_eq!(old.requests.x11_window(), None);
+    old.x11_window = 42;
+    old.requests.x11_window.store(42, Ordering::Release);
+    assert_eq!(old.requests.x11_window(), Some(42));
+    old.on_event_inner(&Event::Window(WindowEvent::WillClose));
+    assert_eq!(old.requests.x11_window(), None);
+    let requests = Arc::clone(&old.requests);
+    requests.x11_window.store(43, Ordering::Release);
+    drop(old);
+    assert_eq!(requests.x11_window(), Some(43));
+    let mut current = handler((240, 200), 1.0);
+    current.requests = Arc::clone(&requests);
+    current.x11_window = 43;
+    drop(current);
+    assert_eq!(requests.x11_window(), None);
+}
+
 /// Run with an X11 display and compute-capable EGL driver:
 /// `WGPU_BACKEND=gl cargo test -p mui-baseview native_surface_presents_and_reopens -- --ignored`
 #[cfg(target_os = "linux")]
@@ -39,6 +91,21 @@ fn handler(size: (u32, u32), scale: f64) -> Handler<Knob> {
 #[ignore = "requires a live X11 display and graphics driver"]
 fn native_surface_presents_and_reopens() {
     use std::sync::mpsc::{Sender, channel};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
+
+    struct Green;
+    impl View for Green {
+        fn build(&mut self, _: &mut Ui, _: &Input) -> El {
+            mui::prelude::block(240., 200.).fill(mui::prelude::Color::srgb(0., 1., 0.))
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
 
     struct Probe {
         // Drop graphics before the native context, as the production handler does.
@@ -51,7 +118,11 @@ fn native_surface_presents_and_reopens() {
             if let Some(send) = self.result.borrow_mut().take() {
                 let result = (|| {
                     let mut gpu = open_gpu(&self.cx, (240, 200))?;
-                    let mut h = handler((240, 200), 1.0);
+                    let shared = Arc::new(Mutex::new(Shared {
+                        ui: Ui::default(),
+                        view: Green,
+                    }));
+                    let mut h = Handler::new(shared, Arc::default(), (240, 200), 1.0);
                     h.step();
                     let scene = lock(&h.shared).ui.scene_snapshot().ok_or("no scene")?;
                     for replacement in 0..3 {
@@ -74,6 +145,94 @@ fn native_surface_presents_and_reopens() {
                             ));
                         }
                     }
+                    // Check actual presented pixels, including the bottom edge.
+                    // An oversized GL swapchain previously shifted this image
+                    // upward and left a black strip although present succeeded.
+                    let window = match self.cx.window_handle().map_err(|e| e.to_string())?.as_raw()
+                    {
+                        raw_window_handle::RawWindowHandle::Xlib(h) => {
+                            u32::try_from(h.window).map_err(|e| e.to_string())?
+                        }
+                        raw_window_handle::RawWindowHandle::Xcb(h) => h.window.get(),
+                        _ => return Err("expected X11 native fixture".into()),
+                    };
+                    let (connection, _) = x11rb::rust_connection::RustConnection::connect(None)
+                        .map_err(|e| e.to_string())?;
+                    let visual_id = connection
+                        .get_window_attributes(window)
+                        .map_err(|e| e.to_string())?
+                        .reply()
+                        .map_err(|e| e.to_string())?
+                        .visual;
+                    let geometry = connection
+                        .get_geometry(window)
+                        .map_err(|e| e.to_string())?
+                        .reply()
+                        .map_err(|e| e.to_string())?;
+                    if (geometry.width, geometry.height) != (240, 200) {
+                        return Err(
+                            "native pixel fixture must use its configured physical extent".into(),
+                        );
+                    }
+                    let visual = connection
+                        .setup()
+                        .roots
+                        .iter()
+                        .flat_map(|s| &s.allowed_depths)
+                        .flat_map(|d| &d.visuals)
+                        .find(|v| v.visual_id == visual_id)
+                        .ok_or("missing native visual")?;
+                    let deadline = Instant::now() + Duration::from_secs(1);
+                    loop {
+                        let pixels = [20, 180]
+                            .into_iter()
+                            .map(|y| {
+                                connection
+                                    .get_image(ImageFormat::Z_PIXMAP, window, 20, y, 1, 1, u32::MAX)
+                                    .map_err(|e| e.to_string())?
+                                    .reply()
+                                    .map_err(|e| e.to_string())
+                            })
+                            .collect::<Result<Vec<_>, _>>()?;
+                        if pixels.iter().all(|p| {
+                            let Some(format) = connection
+                                .setup()
+                                .pixmap_formats
+                                .iter()
+                                .find(|f| f.depth == p.depth)
+                            else {
+                                return false;
+                            };
+                            let count = usize::from(format.bits_per_pixel / 8);
+                            if count == 0 || count > 4 || p.data.len() < count {
+                                return false;
+                            }
+                            let mut bytes = [0; 4];
+                            let pixel = if connection.setup().image_byte_order
+                                == x11rb::protocol::xproto::ImageOrder::LSB_FIRST
+                            {
+                                bytes[..count].copy_from_slice(&p.data[..count]);
+                                u32::from_le_bytes(bytes)
+                            } else {
+                                bytes[4 - count..].copy_from_slice(&p.data[..count]);
+                                u32::from_be_bytes(bytes)
+                            };
+                            visual.green_mask != 0
+                                && f64::from(pixel & visual.green_mask)
+                                    / f64::from(visual.green_mask)
+                                    > 0.78
+                                && pixel & (visual.red_mask | visual.blue_mask) == 0
+                        }) {
+                            break;
+                        }
+                        if Instant::now() >= deadline {
+                            return Err(format!(
+                                "native surface lost top/bottom pixels: {:?}",
+                                pixels.iter().map(|p| &p.data).collect::<Vec<_>>(),
+                            ));
+                        }
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                     *self.gpu.borrow_mut() = Some(gpu);
                     Ok(())
                 })();
@@ -93,16 +252,19 @@ fn native_surface_presents_and_reopens() {
         for _ in 0..2 {
             let parent = parented.then(|| {
                 let (send, recv) = channel();
-                let window =
-                    Window::create(settings("MUI regression parent", (240, 200)), move |cx| {
+                let window = Window::create(
+                    settings("MUI regression parent", (240, 200))
+                        .with_scale_factor_override(Some(1.0)),
+                    move |cx| {
                         send.send(cx.platform_handle()).expect("parent handle");
                         Ok(Probe {
                             gpu: RefCell::new(None),
                             cx,
                             result: RefCell::new(None),
                         })
-                    })
-                    .expect("parent creation");
+                    },
+                )
+                .expect("parent creation");
                 let handle = recv
                     .recv_timeout(Duration::from_secs(30))
                     .expect("parent handle");
@@ -111,7 +273,8 @@ fn native_surface_presents_and_reopens() {
                 }
                 (window, handle)
             });
-            let mut options = settings("MUI presentation regression", (240, 200));
+            let mut options = settings("MUI presentation regression", (240, 200))
+                .with_scale_factor_override(Some(1.0));
             if let Some((_, handle)) = &parent {
                 options = options.with_parent(handle);
             }

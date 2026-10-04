@@ -1,0 +1,24 @@
+[package]
+name = "mui-native-dialog"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Cancellable, parented Linux desktop portal file dialogs"
+
+[features]
+default = []
+xdg-portal = ["dep:async-channel", "dep:tokio", "dep:futures-lite", "dep:url", "dep:zbus"]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+async-channel = { version = "2.5", optional = true }
+tokio = { version = "1", features = ["rt", "net", "time"], optional = true }
+futures-lite = { version = "2.6", optional = true }
+url = { version = "2.5", optional = true }
+zbus = { version = "5.19", default-features = false, features = ["tokio"], optional = true }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

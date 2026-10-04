@@ -22,7 +22,24 @@ pub(super) type LateStroke = (Arc<Path>, Option<RoundedRect>, Fill, f64, bool);
 
 /// The colour a painted entry leaves for what paints on it.
 fn solid(p: Option<&mut Painted>, or: Color) -> Color {
-    p.map_or(or, |p| p.paint.solid())
+    p.map_or(or, |p| ground(&p.paint, or))
+}
+
+/// Contrast follows the visible colour, while the paint keeps its alpha.
+fn ground(paint: &Paint, under: Color) -> Color {
+    let color = paint.solid();
+    if color.alpha() >= 1.0 {
+        return color;
+    }
+    if color.alpha() <= 0.0 {
+        return under;
+    }
+    let foreground = color.to_srgb();
+    let composed = (foreground.premultiply()
+        + under.to_srgb().premultiply() * (1.0 - foreground.components[3]))
+        .un_premultiply();
+    let [r, g, b, a] = composed.components;
+    Color::srgba(r, g, b, a)
 }
 
 impl Walk<'_> {
@@ -72,13 +89,13 @@ impl Walk<'_> {
             // though its colour still grounds the shells as before.
             None if matches!(e.content, Content::Text(_)) && e.extras().editable_text.is_none() => {
                 self.paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
-                    .map_or(under, |p| p.solid())
+                    .map_or(under, |p| ground(&p, under))
             }
             // A joined tab takes the owner's border material; its fill only
             // grounds its content.
             None if e.extras().border_join.is_some() => self
                 .paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
-                .map_or(under, |p| p.solid()),
+                .map_or(under, |p| ground(&p, under)),
             None => {
                 let path = contour.path.clone();
                 let mut p = self.push(
@@ -595,6 +612,95 @@ mod tests {
             min = min.min(mui_geometry::boundary_distance(*p, &oc));
         }
         assert!((min - 6.0).abs() < 0.35, "measured inset={min}");
+    }
+
+    #[test]
+    fn translucent_selected_surfaces_keep_their_alpha_and_readable_child_ink() {
+        for mode in [mui_style::Mode::Light, mui_style::Mode::Dark] {
+            let root = col([col([text("selected").id("label")])
+                .fill(Role::Ink.alpha(0.08))
+                .id("selected")])
+            .fill(Role::Surface);
+            let mut spec = SceneSpec::new(root);
+            spec.theme.palette = spec.theme.palette.with_mode(mode);
+            spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+            let scene = resolve(&spec).unwrap();
+            let ink = scene
+                .paint
+                .iter()
+                .find(|p| p.key == "label".into() && p.layer == Layer::Text)
+                .unwrap();
+            assert_eq!(
+                ink.paint,
+                Paint::Solid(spec.theme.palette.ink()),
+                "{mode:?}"
+            );
+            let selected = scene
+                .paint
+                .iter()
+                .find(|p| p.key == "selected".into() && p.layer == Layer::Fill)
+                .unwrap();
+            assert_eq!(
+                selected.paint,
+                Paint::Solid(
+                    spec.theme
+                        .palette
+                        .on(spec.theme.palette.surface())
+                        .with_alpha(0.08)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn nested_translucent_fills_gradients_and_shells_ground_child_contrast() {
+        for mode in [mui_style::Mode::Light, mui_style::Mode::Dark] {
+            for gradient in [false, true] {
+                let fill = if gradient {
+                    crate::Gradient::vertical(Role::Ink.alpha(0.08), Role::Ink.alpha(0.04)).into()
+                } else {
+                    Role::Ink.alpha(0.08)
+                };
+                let root = col([col([col([text("nested").id("label")])
+                    .fill(fill)
+                    .shell(0., Role::Ink.alpha(0.08))])
+                .fill(Role::Ink.alpha(0.08))])
+                .fill(Role::Surface);
+                let mut spec = SceneSpec::new(root);
+                spec.theme.palette = spec.theme.palette.with_mode(mode);
+                spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+                let scene = resolve(&spec).unwrap();
+                let ink = scene
+                    .paint
+                    .iter()
+                    .find(|p| p.key == "label".into() && p.layer == Layer::Text)
+                    .unwrap();
+                assert_eq!(ink.paint, Paint::Solid(spec.theme.palette.ink()));
+                assert!(scene.paint.iter().any(|p| p.layer == Layer::Shell(0)));
+                for p in scene.paint.iter().filter(|p| {
+                    matches!(p.layer, Layer::Fill | Layer::Shell(_))
+                        && p.paint.solid().alpha() < 1.0
+                }) {
+                    assert_eq!(p.paint.solid().alpha(), 0.08);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contrast_ground_uses_source_over_and_keeps_opaque_and_clear_identity() {
+        let red = Color::srgba(1., 0., 0., 0.5);
+        let blue = Color::srgba(0., 0., 1., 0.5);
+        let [r, g, b, a] = super::ground(&Paint::Solid(red), blue).to_srgb().components;
+        for (actual, expected) in [(r, 2. / 3.), (g, 0.), (b, 1. / 3.), (a, 0.75)] {
+            assert!(
+                (actual - expected).abs() < 0.00001,
+                "{actual} != {expected}"
+            );
+        }
+        let opaque = Color::oklch(0.6, 0.2, 70.);
+        assert_eq!(super::ground(&Paint::Solid(opaque), blue), opaque);
+        assert_eq!(super::ground(&Paint::Solid(red.with_alpha(0.)), blue), blue);
     }
 
     #[test]
