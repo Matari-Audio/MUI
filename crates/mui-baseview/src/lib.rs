@@ -510,8 +510,9 @@ impl<V: View> Handler<V> {
 /// returns). A call that finds the handler busy is kept, the latest resize
 /// and every event, and delivered once the outer call returns.
 struct Adapter<V> {
-    cx: WindowContext,
+    // Drop graphics and native accessibility before their window context.
     handler: RefCell<Handler<V>>,
+    cx: WindowContext,
     pending_resize: Cell<Option<WindowSize>>,
     pending_events: RefCell<VecDeque<Event>>,
 }

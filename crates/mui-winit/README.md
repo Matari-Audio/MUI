@@ -53,3 +53,11 @@ Wayland support does not establish native Wayland plugin embedding.
 `Gpu` is the gallery's original adapter factored into this crate. Applications
 with their own winit event loop can use its fallible `try_new`, resize and
 present operations; `mui-preview` uses the same adapter.
+
+For several windows, `run_windows` accepts independent `WindowSpec` values and
+gives the startup callback a `WindowController`. Its typed commands open,
+resize, redraw and close windows through the event loop. Each window owns its
+UI, driver and native input/accessibility state; notification callbacks run
+after the model lock is released. Views can retain non-`Send` UI state.
+`cargo run -p mui-winit --example native_windows` checks dynamic window creation,
+first presentation, resize presentation and closure with a bounded deadline.

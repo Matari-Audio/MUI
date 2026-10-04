@@ -655,14 +655,27 @@ impl ApplicationHandler<AccessEvent> for App {
                         AccessAction::SetTextSelection => {
                             if let Some(mui_access::accesskit::ActionData::SetTextSelection(s)) =
                                 r.data
+                                && let Some((anchor, caret, upstream)) =
+                                    self.ui.scene().and_then(|scene| {
+                                        let (anchor, caret) =
+                                            mui_access::selection_of(scene, r.target_node, &s)?;
+                                        Some((
+                                            anchor,
+                                            caret,
+                                            mui_access::selection_is_upstream(
+                                                scene,
+                                                r.target_node,
+                                                &s.focus,
+                                            )?,
+                                        ))
+                                    })
+                                && self.ui.request_action(SemanticAction::set_selection(
+                                    key.clone(),
+                                    anchor,
+                                    caret,
+                                ))
                             {
-                                if let Some((anchor, caret)) = self.ui.scene().and_then(|scene| {
-                                    mui_access::selection_of(scene, r.target_node, &s)
-                                }) {
-                                    self.ui.request_action(SemanticAction::set_selection(
-                                        key, anchor, caret,
-                                    ));
-                                }
+                                self.ui.set_text_selection_affinity(key, upstream);
                             }
                         }
                         _ => {}

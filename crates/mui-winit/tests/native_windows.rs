@@ -17,6 +17,7 @@ fn two_native_windows_present_resize_and_close() {
             env!("CARGO"),
             "run",
             "--locked",
+            "--offline",
             "-p",
             "mui-winit",
             "--example",
