@@ -803,10 +803,12 @@ impl GpuRenderer {
         if head == old.len() && head == paint.len() {
             return Change::None;
         }
-        // Any backdrop may blur what changed, and a part renders none (nor
-        // a path shadow, which is rendered the same way).
-        if paint
+        // A changed backdrop (or anything below one) needs a fresh whole
+        // frame. Unchanged backdrops and path shadows can be reused in a
+        // partial render.
+        if old[head..]
             .iter()
+            .chain(&paint[head..])
             .any(|p| p.layer == Layer::Backdrop || crate::path_shadow(p))
         {
             return Change::Full;
@@ -883,26 +885,35 @@ impl GpuRenderer {
         self.paths.tick();
         // Backdrops first: each is a render of its own that the frame samples.
         let mut blurred = Vec::new();
-        if part.is_none() {
-            let mut k = 0;
-            for (i, p) in resolved.paint.iter().enumerate() {
-                if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
-                    let outline = self.paths.get(&p.path)?.clone();
-                    blurred.push(self.backdrop(k, &resolved.paint[..i], p, &outline, xf)?);
-                    k += 1;
-                } else if crate::path_shadow(p) {
-                    // The same offscreen blur, over the path alone, sharp:
-                    // what fills its reach is the shadow.
-                    let path = self.paths.get(&p.path)?.clone();
-                    let sharp = Painted {
-                        layer: Layer::Fill,
-                        blur: 0.,
-                        ..p.clone()
-                    };
-                    blurred.push(self.backdrop(k, std::slice::from_ref(&sharp), p, &path, xf)?);
-                    k += 1;
-                }
+        let mut k = 0;
+        for (i, p) in resolved.paint.iter().enumerate() {
+            if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
+                let outline = self.paths.get(&p.path)?.clone();
+                let reuse = self.backdrop_unchanged(&resolved.paint, i, p, xf);
+                blurred.push(self.backdrop(k, &resolved.paint[..i], p, &outline, xf, reuse)?);
+                k += 1;
+            } else if crate::path_shadow(p) {
+                // The same offscreen blur, over the path alone, sharp:
+                // what fills its reach is the shadow.
+                let path = self.paths.get(&p.path)?.clone();
+                let sharp = Painted {
+                    layer: Layer::Fill,
+                    blur: 0.,
+                    ..p.clone()
+                };
+                let reuse = self.backdrop_unchanged(&resolved.paint, i, p, xf);
+                blurred.push(self.backdrop(
+                    k,
+                    std::slice::from_ref(&sharp),
+                    p,
+                    &path,
+                    xf,
+                    reuse,
+                )?);
+                k += 1;
             }
+        }
+        if part.is_none() {
             self.backdrops.truncate(k);
         }
 
@@ -1045,6 +1056,14 @@ impl GpuRenderer {
     /// The prefix renders at a power-of-two fraction of the device -- a
     /// Gaussian that wide has nothing left at full resolution -- so the two
     /// passes after it never take more than 25 taps.
+    fn backdrop_unchanged(&self, paint: &[Painted], i: usize, p: &Painted, xf: Affine) -> bool {
+        self.transform == Some(xf)
+            && !self.stale
+            && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
+            && self.retained.get(..i).is_some_and(|old| old == &paint[..i])
+            && self.retained.get(i).is_some_and(|old| old == p)
+    }
+
     fn backdrop(
         &mut self,
         k: usize,
@@ -1052,6 +1071,7 @@ impl GpuRenderer {
         p: &Painted,
         outline: &crate::kurbo::BezPath,
         xf: Affine,
+        reuse: bool,
     ) -> Result<Option<(ImageData, Affine)>, Error> {
         let sigma = p.blur;
         let sigma_device = sigma * xf.determinant().abs().sqrt();
@@ -1073,6 +1093,12 @@ impl GpuRenderer {
             ((device.y1 - origin.1) / scale).ceil().max(1.) as u32,
         ];
         let to_prefix = Affine::scale(1. / scale) * Affine::translate((-origin.0, -origin.1)) * xf;
+        let brush =
+            crate::placed(xf, p).inverse() * Affine::translate(origin) * Affine::scale(scale);
+
+        if reuse && let Some(b) = self.backdrops.get(k).filter(|b| b.size == size) {
+            return Ok(Some((b.image.clone(), brush)));
+        }
 
         self.prefix.reset();
         let mut canvas = Classic::new(&mut self.prefix, &mut self.cache, &self.textures, size);
@@ -1119,8 +1145,6 @@ impl GpuRenderer {
             .draw(&mut encoder, &self.passes.blur, &b.binds[1], &b.out);
         self.queue.submit([encoder.finish()]);
         self.vello.mark_override_image_dirty(&b.image);
-        let brush =
-            crate::placed(xf, p).inverse() * Affine::translate(origin) * Affine::scale(scale);
         Ok(Some((b.image.clone(), brush)))
     }
 
