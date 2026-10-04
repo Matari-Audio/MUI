@@ -37,6 +37,7 @@ with tempfile.TemporaryDirectory() as directory:
         return [json.loads(line) for line in log.read_text().splitlines()]
 
     workflow = (ROOT / ".github/workflows/verify.yml").read_text()
+    assert "cargo test -p mui-baseview --lib --locked --offline -- --ignored" in workflow
     sections = re.search(r"section: \[([^]]+)\]", workflow).group(1).replace(" ", "").split(",")
     recorded = {section: commands(section) for section in sections}
     vendor_manifests = {"vendor/moose-baseview/Cargo.toml", "vendor/xim-rs/Cargo.toml"}
@@ -80,6 +81,8 @@ required = re.search(r"PLATFORMS_REQUIRED: \$\{\{ (.+) \}\}", aggregate).group(1
 platforms = workflow.split("\n  platforms:\n", 1)[1]
 assert "cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked" in platforms
 assert "cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline" in platforms
+assert "if: runner.os == 'macOS'\n        name: Accessibility providers in two native libraries\n        run: python3 tools/ci/check-macos-accesskit-images.py" in platforms
+assert (ROOT / "tools/ci/fixtures/accesskit-images/Cargo.lock").is_file()
 assert "vendor/xim-rs" not in platforms
 scheduled = platforms.split("    if: >-\n", 1)[1].split("    strategy:", 1)[0]
 assert " ".join(scheduled.split()) == required

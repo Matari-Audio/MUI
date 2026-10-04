@@ -153,6 +153,9 @@ jobs:
         run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
         env:
           CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      - if: runner.os == 'macOS'
+        name: Accessibility providers in two native libraries
+        run: python3 tools/ci/check-macos-accesskit-images.py
       - name: Native platform lint
         run: cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
       # fmt and wasm are already gated on Linux.
