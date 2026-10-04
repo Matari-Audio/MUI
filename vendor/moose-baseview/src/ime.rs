@@ -187,7 +187,11 @@ impl TextShadow {
         let acknowledged = current.text == self.text
             && current.selection == self.selection
             && current.marked == self.marked;
-        if acknowledged || !(same_input && self.pending && old_frame) {
+        if same_input && acknowledged {
+            // A model acknowledgement must preserve native NSNotFound cursor
+            // visibility while marked text remains active.
+            self.pending = false;
+        } else if !(same_input && self.pending && old_frame) {
             *self = Self::new(current);
         }
     }
@@ -263,6 +267,25 @@ mod shadow_tests {
         let next = shadow.utf16_range(4, 1);
         shadow.replace("é", next, None, false);
         assert_eq!(shadow.text, "a語😀é", "second replacement reads the live buffer");
+    }
+    #[test]
+    fn acknowledged_preedit_keeps_native_hidden_selection() {
+        let config = configuration();
+        let mut shadow = TextShadow::new(&config);
+        shadow.replace("日本", None, None, true);
+        let mut acknowledged = config.clone();
+        acknowledged.text = shadow.text.clone();
+        acknowledged.selection = shadow.selection.clone();
+        acknowledged.marked = shadow.marked.clone();
+        shadow.reconcile(&config, &acknowledged);
+        assert!(!shadow.pending);
+        assert_eq!(shadow.selection_utf16(), None);
+        let mut moved = acknowledged.clone();
+        moved.position.x = 20.;
+        shadow.reconcile(&acknowledged, &moved);
+        assert_eq!(shadow.selection_utf16(), None, "geometry must not reveal hidden native caret");
+        shadow.replace("日本", None, None, false);
+        assert!(shadow.selection_utf16().is_some());
     }
     #[test]
     fn new_focus_and_model_edits_replace_pending_native_shadow() {

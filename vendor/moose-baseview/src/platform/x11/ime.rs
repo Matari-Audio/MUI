@@ -42,6 +42,7 @@ struct Handler {
     forward_mask: u32,
     synchronous_mask: u32,
     deferred_keys: VecDeque<KeyPressEvent>,
+    synchronizing: bool,
     configuration: Option<ImeConfiguration>,
     pending: VecDeque<NativeEvent>,
 }
@@ -117,32 +118,19 @@ impl NativeIme {
         }
     }
     pub fn forward(&mut self, event: &KeyPressEvent) -> bool {
-        if !self.handler.enabled || self.handler.im == 0 {
-            return false;
-        }
-        if self.handler.ic == 0 {
-            if self.handler.creating.is_none() && self.handler.retired.is_empty() {
-                return false;
+        let client = &mut self.client;
+        match self
+            .handler
+            .forward(event, |im, ic, flags, event| client.forward_event(im, ic, flags, event))
+        {
+            Ok(forwarded) => forwarded,
+            Err(e) => {
+                crate::warn!("XIM key forwarding failed: {}", e);
+                false
             }
-            // Context replacement is asynchronous. Hold keys for this field;
-            // another focus change drops them before the next context activates.
-            self.handler.deferred_keys.push_back(*event);
-            return true;
         }
-        if !self.handler.forwards(event) {
-            return false;
-        }
-        if let Err(e) = self.client.forward_event(
-            self.handler.im,
-            self.handler.ic,
-            self.handler.forward_flags(event),
-            event,
-        ) {
-            crate::warn!("XIM key forwarding failed: {}", e);
-            return false;
-        }
-        true
     }
+
     pub fn drain(&mut self) -> VecDeque<NativeEvent> {
         std::mem::take(&mut self.handler.pending)
     }
@@ -165,6 +153,7 @@ impl Handler {
     fn begin_generation(&mut self) -> Option<u16> {
         self.generation = self.generation.wrapping_add(1);
         self.deferred_keys.clear();
+        self.synchronizing = false;
         self.preedit.clear();
         self.caret = 0;
         self.individual_mask = false;
@@ -261,6 +250,53 @@ impl Handler {
             xim::ForwardEventFlag::empty()
         }
     }
+    fn acknowledge_sync(&mut self, im: u16, ic: u16) -> bool {
+        if !self.synchronizing || !self.accepts(im, ic) {
+            return false;
+        }
+        self.synchronizing = false;
+        true
+    }
+    fn forward(
+        &mut self, event: &KeyPressEvent,
+        mut send: impl FnMut(u16, u16, xim::ForwardEventFlag, &KeyPressEvent) -> Result<(), ClientError>,
+    ) -> Result<bool, ClientError> {
+        if !self.enabled || self.im == 0 {
+            return Ok(false);
+        }
+        if self.ic == 0 {
+            if self.creating.is_none() && self.retired.is_empty() {
+                return Ok(false);
+            }
+            self.deferred_keys.push_back(*event);
+            return Ok(true);
+        }
+        if !self.forwards(event) {
+            return Ok(false);
+        }
+        if self.synchronizing {
+            self.deferred_keys.push_back(*event);
+            return Ok(true);
+        }
+        let flags = self.forward_flags(event);
+        send(self.im, self.ic, flags, event)?;
+        self.synchronizing = flags.contains(xim::ForwardEventFlag::SYNCHRONOUS);
+        Ok(true)
+    }
+    fn flush_deferred(
+        &mut self,
+        mut send: impl FnMut(u16, u16, xim::ForwardEventFlag, &KeyPressEvent) -> Result<(), ClientError>,
+    ) -> Result<(), ClientError> {
+        while self.enabled && self.ic != 0 && !self.synchronizing {
+            let Some(event) = self.deferred_keys.pop_front() else { break };
+            if self.forwards(&event) {
+                self.forward(&event, &mut send)?;
+            } else {
+                self.pending.push_back(NativeEvent::Key(event));
+            }
+        }
+        Ok(())
+    }
     fn emit(&mut self, input: Ime) {
         self.pending.push_back(NativeEvent::Input(Event::Ime(input)));
     }
@@ -308,12 +344,11 @@ impl<C: Client<XEvent = KeyPressEvent>> ClientHandler<C> for Handler {
         }
         self.set_spot(c)?;
         c.set_focus(im, ic)?;
-        while let Some(event) = self.deferred_keys.pop_front() {
-            if self.forwards(&event) {
-                c.forward_event(im, ic, self.forward_flags(&event), &event)?;
-            } else {
-                self.pending.push_back(NativeEvent::Key(event));
-            }
+        self.flush_deferred(|im, ic, flags, event| c.forward_event(im, ic, flags, event))
+    }
+    fn handle_sync_reply(&mut self, c: &mut C, im: u16, ic: u16) -> Result<(), ClientError> {
+        if self.acknowledge_sync(im, ic) {
+            self.flush_deferred(|im, ic, flags, event| c.forward_event(im, ic, flags, event))?;
         }
         Ok(())
     }
@@ -402,6 +437,7 @@ impl<C: Client<XEvent = KeyPressEvent>> ClientHandler<C> for Handler {
         self.preedit.clear();
         self.deferred_keys.clear();
         self.creating = None;
+        self.synchronizing = false;
         self.retired.clear();
         self.generation = self.generation.wrapping_add(1);
         self.default_forward_mask = 0;
@@ -422,6 +458,54 @@ fn replace_preedit(preedit: &mut String, first: i32, len: i32, text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn asynchronous_sync_acknowledgements_serialize_keys_and_reject_stale_contexts() {
+        let mut handler = Handler {
+            im: 3,
+            ic: 7,
+            enabled: true,
+            forward_mask: u32::from(x11rb::protocol::xproto::EventMask::KEY_PRESS),
+            synchronous_mask: u32::from(x11rb::protocol::xproto::EventMask::KEY_PRESS),
+            ..Handler::default()
+        };
+        let mut sent = Vec::new();
+        let mut send = |im, ic, flags, event: &KeyPressEvent| {
+            sent.push((im, ic, flags, event.detail));
+            Ok(())
+        };
+        let mut key = KeyPressEvent {
+            response_type: x11rb::protocol::xproto::KEY_PRESS_EVENT,
+            detail: 38,
+            ..KeyPressEvent::default()
+        };
+        assert!(handler.forward(&key, &mut send).unwrap());
+        key.detail = 39;
+        assert!(handler.forward(&key, &mut send).unwrap());
+        assert_eq!(handler.deferred_keys.len(), 1);
+        assert!(handler.synchronizing);
+        assert!(!handler.acknowledge_sync(3, 9));
+        assert!(handler.synchronizing, "stale IC ACK cannot release outstanding request");
+        assert!(handler.acknowledge_sync(3, 7));
+        handler.flush_deferred(&mut send).unwrap();
+        assert!(handler.synchronizing);
+        key.response_type = x11rb::protocol::xproto::KEY_RELEASE_EVENT;
+        assert!(!handler.forward(&key, &mut send).unwrap(), "unrequested release stays local");
+        assert_eq!(sent.len(), 2, "one queued key sent only after ACK");
+        assert!(sent
+            .iter()
+            .all(|(_, _, flags, _)| flags.contains(xim::ForwardEventFlag::SYNCHRONOUS)));
+        handler.begin_generation();
+        handler.retired.clear(); // Destruction reply precedes any numeric ID reuse.
+        handler.creating = Some(handler.generation);
+        assert!(handler.activate_created(3, 9));
+        handler.forward_mask = 1;
+        handler.synchronous_mask = 1;
+        key.response_type = x11rb::protocol::xproto::KEY_PRESS_EVENT;
+        handler.forward(&key, |_, _, _, _| Ok(())).unwrap();
+        assert!(!handler.acknowledge_sync(3, 7), "retired IC ACK cannot unlock new IC");
+        assert!(handler.synchronizing);
+        assert!(handler.acknowledge_sync(3, 9));
+    }
     #[test]
     fn retired_context_and_pending_creation_cannot_route_old_field_callbacks() {
         let mut handler = Handler { im: 3, ic: 7, enabled: true, ..Handler::default() };

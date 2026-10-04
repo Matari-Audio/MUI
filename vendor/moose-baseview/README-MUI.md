@@ -18,14 +18,16 @@ changing the caret cannot repeatedly disable/enable an active composition.
   associates/disassociates the thread input context only on enable changes,
   positions composition/candidate windows, and serves `IMR_DOCUMENTFEED`.
 * X11 uses the maintained MIT-licensed `zed-xim` fork of xim-rs, pinned to
-  `16f35a2c881b815a2b6cdfd6687988e84f8447d8`. Its transport shares the original
+  `16f35a2c881b815a2b6cdfd6687988e84f8447d8`, vendored at `../xim-rs` with an
+  acknowledgement callback hook and required preedit-start reply. Its transport shares the original
   owned XCB connection, replaces the input context when field identity or focus
   changes, and processes incremental preedit/caret callbacks. Retired ICs remain
   rejected until their destruction reply; fresh creation waits for that reply.
-  Negotiated event masks determine press/release forwarding and synchronous flags,
-  while unrequested events retain local keyboard handling. It positions the
-  candidate spot and reads
-  `XMODIFIERS` and locale variables; it never mutates the host's environment or
+  Negotiated event masks determine press/release forwarding and synchronous flags.
+  Synchronous keys queue until the matching IC acknowledgement, without blocking
+  the event loop; stale IC acknowledgements cannot release the current queue.
+  Unrequested events retain local keyboard handling. It positions the candidate
+  spot and reads `XMODIFIERS` and locale variables; it never mutates the host's environment or
   process-wide locale. An XIM server must be running before opening the window.
 
 The platform mechanism was cross-checked with Apache-2.0 GPUI sources at
@@ -53,7 +55,9 @@ Run the vendored unit tests and platform checks separately:
 
 ```
 cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib
+cargo test --manifest-path vendor/xim-rs/Cargo.toml -p zed-xim --lib --features x11rb-client,x11rb-xcb mui_tests
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-gnu
+cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-msvc
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-apple-darwin
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target aarch64-apple-darwin
 cargo test -p mui-baseview
