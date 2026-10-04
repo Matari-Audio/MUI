@@ -51,11 +51,20 @@ plugin keyboard hooks, parent-window behavior, original display connection and
 handler-before-native-window teardown. Keep native callbacks outside MUI's model
 lock. Do not silently replace these APIs with no-ops on an OS.
 
+The standalone `Cargo.lock` files here and in `../xim-rs` pin the regression
+builds separately from MUI's workspace lockfiles. `tools/verify.sh root-test`
+runs both library suites on Linux; CI also runs baseview's native library suite
+on Windows and macOS. CI fetches each standalone lock before testing offline,
+so XIM's test-only dependencies do not depend on a developer's Cargo cache.
+Update and commit the corresponding standalone lock when changing these manifests.
+
 Run the vendored unit tests and platform checks separately:
 
 ```
-cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib
-cargo test --manifest-path vendor/xim-rs/Cargo.toml -p zed-xim --lib --features x11rb-client,x11rb-xcb mui_tests
+cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked
+cargo fetch --manifest-path vendor/xim-rs/Cargo.toml --locked
+cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
+cargo test --manifest-path vendor/xim-rs/Cargo.toml -p zed-xim --lib --features x11rb-client,x11rb-xcb --locked --offline
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-gnu
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-msvc
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-apple-darwin

@@ -83,6 +83,11 @@ jobs:
           restore-keys: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
       - if: startsWith(matrix.section, 'root')
         run: cargo fetch --locked
+      - if: matrix.section == 'root-test'
+        name: Fetch standalone native regression dependencies
+        run: |
+          cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked
+          cargo fetch --manifest-path vendor/xim-rs/Cargo.toml --locked
       # verify.sh runs media/ offline too, against its own lock.
       - if: startsWith(matrix.section, 'media')
         run: cargo fetch --manifest-path media/Cargo.toml --locked
@@ -142,6 +147,12 @@ jobs:
       # Linux cannot lint the Windows/macOS cfgs (IME, accessibility and window
       # adapters). Keep native lint and tests in one job to reuse its Cargo cache.
       - run: cargo fetch --locked
+      - name: Fetch standalone baseview regression dependencies
+        run: cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked
+      - name: Native baseview regressions
+        run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
       - name: Native platform lint
         run: cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
       # fmt and wasm are already gated on Linux.

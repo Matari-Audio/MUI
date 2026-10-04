@@ -21,6 +21,11 @@ fi
 # their facade forwards), so one all-features surface covers test, lint and wasm.
 if on root-test; then
 cargo test --workspace --all-features --locked --offline
+# Standalone patched native packages are excluded from the root workspace.
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}" cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
+if [ "$(uname -s)" = Linux ]; then
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}" cargo test --manifest-path vendor/xim-rs/Cargo.toml -p zed-xim --lib --features x11rb-client,x11rb-xcb --locked --offline
+fi
 fi
 if on root-lint; then
 cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings

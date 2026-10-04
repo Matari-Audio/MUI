@@ -27,16 +27,30 @@ with tempfile.TemporaryDirectory() as directory:
         executable = temporary / tool
         executable.write_text(stub)
         executable.chmod(0o755)
+    (temporary / "uname").write_text('#!/bin/sh\nprintf "%s\\n" "$VERIFY_TEST_OS"\n')
+    (temporary / "uname").chmod(0o755)
     env = {**os.environ, "PATH": f"{temporary}:{os.environ['PATH']}", "VERIFY_COMMAND_LOG": str(log)}
 
-    def commands(section):
+    def commands(section, platform="Linux"):
         log.write_text("")
-        subprocess.run([str(ROOT / "tools/verify.sh"), section], cwd=ROOT, env=env, check=True)
+        subprocess.run([str(ROOT / "tools/verify.sh"), section], cwd=ROOT, env={**env, "VERIFY_TEST_OS": platform}, check=True)
         return [json.loads(line) for line in log.read_text().splitlines()]
 
     workflow = (ROOT / ".github/workflows/verify.yml").read_text()
     sections = re.search(r"section: \[([^]]+)\]", workflow).group(1).replace(" ", "").split(",")
     recorded = {section: commands(section) for section in sections}
+    vendor_manifests = {"vendor/moose-baseview/Cargo.toml", "vendor/xim-rs/Cargo.toml"}
+    vendor_tests = [argv for argv in recorded["root-test"] if "--manifest-path" in argv]
+    assert {argv[argv.index("--manifest-path") + 1] for argv in vendor_tests} == vendor_manifests, vendor_tests
+    assert all("--lib" in argv for argv in vendor_tests), vendor_tests
+    xim = next(argv for argv in vendor_tests if "vendor/xim-rs/Cargo.toml" in argv)
+    assert xim[xim.index("--features") + 1] == "x11rb-client,x11rb-xcb", xim
+    for platform in ("Darwin", "Windows_NT"):
+        native = [argv for argv in commands("root-test", platform) if "--manifest-path" in argv]
+        assert len(native) == 1 and "vendor/moose-baseview/Cargo.toml" in native[0], native
+    for manifest in vendor_manifests:
+        assert (ROOT / manifest).with_name("Cargo.lock").is_file(), manifest
+        assert f"cargo fetch --manifest-path {manifest} --locked" in workflow, manifest
     groups = []
     for section in ("media-cut-test", "media-native-test"):
         tests = [argv for argv in recorded[section] if argv[:2] == ["cargo", "test"]]
@@ -64,6 +78,9 @@ assert "needs: [gate, platforms]" in aggregate and "if: always()" in aggregate
 # Scheduling and the aggregate's expectation must stay identical.
 required = re.search(r"PLATFORMS_REQUIRED: \$\{\{ (.+) \}\}", aggregate).group(1)
 platforms = workflow.split("\n  platforms:\n", 1)[1]
+assert "cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked" in platforms
+assert "cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline" in platforms
+assert "vendor/xim-rs" not in platforms
 scheduled = platforms.split("    if: >-\n", 1)[1].split("    strategy:", 1)[0]
 assert " ".join(scheduled.split()) == required
 body = textwrap.dedent(aggregate.split("        run: |\n", 1)[1])

@@ -15,3 +15,8 @@ without blocking the GUI thread. No parser features have been added.
 The callback is source-compatible with handlers that do not override it. The
 baseview regression tests cover outstanding requests, deferred keys, stale IC
 acknowledgements and negotiated masks.
+
+The standalone `Cargo.lock` is committed for the Linux regression suite. CI runs
+`cargo fetch --manifest-path vendor/xim-rs/Cargo.toml --locked`, then tests the
+`zed-xim` library with `x11rb-client,x11rb-xcb` and `--locked --offline`. This
+includes the MUI transport regressions and preserves the original crate warnings.
