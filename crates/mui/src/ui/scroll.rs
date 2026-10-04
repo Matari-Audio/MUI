@@ -19,23 +19,41 @@ impl Ui {
         root: &El,
         limits: mui_layout::Limits,
     ) -> Result<(), SceneError> {
-        let mut pending = vec![(root, 0usize)];
-        let mut visited = 0;
-        while let Some((node, depth)) = pending.pop() {
-            if depth > limits.depth || visited >= limits.nodes {
-                return Err(mui_layout::Error::BudgetExceeded.into());
-            }
-            visited += 1;
-            let children = node.children();
-            if children.len() > limits.nodes - visited - pending.len() {
-                return Err(mui_layout::Error::BudgetExceeded.into());
-            }
-            pending.extend(children.iter().map(|child| (child, depth + 1)));
-        }
-        Ok(())
+        Self::validate_tree_budget_with(root, limits, |node| node)
     }
 
-    /// Read declarations iteratively after memo expansion. Only descendants of
+    pub(super) fn validate_tree_budget_with<'a>(
+        root: &'a El,
+        limits: mui_layout::Limits,
+        mut expand: impl FnMut(&'a El) -> &'a El,
+    ) -> Result<(), SceneError> {
+        fn visit<'a>(
+            node: &'a El,
+            depth: usize,
+            left: &mut usize,
+            limit: usize,
+            expand: &mut impl FnMut(&'a El) -> &'a El,
+        ) -> Result<(), SceneError> {
+            if depth > limit || *left == 0 {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            let node = expand(node);
+            *left -= 1;
+            if node.children().len() > *left {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            for child in node.children().iter().rev() {
+                visit(child, depth + 1, left, limit, expand)?;
+            }
+            Ok(())
+        }
+        // Check depth before descending, so even rejected input has a bounded
+        // call stack. Valid frames need no heap-backed traversal buffer.
+        let mut left = limits.nodes;
+        visit(root, 0, &mut left, limits.depth, &mut expand)
+    }
+
+    /// Read declarations after bounded memo expansion. Only descendants of
     /// a declared scroll root receive its content allowance; the viewport and
     /// unrelated nodes retain the ordinary layout cap.
     pub(super) fn virtual_scroll_extent(
@@ -43,10 +61,7 @@ impl Ui {
         limits: mui_layout::Limits,
         scale: Option<f64>,
     ) -> Result<f64, SceneError> {
-        Self::validate_tree_budget(root, limits)?;
-        let mut extent = limits.extent;
-        let mut pending = vec![&*root];
-        while let Some(node) = pending.pop() {
+        fn extent_of(node: &El, mut extent: f64, scale: Option<f64>) -> Result<f64, SceneError> {
             if let Some(value) = node.payload().extras().virtual_scroll_extent {
                 // Logical extents also reach geometry backends. Leave ample
                 // headroom for finite scaled coordinates and arithmetic.
@@ -60,26 +75,29 @@ impl Ui {
                 }
                 extent = extent.max(value);
             }
-            pending.extend(node.children());
+            for child in node.children() {
+                extent = extent_of(child, extent, scale)?;
+            }
+            Ok(extent)
         }
+        Self::validate_tree_budget(root, limits)?;
+        let extent = extent_of(root, limits.extent, scale)?;
         if extent > limits.extent {
             // Ordinary frames need no rare-node allocation or cache-key change.
             // When the pass ceiling is raised, explicitly cap every node so an
             // unrelated intrinsic measurement cannot inherit that ceiling.
-            let mut pending = vec![(root, limits.extent)];
-            while let Some((node, cap)) = pending.pop() {
+            fn cap_tree(node: &mut El, cap: f64) {
                 node.set_layout_extent_limit(cap);
                 let child_cap = node
                     .payload()
                     .extras()
                     .virtual_scroll_extent
                     .map_or(cap, |value| cap.max(value));
-                pending.extend(
-                    node.children_mut()
-                        .iter_mut()
-                        .map(|child| (child, child_cap)),
-                );
+                for child in node.children_mut() {
+                    cap_tree(child, child_cap);
+                }
             }
+            cap_tree(root, limits.extent);
         }
         Ok(extent)
     }

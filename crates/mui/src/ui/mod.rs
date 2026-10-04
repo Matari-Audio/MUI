@@ -206,6 +206,8 @@ pub struct Ui {
     kept: HashMap<u64, Kept>,
     /// Each kept memo's id and the number the scene knows it by.
     memo_ids: rustc_hash::FxHashMap<Id, u64>,
+    /// Scratch IDs for validating expanded memo trees, reused between frames.
+    expanded_memos: std::collections::HashSet<u64>,
     next_memo: u64,
     /// This `Ui`'s key in [`TREES`].
     me: u64,
@@ -314,6 +316,7 @@ impl Ui {
             bar_grab: 0.0,
             kept: HashMap::new(),
             memo_ids: rustc_hash::FxHashMap::default(),
+            expanded_memos: std::collections::HashSet::new(),
             next_memo: 0,
             me: NEXT_UI.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hot: BTreeSet::new(),
