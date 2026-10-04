@@ -23,7 +23,7 @@ members = [
   "vendor/vello",
   "vendor/vello_encoding",
 ]
-exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit"]
+exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit", "vendor/accesskit_unix"]
 resolver = "2"
 # The trailer/film crates (mui-stage, mui-reel, mui-motion-bridge) live in
 # media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.

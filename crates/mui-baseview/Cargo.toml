@@ -26,7 +26,7 @@ accesskit_macos = { path = "../../vendor/accesskit_macos" }
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.6", default-features = false }
 # AT-SPI; screen bounds borrow baseview's original X11 connection below.
-accesskit_unix = "0.22"
+accesskit_unix = { path = "../../vendor/accesskit_unix" }
 x11-dl = "2.21"
 x11rb = { version = "0.13.2", default-features = false, features = ["allow-unsafe-code", "dl-libxcb"] }
 
