@@ -722,8 +722,10 @@ fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
         let instance = wgpu::Instance::new(
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)),
         );
-        // SAFETY: the surface comes from this window's live native handle,
-        // and baseview drops the handler that owns it before the window.
+        // SAFETY: the surface uses this window's live native handle. Baseview's
+        // owned close paths drop the handler/renderer before destroying it.
+        // An embedding host must keep that handle alive during callbacks;
+        // forced external destruction cannot satisfy the surface lifetime.
         #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
         let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;
