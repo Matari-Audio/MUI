@@ -56,9 +56,21 @@ pub struct Requests {
     scale: AtomicU64,
     redraw: AtomicBool,
     keys: Mutex<Option<KeyHook>>,
+    #[cfg(target_os = "linux")]
+    x11_window: std::sync::atomic::AtomicU32,
 }
 
 impl Requests {
+    /// The editor's X11 window identifier, for parenting desktop portal dialogs.
+    ///
+    /// Available after native creation and cleared on close. This is an owned
+    /// identifier, not a borrowed native handle; cancel dialogs when their editor
+    /// closes, since reading it does not keep the window alive.
+    #[cfg(target_os = "linux")]
+    pub fn x11_window(&self) -> Option<u32> {
+        let window = self.x11_window.load(Ordering::Acquire);
+        (window != 0).then_some(window)
+    }
     /// Hand every key event to `hook` first; see [`KeyHook`].
     pub fn on_key(&self, hook: KeyHook) {
         *self
@@ -157,6 +169,22 @@ fn build<V: View + Send + 'static>(
         let size = cx.size();
         let physical = (size.physical.width, size.physical.height);
         let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
+        #[cfg(target_os = "linux")]
+        {
+            handler.x11_window = cx
+                .window_handle()
+                .ok()
+                .and_then(|handle| match handle.as_raw() {
+                    raw_window_handle::RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok(),
+                    raw_window_handle::RawWindowHandle::Xcb(h) => Some(h.window.get()),
+                    _ => None,
+                })
+                .unwrap_or(0);
+            handler
+                .requests
+                .x11_window
+                .store(handler.x11_window, Ordering::Release);
+        }
         // SAFETY: this pre-show builder runs on the window's thread. The
         // handler drops its native adapter before its window context/teardown.
         #[expect(
@@ -206,6 +234,28 @@ pub struct Handler<V> {
     applied_ime: Option<Option<baseview::ImeConfiguration>>,
     /// The queue and the frame schedule.
     pub driver: Driver,
+    #[cfg(target_os = "linux")]
+    x11_window: u32,
+}
+
+#[cfg(target_os = "linux")]
+impl<V> Drop for Handler<V> {
+    fn drop(&mut self) {
+        self.clear_x11_window();
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl<V> Handler<V> {
+    fn clear_x11_window(&self) {
+        // A retained old handler must not clear a newly opened window's identifier.
+        let _ = self.requests.x11_window.compare_exchange(
+            self.x11_window,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    }
 }
 
 impl<V: View> Handler<V> {
@@ -229,6 +279,8 @@ impl<V: View> Handler<V> {
             captured: None,
             applied_ime: None,
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
+            #[cfg(target_os = "linux")]
+            x11_window: 0,
         }
     }
 
@@ -423,6 +475,10 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        #[cfg(target_os = "linux")]
+        if matches!(event, Event::Window(WindowEvent::WillClose)) {
+            self.clear_x11_window();
+        }
         let scale = self.scale;
         let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
         let d = &mut self.driver;

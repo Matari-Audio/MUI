@@ -32,6 +32,27 @@ fn handler(size: (u32, u32), scale: f64) -> Handler<Knob> {
     Handler::new(shared, Arc::default(), size, scale)
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn dialog_parent_is_cleared_on_close_and_old_handler_drop_preserves_reopen() {
+    let mut old = handler((240, 200), 1.0);
+    assert_eq!(old.requests.x11_window(), None);
+    old.x11_window = 42;
+    old.requests.x11_window.store(42, Ordering::Release);
+    assert_eq!(old.requests.x11_window(), Some(42));
+    old.on_event_inner(&Event::Window(WindowEvent::WillClose));
+    assert_eq!(old.requests.x11_window(), None);
+    let requests = Arc::clone(&old.requests);
+    requests.x11_window.store(43, Ordering::Release);
+    drop(old);
+    assert_eq!(requests.x11_window(), Some(43));
+    let mut current = handler((240, 200), 1.0);
+    current.requests = Arc::clone(&requests);
+    current.x11_window = 43;
+    drop(current);
+    assert_eq!(requests.x11_window(), None);
+}
+
 /// Run with an X11 display and compute-capable EGL driver:
 /// `WGPU_BACKEND=gl cargo test -p mui-baseview native_surface_presents_and_reopens -- --ignored`
 #[cfg(target_os = "linux")]
