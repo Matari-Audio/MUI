@@ -19,24 +19,28 @@ on:
 permissions:
   contents: read
 concurrency:
-  # A label run gets its own group so it never cancels the code run it rides beside.
-  group: verify-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'code' }}
+  # Label runs include the gate too: skipping a required check can turn it green
+  # on the same SHA even when the original code run failed. Replace older PR
+  # code/label runs instead of repeating costly tests in separate groups. Event
+  # types stay isolated so dispatch cannot supersede a push or merge queue run.
+  group: verify-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 jobs:
-  # tools/verify.sh in four parallel sections, each with its own cache.
+  # Media tests split into disjoint package groups: measured cached runs spent
+  # ~21 min in CUT test binaries and ~16 min in native media binaries. Keep
+  # every test, and give each runner its own section cache and target directory.
   gate:
-    if: github.event.action != 'labeled'
     strategy:
       fail-fast: false
       matrix:
-        section: [root-lint, root-test, media-lint, media-test]
+        section: [root-lint, root-test, media-lint, media-cut-test, media-native-test]
     name: ${{ matrix.section }}
     runs-on: ubuntu-latest
-    # media-test builds plugin adapters, one with all of mui-cut in it (the
-    # in-process path): uncached on a pull request, that alone is ~20 min.
+    # CUT includes expensive plugin adapter, shader, CLI and media tests.
+    # Retain the uncached-run budget; sharding should shorten the cached path.
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,45 +75,53 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # mui-cut's sound tests build plugin adapters (moose, truce, nice-plug)
       # into their own target dir, which rust-cache prunes: kept here.
-      - if: matrix.section == 'media-test'
+      - if: matrix.section == 'media-cut-test'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: media/target/tmp/adapters/target
-          key: mui-cut-adapters-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
-          restore-keys: mui-cut-adapters-
+          key: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
+          restore-keys: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
       - if: startsWith(matrix.section, 'root')
         run: cargo fetch --locked
       # verify.sh runs media/ offline too, against its own lock.
       - if: startsWith(matrix.section, 'media')
-        run: cargo fetch --manifest-path media/Cargo.toml
+        run: cargo fetch --manifest-path media/Cargo.toml --locked
       # The same gate as local, one section of it.
       - run: ./tools/verify.sh ${{ matrix.section }}
       - if: matrix.section == 'root-test'
         name: Native EGL presentation and reopen
         run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-baseview native_surface_presents_and_reopens --locked --offline -- --ignored
       # A failing test leaves the adapter builds good.
-      - if: "!cancelled() && matrix.section == 'media-test' && github.ref == 'refs/heads/main'"
+      - if: "!cancelled() && matrix.section == 'media-cut-test' && github.ref == 'refs/heads/main'"
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: media/target/tmp/adapters/target
-          key: mui-cut-adapters-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
+          key: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
 
-  # The one check to require: green only when every section is.
+  # Keep the existing required check name. Platforms may skip on default PRs,
+  # but failures/cancellations on main, merge queue or labelled PRs fail the gate.
   linux:
-    if: always() && github.event.action != 'labeled'
-    needs: gate
+    if: always()
+    needs: [gate, platforms]
     runs-on: ubuntu-latest
     steps:
       - env:
-          RESULT: ${{ needs.gate.result }}
-        run: test "$RESULT" = success
+          GATE_RESULT: ${{ needs.gate.result }}
+          PLATFORM_RESULT: ${{ needs.platforms.result }}
+          PLATFORMS_REQUIRED: ${{ (github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.platforms) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms')) }}
+        run: |
+          test "$GATE_RESULT" = success
+          if [ "$PLATFORMS_REQUIRED" = true ]; then
+            test "$PLATFORM_RESULT" = success
+          else
+            test "$PLATFORM_RESULT" = skipped
+          fi
 
   platforms:
     if: >-
       (github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch') ||
       (github.event_name == 'workflow_dispatch' && inputs.platforms) ||
-      (github.event.action == 'labeled' && github.event.label.name == 'ci:all-platforms') ||
-      (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms'))
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms'))
     strategy:
       fail-fast: false
       matrix:
@@ -124,13 +136,18 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # fmt, clippy and wasm are platform-independent and already gated on Linux.
+      # Linux cannot lint the Windows/macOS cfgs (IME, accessibility and window
+      # adapters). Keep native lint and tests in one job to reuse its Cargo cache.
+      - run: cargo fetch --locked
+      - name: Native platform lint
+        run: cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
+      # fmt and wasm are already gated on Linux.
       # Windows runners have only WARP, and wgpu's DX12 backend faults on it
       # (Device::destroy, the effects smoke test). GPU tests read WGPU_BACKEND:
       # `metal` has no adapter on Windows, so they skip; macOS keeps Metal.
       - if: runner.os == 'Windows'
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked --offline
         env:
           WGPU_BACKEND: metal
       - if: runner.os != 'Windows'
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked --offline

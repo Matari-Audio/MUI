@@ -3,16 +3,17 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# One gate, four sections CI runs as parallel jobs: `./tools/verify.sh
-# [root-lint|root-test|media-lint|media-test|all]`, all by default.
+# One gate. CI splits media-test into disjoint CUT and native package groups;
+# local media-test/all still run the whole media workspace.
 section="${1:-all}"
 case "$section" in
-  root-lint | root-test | media-lint | media-test | all) ;;
-  *) echo "usage: $0 [root-lint|root-test|media-lint|media-test|all]" >&2; exit 2 ;;
+  root-lint | root-test | media-lint | media-test | media-cut-test | media-native-test | all) ;;
+  *) echo "usage: $0 [root-lint|root-test|media-lint|media-test|media-cut-test|media-native-test|all]" >&2; exit 2 ;;
 esac
 on() { [ "$section" = all ] || [ "$section" = "$1" ]; }
 
 if on root-lint; then
+python3 tools/test_verify.py
 cargo fmt --all -- --check
 fi
 # Every workspace feature is additive (mui-vello's cpu/gpu-effects backends and
@@ -44,20 +45,24 @@ fi
 # mui-stage's default `backends` feature is the only feature; --all-features
 # keeps it on. Only mui-cut's library is checked for wasm (its web editor);
 # the rest own a native device or ffmpeg.
-# ponytail: no --locked here. media/Cargo.lock also pins the root crates'
-# dependencies, so --locked would fail on every root dependency change; the
-# gate refreshes it instead and git status shows the diff.
+# Commit both lockfiles when root dependencies change. CI must reject a stale
+# media lock rather than silently resolve a different graph while checking it.
 # ---------------------------------------------------------------------------
 if on media-lint; then
-cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-reel -p mui-motion-bridge -p mui-cut -- --check
+cargo fmt --manifest-path media/Cargo.toml -p mui-stage -p mui-stage-rt -p mui-reel -p mui-motion-bridge -p mui-cut -- --check
 fi
-if on media-test; then
-cargo test --manifest-path media/Cargo.toml --workspace --all-features --offline
+if on media-test || on media-cut-test || on media-native-test; then
+case "$section" in
+  media-cut-test) media_packages=(-p mui-cut) ;;
+  media-native-test) media_packages=(-p mui-stage -p mui-stage-rt -p mui-reel -p mui-motion-bridge) ;;
+  *) media_packages=(--workspace) ;;
+esac
+cargo test --manifest-path media/Cargo.toml "${media_packages[@]}" --all-features --locked --offline
 fi
 if on media-lint; then
-cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --offline -- -D warnings
-cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --offline
-cargo clippy --manifest-path media/Cargo.toml -p mui-cut --lib --target wasm32-unknown-unknown --offline -- -D warnings
+cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings
+cargo check --manifest-path media/Cargo.toml -p mui-stage --no-default-features --locked --offline
+cargo clippy --manifest-path media/Cargo.toml -p mui-cut --lib --target wasm32-unknown-unknown --locked --offline -- -D warnings
 # The plugin rev-pin guard (media/tools/mui-sync).
 python3 -m unittest discover -s media/tools/mui-sync
 fi
