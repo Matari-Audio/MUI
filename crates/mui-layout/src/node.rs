@@ -82,6 +82,7 @@ pub(crate) struct Rare {
     pub(crate) grid_position: Option<[usize; 2]>,
     pub(crate) grid_row_span: usize,
     pub(crate) maximum: Option<Size>,
+    pub(crate) layout_extent_limit: Option<f64>,
     pub(crate) aspect: Option<f64>,
     /// Contain the aspect in both offered axes rather than deriving height.
     pub(crate) aspect_fit: bool,
@@ -102,6 +103,7 @@ impl Rare {
         grid_position: None,
         grid_row_span: 1,
         maximum: None,
+        layout_extent_limit: None,
         aspect: None,
         aspect_fit: false,
         pin: None,
@@ -234,6 +236,28 @@ impl<P> Node<P> {
         self.id = Some(id.into());
         self
     }
+    /// Set this node's local layout extent ceiling. It can narrow the solve's
+    /// global ceiling, never raise it. Descendants keep their own ceilings;
+    /// runtime virtual collections set these individually for viewport and
+    /// content. Invalid ceilings are rejected when validating or resolving.
+    pub fn set_layout_extent_limit(&mut self, extent: f64) {
+        self.rare_mut().layout_extent_limit = Some(extent);
+    }
+
+    /// Validate this node's authored layout values against its local/global
+    /// ceiling. This is shallow: it does not walk children, check duplicate
+    /// IDs, measure intrinsic content, or resolve spacing tokens.
+    pub fn validate_layout_values(&self, limits: crate::Limits) -> Result<(), crate::Error> {
+        if !limits.extent.is_finite()
+            || limits.extent <= 0.0
+            || limits.nodes == 0
+            || limits.depth > 256
+        {
+            return Err(crate::Error::InvalidValue);
+        }
+        crate::measure::validate_node(self, limits)
+    }
+
     pub fn key(&self) -> Option<&str> {
         self.id.as_deref()
     }

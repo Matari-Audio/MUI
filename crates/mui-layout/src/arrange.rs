@@ -165,6 +165,9 @@ pub(crate) fn arrange<P>(
     out: &mut (Vec<(Id, u32)>, Vec<Frame>),
 ) -> Result<(), Error> {
     let n = m.node;
+    if !size.valid(m.extent_limit) || !origin.iter().all(|v| v.is_finite()) {
+        return Err(Error::BudgetExceeded);
+    }
     // A box handed less than its floor is not refused: `distribute` and
     // `extent` keep every child at its own floor, so the content overflows.
     let here = n.id.as_deref().unwrap_or(ancestor);

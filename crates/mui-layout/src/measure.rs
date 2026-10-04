@@ -18,6 +18,8 @@ pub(crate) struct Measured<'a, P> {
     pub(crate) line_gap: f64,
     pub(crate) padding: Insets,
     pub(crate) size: Size,
+    /// Effective local ceiling, retained by cached measurements for arrange.
+    pub(crate) extent_limit: f64,
     /// The smallest this subtree may be squeezed to: every minimum in it,
     /// summed along the axis they sit on.
     pub(crate) floor: Size,
@@ -205,7 +207,18 @@ pub(crate) fn place(avail: f64, extent: f64, align: Align) -> f64 {
     }
 }
 
+pub(crate) fn effective_limits<P>(node: &Node<P>, mut limits: Limits) -> Result<Limits, Error> {
+    if let Some(extent) = node.rare().layout_extent_limit {
+        if !extent.is_finite() || extent <= 0.0 {
+            return Err(Error::InvalidValue);
+        }
+        limits.extent = limits.extent.min(extent);
+    }
+    Ok(limits)
+}
+
 pub(crate) fn validate_node<P>(node: &Node<P>, l: Limits) -> Result<(), Error> {
+    let l = effective_limits(node, l)?;
     let finite = |v: f64| v.is_finite() && (0.0..=l.extent).contains(&v);
     if node.id.as_deref().is_some_and(str::is_empty)
         || !node.minimum.valid(l.extent)
@@ -338,7 +351,7 @@ pub(crate) fn measure_uncached<'a, P>(
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
-    let l = pass.limits;
+    let l = effective_limits(node, pass.limits)?;
     if depth > l.depth || (!pass.redo && pass.left == 0) {
         return Err(Error::BudgetExceeded);
     }
@@ -892,6 +905,19 @@ pub(crate) fn measure_uncached<'a, P>(
             (hug(|c| c.size, col_min), floor)
         }
     };
+    if node.rare().layout_extent_limit.is_some() {
+        // A small viewport may contain explicitly raised virtual spacers.
+        // Ordinary scrolls keep the normal ceiling even if another subtree
+        // raised this solve's global ceiling.
+        let content_limit = if node.scroll {
+            flow.iter().map(|c| c.extent_limit).fold(l.extent, f64::max)
+        } else {
+            l.extent
+        };
+        if !content.valid(content_limit) {
+            return Err(Error::BudgetExceeded);
+        }
+    }
     let pad = |s: Size| {
         Size::new(
             (s.width + padding.horizontal()).max(node.minimum.width),
@@ -1031,6 +1057,7 @@ pub(crate) fn measure_uncached<'a, P>(
         line_gap,
         padding,
         size,
+        extent_limit: l.extent,
         floor,
         content,
         cols,
