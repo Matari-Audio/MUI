@@ -318,6 +318,9 @@ impl<V: View> ApplicationHandler<AccessEvent> for App<V> {
         self.close();
     }
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(profile) = self.driver.as_mut().and_then(Driver::profiler_mut) {
+            profile.count(mui::profiling::Counter::NativeWakes, 1);
+        }
         if !self.state.visible() || self.gpu.is_none() {
             event_loop.set_control_flow(ControlFlow::Wait);
             return;
