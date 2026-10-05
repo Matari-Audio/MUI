@@ -37,7 +37,16 @@ fn try_backends<T>(
         match result {
             Ok(Ok(host)) => return Ok(host),
             Ok(Err(error)) => errors.push(format!("{backends:?}: {error}")),
-            Err(_) => errors.push(format!("{backends:?}: GPU initialization panicked")),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic payload");
+                errors.push(format!(
+                    "{backends:?}: GPU initialization panicked: {message}"
+                ));
+            }
         }
     }
     if errors.is_empty() {
@@ -642,15 +651,25 @@ impl Host {
     /// remains an allowlist. The factory must drop each failed surface before
     /// creating another and keep its native window alive for the returned host.
     pub fn open_native(
+        create: impl FnMut(wgpu::Backends) -> Result<(wgpu::Instance, wgpu::Surface<'static>), String>,
+        size: (u32, u32),
+    ) -> Result<Self, String> {
+        Self::open_native_with_transparency(create, size, Transparency::Opaque)
+    }
+
+    /// [`Self::open_native`] preserving a native window's transparency policy.
+    pub fn open_native_with_transparency(
         mut create: impl FnMut(
             wgpu::Backends,
         ) -> Result<(wgpu::Instance, wgpu::Surface<'static>), String>,
         size: (u32, u32),
+        transparency: Transparency,
     ) -> Result<Self, String> {
         let enabled = wgpu::InstanceDescriptor::new_without_display_handle_from_env().backends;
         try_backends(enabled, |backends| {
             let (instance, surface) = create(backends)?;
-            Self::new(instance, surface, size).map_err(|e| e.to_string())
+            Self::with_transparency(instance, surface, size, transparency)
+                .map_err(|e| e.to_string())
         })
     }
 
@@ -961,6 +980,11 @@ mod tests {
         let error = try_backends::<()>(B::VULKAN, |_| Err("no surface".into())).unwrap_err();
         assert!(error.contains("no surface"));
         assert!(try_backends::<()>(B::empty(), |_| panic!("must not run")).is_err());
+        assert!(
+            try_backends::<()>(B::VULKAN, |_| panic!("shader diagnostic"))
+                .unwrap_err()
+                .contains("shader diagnostic")
+        );
         assert_eq!(
             try_backends(B::VULKAN | B::GL, |b| {
                 if b == B::VULKAN {
