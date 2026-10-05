@@ -241,6 +241,8 @@ pub struct Handler<V> {
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
     gpu: Option<Host>,
+    software: Option<mui::vello::software::Window<WindowContext>>,
+    software_only: bool,
     gpu_retry_at: Instant,
     applied_cursor: Option<MouseCursor>,
     /// The current scene is not on screen yet: paint it.
@@ -293,6 +295,9 @@ impl<V: View> Handler<V> {
             shared,
             requests,
             gpu: None,
+            software: None,
+            software_only: std::env::var("MUI_RENDERER")
+                .is_ok_and(|v| v.eq_ignore_ascii_case("cpu")),
             gpu_retry_at: Instant::now(),
             applied_cursor: None,
             unpainted: true,
@@ -353,24 +358,51 @@ impl<V: View> Handler<V> {
         let size = self.driver.size();
         if self.requests.redraw.swap(false, Ordering::AcqRel) {
             self.driver.redraw();
+            if let Some(software) = &mut self.software {
+                software.invalidate();
+            }
         }
         // Lost between presents: an idle editor would never find out. The
         // next present rebuilds the device.
         if self.gpu.as_ref().is_some_and(Host::device_lost) {
             self.unpainted = true;
         }
-        if self.gpu.is_none() && target_size(size.0, size.1).is_some() && now >= self.gpu_retry_at {
-            match open_gpu(window, size) {
-                Ok(gpu) => {
-                    self.gpu = Some(gpu);
-                    self.unpainted = true;
+        if self.gpu.is_none()
+            && self.software.is_none()
+            && target_size(size.0, size.1).is_some()
+            && now >= self.gpu_retry_at
+        {
+            if !self.software_only {
+                match open_gpu(window, size) {
+                    Ok(gpu) => {
+                        self.gpu = Some(gpu);
+                        lock(&self.shared).ui.set_gpu_welding_available(true);
+                        self.unpainted = true;
+                    }
+                    Err(e) => {
+                        log(
+                            &self.shared,
+                            &format!("mui-baseview: GPU unavailable ({e}); using CPU rendering"),
+                        );
+                        self.software_only = true;
+                    }
                 }
-                Err(e) => {
-                    log(
-                        &self.shared,
-                        &format!("mui-baseview: GPU unavailable ({e}); retrying"),
-                    );
-                    self.gpu_retry_at = now + GPU_RETRY;
+            }
+            if self.software_only {
+                match mui::vello::software::Window::new(window.clone(), size) {
+                    Ok(software) => {
+                        self.software = Some(software);
+                        lock(&self.shared).ui.set_gpu_welding_available(false);
+                        self.driver.redraw();
+                        self.unpainted = true;
+                    }
+                    Err(e) => {
+                        log(
+                            &self.shared,
+                            &format!("mui-baseview: CPU presentation unavailable ({e})"),
+                        );
+                        self.gpu_retry_at = Instant::now() + GPU_RETRY;
+                    }
                 }
             }
         }
@@ -409,7 +441,7 @@ impl<V: View> Handler<V> {
                 accessibility_update = a11y.prepare(&s.ui);
             }
             self.unpainted |= fresh;
-            if self.unpainted && self.gpu.is_some() {
+            if self.unpainted && (self.gpu.is_some() || self.software.is_some()) {
                 s.ui.scene_snapshot()
             } else {
                 None
@@ -427,6 +459,29 @@ impl<V: View> Handler<V> {
         if self.applied_ime.as_ref() != Some(&ime_configuration) {
             window.set_ime_configuration(ime_configuration.clone());
             self.applied_ime = Some(ime_configuration);
+        }
+        if let (Some(software), Some(scene)) = (self.software.as_mut(), scene.as_ref()) {
+            let start = self.driver.profiler().map(|_| Instant::now());
+            let result = software.present(scene, Affine::scale(self.driver.ui_scale()), size);
+            if let (Some(profile), Some(start)) = (self.driver.profiler_mut(), start) {
+                profile.record_since(mui::profiling::Phase::BackendDraw, start);
+                if matches!(result, Ok(true)) {
+                    profile.record_since(mui::profiling::Phase::PresentCall, start);
+                } else if matches!(result, Ok(false)) {
+                    profile.discard_pending_presentation();
+                }
+            }
+            match result {
+                Ok(_) => self.unpainted = false,
+                Err(e) => {
+                    log(
+                        &self.shared,
+                        &format!("mui-baseview: CPU render failed ({e})"),
+                    );
+                    self.software = None;
+                    self.gpu_retry_at = Instant::now() + GPU_RETRY;
+                }
+            }
         }
         if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
             if let Err(e) = gpu.resize(size.0, size.1) {
@@ -465,10 +520,14 @@ impl<V: View> Handler<V> {
                     }
                 }
                 Err(e) => {
-                    // Not a lost surface: painting it again would fail
-                    // again. A lost device rebuilds on its own schedule.
                     log(&self.shared, &format!("mui-baseview: {e}"));
-                    self.unpainted = false;
+                    // Drop the GPU surface before attaching software presentation.
+                    // Keep CPU rendering for this window; do not retry broken
+                    // drivers periodically while the user is working.
+                    self.gpu = None;
+                    self.software_only = true;
+                    self.gpu_retry_at = Instant::now();
+                    self.unpainted = true;
                 }
             }
         }
@@ -506,6 +565,12 @@ impl<V: View> Handler<V> {
         let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
         let d = &mut self.driver;
         match event {
+            Event::Window(WindowEvent::RedrawRequested) => {
+                if let Some(software) = &mut self.software {
+                    software.invalidate();
+                    self.unpainted = true;
+                }
+            }
             Event::Ime(event) => d.ime(native::ime_event(event)),
             Event::Keyboard(key) => {
                 let event = key_event(key);
@@ -585,6 +650,8 @@ impl<V: View> Handler<V> {
             Event::Window(WindowEvent::WillClose) => {
                 // Drop retained native accessibility views before locking the model.
                 drop(self.a11y.take());
+                drop(self.software.take());
+                drop(self.gpu.take());
                 self.applied_ime = None;
                 d.close(&mut lock(&self.shared));
             }
@@ -834,21 +901,24 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 /// an error the editor can show, when the plugin unwinds; under
 /// `panic = "abort"` it is the host's crash.
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let display = surface::Display::new(window).map_err(|e| e.to_string())?;
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)),
-        );
-        // SAFETY: the surface uses this window's live native handle. Baseview's
-        // owned close paths drop the handler/renderer before destroying it.
-        // An embedding host must keep that handle alive during callbacks;
-        // forced external destruction cannot satisfy the surface lifetime.
-        #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
-        let surface = unsafe { surface::create(&instance, window) }
-            .ok_or("native surface creation failed")?;
-        Host::new(instance, surface, size).map_err(|e| e.to_string())
-    }))
-    .map_err(|_| "panic while creating GPU resources".to_owned())?
+    Host::open_native(
+        |backends| {
+            let display = surface::Display::new(window).map_err(|e| e.to_string())?;
+            let mut descriptor =
+                wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
+            descriptor.backends = backends;
+            let instance = wgpu::Instance::new(descriptor);
+            // SAFETY: the surface uses this window's live native handle. Baseview's
+            // owned close paths drop the handler/renderer before destroying it.
+            // An embedding host must keep that handle alive during callbacks;
+            // forced external destruction cannot satisfy the surface lifetime.
+            #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
+            let surface = unsafe { surface::create(&instance, window) }
+                .ok_or("native surface creation failed")?;
+            Ok((instance, surface))
+        },
+        size,
+    )
 }
 
 mod a11y;

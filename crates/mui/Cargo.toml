@@ -10,6 +10,7 @@ default = []
 gpu-effects = ["mui-vello/gpu-effects"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
+software-window = ["mui-vello/software-window"]
 
 [dependencies]
 color.workspace = true
