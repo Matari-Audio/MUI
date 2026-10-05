@@ -108,6 +108,9 @@ jobs:
           for backend in vulkan gl; do
             xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND="$backend" cargo test -p mui-winit --test native_windows --locked --offline -- --ignored
           done
+      - if: matrix.section == 'root-test'
+        name: CPU presentation when no GPU backend is available
+        run: xvfb-run -a env WGPU_BACKEND=metal cargo test -p mui-baseview --lib --locked --offline native_cpu_fallback_presents_and_reopens -- --ignored
       # A failing test leaves the adapter builds good.
       - if: "!cancelled() && matrix.section == 'media-cut-test' && github.ref == 'refs/heads/main'"
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

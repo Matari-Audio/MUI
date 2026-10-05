@@ -22,20 +22,26 @@ impl Gpu {
         window: Arc<Window>,
         display: Box<winit::event_loop::OwnedDisplayHandle>,
     ) -> Result<Self, String> {
-        let operation = mui::diagnostics::operation(
-            "mui-winit",
-            "create_instance",
-            "creating window GPU instance",
-            None,
-        );
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(display),
-        );
-        drop(operation);
-        let surface = surface(&instance, &window)?;
         let size = window.inner_size();
-        let host =
-            Host::new(instance, surface, (size.width, size.height)).map_err(|e| e.to_string())?;
+        let window_ref = &window;
+        let host = Host::open_native(
+            move |backends| {
+                let operation = mui::diagnostics::operation(
+                    "mui-winit",
+                    "create_instance",
+                    &format!("backends={backends:?}"),
+                    None,
+                );
+                let mut descriptor =
+                    wgpu::InstanceDescriptor::new_with_display_handle_from_env(display.clone());
+                descriptor.backends = backends;
+                let instance = wgpu::Instance::new(descriptor);
+                drop(operation);
+                let surface = surface(&instance, window_ref)?;
+                Ok((instance, surface))
+            },
+            (size.width, size.height),
+        )?;
         Ok(Self {
             window,
             host,

@@ -7,7 +7,7 @@ license.workspace = true
 
 # A native window: nothing here builds for wasm.
 [dependencies]
-mui = { workspace = true, features = ["gpu-effects"] }
+mui = { workspace = true, features = ["gpu-effects", "software-window"] }
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
 mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }
