@@ -43,7 +43,7 @@ jobs:
             libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev \
             libzstd-dev mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri \
-            mesa-utils vulkan-tools xvfb xauth dbus-x11 ffmpeg imagemagick xdotool python3-pil ripgrep
+            mesa-utils vulkan-tools xvfb xauth dbus-x11 ffmpeg imagemagick xdotool python3-pil ripgrep weston
           icd=$(dpkg -L mesa-vulkan-drivers | rg '/lvp_icd[^/]*\.json$' | head -n 1)
           test -f "$icd"
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
@@ -59,6 +59,13 @@ jobs:
         run: |
           mkdir -p ui-results
           cargo build -p mui-preview --bin mui-preview --locked 2>&1 | tee ui-results/build.log
+          cargo build -p mui-baseview --example native_editor --locked
+          cargo build -p mui-winit --example native_windows --locked
+      - name: Production embedded editor lifecycle
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/embedded --timeout 60 -- \
+            target/debug/examples/native_editor
       - name: All gallery scenes, themes, sizes, input and visible pixels
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
@@ -70,6 +77,7 @@ jobs:
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/baseview -- \
             cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1
+          rg -q 'native_resize_failure_falls_back_and_presents .*ok' ui-results/baseview/stdout.log
       - name: Multiwindow resize and close
         if: ${{ !cancelled() }}
         run: |
@@ -93,6 +101,31 @@ jobs:
             /usr/bin/python3 tools/ci/ui.py --output ui-results/cpu -- \
             cargo test -p mui-baseview --lib --locked native_cpu_fallback_presents_and_reopens -- --ignored --test-threads=1
           rg -q 'native_cpu_fallback_presents_and_reopens .*ok' ui-results/cpu/stdout.log
+          MUI_EXPECT_SOFTWARE=1 xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/embedded-cpu --timeout 60 -- \
+            target/debug/examples/native_editor
+          rg -q 'GPU unavailable.*using CPU rendering' ui-results/embedded-cpu/stderr.log
+      - name: Standalone Wayland presentation, resize and two-window teardown
+        if: ${{ !cancelled() && matrix.backend == 'vulkan' }}
+        shell: bash
+        run: |
+          mkdir -m 700 -p "$RUNNER_TEMP/mui-wayland"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/mui-wayland"
+          export WAYLAND_DISPLAY=wayland-mui
+          export WINIT_UNIX_BACKEND=wayland
+          unset DISPLAY
+          weston --backend=headless-backend.so --socket="$WAYLAND_DISPLAY" --idle-time=0 \
+            --width=1600 --height=1200 --log="$GITHUB_WORKSPACE/ui-results/weston.log" &
+          compositor=$!
+          trap 'kill "$compositor" 2>/dev/null || true; wait "$compositor" 2>/dev/null || true' EXIT
+          for attempt in {1..50}; do
+            test ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" || break
+            kill -0 "$compositor"
+            sleep .1
+          done
+          test -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+          /usr/bin/python3 tools/ci/ui.py --output ui-results/wayland --timeout 60 -- \
+            target/debug/examples/native_windows
       - name: Retain evidence even after a native fault
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -102,9 +135,68 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  embedded:
+    name: Required embedded CPU lifecycle / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            unavailable: metal
+          - os: macos-15
+            unavailable: dx12
+    env:
+      MUI_EXPECT_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ui-embedded-${{ runner.os }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build production embedded tester
+        shell: bash
+        run: |
+          mkdir -p ui-results
+          cargo build -p mui-baseview --example native_editor --locked 2>&1 | tee ui-results/build.log
+      - name: Explicit CPU selection, resize, close and reopen
+        shell: bash
+        env:
+          MUI_RENDERER: cpu
+        run: |
+          python3 tools/ci/ui.py --output ui-results/explicit-cpu --timeout 60 -- target/debug/examples/native_editor
+      - name: Automatic CPU fallback after GPU initialization failure
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          WGPU_BACKEND: ${{ matrix.unavailable }}
+        run: |
+          python3 tools/ci/ui.py --output ui-results/automatic-cpu --timeout 60 -- target/debug/examples/native_editor
+          grep -q 'GPU unavailable.*using CPU rendering' ui-results/automatic-cpu/stderr.log
+      - name: Actual WARP adapter is rejected safely and the editor presents
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: bash
+        env:
+          WGPU_BACKEND: dx12
+        run: |
+          python3 tools/ci/ui.py --output ui-results/warp-cpu --timeout 60 -- target/debug/examples/native_editor
+          grep -q 'WARP compute shader compilation can crash' ui-results/warp-cpu/stderr.log
+      - name: Retain editor lifecycle and fallback evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mui-ui-embedded-${{ matrix.os }}
+          path: ui-results/
+          if-no-files-found: warn
+          retention-days: 7
+
   native-probe:
     # Standard VMs do not promise an accelerated adapter. Preserve a failed
-    # probe as failed evidence; Linux software presentation remains the gate.
+    # probe as failed evidence; embedded CPU lifecycle is required separately.
     name: Native GPU probe / ${{ matrix.os }} / ${{ matrix.backend }}
     continue-on-error: true
     runs-on: ${{ matrix.os }}
@@ -133,6 +225,8 @@ jobs:
         run: |
           mkdir -p ui-results
           cargo build -p mui-preview --bin mui-preview --locked 2>&1 | tee ui-results/build.log
+          cargo build -p mui-baseview --example native_editor --locked
+          cargo build -p mui-winit --example native_windows --locked
       - name: Collect Windows native fault stacks for the tester
         if: runner.os == 'Windows'
         shell: pwsh
@@ -149,6 +243,14 @@ jobs:
         shell: bash
         run: |
           python3 tools/ci/ui.py --output ui-results/native --gallery -- target/debug/mui-preview --test-ui
+      - name: Native GPU embedded editor lifecycle
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 tools/ci/ui.py --output ui-results/embedded-gpu --timeout 60 -- target/debug/examples/native_editor
+      - name: Native GPU multiwindow resize and teardown
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: python3 tools/ci/ui.py --output ui-results/multiwindow-gpu --timeout 60 -- target/debug/examples/native_windows
       - name: Replay Windows fault under CDB
         if: always() && runner.os == 'Windows' && steps.native_probe.outcome == 'failure'
         continue-on-error: true

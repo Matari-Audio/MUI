@@ -52,6 +52,14 @@ pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 /// only signal cancellation, never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
 
+/// Last frame submitted to the native child; not GPU completion or scanout.
+#[derive(Clone, Copy, Debug)]
+pub struct Presentation {
+    pub frames: u64,
+    pub size: (u32, u32),
+    pub software: bool,
+}
+
 /// Requests from the host's thread, applied by the window's next tick,
 /// which is the only place baseview's `WindowContext` can be touched.
 #[derive(Default)]
@@ -61,11 +69,25 @@ pub struct Requests {
     redraw: AtomicBool,
     keys: Mutex<Option<KeyHook>>,
     close: Mutex<Option<CloseHook>>,
+    presentation: Mutex<Option<Presentation>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
 }
 
 impl Requests {
+    /// Coherent presentation evidence; absent until the first successful submit.
+    pub fn presentation(&self) -> Option<Presentation> {
+        *lock(&self.presentation)
+    }
+    fn presented(&self, size: (u32, u32), software: bool) {
+        let mut status = lock(&self.presentation);
+        let frames = status.map_or(1, |old| old.frames.saturating_add(1));
+        *status = Some(Presentation {
+            frames,
+            size,
+            software,
+        });
+    }
     /// Register the close signal for the next native window, before opening it.
     /// It runs once on native close, or when the window adapter is dropped.
     pub fn on_close(&self, hook: CloseHook) {
@@ -472,7 +494,12 @@ impl<V: View> Handler<V> {
                 }
             }
             match result {
-                Ok(_) => self.unpainted = false,
+                Ok(drew) => {
+                    self.unpainted = false;
+                    if drew {
+                        self.requests.presented(size, true);
+                    }
+                }
                 Err(e) => {
                     log(
                         &self.shared,
@@ -488,9 +515,12 @@ impl<V: View> Handler<V> {
         {
             if let Err(e) = gpu.resize(size.0, size.1) {
                 log(&self.shared, &format!("mui-baseview: {e}"));
-                // Configuration and allocation may have only partly succeeded.
-                // Keep the frame dirty and retry before presenting that surface.
-                self.gpu_retry_at = now + GPU_RETRY;
+                // Resize errors are terminal configuration/allocation failures.
+                // Drop the partly configured surface before attaching CPU presentation.
+                self.gpu = None;
+                self.software_only = true;
+                self.gpu_retry_at = now;
+                self.unpainted = true;
                 return;
             }
             let draw_start = self.driver.profiler().map(|_| Instant::now());
@@ -503,7 +533,10 @@ impl<V: View> Handler<V> {
                 }
             }
             match frame {
-                Ok(Frame::Presented(_)) => self.unpainted = false,
+                Ok(Frame::Presented(_)) => {
+                    self.unpainted = false;
+                    self.requests.presented(gpu.size(), false);
+                }
                 Ok(Frame::Current) => {
                     self.unpainted = false;
                     if let Some(profiler) = self.driver.profiler_mut() {

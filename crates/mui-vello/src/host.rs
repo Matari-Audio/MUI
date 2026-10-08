@@ -234,10 +234,19 @@ fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
 }
 
 fn validate_renderer_requirements(
+    info: &wgpu::AdapterInfo,
     flags: wgpu::DownlevelFlags,
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
 ) -> Result<(), String> {
+    // WARP's compute JIT faults outside Rust error handling; see the captured
+    // stack in research/platform-validation-2026-10-08.md.
+    if info.backend == wgpu::Backend::Dx12
+        && info.device_type == wgpu::DeviceType::Cpu
+        && info.vendor == 0x1414
+    {
+        return Err("WARP compute shader compilation can crash; use CPU rendering".into());
+    }
     if !flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
         return Err("Vello requires compute shaders; downlevel GL is unsupported".into());
     }
@@ -455,6 +464,7 @@ impl OnDevice {
         candidate: &mut AdapterDiagnostic,
     ) -> Result<Self, String> {
         validate_renderer_requirements(
+            &candidate.adapter,
             adapter.get_downlevel_capabilities().flags,
             &candidate.requested_limits,
             &candidate.supported_limits,
@@ -1066,15 +1076,22 @@ mod tests {
 
     #[test]
     fn downlevel_gl_is_rejected_without_weakening_vello_requirements() {
+        let info = adapter_info("GL", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Gl);
         let requested = wgpu::Limits::default();
         let downlevel = wgpu::Limits::downlevel_webgl2_defaults();
         assert!(
-            validate_renderer_requirements(wgpu::DownlevelFlags::empty(), &requested, &downlevel)
-                .unwrap_err()
-                .contains("compute shaders")
+            validate_renderer_requirements(
+                &info,
+                wgpu::DownlevelFlags::empty(),
+                &requested,
+                &downlevel
+            )
+            .unwrap_err()
+            .contains("compute shaders")
         );
         assert!(
             validate_renderer_requirements(
+                &info,
                 wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &requested,
                 &downlevel
@@ -1084,12 +1101,46 @@ mod tests {
         );
         assert!(
             validate_renderer_requirements(
+                &info,
                 wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &requested,
                 &requested
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
+        let limits = wgpu::Limits::default();
+        let validate = |info: &wgpu::AdapterInfo| {
+            validate_renderer_requirements(
+                info,
+                wgpu::DownlevelFlags::COMPUTE_SHADERS,
+                &limits,
+                &limits,
+            )
+        };
+        let mut info = adapter_info(
+            "Microsoft Basic Render Driver",
+            wgpu::DeviceType::Cpu,
+            wgpu::Backend::Dx12,
+        );
+        info.vendor = 0x1414;
+        info.device = 0x008c;
+        info.driver = "10.0.26100.33438".into();
+        assert!(validate(&info).unwrap_err().contains("WARP"));
+        info.backend = wgpu::Backend::Vulkan;
+        assert!(validate(&info).is_ok());
+        info.backend = wgpu::Backend::Dx12;
+        info.device_type = wgpu::DeviceType::DiscreteGpu;
+        for vendor in [0x10de, 0x8086, 0x1002, 0x1414] {
+            info.vendor = vendor;
+            assert!(validate(&info).is_ok());
+        }
+        info.device_type = wgpu::DeviceType::IntegratedGpu;
+        info.vendor = 0x8086;
+        assert!(validate(&info).is_ok());
     }
 
     #[test]

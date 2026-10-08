@@ -10,6 +10,18 @@ use mui::prelude::{El, Input, knob};
 #[test]
 #[ignore = "requires an X11 display"]
 fn native_cpu_fallback_presents_and_reopens() {
+    cpu_presentation_fixture(false);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a live X11 display and graphics driver"]
+fn native_resize_failure_falls_back_and_presents() {
+    cpu_presentation_fixture(true);
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_presentation_fixture(resize_failure: bool) {
     use mui::prelude::*;
     use std::sync::mpsc::{Sender, channel};
     use x11rb::connection::Connection;
@@ -32,12 +44,47 @@ fn native_cpu_fallback_presents_and_reopens() {
         cx: WindowContext,
         phase: std::cell::Cell<u8>,
         exposed: std::cell::Cell<bool>,
+        resize_failure: bool,
         result: RefCell<Option<Sender<Result<(), String>>>>,
     }
     impl WindowHandler for Probe {
         fn on_frame(&self) -> Result<(), HandlerError> {
             if self.phase.get() == 0 {
-                self.handler.borrow_mut().tick(&self.cx);
+                let result = (|| {
+                    let mut handler = self.handler.borrow_mut();
+                    handler.tick(&self.cx);
+                    if self.resize_failure {
+                        let presented = handler
+                            .requests
+                            .presentation()
+                            .ok_or("missing initial GPU presentation")?;
+                        if presented.software || presented.size != (240, 200) {
+                            return Err("fixture did not establish a GPU frame".into());
+                        }
+                        let gpu = handler.gpu.as_ref().ok_or("missing initial GPU")?;
+                        // wgpu marks this device invalid immediately. Changing the
+                        // extent forces real surface configuration before present
+                        // could rebuild the lost device.
+                        gpu.device().0.destroy();
+                        handler.requests.resize(200, 160);
+                        handler.tick(&self.cx);
+                        if handler.gpu.is_some()
+                            || handler.software.is_some()
+                            || !handler.software_only
+                            || !handler.unpainted
+                            || handler.driver.size() != (200, 160)
+                        {
+                            return Err("resize failure did not detach GPU for CPU recovery".into());
+                        }
+                    }
+                    Ok(())
+                })();
+                if result.is_err() {
+                    if let Some(send) = self.result.borrow_mut().take() {
+                        let _ = send.send(result);
+                    }
+                    return Ok(());
+                }
                 // Baseview flushes its X11 connection after this callback.
                 self.phase.set(1);
                 return Ok(());
@@ -58,6 +105,21 @@ fn native_cpu_fallback_presents_and_reopens() {
                 if handler.gpu.is_some() || handler.software.is_none() || handler.unpainted {
                     return Err("expected a successfully presented CPU fallback".into());
                 }
+                let expected = if self.resize_failure {
+                    (200, 160)
+                } else {
+                    (240, 200)
+                };
+                let presented = handler
+                    .requests
+                    .presentation()
+                    .ok_or("no CPU presentation")?;
+                if !presented.software
+                    || presented.size != expected
+                    || (self.resize_failure && presented.frames < 2)
+                {
+                    return Err("CPU presentation did not use the recovered extent".into());
+                }
                 let window = handler.requests.x11_window().ok_or("no X11 window")?;
                 let (connection, _) = x11rb::rust_connection::RustConnection::connect(None)
                     .map_err(|e| e.to_string())?;
@@ -75,16 +137,27 @@ fn native_cpu_fallback_presents_and_reopens() {
                     .flat_map(|d| &d.visuals)
                     .find(|v| v.visual_id == visual_id)
                     .ok_or("missing visual")?;
-                let depth = connection
+                let geometry = connection
                     .get_geometry(window)
                     .map_err(|e| e.to_string())?
                     .reply()
-                    .map_err(|e| e.to_string())?
-                    .depth;
+                    .map_err(|e| e.to_string())?;
+                if (u32::from(geometry.width), u32::from(geometry.height)) != expected {
+                    return Err("native window did not use the recovered extent".into());
+                }
+                let depth = geometry.depth;
                 let deadline = Instant::now() + Duration::from_secs(1);
                 loop {
                     let pixels = connection
-                        .get_image(ImageFormat::Z_PIXMAP, window, 20, 180, 1, 1, u32::MAX)
+                        .get_image(
+                            ImageFormat::Z_PIXMAP,
+                            window,
+                            20,
+                            i16::try_from(expected.1 - 20).unwrap(),
+                            1,
+                            1,
+                            u32::MAX,
+                        )
                         .map_err(|e| e.to_string())?
                         .reply()
                         .map_err(|e| e.to_string())?;
@@ -167,7 +240,9 @@ fn native_cpu_fallback_presents_and_reopens() {
             move |cx| {
                 let requests = Arc::new(Requests::default());
                 let mut handler = Handler::new(shared, requests, (240, 200), 1.0);
-                handler.software_only |= std::env::var("WGPU_BACKEND").as_deref() != Ok("metal");
+                handler.software_only = !resize_failure
+                    && (handler.software_only
+                        || std::env::var("WGPU_BACKEND").as_deref() != Ok("metal"));
                 handler.x11_window = match cx.window_handle()?.as_raw() {
                     raw_window_handle::RawWindowHandle::Xlib(h) => h.window as u32,
                     raw_window_handle::RawWindowHandle::Xcb(h) => h.window.get(),
@@ -182,6 +257,7 @@ fn native_cpu_fallback_presents_and_reopens() {
                     cx,
                     phase: std::cell::Cell::new(0),
                     exposed: std::cell::Cell::new(false),
+                    resize_failure,
                     result: RefCell::new(Some(send)),
                 })
             },
