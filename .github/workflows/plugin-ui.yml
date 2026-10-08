@@ -22,20 +22,24 @@ permissions:
 
 jobs:
   editor:
-    name: Editor / ${{ matrix.backend }}
+    name: Editor / ${{ matrix.renderer }} / ${{ matrix.backend }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        backend: [vulkan, gl]
+        include:
+          - {renderer: gpu, backend: vulkan}
+          - {renderer: gpu, backend: gl}
+          - {renderer: cpu, backend: vulkan}
     env:
       WGPU_BACKEND: ${{ matrix.backend }}
+      MUI_RENDERER: ${{ matrix.renderer }}
       LIBGL_ALWAYS_SOFTWARE: "1"
       GALLIUM_DRIVER: llvmpipe
-      MUI_DIAGNOSTICS_DIR: ${{ github.workspace }}/ui-results/${{ matrix.backend }}/mui
+      MUI_DIAGNOSTICS_DIR: ${{ github.workspace }}/ui-results/${{ matrix.renderer }}-${{ matrix.backend }}/mui
       MUI_REPORTING_DISABLED: "1"
-      RESULTS: ${{ github.workspace }}/ui-results/${{ matrix.backend }}
+      RESULTS: ${{ github.workspace }}/ui-results/${{ matrix.renderer }}-${{ matrix.backend }}
       PLUGIN_PATH: ${{ inputs.plugin-path }}
       REQUIRE_MUI_DIAGNOSTICS: ${{ inputs.require-mui-diagnostics }}
     steps:
@@ -91,7 +95,11 @@ jobs:
           rg -q 'Time taken to open editor \(cold\):' "$RESULTS/pluginval.log"
           test -s "$RESULTS/screen.mp4"
           if [[ "$REQUIRE_MUI_DIAGNOSTICS" == true ]]; then
-            rg -q 'mui-vello/frame_presented' "$MUI_DIAGNOSTICS_DIR"
+            if [[ "$MUI_RENDERER" == cpu ]]; then
+              rg -q 'mui-baseview/cpu_frame_presented' "$MUI_DIAGNOSTICS_DIR"
+            else
+              rg -q 'mui-vello/frame_presented' "$MUI_DIAGNOSTICS_DIR"
+            fi
             if rg -n 'ERROR ' "$MUI_DIAGNOSTICS_DIR"; then
               echo '::error::MUI recorded a graphics or window failure'
               exit 1
@@ -101,7 +109,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: plugin-ui-${{ inputs.artifact-name }}-${{ matrix.backend }}
+          name: plugin-ui-${{ inputs.artifact-name }}-${{ matrix.renderer }}-${{ matrix.backend }}
           path: ui-results/
           if-no-files-found: warn
           retention-days: 7

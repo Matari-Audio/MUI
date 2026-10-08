@@ -14,7 +14,7 @@ use std::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use ureq::unversioned::{
-    resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver},
+    resolver::{ResolvedSocketAddrs, Resolver},
     transport::{DefaultConnector, NextTimeout},
 };
 
@@ -24,21 +24,65 @@ const PENDING: usize = 32;
 static ACTIVE: Mutex<Weak<Worker>> = Mutex::new(Weak::new());
 
 #[derive(Debug)]
-struct JoinedResolver;
+struct JoinedResolver(
+    hickory_resolver::config::ResolverConfig,
+    hickory_resolver::config::ResolverOpts,
+);
 
 impl Resolver for JoinedResolver {
     fn resolve(
         &self,
         uri: &ureq::http::Uri,
         config: &ureq::config::Config,
-        mut timeout: NextTimeout,
+        timeout: NextTimeout,
     ) -> Result<ResolvedSocketAddrs, ureq::Error> {
-        // ureq's timeout resolver detaches a DNS thread. A plugin DLL may be
-        // unloaded immediately after Reporter drops, so all its code must join.
-        // ponytail: system DNS can exceed the HTTP deadline; move delivery to
-        // an external process if bounded plugin shutdown becomes a requirement.
-        timeout.after = ureq::unversioned::transport::time::Duration::NotHappening;
-        DefaultResolver::default().resolve(uri, config, timeout)
+        use std::net::{IpAddr, SocketAddr};
+        let host = uri.host().ok_or(ureq::Error::HostNotFound)?;
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        let port = uri
+            .port_u16()
+            .or_else(|| match uri.scheme_str() {
+                Some("https") => Some(443),
+                Some("http") => Some(80),
+                _ => None,
+            })
+            .ok_or(ureq::Error::HostNotFound)?;
+        let ips = if let Ok(ip) = host.parse::<IpAddr>() {
+            vec![ip]
+        } else {
+            // DNS tasks share this reporting thread and are cancelled before it joins.
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()?;
+            let deadline = (*timeout.after).min(Duration::from_secs(5));
+            runtime.block_on(async {
+                let resolver = hickory_resolver::Resolver::builder_with_config(
+                    self.0.clone(),
+                    hickory_resolver::net::runtime::TokioRuntimeProvider::default(),
+                )
+                .with_options(self.1.clone())
+                .build()
+                .map_err(io::Error::other)?;
+                let lookup = tokio::time::timeout(deadline, resolver.lookup_ip(host))
+                    .await
+                    .map_err(|_| ureq::Error::Timeout(timeout.reason))?
+                    .map_err(io::Error::other)?;
+                Ok::<_, ureq::Error>(lookup.iter().collect::<Vec<_>>())
+            })?
+        };
+        let mut addresses = self.empty();
+        for address in config
+            .ip_family()
+            .keep_wanted(ips.into_iter().map(|ip| SocketAddr::new(ip, port)))
+            .take(16)
+        {
+            addresses.push(address);
+        }
+        if addresses.is_empty() {
+            Err(ureq::Error::HostNotFound)
+        } else {
+            Ok(addresses)
+        }
     }
 }
 
@@ -125,15 +169,18 @@ impl Reporter {
         let stopped = Arc::clone(&stop);
         let (wake, receiver) = mpsc::sync_channel(1);
         let directory = config.directory.clone();
+        let (dns, dns_options) =
+            hickory_resolver::system_conf::read_system_conf().map_err(io::Error::other)?;
+        let resolver = JoinedResolver(dns, dns_options);
         let worker = thread::Builder::new()
             .name("mui-reports".into())
             .spawn(move || {
                 let config = ureq::Agent::config_builder()
+                    .user_agent("matari-mui-report/0.4.0")
                     .timeout_global(Some(Duration::from_secs(5)))
                     .max_redirects(0)
                     .build();
-                let agent =
-                    ureq::Agent::with_parts(config, DefaultConnector::default(), JoinedResolver);
+                let agent = ureq::Agent::with_parts(config, DefaultConnector::default(), resolver);
                 let mut retry_at = None;
                 while !stopped.load(Ordering::Acquire) {
                     recover_operations(&directory);
@@ -591,6 +638,65 @@ fn deliver_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unanswered_dns_cancels_before_the_reporting_thread_can_exit() {
+        use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+        let blackhole = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let address = blackhole.local_addr().unwrap();
+        let mut nameserver = NameServerConfig::udp(address.ip());
+        nameserver.connections[0].port = address.port();
+        let mut dns = ResolverConfig::default();
+        dns.add_name_server(nameserver);
+        let resolver = JoinedResolver(dns, ResolverOpts::default());
+        let config = ureq::Agent::config_builder().build();
+        let start = Instant::now();
+        let error = resolver
+            .resolve(
+                &"https://unanswered.invalid/".parse().unwrap(),
+                &config,
+                NextTimeout {
+                    after: ureq::unversioned::transport::time::Duration::from_millis(100),
+                    reason: ureq::Timeout::Global,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(error, ureq::Error::Timeout(ureq::Timeout::Global)));
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "DNS runtime must cancel and join"
+        );
+        blackhole
+            .set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut packet = [0; 512];
+        assert!(
+            blackhole.recv_from(&mut packet).unwrap().0 > 12,
+            "a real DNS query reached the unanswered server"
+        );
+    }
+
+    #[test]
+    fn numeric_addresses_obey_port_and_ip_family_without_dns() {
+        use hickory_resolver::config::{ResolverConfig, ResolverOpts};
+        let resolver = JoinedResolver(ResolverConfig::default(), ResolverOpts::default());
+        let config = ureq::Agent::config_builder()
+            .ip_family(ureq::config::IpFamily::Ipv4Only)
+            .build();
+        let timeout = NextTimeout {
+            after: ureq::unversioned::transport::time::Duration::from_millis(100),
+            reason: ureq::Timeout::Global,
+        };
+        let addresses = resolver
+            .resolve(&"http://127.0.0.1:8123/".parse().unwrap(), &config, timeout)
+            .unwrap();
+        assert_eq!(addresses.len(), 1);
+        assert_eq!(addresses[0], "127.0.0.1:8123".parse().unwrap());
+        let error = resolver
+            .resolve(&"https://[::1]/".parse().unwrap(), &config, timeout)
+            .unwrap_err();
+        assert!(matches!(error, ureq::Error::HostNotFound));
+    }
 
     #[test]
     fn native_window_guard_retains_worker_until_resource_teardown() {

@@ -87,12 +87,21 @@ impl Requests {
             .presentation
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let first_cpu_frame = software && status.is_none_or(|old| !old.software);
         let frames = status.map_or(1, |old| old.frames.saturating_add(1));
         *status = Some(Presentation {
             frames,
             size,
             software,
         });
+        drop(status);
+        if first_cpu_frame {
+            mui::diagnostics::breadcrumb(
+                "mui-baseview",
+                "cpu_frame_presented",
+                "native CPU presentation succeeded",
+            );
+        }
     }
     /// Register the close signal for the next native window, before opening it.
     /// It runs once on native close, or when the window adapter is dropped.

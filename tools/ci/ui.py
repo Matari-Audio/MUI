@@ -61,8 +61,8 @@ def gallery_summary(events, renderer=None):
             "timing_scope": "CPU resolve and submission calls; excludes journal I/O, not GPU execution or scanout"}
 
 
-def verify_pixels(path, stage):
-    from PIL import Image
+def verify_pixels(path, stage, reference=None):
+    from PIL import Image, ImageChops
     with Image.open(path) as image:
         x, y, width, height = stage
         region = image.convert("RGB").crop((int(x), int(y), int(x + width), int(y + height)))
@@ -70,10 +70,32 @@ def verify_pixels(path, stage):
             raise ValueError("specimen stage is outside the captured native window")
         if max(high - low for low, high in region.getextrema()) < 4:
             raise ValueError("native specimen stage is blank or uniform")
-        return {"width": image.width, "height": image.height, "stage": stage}
+        metadata = {"width": image.width, "height": image.height, "stage": stage}
+        if reference is not None:
+            with Image.open(reference) as expected:
+                expected = expected.convert("RGBA")
+                if expected.size != region.size:
+                    raise ValueError("CPU reference and native specimen dimensions differ")
+                # Fully opaque pixels need no premultiplication or window-background conversion.
+                opaque = expected.getchannel("A").point(lambda alpha: 255 if alpha == 255 else 0)
+                compared = opaque.histogram()[255]
+                if not compared:
+                    raise ValueError("CPU reference has no opaque pixels to compare")
+                difference = ImageChops.difference(region, expected.convert("RGB"))
+                difference = Image.composite(difference, Image.new("RGB", region.size), opaque)
+                maximum = max(high for low, high in difference.getextrema())
+                metadata.update(compared_pixels=compared, max_rgb_error=maximum, rgb_tolerance=4)
+                if maximum > 4:
+                    raise ValueError(f"native pixels differ from CPU reference (maximum RGB error {maximum})")
+        return metadata
 
 
 def capture(output, request):
+    reference = request.get("reference")
+    if reference is not None:
+        if not isinstance(reference, str) or Path(reference).name != reference or not reference.endswith(".png"):
+            raise ValueError("CPU reference must be a local PNG filename")
+        reference = output / reference
     ids = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--name", "^MUI tester$"], timeout=10, text=True).splitlines()
     if len(ids) != 1 or not ids[0].isdigit():
         raise ValueError("expected exactly one visible MUI tester window")
@@ -84,7 +106,7 @@ def capture(output, request):
         time.sleep(.15)
         subprocess.run(["import", "-window", ids[0], str(target)], check=True, timeout=15)
         try:
-            metadata = verify_pixels(target, request["stage"])
+            metadata = verify_pixels(target, request["stage"], reference)
             (target.with_suffix(".json")).write_text(json.dumps({**request, **metadata}, indent=2))
             return
         except ValueError:
@@ -112,6 +134,7 @@ def main():
     parser.add_argument("--gallery", action="store_true")
     parser.add_argument("--renderer", choices=("gpu", "cpu"), help="required gallery presentation mode")
     parser.add_argument("--record", action="store_true")
+    parser.add_argument("--capture", action="store_true", help="verify native capture requests without gallery schema")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -120,7 +143,7 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    captures = args.gallery and platform.system() == "Linux"
+    captures = (args.gallery or args.capture) and platform.system() == "Linux"
     env.update(MUI_TEST_RESULTS=str(output), MUI_TEST_CAPTURE="1" if captures else "0",
                MUI_DIAGNOSTICS_DIR=str(output / "mui"), MUI_REPORTING_DISABLED="1", RUST_BACKTRACE="full")
     metadata = {"platform": platform.platform(), "machine": platform.machine(),
@@ -162,10 +185,15 @@ def main():
                 time.sleep(.05)
             if process.returncode:
                 raise RuntimeError(f"native child returned {process.returncode}")
+            stderr.flush()
+            if "objc_disposeClassPair" in (output / "stderr.log").read_text(errors="replace"):
+                raise RuntimeError("native teardown attempted to dispose a cached Objective-C class")
             if args.gallery:
                 result["gallery"] = gallery_summary(read_events(output / "events.jsonl"), args.renderer)
                 if captures and len(recorded) != result["gallery"]["cases"]:
                     raise ValueError("not every gallery case has a verified native screenshot")
+            if args.capture and captures and not recorded:
+                raise ValueError("native tester supplied no verified capture requests")
             result["status"] = "passed"
         except Exception as error:
             result["error"] = str(error)

@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from ui import gallery_summary, main, read_events, verify_pixels
+from ui import capture, gallery_summary, main, read_events, verify_pixels
 
 
 def completed():
@@ -66,6 +66,43 @@ class UiEvidenceTests(unittest.TestCase):
             path = Path(name) / "events.jsonl"
             path.write_text(json.dumps({"event": "frame_begin", "case": 7}) + '\n{"event":')
             self.assertEqual(read_events(path), [{"event": "frame_begin", "case": 7}])
+
+    def test_native_capture_and_teardown_evidence_are_required(self):
+        for code, arguments, message in [
+            ("pass", ["--capture"], "no verified capture"),
+            ("import sys; print('objc_disposeClassPair: class still has subclasses', file=sys.stderr)", [], "cached Objective-C class"),
+        ]:
+            with tempfile.TemporaryDirectory() as name:
+                with patch("sys.argv", ["ui.py", "--output", name, *arguments, "--", sys.executable, "-c", code]), \
+                     patch("platform.system", return_value="Linux"), \
+                     patch("ui.subprocess.run", side_effect=FileNotFoundError), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(main(), 1)
+                self.assertIn(message, json.loads((Path(name) / "result.json").read_text())["error"])
+
+    def test_capture_rejects_reference_paths_outside_results(self):
+        for reference in ["../private.png", "/tmp/private.png", 7, "reference.txt"]:
+            with self.assertRaisesRegex(ValueError, "local PNG filename"):
+                capture(Path("/tmp/results"), {"reference": reference})
+
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "pixel checks run in the display job with Pillow")
+    def test_native_pixels_must_match_opaque_cpu_reference(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as name:
+            native, reference = Path(name) / "native.png", Path(name) / "reference.png"
+            expected = Image.new("RGBA", (2, 2), (255, 0, 0, 255))
+            expected.putpixel((1, 1), (0, 0, 0, 0))
+            expected.save(reference)
+            observed = expected.convert("RGB")
+            observed.putpixel((1, 1), (0, 255, 0))  # Transparent pixels depend on the native background.
+            observed.save(native)
+            self.assertEqual(verify_pixels(native, [0, 0, 2, 2], reference)["compared_pixels"], 3)
+            observed.putpixel((0, 0), (0, 255, 0))
+            observed.save(native)
+            with self.assertRaisesRegex(ValueError, "differ from CPU reference"):
+                verify_pixels(native, [0, 0, 2, 2], reference)
+            with self.assertRaisesRegex(ValueError, "dimensions differ"):
+                verify_pixels(native, [0, 0, 1, 2], reference)
 
     @unittest.skipUnless(importlib.util.find_spec("PIL"), "pixel checks run in the display job with Pillow")
     def test_visible_specimen_required_in_captured_window(self):
