@@ -79,6 +79,14 @@ impl Config {
 #[derive(Clone)]
 pub struct Reporter(Arc<Worker>);
 
+pub(super) fn active_reporter() -> Option<Reporter> {
+    ACTIVE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .upgrade()
+        .map(Reporter)
+}
+
 struct Worker {
     config: Config,
     wake: mpsc::SyncSender<()>,
@@ -583,6 +591,30 @@ fn deliver_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_window_guard_retains_worker_until_resource_teardown() {
+        let directory = std::env::temp_dir().join(format!(
+            "mui-reporting-lifetime-test-{}",
+            std::process::id()
+        ));
+        let mut config = Config::new("lifetime-test", "1");
+        config.directory = directory.clone();
+        let reporter = Reporter::start(config).unwrap();
+        let worker = Arc::downgrade(&reporter.0);
+        let guard = super::super::retain_reporter();
+        drop(reporter);
+        assert!(
+            worker.upgrade().is_some(),
+            "native resources retain reporting"
+        );
+        drop(guard);
+        assert!(
+            worker.upgrade().is_none(),
+            "final guard joins reporting worker"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn native_operation_recovery_ignores_live_and_completed_owners() {

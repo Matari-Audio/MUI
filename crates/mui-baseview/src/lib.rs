@@ -77,10 +77,16 @@ pub struct Requests {
 impl Requests {
     /// Coherent presentation evidence; absent until the first successful submit.
     pub fn presentation(&self) -> Option<Presentation> {
-        *lock(&self.presentation)
+        *self
+            .presentation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
     fn presented(&self, size: (u32, u32), software: bool) {
-        let mut status = lock(&self.presentation);
+        let mut status = self
+            .presentation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let frames = status.map_or(1, |old| old.frames.saturating_add(1));
         *status = Some(Presentation {
             frames,
@@ -283,6 +289,7 @@ pub struct Handler<V> {
     pub driver: Driver,
     #[cfg(target_os = "linux")]
     x11_window: u32,
+    _reporting: mui::diagnostics::ReportingGuard,
 }
 
 #[cfg(target_os = "linux")]
@@ -331,6 +338,7 @@ impl<V: View> Handler<V> {
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
             #[cfg(target_os = "linux")]
             x11_window: 0,
+            _reporting: mui::diagnostics::retain_reporter(),
         }
     }
 

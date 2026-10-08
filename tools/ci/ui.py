@@ -21,7 +21,7 @@ def read_events(path):
     return events
 
 
-def gallery_summary(events):
+def gallery_summary(events, renderer=None):
     if not events or events[0].get("event") != "run_begin":
         raise ValueError("tester did not record startup")
     header = events[0]
@@ -31,6 +31,9 @@ def gallery_summary(events):
     if sorted(e["case"] for e in ended) != list(range(expected)):
         raise ValueError("gallery cases are missing or duplicated")
     frames = [e for e in events if e.get("event") == "frame"]
+    modes = sorted({f.get("rendering_mode", "unknown") for f in frames})
+    if renderer is not None and modes != [renderer]:
+        raise ValueError(f"expected {renderer} presentation, observed {modes}")
     for case in range(expected):
         found = [f for f in frames if f["case"] == case]
         if sorted(f["step"] for f in found) != list(range(header["steps_per_case"])):
@@ -53,7 +56,7 @@ def gallery_summary(events):
         costs[scene] = {key: distribution([f[key] for f in selected])
                         for key in ("resolve_ms", "submit_ms")}
         costs[scene]["peak_texture_bytes"] = max(f.get("peak_texture_bytes") or 0 for f in selected)
-    return {"cases": expected, "frames": len(frames),
+    return {"cases": expected, "frames": len(frames), "rendering_modes": modes,
             "presented": sum(f["presented"] for f in frames), "scene_costs": costs,
             "timing_scope": "CPU resolve and submission calls; excludes journal I/O, not GPU execution or scanout"}
 
@@ -107,6 +110,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--gallery", action="store_true")
+    parser.add_argument("--renderer", choices=("gpu", "cpu"), help="required gallery presentation mode")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
@@ -159,7 +163,7 @@ def main():
             if process.returncode:
                 raise RuntimeError(f"native child returned {process.returncode}")
             if args.gallery:
-                result["gallery"] = gallery_summary(read_events(output / "events.jsonl"))
+                result["gallery"] = gallery_summary(read_events(output / "events.jsonl"), args.renderer)
                 if captures and len(recorded) != result["gallery"]["cases"]:
                     raise ValueError("not every gallery case has a verified native screenshot")
             result["status"] = "passed"

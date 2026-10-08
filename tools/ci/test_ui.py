@@ -47,6 +47,20 @@ class UiEvidenceTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             gallery_summary(events)
 
+    def test_gpu_probe_rejects_cpu_fallback_and_missing_mode(self):
+        events = completed()
+        with self.assertRaises(ValueError):
+            gallery_summary(events, "gpu")
+        for frame in events[2:4]:
+            frame["rendering_mode"] = "gpu"
+        self.assertEqual(gallery_summary(events, "gpu")["rendering_modes"], ["gpu"])
+        events[3]["rendering_mode"] = "cpu"
+        with self.assertRaises(ValueError):
+            gallery_summary(events, "gpu")
+        for frame in events[2:4]:
+            frame["rendering_mode"] = "cpu"
+        self.assertEqual(gallery_summary(events, "cpu")["presented"], 1)
+
     def test_partial_crash_record_keeps_last_completed_stage(self):
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "events.jsonl"

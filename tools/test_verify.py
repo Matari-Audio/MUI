@@ -42,9 +42,11 @@ with tempfile.TemporaryDirectory() as directory:
     assert "needs: [gate, platforms, ui]" in workflow
     assert 'test "$UI_RESULT" = success' in workflow
     assert "cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1" in ui_workflow
-    assert "--gallery --record" in ui_workflow
+    assert "--gallery --renderer gpu --record" in ui_workflow
     assert "backend: [vulkan, gl]" in ui_workflow
     embedded = ui_workflow.split("\n  embedded:\n", 1)[1].split("\n  native-probe:\n", 1)[0]
+    assert "--gallery --renderer cpu" in embedded
+    assert "target/debug/examples/native_windows" in embedded
     assert "continue-on-error" not in embedded, "embedded CPU lifecycle must be required"
     assert "windows-2025" in embedded and "macos-15" in embedded
     assert "MUI_RENDERER: cpu" in embedded and "WGPU_BACKEND: ${{ matrix.unavailable }}" in embedded

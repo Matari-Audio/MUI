@@ -1,5 +1,5 @@
 //! Retained CPU pixels and optional native presentation without a GPU device.
-use crate::{Cache, Cpu, kurbo::Affine};
+use crate::{Cache, Canvas, Cpu, kurbo::Affine};
 use mui_scene::{Painted, ResolvedScene};
 use vello_common::pixmap::Pixmap;
 
@@ -80,30 +80,49 @@ impl Renderer {
     /// Returns whether pixels changed. GPU materials must first be resolved
     /// with `WeldBackend::Reference`; unsupported scenes fail without presenting.
     pub fn render(&mut self, scene: &ResolvedScene, transform: Affine) -> Result<bool, String> {
+        self.render_inner(scene, transform, None::<fn(&mut dyn Canvas)>)
+    }
+
+    /// Overlays repaint on every call and are included in the presented pixels.
+    pub fn render_with_overlay(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        overlay: impl FnOnce(&mut dyn Canvas),
+    ) -> Result<bool, String> {
+        self.render_inner(scene, transform, Some(overlay))
+    }
+
+    fn render_inner(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        overlay: Option<impl FnOnce(&mut dyn Canvas)>,
+    ) -> Result<bool, String> {
         if !transform.as_coeffs().iter().all(|v| v.is_finite()) {
             return Err("nonfinite CPU scene transform".into());
         }
-        if self.transform == Some(transform) && self.retained == scene.paint {
+        if overlay.is_none() && self.transform == Some(transform) && self.retained == scene.paint {
             return Ok(false);
         }
         self.transform = None;
         self.ctx.reset();
-        crate::paint(
-            &mut Cpu {
-                ctx: &mut self.ctx,
-                resources: &mut self.resources,
-                cache: &mut self.cache,
-            },
-            scene,
-            transform,
-        )
-        .map_err(|e| e.to_string())?;
+        let mut canvas = Cpu {
+            ctx: &mut self.ctx,
+            resources: &mut self.resources,
+            cache: &mut self.cache,
+        };
+        crate::paint(&mut canvas, scene, transform).map_err(|e| e.to_string())?;
+        let has_overlay = overlay.is_some();
+        if let Some(overlay) = overlay {
+            overlay(&mut canvas);
+        }
         self.ctx.flush();
         // ponytail: changed frames repaint fully; add damage clipping after
         // measuring active CPU fallback workloads, preserving blend/backdrop order.
         self.ctx.render(&mut self.pixels, &mut self.resources);
         self.retained.clone_from(&scene.paint);
-        self.transform = Some(transform);
+        self.transform = (!has_overlay).then_some(transform);
         Ok(true)
     }
 }
@@ -147,18 +166,47 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         self.presented = false;
     }
 
+    /// Zero-sized windows retain their pixels until restored.
+    pub fn resize(&mut self, size: (u32, u32)) -> Result<(), String> {
+        if size.0 != 0 && size.1 != 0 {
+            self.renderer.resize(size)?;
+        }
+        self.invalidate();
+        Ok(())
+    }
+
     pub fn present(
         &mut self,
         scene: &ResolvedScene,
         transform: Affine,
         size: (u32, u32),
     ) -> Result<bool, String> {
+        self.present_inner(scene, transform, size, None::<fn(&mut dyn Canvas)>)
+    }
+
+    pub fn present_with_overlay(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        size: (u32, u32),
+        overlay: impl FnOnce(&mut dyn Canvas),
+    ) -> Result<bool, String> {
+        self.present_inner(scene, transform, size, Some(overlay))
+    }
+
+    fn present_inner(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        size: (u32, u32),
+        overlay: Option<impl FnOnce(&mut dyn Canvas)>,
+    ) -> Result<bool, String> {
         use std::num::NonZeroU32;
         let (Some(width), Some(height)) = (NonZeroU32::new(size.0), NonZeroU32::new(size.1)) else {
             return Ok(false);
         };
         self.renderer.resize(size)?;
-        if self.renderer.render(scene, transform)? {
+        if self.renderer.render_inner(scene, transform, overlay)? {
             self.presented = false;
         }
         if self.presented {
@@ -216,6 +264,45 @@ mod tests {
                 !available
             );
         }
+    }
+
+    #[test]
+    fn cpu_overlay_is_visible_and_removing_it_restores_retained_scene() {
+        use crate::kurbo::{Rect, Shape};
+        let scene = mui_scene::resolve(&SceneSpec::new(
+            block(8., 8.).radius(0.).fill(Color::srgb(1., 0., 0.)),
+        ))
+        .unwrap();
+        let mut renderer = Renderer::new((8, 8)).unwrap();
+        renderer.render(&scene, Affine::IDENTITY).unwrap();
+        for green in [true, false] {
+            let color = if green {
+                Color::srgb(0., 1., 0.)
+            } else {
+                Color::srgb(0., 0., 1.)
+            };
+            assert!(
+                renderer
+                    .render_with_overlay(&scene, Affine::IDENTITY, |canvas| {
+                        canvas.set_transform(Affine::IDENTITY);
+                        canvas.set_paint(color.to_srgb().into());
+                        canvas.fill_path(&Rect::new(0., 0., 4., 8.).to_path(0.1));
+                    })
+                    .unwrap()
+            );
+            assert_eq!(
+                &renderer.pixels()[..4],
+                if green {
+                    &[0, 255, 0, 255]
+                } else {
+                    &[0, 0, 255, 255]
+                }
+            );
+            assert_eq!(&renderer.pixels()[7 * 4..8 * 4], &[255, 0, 0, 255]);
+        }
+        assert!(renderer.render(&scene, Affine::IDENTITY).unwrap());
+        assert_eq!(&renderer.pixels()[..4], &[255, 0, 0, 255]);
+        assert!(!renderer.render(&scene, Affine::IDENTITY).unwrap());
     }
 
     #[test]

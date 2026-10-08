@@ -120,7 +120,7 @@ fn parse_theme(src: &str) -> (Theme, Vec<String>) {
 /// Keys a scene actually wrote draw at 1 px and the tree-path keys (`/0/2`)
 /// nobody named draw at 0.5, so a scene's ids stand out of its scaffolding.
 fn inspect(
-    canvas: &mut impl mui::vello::Canvas,
+    canvas: &mut (impl mui::vello::Canvas + ?Sized),
     scene: &mui::scene::ResolvedScene,
     xf: Affine,
     palette: &Palette,
@@ -419,6 +419,10 @@ impl App {
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
         self.ui.set_scale(Some(scale));
+        if let Some(gpu) = &self.gpu {
+            self.ui
+                .set_gpu_welding_available(gpu.rendering_mode() == "gpu");
+        }
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
             // Destructured first: `f` borrows `self.ui`, and handing the
@@ -586,7 +590,7 @@ impl App {
         let xf = Affine::scale(scale);
         let extra = self.scenes[self.selected].overlay();
         let wants_overlay = self.frames || extra.is_some();
-        let draw_extra = |canvas: &mut mui::vello::Classic<'_>| {
+        let draw_extra = |canvas: &mut dyn mui::vello::Canvas| {
             if let Some((key, path)) = extra
                 && let (Some(s), Ok(bez)) = (
                     scene.surface(key),
@@ -712,7 +716,13 @@ impl ApplicationHandler<AccessEvent> for App {
         window.set_visible(true);
         window.request_redraw();
         let display = Box::new(event_loop.owned_display_handle());
-        self.gpu = Some(Gpu::new(window, display));
+        match Gpu::try_new(window, display) {
+            Ok(gpu) => self.gpu = Some(gpu),
+            Err(error) => {
+                self.frame_error = Some(error);
+                event_loop.exit();
+            }
+        }
     }
 
     /// The theme file is the only thing that changes with no event behind it,
@@ -853,6 +863,9 @@ impl ApplicationHandler<AccessEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.invalidate();
+                }
                 if let Some(mut tester) = self.tester.take() {
                     tester.draw(self, event_loop);
                     self.tester = Some(tester);
@@ -908,6 +921,9 @@ fn main() -> Result<(), String> {
     if app.tester.is_some() {
         drop(app.access.take());
         drop(app.gpu.take());
+    }
+    if let Some(error) = app.frame_error {
+        return Err(error);
     }
     app.tester.as_mut().map_or(Ok(()), tester::Tester::finish)
 }

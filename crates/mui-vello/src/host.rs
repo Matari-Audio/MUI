@@ -908,11 +908,11 @@ impl Host {
         let Some(surface) = &self.surface else {
             return Ok(Frame::SurfaceLost);
         };
-        let _operation = self.first_frame.then(|| {
+        let operation = self.first_frame.then(|| {
             crate::diagnostics::operation(
                 "mui-vello",
                 "first_frame",
-                "acquire, render and present first window frame",
+                "first GPU frame completion was not confirmed",
                 self.gpu
                     .diagnostics
                     .candidates
@@ -951,6 +951,10 @@ impl Host {
         }
         .map_err(HostError::Render)?;
         queue.present(frame);
+        // Driver compilation can fault after submit returns, before work completes.
+        if let Some(operation) = operation {
+            queue.on_submitted_work_done(move || drop(operation));
+        }
         if self.first_frame {
             crate::diagnostics::breadcrumb(
                 "mui-vello",

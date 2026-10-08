@@ -89,6 +89,8 @@ impl Lab {
         let Some(gpu) = self.gpu.as_ref() else {
             return;
         };
+        let software = gpu.rendering_mode() == "cpu";
+        self.ui.set_gpu_welding_available(!software);
         let (pw, ph) = gpu.size();
         let scale = gpu.window().scale_factor();
         if self.animate {
@@ -123,7 +125,7 @@ impl Lab {
             Ok(Some(s))=>gpu.window().set_title(&format!("MUI {} | morph {:.2} | measure/arrange {}/{} | uniforms/boundary {}/{} B | effect {} | encodes {}",
                 if self.crisp {"crisp"} else {"organic"},self.morph,layout_work.measured_nodes,layout_work.arranged_nodes,
                 s.uniform_upload_bytes,s.boundary_upload_bytes,s.effect_draws,s.encoded_scenes)),
-            Ok(None)=>{},Err(e)=>eprintln!("render: {e}"),
+            Ok(None)=>{},Err(e)=>{self.dirty = true; eprintln!("render: {e}");},
         }
         if self.animate {
             gpu.window().request_redraw();
@@ -155,6 +157,9 @@ impl ApplicationHandler for Lab {
                 return;
             }
             WindowEvent::RedrawRequested => {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.invalidate();
+                }
                 self.draw();
                 return;
             }

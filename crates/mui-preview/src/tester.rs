@@ -131,7 +131,8 @@ impl Tester {
             self.record(&json!({"event":"case_begin", "case":self.case,
                 "scene":app.scenes[scene_index].name(), "light":app.light,
                 "requested_logical_size":[requested.0,requested.1], "logical_size":[logical.width,logical.height], "overlay":app.frames,
-                "gpu":gpu.diagnostics().to_string()}))?;
+                "rendering_mode":gpu.rendering_mode(), "gpu_error":gpu.gpu_error(),
+                "gpu":gpu.diagnostics().map(ToString::to_string)}))?;
             return Ok(());
         }
         if self.waiting_capture {
@@ -208,6 +209,7 @@ impl Tester {
         }
         self.record(&json!({"event":"frame", "case":self.case, "step":self.step,
             "resolve_ms":resolve_ms,"submit_ms":submit_ms,"presented":stats.is_some(),
+            "rendering_mode":app.gpu.as_ref().map(Gpu::rendering_mode),
             "current":current,"physical_size":[physical.0,physical.1],"scale":scale,
             "paint_items":scene.paint.len(),"surfaces":scene.surfaces().count(),
             "rendered_pixels":stats.map(|s|s.rendered_pixels),

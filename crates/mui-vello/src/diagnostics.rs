@@ -20,6 +20,20 @@ mod reporting;
 #[cfg(all(feature = "reporting", not(target_arch = "wasm32")))]
 pub use reporting::{Config, Reporter};
 
+/// Retains reporting through native resource teardown; empty without reporting.
+pub struct ReportingGuard {
+    #[cfg(all(feature = "reporting", not(target_arch = "wasm32")))]
+    _reporter: Option<Reporter>,
+}
+
+/// Window hosts keep this as their last field, after native resources.
+pub fn retain_reporter() -> ReportingGuard {
+    ReportingGuard {
+        #[cfg(all(feature = "reporting", not(target_arch = "wasm32")))]
+        _reporter: reporting::active_reporter(),
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 const LOG_BYTES: u64 = 1024 * 1024;
 #[cfg(not(target_arch = "wasm32"))]

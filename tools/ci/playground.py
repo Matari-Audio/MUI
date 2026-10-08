@@ -8,7 +8,7 @@ from pathlib import Path
 from threading import Thread
 import time
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 
 def frame(page):
@@ -23,7 +23,7 @@ def frame(page):
 
 
 def rendered(page):
-    page.wait_for_function("document.querySelector('#status').textContent.includes(' draws ')")
+    expect(page.locator("#status")).to_contain_text(" draws ", timeout=30000)
     assert not page.locator("#error").is_visible(), "worker reported a rendering error"
     result = frame(page)
     assert result["colors"] > 1, "worker canvas is blank or uniform"
@@ -37,7 +37,7 @@ def check(page, output):
         page.locator(f'[data-example="{example}"]').click()
         # Clicking loads an example asynchronously; wait for its worker result,
         # rather than accepting the previous successful canvas.
-        page.wait_for_function("name => document.querySelector(`[data-example='${name}']`).getAttribute('aria-pressed') === 'true'", arg=example)
+        expect(page.locator(f'[data-example="{example}"]')).to_have_attribute("aria-pressed", "true")
         evidence[example] = rendered(page)
     page.locator("#source").fill("block(100., 100.).fill(Primary)")
     page.locator("#run").click()

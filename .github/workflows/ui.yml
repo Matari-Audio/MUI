@@ -70,7 +70,7 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/gallery \
-            --gallery --record -- target/debug/mui-preview --test-ui
+            --gallery --renderer gpu --record -- target/debug/mui-preview --test-ui
       - name: Embedded editor pixels, accessibility, expose, close and reopen
         if: ${{ !cancelled() }}
         run: |
@@ -105,6 +105,20 @@ jobs:
             /usr/bin/python3 tools/ci/ui.py --output ui-results/embedded-cpu --timeout 60 -- \
             target/debug/examples/native_editor
           rg -q 'GPU unavailable.*using CPU rendering' ui-results/embedded-cpu/stderr.log
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/standalone-automatic-cpu --gallery --renderer cpu -- \
+            target/debug/mui-preview --test-ui
+      - name: Required standalone CPU gallery and multiwindow lifecycle
+        if: ${{ !cancelled() && matrix.backend == 'vulkan' }}
+        env:
+          MUI_RENDERER: cpu
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/standalone-cpu --gallery --renderer cpu -- \
+            target/debug/mui-preview --test-ui
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/windows-cpu --timeout 60 -- \
+            target/debug/examples/native_windows
       - name: Standalone Wayland presentation, resize and two-window teardown
         if: ${{ !cancelled() && matrix.backend == 'vulkan' }}
         shell: bash
@@ -163,6 +177,15 @@ jobs:
         run: |
           mkdir -p ui-results
           cargo build -p mui-baseview --example native_editor --locked 2>&1 | tee ui-results/build.log
+          cargo build -p mui-preview --bin mui-preview --locked
+          cargo build -p mui-winit --example native_windows --locked
+      - name: Required standalone CPU gallery, resize and two-window teardown
+        shell: bash
+        env:
+          MUI_RENDERER: cpu
+        run: |
+          python3 tools/ci/ui.py --output ui-results/standalone-cpu --gallery --renderer cpu -- target/debug/mui-preview --test-ui
+          python3 tools/ci/ui.py --output ui-results/windows-cpu --timeout 60 -- target/debug/examples/native_windows
       - name: Explicit CPU selection, resize, close and reopen
         shell: bash
         env:
@@ -177,6 +200,7 @@ jobs:
         run: |
           python3 tools/ci/ui.py --output ui-results/automatic-cpu --timeout 60 -- target/debug/examples/native_editor
           grep -q 'GPU unavailable.*using CPU rendering' ui-results/automatic-cpu/stderr.log
+          python3 tools/ci/ui.py --output ui-results/standalone-automatic-cpu --gallery --renderer cpu -- target/debug/mui-preview --test-ui
       - name: Actual WARP adapter is rejected safely and the editor presents
         if: ${{ !cancelled() && runner.os == 'Windows' }}
         shell: bash
@@ -242,7 +266,7 @@ jobs:
         id: native_probe
         shell: bash
         run: |
-          python3 tools/ci/ui.py --output ui-results/native --gallery -- target/debug/mui-preview --test-ui
+          python3 tools/ci/ui.py --output ui-results/native --gallery --renderer gpu -- target/debug/mui-preview --test-ui
       - name: Native GPU embedded editor lifecycle
         if: ${{ !cancelled() }}
         shell: bash
