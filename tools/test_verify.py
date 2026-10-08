@@ -37,7 +37,13 @@ with tempfile.TemporaryDirectory() as directory:
         return [json.loads(line) for line in log.read_text().splitlines()]
 
     workflow = (ROOT / ".github/workflows/verify.yml").read_text()
-    assert "cargo test -p mui-baseview --lib --locked --offline -- --ignored" in workflow
+    ui_workflow = (ROOT / ".github/workflows/ui.yml").read_text()
+    assert "uses: ./.github/workflows/ui.yml" in workflow
+    assert "needs: [gate, platforms, ui]" in workflow
+    assert 'test "$UI_RESULT" = success' in workflow
+    assert "cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1" in ui_workflow
+    assert "--gallery --record" in ui_workflow
+    assert "backend: [vulkan, gl]" in ui_workflow
     sections = re.search(r"section: \[([^]]+)\]", workflow).group(1).replace(" ", "").split(",")
     recorded = {section: commands(section) for section in sections}
     vendor_manifests = {"vendor/moose-baseview/Cargo.toml", "vendor/xim-rs/Cargo.toml"}
