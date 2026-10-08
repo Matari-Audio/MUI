@@ -90,6 +90,40 @@ def verify_pixels(path, stage, reference=None):
         return metadata
 
 
+def gpui_summary(events, screenshots=None):
+    if not events or events[0].get("event") != "run_begin" or not events[0].get("test_ui"):
+        raise ValueError("GPUI tester did not record native test startup")
+    completed = [event for event in events if event.get("event") == "test_complete"]
+    if len(completed) != 1 or not completed[0].get("completed"):
+        raise ValueError("GPUI tester did not complete its input/image/resize phases")
+    completed = completed[0]
+    extents = [completed.get("resize_from"), completed.get("resize_to")]
+    if any(not isinstance(size, list) or len(size) != 2 or
+           any(type(value) is not int or value <= 0 for value in size) for size in extents) or extents[0] == extents[1]:
+        raise ValueError("GPUI native extent did not change")
+    if not any(event.get("event") == "scripted_input_changed_image" for event in events):
+        raise ValueError("GPUI scripted input did not change pixels")
+    frames = [event for event in events if event.get("event") == "cpu_image_ready"]
+    if len(frames) < 5 or completed.get("native_frame_callbacks", 0) < 5:
+        raise ValueError("GPUI native image/callback evidence is incomplete")
+    last = events[-1]
+    boundary = last.get("event")
+    if boundary not in ("run_end", "native_shutdown_hook") or not last.get("completed") or last.get("error"):
+        raise ValueError("GPUI native shutdown evidence is missing or failed")
+    if not last.get("probe_resources_dropped"):
+        raise ValueError("GPUI shutdown did not release its owned resources")
+    returned = last.get("native_application_returned") is True
+    if boundary == "run_end" and not returned:
+        raise ValueError("GPUI application return was not recorded")
+    if boundary == "native_shutdown_hook" and (returned or last.get("shutdown_phase") != "after_gpui_window_clear_and_entity_flush"):
+        raise ValueError("GPUI shutdown hook did not release its owned resources")
+    if screenshots is not None and (screenshots != 5 or completed.get("native_capture_acknowledgements") != 5):
+        raise ValueError("GPUI tester did not verify all five native screenshots")
+    return {"changed_images": len(frames), "native_application_returned": returned,
+            "shutdown_boundary": boundary, "native_gpu_submission_verified": False,
+            "timing_scope": "CPU image preparation and native scheduling; excludes GPU completion/scanout"}
+
+
 def capture(output, request):
     reference = request.get("reference")
     if reference is not None:
@@ -135,6 +169,7 @@ def main():
     parser.add_argument("--renderer", choices=("gpu", "cpu"), help="required gallery presentation mode")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--capture", action="store_true", help="verify native capture requests without gallery schema")
+    parser.add_argument("--gpui", action="store_true", help="require GPUI input, resize and native shutdown evidence")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -194,6 +229,8 @@ def main():
                     raise ValueError("not every gallery case has a verified native screenshot")
             if args.capture and captures and not recorded:
                 raise ValueError("native tester supplied no verified capture requests")
+            if args.gpui:
+                result["gpui"] = gpui_summary(read_events(output / "gpui-events.jsonl"), len(recorded) if captures else None)
             result["status"] = "passed"
         except Exception as error:
             result["error"] = str(error)
@@ -219,7 +256,7 @@ def main():
                 except subprocess.TimeoutExpired:
                     recorder.kill()
                     recorder.wait()
-            events = read_events(output / "events.jsonl")
+            events = read_events(output / ("gpui-events.jsonl" if args.gpui else "events.jsonl"))
             result.update(elapsed_seconds=time.monotonic() - started, last_event=events[-1] if events else None, screenshots=len(recorded))
             (output / "result.json").write_text(json.dumps(result, indent=2))
     print(json.dumps(result, indent=2))

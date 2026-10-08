@@ -67,10 +67,11 @@ not an unconditional replacement. GPUI's ownership/lifecycle ideas may still
 reduce MUI complexity, but native embedding, device failure handling, text,
 materials and DAW behavior need direct evidence before replacing the host layer.
 
-The macOS Metal and forced CPU galleries passed 750 frames each on fc666b46;
-standalone multiwindow resize/teardown also passed. Embedded child presentation
-and resize worked but final native event-loop teardown timed out. The native
-fixture deliberately fails that path; passing standalone work does not hide it.
+The macOS owned-loop teardown timeout exposed on fc666b46 was fixed by waking
+AppKit after stop; revision 199d46be passed native embedded close/reopen and resize,
+standalone galleries, multiwindow teardown and the Metal GPU probe. Windows
+passed required CPU lifecycle and actual WARP rejection. These native host tests
+are correctness evidence, separate from the renderer throughput measurements.
 
 Windows WARP/DX12 previously exited with 0xc0000005 after one submission.
 Normal and CDB reproductions locate the fault in
@@ -85,7 +86,7 @@ Controlled same-host evidence: https://github.com/Matari-Audio/MUI/actions/runs/
 Local raw samples and PNGs: /tmp/mui-renderer-local-rx6600-fdca0ecb
 Compact complete summaries: renderer-measurements-2026-10-08.jsonl
 
-Not measured: native GPUI D3D11/Metal, NVIDIA/Intel hardware, hosted plugin
-lifecycle for candidate engines, full text/effects/material parity, audio xruns,
+Not measured: completed-GPU native GPUI D3D11/Metal timings, NVIDIA/Intel hardware,
+real DAW lifecycle for candidate engines, full text/effects/material parity, audio xruns,
 GPU timestamps or GPU memory. Startup is fresh-process, not guaranteed cold
 driver-cache startup.

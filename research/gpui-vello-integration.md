@@ -199,9 +199,10 @@ reuses unchanged images and removes superseded atlas entries. It includes
 tests for the alpha/channel seam and malformed image dimensions. Text,
 materials, effects and images are rasterized by the existing MUI implementation.
 
-This remains a **standalone prototype with hosted compilation/native validation
-pending**. Static checks pass; a separate dependency lockfile is resolved without
-compilation, and no hardware result is claimed. JSON metrics distinguish resolve/raster/image
+This remains a **standalone prototype**. The hosted macOS run compiled and
+passed 19 tests; editor/effects/material each completed the scripted image,
+gesture and native resize stages. Shutdown-hook validation and native screenshot
+parity remain pending, and no performance benefit is claimed. JSON metrics distinguish resolve/raster/image
 preparation CPU time from a next-frame scheduling interval; the latter is not
 GPU completion or presentation latency. GPU memory/upload timing needs driver
 capture. At 1200×800, each changed frame carries 3.84 MB; 200% scale increases
@@ -215,8 +216,19 @@ fully opaque pixels against the CPU reference with a four-channel-value RGB
 tolerance, and reject blank native images. Transparent compositing and GPU
 completion still need separate evidence.
 Windows/macOS without that capture protocol retain callback evidence. The
-summary keeps `native_gpu_submission_verified=false`; the completion journal
-records return from the native application loop separately.
+summary keeps `native_gpu_submission_verified=false`. The completion journal
+records an actual native-loop return as `run_end`. On macOS, GPUI invokes
+[`NSApplication terminate:`](https://github.com/zed-industries/zed/blob/f1a10a5227a331e86bdb006301e1090a21d33e7a/crates/gpui_macos/src/platform.rs#L594-L611),
+which can terminate the process before that return. The probe's public
+[`App::on_app_quit`](https://github.com/zed-industries/zed/blob/f1a10a5227a331e86bdb006301e1090a21d33e7a/crates/gpui/src/app.rs#L2590-L2608)
+future records `native_shutdown_hook` with `native_application_returned=false`.
+GPUI polls this future after clearing windows and flushing released entities
+([shutdown order](https://github.com/zed-industries/zed/blob/f1a10a5227a331e86bdb006301e1090a21d33e7a/crates/gpui/src/app.rs#L1093-L1124));
+a final-field guard observes the probe's owned-resource teardown. This boundary
+does not prove all driver allocations were destroyed or the GPU completed.
+Incomplete tests or shutdown failures explicitly exit nonzero. The first
+macOS run ended after `test_complete`, correctly failing the older return-only
+collector contract; the revised lifecycle evidence still needs a hosted rerun.
 
 This probe can investigate GPUI's D3D11/Metal image presentation on affected
 hardware without feeding it MUI's compute renderer. It still needs GPUI's GPU

@@ -783,6 +783,14 @@ impl Host {
         if (width, height) == self.size() {
             return Ok(());
         }
+        // Some backends accept surface configuration on a destroyed device.
+        // Its renderer resources are still invalid; let the host detach this
+        // GPU before any resize or presentation uses them.
+        if self.gpu.poll_lost() {
+            let error = "device lost before resize".to_owned();
+            crate::diagnostics::error("mui-vello", "resize_failed", &error);
+            return Err(HostError::Configuration(error));
+        }
         let OnDevice {
             device,
             config,

@@ -38,6 +38,8 @@ with tempfile.TemporaryDirectory() as directory:
 
     workflow = (ROOT / ".github/workflows/verify.yml").read_text()
     ui_workflow = (ROOT / ".github/workflows/ui.yml").read_text()
+    assert "CARGO_TARGET_DIR=" not in (ROOT / "tools/verify.sh").read_text()
+    assert "RUSTC_WRAPPER=" not in (ROOT / "tools/verify.sh").read_text()
     assert "uses: ./.github/workflows/ui.yml" in workflow
     assert "needs: [gate, platforms, ui]" in workflow
     assert 'test "$UI_RESULT" = success' in workflow

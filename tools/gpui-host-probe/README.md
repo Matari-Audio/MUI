@@ -1,8 +1,9 @@
 # MUI pixels in a native GPUI window
 
-Source prototype, 2026-10-08. **Hosted compilation and native validation are
-pending.** Static checks pass; no benefit or native-device compatibility
-result has been established.
+Source prototype, 2026-10-08. The hosted macOS run compiled and passed 19
+tests; editor/effects/material each completed the scripted image, gesture and
+resize stages. **Validation of the shutdown-hook fix and native screenshot
+parity is pending.** No performance benefit has been established.
 
 This isolated package uses GPUI's stock native platform and public `RenderImage`
 API to display the complete output of MUI's existing Vello CPU renderer. It
@@ -52,10 +53,17 @@ pixel extent. Each request identifies a CPU reference PNG and its dimensions;
 the reference is saved before publishing the request. It retains premultiplied
 RGBA, so comparison uses opaque pixels (alpha exactly 255) and tolerates four
 levels of channel error rather than treating transparency/AA edges as parity
-evidence. The probe waits for each screenshot acknowledgement before advancing.
+evidence. The probe holds the exact requested image while waiting for each
+screenshot acknowledgement, then resumes animation and input advancement.
 Native Wayland capture needs a compositor-specific collector rather than
 xdotool.
 Windows/macOS without capture acknowledgements report callback evidence only.
+
+The first hosted Linux run passed 19 tests and matched its first two native
+captures exactly in all three fixture runs. The gesture capture then failed
+because hover animation changed the displayed pixels while the saved CPU
+reference stayed fixed. The image-hold fix preserves the comparison tolerance;
+all five milestones still need a hosted rerun.
 
 Resize the editor at 100% and 200% display scale, including narrow/tall and
 wide/short windows. Compare native screenshots against the same MUI gallery
@@ -78,8 +86,18 @@ preparation time, physical extent, image payload size, process RSS on Linux,
 and startup elapsed time. The next-frame callback interval is scheduling
 evidence; **it is not GPU completion, upload duration, or presentation latency**.
 The summary always sets `native_gpu_submission_verified=false`; screenshot
-acknowledgements are counted separately. `run_end` follows return from GPUI's
-native application loop and failures return a nonzero exit status.
+acknowledgements are counted separately. `run_end` records an actual return
+from GPUI's native application loop. macOS uses Cocoa termination, which can
+exit without returning from that loop. The public `App::on_app_quit` future
+instead records `native_shutdown_hook` after GPUI clears its windows and
+flushes released entities. A final-field drop guard verifies the probe's
+owned resources were dropped. This event explicitly keeps
+`native_application_returned=false`; it does not verify GPU completion or
+destruction of every native driver allocation. Validation requires a
+successful `test_complete` followed by either a valid shutdown hook or an
+actual `run_end`. Incomplete tests, explicit failures, missing owned-resource
+teardown, and shutdown journal failures force a nonzero exit status even
+when Cocoa would otherwise exit with status zero.
 GPU specs are available from GPUI on Linux and absent from that API on Windows
 and macOS. Driver capture is needed to measure GPU memory and transfer timing.
 

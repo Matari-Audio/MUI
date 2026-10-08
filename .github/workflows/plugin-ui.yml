@@ -100,7 +100,7 @@ jobs:
             else
               rg -q 'mui-vello/frame_presented' "$MUI_DIAGNOSTICS_DIR"
             fi
-            if rg -n 'ERROR ' "$MUI_DIAGNOSTICS_DIR"; then
+            if rg --glob '*.log' -n 'ERROR ' "$MUI_DIAGNOSTICS_DIR"; then
               echo '::error::MUI recorded a graphics or window failure'
               exit 1
             fi

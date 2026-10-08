@@ -145,15 +145,14 @@ impl Parent {
                     state.first_frame = 0;
                     state.phase = Phase::Open;
                     return Ok(state.round == 2);
-                } else {
-                    state.first_frame = presented.frames;
-                    self.cx
-                        .resize(LogicalSize::new(420., 340.))
-                        .map_err(|e| e.to_string())?;
-                    state.requests.resize(RESIZED.0, RESIZED.1);
-                    state.requests.redraw();
-                    state.phase = Phase::Resized;
                 }
+                state.first_frame = presented.frames;
+                self.cx
+                    .resize(LogicalSize::new(420., 340.))
+                    .map_err(|e| e.to_string())?;
+                state.requests.resize(RESIZED.0, RESIZED.1);
+                state.requests.redraw();
+                state.phase = Phase::Resized;
             }
         }
         Ok(false)

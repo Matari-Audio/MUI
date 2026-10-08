@@ -67,6 +67,14 @@ struct TestRun {
     captures: u8,
 }
 
+struct ProbeDrop(Rc<Cell<bool>>);
+
+impl Drop for ProbeDrop {
+    fn drop(&mut self) {
+        self.0.set(true);
+    }
+}
+
 struct Probe {
     scene: Box<dyn scenes::PreviewScene>,
     ui: Ui,
@@ -83,6 +91,8 @@ struct Probe {
     completed: Rc<Cell<bool>>,
     failure: Rc<RefCell<Option<String>>>,
     capture: Option<std::path::PathBuf>,
+    // Struct fields drop in declaration order: observe this after owned resources.
+    _drop: ProbeDrop,
 }
 
 fn checksum(pixels: &[u8]) -> u64 {
@@ -277,6 +287,19 @@ impl Probe {
     }
 
     fn frame(&mut self, window: &mut Window) -> Result<Arc<RenderImage>> {
+        if self.capture.is_some()
+            && self
+                .test
+                .as_ref()
+                .is_some_and(|test| test.capture_requested == Some(test.step))
+        {
+            // Keep the sampled image identical to its published CPU reference.
+            // Hover animations and queued input resume after the capture acknowledgement.
+            return self
+                .image
+                .clone()
+                .ok_or_else(|| anyhow!("capture milestone has no native image"));
+        }
         let viewport = window.viewport_size();
         let scale = f64::from(window.scale_factor());
         let logical = mui::prelude::Size::new(
@@ -487,6 +510,8 @@ fn main() -> Result<()> {
     let error = launch_error.clone();
     let completed = Rc::new(Cell::new(false));
     let finished = completed.clone();
+    let dropped = Rc::new(Cell::new(false));
+    let teardown = dropped.clone();
     let final_journal = journal.clone();
     let capture = if std::env::var_os("MUI_TEST_CAPTURE").is_some_and(|v| v == "1") {
         Some(
@@ -498,6 +523,47 @@ fn main() -> Result<()> {
         None
     };
     gpui_platform::application().run(move |cx: &mut App| {
+        let shutdown_completed = completed.clone();
+        let shutdown_failure = launch_error.clone();
+        let shutdown_journal = journal.clone();
+        let shutdown_dropped = dropped.clone();
+        cx.on_app_quit(move |_| {
+            let completed = shutdown_completed.clone();
+            let failure = shutdown_failure.clone();
+            let journal = shutdown_journal.clone();
+            let dropped = shutdown_dropped.clone();
+            // GPUI polls quit futures after clearing windows and flushing entities.
+            async move {
+                if test_ui && !completed.get() && failure.borrow().is_none() {
+                    *failure.borrow_mut() =
+                        Some("native shutdown began before test completion".into());
+                }
+                if !dropped.get() && failure.borrow().is_none() {
+                    *failure.borrow_mut() =
+                        Some("probe resources were retained through native shutdown".into());
+                }
+                let result = record(
+                    &journal,
+                    serde_json::json!({
+                        "event":"native_shutdown_hook", "completed":!test_ui || completed.get(),
+                        "error":failure.borrow().as_deref(),
+                        "probe_resources_dropped":dropped.get(),
+                        "shutdown_phase":"after_gpui_window_clear_and_entity_flush",
+                        "native_application_returned":false,
+                        "native_gpu_submission_verified":false,
+                    }),
+                );
+                if let Err(error) = result {
+                    eprintln!("GPUI probe shutdown journal failed: {error:#}");
+                    std::process::exit(1);
+                }
+                // Cocoa termination can skip main's return and its error exit status.
+                if failure.borrow().is_some() {
+                    std::process::exit(1);
+                }
+            }
+        })
+        .detach();
         if test_ui {
             let timer = cx.background_executor().timer(Duration::from_secs(30));
             let completed = completed.clone();
@@ -545,6 +611,7 @@ fn main() -> Result<()> {
                         completed,
                         failure: launch_error.clone(),
                         capture,
+                        _drop: ProbeDrop(dropped),
                     }
                 })
             },
@@ -562,6 +629,7 @@ fn main() -> Result<()> {
         serde_json::json!({
             "event":"run_end", "completed":!test_ui || finished.get(),
             "error":error.borrow().as_deref(), "native_application_returned":true,
+            "probe_resources_dropped":teardown.get(),
             "native_gpu_submission_verified":false,
         }),
     )?;

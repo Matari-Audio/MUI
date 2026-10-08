@@ -653,7 +653,8 @@ mod tests {
         let start = Instant::now();
         let error = resolver
             .resolve(
-                &"https://unanswered.invalid/".parse().unwrap(),
+                // .invalid is answered locally by RFC 6761; this name reaches the UDP fixture.
+                &"https://unanswered.example.com/".parse().unwrap(),
                 &config,
                 NextTimeout {
                     after: ureq::unversioned::transport::time::Duration::from_millis(100),
@@ -661,7 +662,10 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert!(matches!(error, ureq::Error::Timeout(ureq::Timeout::Global)));
+        assert!(
+            matches!(error, ureq::Error::Timeout(ureq::Timeout::Global)),
+            "{error:?}"
+        );
         assert!(
             start.elapsed() < Duration::from_secs(2),
             "DNS runtime must cancel and join"

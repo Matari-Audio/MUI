@@ -7,7 +7,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from ui import capture, gallery_summary, main, read_events, verify_pixels
+from ui import capture, gallery_summary, gpui_summary, main, read_events, verify_pixels
 
 
 def completed():
@@ -20,6 +20,32 @@ def completed():
 
 
 class UiEvidenceTests(unittest.TestCase):
+    def test_gpui_requires_work_and_an_honest_shutdown_boundary(self):
+        events = [{"event": "run_begin", "test_ui": True},
+                  *[{"event": "cpu_image_ready"} for _ in range(5)],
+                  {"event": "scripted_input_changed_image"},
+                  {"event": "test_complete", "completed": True, "resize_from": [100, 100],
+                   "resize_to": [75, 75], "native_frame_callbacks": 5, "native_capture_acknowledgements": 5},
+                  {"event": "native_shutdown_hook", "completed": True, "error": None,
+                   "shutdown_phase": "after_gpui_window_clear_and_entity_flush",
+                   "probe_resources_dropped": True, "native_application_returned": False}]
+        self.assertFalse(gpui_summary(events, 5)["native_application_returned"])
+        for bad in [events[:-1], events[1:], events[:6] + events[7:]]:
+            with self.assertRaises(ValueError):
+                gpui_summary(bad)
+        for change in [{"completed": False}, {"probe_resources_dropped": False},
+                       {"error": "failed"}, {"native_application_returned": True}]:
+            with self.assertRaises(ValueError):
+                gpui_summary(events[:-1] + [{**events[-1], **change}])
+        with self.assertRaises(ValueError):
+            gpui_summary(events, 4)
+        for extent in [None, [75], [0, 75], [True, 75], [100, 100]]:
+            with self.assertRaises(ValueError):
+                gpui_summary(events[:-2] + [{**events[-2], "resize_to": extent}, events[-1]])
+        events[-1] = {"event": "run_end", "completed": True, "error": None,
+                      "probe_resources_dropped": True, "native_application_returned": True}
+        self.assertTrue(gpui_summary(events, 5)["native_application_returned"])
+
     def test_failed_child_and_timeout_preserve_result(self):
         for code, deadline, exit_code in [("raise SystemExit(17)", "10", 17),
                                           ("import time; time.sleep(10)", "1", None)]:

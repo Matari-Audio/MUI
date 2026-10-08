@@ -264,13 +264,10 @@ jobs:
             output="gpui-results/$scene"
             if [[ "$RUNNER_OS" == Linux ]]; then
               if ! xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
-                python3 tools/ci/ui.py --output "$output" --capture --timeout 90 -- "$binary" "--test-ui=$scene"; then failed=1; fi
+                python3 tools/ci/ui.py --output "$output" --gpui --capture --timeout 90 -- "$binary" "--test-ui=$scene"; then failed=1; fi
             else
-              if ! python3 tools/ci/ui.py --output "$output" --timeout 90 -- "$binary" "--test-ui=$scene"; then failed=1; fi
+              if ! python3 tools/ci/ui.py --output "$output" --gpui --timeout 90 -- "$binary" "--test-ui=$scene"; then failed=1; fi
             fi
-            # Callback evidence is not GPU completion; Linux also compares native pixels.
-            if ! grep -q '"event":"run_end"' "$output/gpui-events.jsonl"; then failed=1; fi
-            if ! grep -q '"event":"test_complete"' "$output/gpui-events.jsonl"; then failed=1; fi
           done
           exit "$failed"
       - name: Preserve prototype evidence after failure
