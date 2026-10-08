@@ -7,6 +7,7 @@ license.workspace = true
 
 [features]
 default = []
+reporting = ["dep:serde_json", "dep:sha2", "dep:ureq"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
@@ -49,6 +50,12 @@ png.workspace = true
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster.workspace = true
 mui.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+# The joined resolver uses ureq's explicitly unversioned low-level API.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
 
 [[example]]
 name = "gpu_contract"

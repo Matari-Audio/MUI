@@ -22,9 +22,16 @@ impl Gpu {
         window: Arc<Window>,
         display: Box<winit::event_loop::OwnedDisplayHandle>,
     ) -> Result<Self, String> {
+        let operation = mui::diagnostics::operation(
+            "mui-winit",
+            "create_instance",
+            "creating window GPU instance",
+            None,
+        );
         let instance = wgpu::Instance::new(
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(display),
         );
+        drop(operation);
         let surface = surface(&instance, &window)?;
         let size = window.inner_size();
         let host =
@@ -99,6 +106,12 @@ fn surface(
     instance: &wgpu::Instance,
     window: &Arc<Window>,
 ) -> Result<wgpu::Surface<'static>, String> {
+    let _operation = mui::diagnostics::operation(
+        "mui-winit",
+        "create_surface",
+        "creating window surface",
+        None,
+    );
     instance
         .create_surface(wgpu::SurfaceTarget::from_window_without_display(
             window.clone(),

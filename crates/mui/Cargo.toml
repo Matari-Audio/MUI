@@ -7,6 +7,7 @@ license.workspace = true
 
 [features]
 default = []
+reporting = ["mui-vello/reporting"]
 gpu-effects = ["mui-vello/gpu-effects"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]

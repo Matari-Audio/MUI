@@ -486,12 +486,14 @@ impl GpuRenderer {
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
         checked_size(&self.device, size)?;
         if size != self.size {
-            self.size = size;
             let have = self.target.size;
             if size[0] > have[0] || size[1] > have[1] {
                 let grown = [size[0].max(have[0]), size[1].max(have[1])];
                 self.target = Self::target(&self.device, &self.passes, grown);
             }
+            // An allocation panic must leave the old size intact so a caught
+            // failure cannot make the next resize skip the required allocation.
+            self.size = size;
             self.write_frame();
             self.invalidate();
         }

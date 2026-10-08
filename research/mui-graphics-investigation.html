@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MUI graphics investigation — 8 October 2026</title>
+<style>
+*{box-sizing:border-box}body{margin:0;color:var(--foreground,#1f2937);font:14px/1.55 var(--font-sans,system-ui,sans-serif);background:transparent}h2{font-size:17px;margin:24px 0 10px}h3{font-size:15px;margin:0 0 5px}p{margin:7px 0 12px}.lead{font-size:18px;line-height:1.45;margin-top:0}.muted,small{color:var(--foreground,#334155)}code{font:12px var(--font-mono,monospace);overflow-wrap:anywhere}a{color:var(--foreground,#1f2937);text-decoration:underline;text-underline-offset:3px}.status{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.box{padding:16px;background:var(--card,#f1f5f9);border-radius:var(--radius,10px)}.tag{display:inline-block;font-size:11px;font-weight:650;letter-spacing:.04em;margin-bottom:6px;padding:2px 7px;border-radius:5px;background:var(--secondary,#e2e8f0)}.ok{color:var(--foreground,#1f2937)}.blocked{color:var(--foreground,#1f2937)}.pending{color:var(--foreground,#1f2937)}.flow{display:grid;grid-template-columns:1fr 24px 1fr 24px 1fr;align-items:center;gap:5px}.flow .box{min-height:96px}.arrow{color:var(--foreground,#334155);text-align:center}.flow strong{display:block}.flow small{display:block;margin-top:5px}.rail{margin:9px 0 0;padding:9px 12px;border-left:1px solid var(--accent,#1d4ed8);color:var(--foreground,#334155)}details{border-top:1px solid var(--border,#cbd5e1);padding:12px 0}summary{cursor:pointer;font-weight:600;display:list-item;min-height:44px}details p{padding-left:8px}summary .tag{margin:0 6px 0 0;font-weight:600}.file{color:var(--foreground,#334155);font-size:12px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border,#cbd5e1);vertical-align:top}th{color:var(--foreground,#334155);font-size:11px;text-transform:uppercase;letter-spacing:.06em}th:first-child,td:first-child{padding-left:0}.list{padding-left:18px}.list li{margin:7px 0}.checks{display:grid;grid-template-columns:1fr 1fr;gap:10px}.note{font-size:12px;color:var(--foreground,#334155);margin-top:17px}pre{padding:16px;background:var(--code-background,#f1f5f9);border-radius:var(--radius,10px);overflow:auto}pre code{white-space:pre;overflow-wrap:normal}@media(max-width:500px){.status,.checks{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.flow .box{min-height:0}.arrow{transform:rotate(90deg);height:20px}td,th{padding:8px 4px;font-size:12px}}
+summary:focus-visible,a:focus-visible{outline:2px solid var(--foreground,#1f2937);outline-offset:4px}::selection{background:var(--primary,#1f2937);color:var(--primary-foreground,#fff)}
+</style></head><body>
+<p class="lead">Plugin editor CI is possible on GitHub runners. A reusable VST3 workflow is prepared; the NVIDIA / Intel crash cause remains unproven.</p>
+<p class="muted">Source audit · 8 October 2026 · MUI base <code>1f1daadb</code>. Affected-user crash logs and a reproducible NVIDIA / Intel case remain unavailable.</p>
+<h2>Display and plugin editor testing in CI</h2>
+<table><thead><tr><th>Runner</th><th>Useful coverage</th><th>Limit</th></tr></thead><tbody>
+ <tr><td>Standard Ubuntu + Xvfb</td><td>Real native editor windows on software Vulkan / GL; open, close, reopen and automation while processing</td><td>Software drivers; no consumer GPU reproduction</td></tr>
+ <tr><td>Paid hosted NVIDIA T4</td><td>Linux / Windows NVIDIA driver coverage</td><td>Different GPU from affected consumer models</td></tr>
+ <tr><td>Paid macOS M2 XLarge</td><td>Hardware-accelerated Metal</td><td>Apple GPU coverage</td></tr>
+ <tr><td>Dedicated hardware</td><td>Affected Intel / NVIDIA models and specific DAWs</td><td>Requires owned or rented machines</td></tr>
+</tbody></table>
+<p>Standard GitHub runners are <a href="https://docs.github.com/en/actions/concepts/billing-and-usage">free for public repositories</a>. GitHub documents <a href="https://docs.github.com/en/actions/reference/runners/larger-runners">paid NVIDIA T4 and macOS M2 GPU runners</a>; its listed hosted GPUs omit Intel. Dedicated Intel hardware is the coverage path inferred from that list.</p>
+<details open><summary>Reusable workflow prepared · software Vulkan + GL</summary>
+ <p><code>.github/workflows/plugin-ui.yml</code> consumes an already-built Linux x86_64 VST3 artifact. Pinned pluginval 1.0.4 runs strictness 6 three times with GUI tests enabled. Jobs preserve a display recording, validator output, graphics metadata and local MUI journals. A missing editor test fails validation. Automatic issue delivery is disabled in CI.</p>
+ <p>With <code>require-mui-diagnostics: true</code>, an instrumented plugin must record its first frame submission and have no MUI error records. Submission is evidence of reaching the surface; pixel correctness needs a separate assertion. Pluginval’s <a href="https://github.com/Tracktion/pluginval/blob/v1.0.4/Source/tests/BasicTests.cpp">basic editor tests</a> and <a href="https://github.com/Tracktion/pluginval/blob/v1.0.4/Source/tests/EditorTests.cpp">editor stress tests</a> cover lifecycle behavior, not screenshot comparisons or resizing.</p>
+ <p>MUI’s existing Xvfb native tests assert displayed pixels, resize and reopen. Their workflow is extended from GL to both software backends. Windows verification deliberately selects an unavailable backend to skip GPU tests because of a recorded WARP / DX12 fault. A green Windows check currently leaves rendering unverified.</p>
+ <p class="file">Actionlint and all shell syntax checks passed. Five simulated cases passed: success, skipped editor, missing MUI frame, MUI error and validator failure. Real plugin / hosted-runner execution is still pending. Caller setup is documented in <code>README.md</code>; released plugins are not yet wired to the workflow. CLAP needs a GUI-capable CLAP host.</p>
+</details>
+<div class="status">
+ <div class="box"><span class="tag ok">IMPLEMENTED</span><h3>Three correctness fixes</h3><small>Surface reconfiguration, renderer resize state and the native error logger.</small></div>
+ <div class="box"><span class="tag pending">PREPARED</span><h3>Reusable reporting</h3><small>Local evidence → background retry → grouped MUI issues. Server is not deployed.</small></div>
+ <div class="box"><span class="tag blocked">BLOCKED</span><h3>Final Rust validation</h3><small>Other Rust jobs remain running, as instructed. Further Cargo, Clippy and GPU validation remains queued.</small></div>
+</div>
+<h2>Shared graphics pipeline</h2>
+<div class="flow">
+ <div class="box"><strong>Plugin editor</strong><small>Moose MUI → mui-baseview<br>Native child window + surface</small></div><div class="arrow" aria-hidden="true">→</div>
+ <div class="box"><strong>MUI GPU host</strong><small>wgpu instance → adapters → device<br>Surface configure / acquire / present</small></div><div class="arrow" aria-hidden="true">→</div>
+ <div class="box"><strong>Retained renderer</strong><small>Vello compute + MUI passes<br>Framebuffers, effects, textures</small></div>
+</div>
+<p class="rail">A driver fault can happen before adapter fallback runs. Rust <code>catch_unwind</code> catches Rust unwind panics; a native fault or process abort needs durable evidence across launches.</p>
+<h2>Findings — expand for evidence</h2>
+<details open><summary><span class="tag ok">FIXED · P1</span>Resize and outdated-surface recovery bypassed guarded configuration</summary>
+ <p>Initialization used validation / out-of-memory / internal error scopes and caught configuration panics. Resize and outdated-surface recovery called <code>surface.configure</code> directly. Both now use the shared guarded helper. A failed configure returns a typed error; the stored configuration and size commit only after success. The plugin host also logged a failed resize and continued presenting, potentially clearing its pending redraw. It now skips that presentation and retries after 500 ms with the frame still pending.</p>
+ <p class="file"><code>crates/mui-vello/src/host.rs</code> · <code>configure</code>, <code>Host::resize</code>, <code>present_inner</code>. Configuration has documented failure / panic conditions: <a href="https://wgpu.rs/doc/wgpu/api/surface/struct.Surface.html">wgpu Surface documentation</a>.</p>
+</details>
+<details><summary><span class="tag ok">FIXED · P1</span>Renderer size changed before framebuffer allocation succeeded</summary>
+ <p><code>GpuRenderer::resize</code> set <code>self.size</code> before allocating a larger target. If that allocation panicked and an outer window guard caught it, a retry could compare equal and skip the allocation. The assignment now follows allocation. This fixes the stale-state path; it does not make all GPU allocation failures recoverable.</p>
+ <p class="file"><code>crates/mui-vello/src/effects/retained.rs:486</code></p>
+</details>
+<details><summary><span class="tag ok">FIXED · P1</span>A panicking plugin logger could escape the native callback guard</summary>
+ <p>The guard caught a window callback panic, then invoked the plugin’s <code>View::log</code> outside the catch. A logger panic could cross the native boundary. Logging now catches that panic too and preserves the original and logger failure in MUI diagnostics. A regression test is added; its final execution is blocked.</p>
+ <p class="file"><code>crates/mui-baseview/src/lib.rs:843</code> · <code>log</code>, <code>guard</code></p>
+</details>
+<details><summary><span class="tag pending">PARTIAL · P1</span>Fatal startup faults had no automatic durable report</summary>
+ <p>New session journals record the last operation before driver entry. Retained reporters automatically queue caught errors, actual-device metadata and panics. Locked markers cover instance / surface creation, adapter enumeration, device / renderer startup, configuration and the first successful draw. After abrupt termination, the next load reports an <strong>unconfirmed interrupted operation</strong>. Normal return and Rust unwind clear the marker; live owners are skipped.</p>
+ <p>Steady-frame native faults, forced host termination and unrelated DAW crashes still require OS exception / stack evidence. This implementation does not install process-wide hooks or claim fault ownership. It is not a full minidump collector.</p>
+ <p class="file"><code>crates/mui-vello/src/diagnostics.rs</code> and <code>diagnostics/reporting.rs</code>. OS file-lock release is documented in <a href="https://doc.rust-lang.org/std/fs/struct.File.html#method.try_lock">Rust File locking</a>.</p>
+</details>
+<details><summary><span class="tag blocked">OPEN · P1</span>Plugin pins and native fallback behavior differ</summary>
+ <p>KORREKT’s pin contains native CPU fallback and deferred secondary-backend startup that are absent from this MUI checkout and the KONTRA / Relay pins. Opening all enabled backends can enter a failing driver before candidate fallback helps. Review and reconcile those existing changes before treating all released plugins as equivalent.</p>
+ <p class="file">Existing MUI commits: <a href="https://github.com/Matari-Audio/MUI/commit/1ef31fd57538c4be57642b75bb0f572fb11b6185">native CPU fallback + deferred backend startup</a> and <a href="https://github.com/Matari-Audio/MUI/commit/bae5b33ca2e5556abd26059c5ce0479a5c2c6f44">preserved fallback diagnostics</a>. These changes were inspected, not merged or released here.</p>
+</details>
+<details><summary><span class="tag blocked">RISK · P2</span>Framebuffer retention can amplify memory pressure</summary>
+ <p>The target is bounded by maximum texture dimensions, not a total byte budget. One 16,384 × 16,384 RGBA8 texture is 1 GiB, before other resources. Resize retains each dimension’s maximum: 8,192 × 512 followed by 512 × 8,192 retains an 8,192² target (256 MiB) for a current 16 MiB viewport. This is a source-level memory risk, not proof of the reported crashes.</p>
+ <p class="file"><code>crates/mui-vello/src/effects/retained.rs:269</code>, <code>:469</code>, <code>:486</code>. Next: measure allocation pressure, then bound retained area / reclaim large targets and validate fallback under OOM.</p>
+</details>
+<details><summary><span class="tag pending">OBSERVED · P2</span>Relay requests a frame continuously</summary>
+ <p>Relay’s <code>.changed(|| true)</code> keeps its editor drawing. That increases exposure to a rendering or driver failure and uses GPU time continuously. It does not establish that Relay currently crashes.</p>
+ <p class="file">Relay worktree · <code>plugin/src/ui.rs:200</code> · <code>MuiEditor</code></p>
+</details>
+<details><summary><span class="tag blocked">OPEN · P2</span>Linux XIM has unchecked input decoding and a discarded error</summary>
+ <p>The vendored XIM client calls <code>expect</code> when decoding externally supplied compound text and discards <code>handle_reset_ic</code>’s <code>Result</code>. Those are real input-boundary / error-propagation weaknesses. They were not changed in this graphics patch and do not explain a Windows GPU report.</p>
+ <p class="file"><code>vendor/xim-rs/src/client.rs:144</code>, <code>:145</code>, <code>:205</code>, <code>:257</code></p>
+</details>
+<h2>Local dependency evidence</h2>
+<table><thead><tr><th>Plugin</th><th>Manifest version</th><th>MUI pin</th><th>Observed path</th></tr></thead><tbody>
+ <tr><td>KORREKT</td><td>0.21.0</td><td><code title="bae5b33ca2e5556abd26059c5ce0479a5c2c6f44">bae5b33c</code></td><td>Custom editor → Moose MUI → baseview</td></tr>
+ <tr><td>KONTRA</td><td>0.3.203</td><td><code>822b1922</code></td><td>Vendored Moose MUI / Vello; existing native flight recorder</td></tr>
+ <tr><td>Relay</td><td>Local plugin checkout</td><td><code>822b1922</code></td><td>MuiEditor → shared native host</td></tr>
+</tbody></table>
+<p class="note">Checkout / lockfile evidence is not proof of an affected user’s shipped binary. KORREKT also resolves wgpu 29 and 30 in its dependency graph; KONTRA / Relay resolve wgpu 30. The available machine has AMD RX 6600 / Radeon 610M, not an NVIDIA / Intel reproduction. The affected DAW and its version remain unknown.</p>
+<h2>Automatic issue reporting prepared</h2>
+<div class="flow">
+ <div class="box"><strong>MUI app / plugin</strong><small>Enable <code>reporting</code><br>Retain <code>Reporter</code> before windows</small></div><div class="arrow" aria-hidden="true">→</div>
+ <div class="box"><strong>Private local queue</strong><small>Atomic reports + exact SHA-256<br>Retry / recover on next load</small></div><div class="arrow" aria-hidden="true">→</div>
+ <div class="box"><strong>Existing support service</strong><small>Public MUI issue metadata<br>Private R2 evidence for 30 days</small></div>
+</div>
+<p>Reports leave the queue only after acknowledgment of the exact digest and a verified <code>Matari-Audio/MUI</code> issue URL. Duplicate failures group across plugins. GitHub credentials stay on the server. Redirects are disabled. Damaged queued files remain exportable without blocking valid reports.</p>
+<details><summary>Integration and lifecycle</summary>
+ <p>Enable <code>mui/reporting</code>; create <code>Config</code> with app version, app build and the actual MUI git pin; retain <code>Reporter::start(config)</code> on owned state. Close windows before dropping the last reporter, off the audio thread. Reporter setup failure can leave the editor usable.</p>
+ <p>The worker is joined before plugin unload. ureq’s default timeout resolver spawns a detached DNS thread, so the implementation reuses its resolver synchronously on the owned worker. HTTP is configured for five seconds, but OS DNS can delay shutdown longer. An external collector is the next step if bounded shutdown or full native dumps are required.</p>
+ <p>Local limits: 32 pending reports and 32 live / interrupted markers per app directory; admission uses an OS lock across processes. Session logs rotate at 1 MiB. Server recovery scans at most 500 authored issues / comments and preserves local evidence at that ceiling. GitHub + R2 delivery is not an exactly-once transaction.</p>
+ <p>Backend changes are in service worktree <code>/tmp/mui-support-service-t3-5612c58a</code>, branch <code>feat/mui-automatic-reports</code>. Configure <code>GITHUB_MUI_TOKEN</code> (or the existing support token with MUI permissions), <code>MUI_REPORT_AUTHOR</code>, and existing storage / rate-limit bindings. Production deployment and live issue creation await rollout.</p>
+</details>
+<h2>Validation and rollout</h2>
+<div class="checks">
+ <div class="box"><h3 class="ok">Passed</h3><p>114 support tests · 4 files<br>Astro: 238 files, zero diagnostics<br>Support production build<br>Actionlint + five workflow fixture cases<br>Rust formatting and diff checks</p><small>An earlier <code>cargo test --locked</code> run passed for mui-vello, mui-baseview, mui-winit and mui-truce. It predates the final marker, resolver, logger and resize-state edits.</small></div>
+ <div class="box"><h3 class="blocked">Blocked / not exercised</h3><p>Final Rust compilation and tests<br>Clippy, wasm compilation<br>Native window / real GPU smoke tests<br>NVIDIA / Intel reproduction</p><small>The user explicitly chose to leave other Rust jobs running. One-Cargo-job policy prevents further validation here. Cross-GPU compatibility remains unverified.</small></div>
+</div>
+<details><summary>Remaining validation and rollout steps</summary><ol class="list"><li>When Rust validation is available, run the final library tests, existing render-resize / native-window regressions and strict lint / wasm checks.</li><li>Reconcile existing CPU fallback / backend-staging commits. Test Windows DX12 + Vulkan, Linux Vulkan + GL, and macOS Metal across discrete / integrated GPUs, including open / draw / resize / close / reopen and device loss.</li><li>Pin the reviewed reusable workflow in each plugin CI and upload unpacked VST3 artifacts from the existing build jobs. Validate its first real run; add hardware jobs for NVIDIA / Intel and a CLAP GUI host.</li><li>Deploy the tested support endpoint, then pin the reviewed MUI commit and retain the reporter in each plugin release.</li><li>Use first affected-user reports to compare OS, host process, plugin build, exact MUI revision, GPU backend / driver and interrupted stage. Obtain OS exception / stack evidence for native crashes beyond the instrumented operations.</li></ol></details>
+<p class="note">Audit covered shared host initialization, surface ownership / resize / presentation, device loss, retained target allocation, caught native callbacks, shader / CPU test coverage, plugin pins and reporting transport. It cannot certify every hardware / DAW configuration from source alone.</p>
+</body></html>

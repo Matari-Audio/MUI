@@ -227,6 +227,11 @@ fn select_candidate<A, T>(
 ) -> Result<(T, GpuDiagnostics), HostError> {
     let mut diagnostics = GpuDiagnostics::default();
     for (adapter, mut candidate) in candidates {
+        crate::diagnostics::breadcrumb(
+            "mui-vello",
+            "adapter_capabilities",
+            &format!("{candidate:?}"),
+        );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             attempt(adapter, &mut candidate)
         }));
@@ -234,20 +239,24 @@ fn select_candidate<A, T>(
             Ok(Ok(selected)) => {
                 candidate.stage = GpuStage::Ready;
                 diagnostics.candidates.push(candidate);
+                crate::diagnostics::breadcrumb("mui-vello", "gpu_ready", &diagnostics.to_string());
                 return Ok((selected, diagnostics));
             }
             Ok(Err(error)) => candidate.failure = Some(error),
             Err(payload) => {
-                let message = payload
-                    .downcast_ref::<String>()
-                    .map(String::as_str)
-                    .or_else(|| payload.downcast_ref::<&str>().copied())
-                    .unwrap_or("driver panicked without a message");
+                let message = crate::diagnostics::panic_message(&*payload);
                 candidate.failure = Some(format!("panic: {message}"));
+                crate::diagnostics::gpu_error("initialization_panic", message, &candidate.adapter);
             }
         }
+        crate::diagnostics::breadcrumb("mui-vello", "candidate_failed", &format!("{candidate:?}"));
         diagnostics.candidates.push(candidate);
     }
+    crate::diagnostics::error(
+        "mui-vello",
+        "initialization_failed",
+        &diagnostics.to_string(),
+    );
     Err(HostError::Initialization(diagnostics))
 }
 
@@ -296,6 +305,8 @@ pub enum HostError {
     /// Acquiring the surface texture failed validation. Acquiring again
     /// would fail the same way, so this is not a lost surface.
     Validation,
+    /// Configuring or reconfiguring a surface failed without installing it.
+    Configuration(String),
     /// The device was lost, and opening a new one failed with this. The
     /// next [`Host::present`] after a short wait tries again.
     DeviceLost(Box<HostError>),
@@ -309,11 +320,22 @@ impl std::fmt::Display for HostError {
             Self::Surface(s) => write!(f, "GPU surface: {s}"),
             Self::Render(e) => write!(f, "{e}"),
             Self::Validation => f.write_str("GPU surface texture failed validation"),
+            Self::Configuration(error) => write!(f, "GPU surface configuration: {error}"),
             Self::DeviceLost(e) => write!(f, "rebuilding a lost device: {e}"),
         }
     }
 }
-impl std::error::Error for HostError {}
+impl std::error::Error for HostError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Adapter(error) => Some(error),
+            Self::Device(error) => Some(error),
+            Self::Render(error) => Some(error),
+            Self::DeviceLost(error) => Some(&**error),
+            _ => None,
+        }
+    }
+}
 impl HostError {
     /// Candidate failures, also when this error wraps a device-loss rebuild.
     pub fn diagnostics(&self) -> Option<&GpuDiagnostics> {
@@ -350,7 +372,20 @@ impl OnDevice {
     ) -> Result<Self, HostError> {
         // Enumeration remains constrained by the instance's enabled backends
         // (including WGPU_BACKEND when its descriptor was built from env).
+        let operation = crate::diagnostics::operation(
+            "mui-vello",
+            "enumerate_adapters",
+            &format!(
+                "size={size:?}; MUI {}; os={}; arch={}; panic_unwind={}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                cfg!(panic = "unwind")
+            ),
+            None,
+        );
         let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        drop(operation);
         adapters.sort_by_key(|adapter| adapter_rank(&adapter.get_info()));
         let candidates = adapters.into_iter().map(|adapter| {
             let supported_limits = adapter.limits();
@@ -427,24 +462,48 @@ impl OnDevice {
         candidate.format = Some(config.format);
         candidate.alpha_mode = Some(config.alpha_mode);
         candidate.stage = GpuStage::Device;
+        let operation = crate::diagnostics::operation(
+            "mui-vello",
+            "request_device",
+            &format!("{candidate:?}"),
+            Some(&candidate.adapter),
+        );
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("MUI retained renderer"),
             required_limits: candidate.requested_limits.clone(),
             ..Default::default()
         }))
         .map_err(|e| e.to_string())?;
+        drop(operation);
         let errors = Arc::new(DeviceErrors::default());
         let state = Arc::clone(&errors);
+        let info = candidate.adapter.clone();
         device.set_device_lost_callback(move |reason, message| {
+            // Destroyed is also delivered during orderly window teardown.
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                crate::diagnostics::gpu_error(
+                    "device_lost",
+                    &format!("{reason:?}: {message}"),
+                    &info,
+                );
+            }
             state.record(format!("device lost ({reason:?}): {message}"));
             state.lost.store(true, Ordering::Release);
         });
         let state = Arc::clone(&errors);
+        let info = candidate.adapter.clone();
         device.on_uncaptured_error(Arc::new(move |error| {
             eprintln!("mui-vello: uncaptured GPU error: {error}");
+            crate::diagnostics::gpu_error("uncaptured_error", &error.to_string(), &info);
             state.record(error.to_string());
         }));
         candidate.stage = GpuStage::Renderer;
+        let operation = crate::diagnostics::operation(
+            "mui-vello",
+            "create_renderer",
+            &format!("format={:?}; size=({width},{height})", config.format),
+            Some(&candidate.adapter),
+        );
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -460,6 +519,7 @@ impl OnDevice {
             .filter_map(|scope| pollster::block_on(scope.pop()))
             .map(|error| error.to_string())
             .collect::<Vec<_>>();
+        drop(operation);
         if !scoped.is_empty() {
             return Err(scoped.join("; "));
         }
@@ -505,6 +565,12 @@ fn configure(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
 ) -> Result<(), String> {
+    let _operation = crate::diagnostics::operation(
+        "mui-vello",
+        "configure_surface",
+        &format!("{config:?}"),
+        None,
+    );
     let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -517,11 +583,7 @@ fn configure(
         .map(|error| error.to_string())
         .collect::<Vec<_>>();
     if let Err(payload) = configured {
-        let message = payload
-            .downcast_ref::<String>()
-            .map(String::as_str)
-            .or_else(|| payload.downcast_ref::<&str>().copied())
-            .unwrap_or("driver panicked without a message");
+        let message = crate::diagnostics::panic_message(&*payload);
         return Err(format!("panic configuring surface: {message}"));
     }
     if errors.is_empty() {
@@ -545,6 +607,8 @@ pub struct Host {
     generation: u64,
     /// What the caller asked for; a rebuilt device asks again.
     transparency: Transparency,
+    /// Persist the first draw only; never do file I/O on steady animation frames.
+    first_frame: bool,
 }
 
 impl Host {
@@ -577,6 +641,7 @@ impl Host {
             retry_at: None,
             generation: 0,
             transparency,
+            first_frame: true,
         })
     }
 
@@ -654,6 +719,16 @@ impl Host {
             renderer,
             ..
         } = &mut self.gpu;
+        // Commit dimensions only after configuration succeeds. A failed resize
+        // must retry, rather than comparing equal to a size never installed.
+        let mut next = config.clone();
+        (next.width, next.height) = (width, height);
+        if let Some(surface) = &self.surface {
+            configure(surface, device, &next).map_err(|error| {
+                crate::diagnostics::error("mui-vello", "resize_failed", &error);
+                HostError::Configuration(error)
+            })?;
+        }
         renderer
             .resize([width, height])
             .map_err(HostError::Render)?;
@@ -661,13 +736,7 @@ impl Host {
         // The drawable and renderer must have the same physical extent. An
         // oversized GL framebuffer shifts its top-left image upward, while
         // Wayland surfaces take their dimensions from the submitted buffer.
-        let extent = (width, height);
-        if extent != (config.width, config.height) {
-            (config.width, config.height) = extent;
-            if let Some(surface) = &self.surface {
-                surface.configure(device, config);
-            }
-        }
+        *config = next;
         Ok(())
     }
 
@@ -712,6 +781,9 @@ impl Host {
     /// again would fail the same way.
     pub fn present(&mut self, scene: &ResolvedScene, xf: Affine) -> Result<Frame, HostError> {
         self.present_inner::<fn(&mut Classic<'_>)>(scene, xf, None)
+            .inspect_err(|error| {
+                crate::diagnostics::error("mui-vello", "present_failed", &error.to_string());
+            })
     }
 
     /// [`Host::present`] with `overlay` drawn on top, never retained.
@@ -722,6 +794,9 @@ impl Host {
         overlay: F,
     ) -> Result<Frame, HostError> {
         self.present_inner(scene, xf, Some(overlay))
+            .inspect_err(|error| {
+                crate::diagnostics::error("mui-vello", "present_failed", &error.to_string());
+            })
     }
 
     fn present_inner<F: FnOnce(&mut Classic<'_>)>(
@@ -746,6 +821,7 @@ impl Host {
                 Ok(gpu) => {
                     self.gpu = gpu;
                     self.generation = self.generation.wrapping_add(1);
+                    self.first_frame = true;
                     self.retry_at = None;
                     return Ok(Frame::Skipped);
                 }
@@ -755,6 +831,19 @@ impl Host {
                 }
             }
         }
+        let _operation = self.first_frame.then(|| {
+            crate::diagnostics::operation(
+                "mui-vello",
+                "first_frame",
+                "acquire, render and present first window frame",
+                self.gpu
+                    .diagnostics
+                    .candidates
+                    .iter()
+                    .find(|c| c.stage == GpuStage::Ready)
+                    .map(|c| &c.adapter),
+            )
+        });
         let OnDevice {
             device,
             queue,
@@ -768,7 +857,7 @@ impl Host {
         let frame = match surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
-                surface.configure(device, config);
+                configure(surface, device, config).map_err(HostError::Configuration)?;
                 renderer.invalidate();
                 return Ok(Frame::Skipped);
             }
@@ -785,6 +874,14 @@ impl Host {
         }
         .map_err(HostError::Render)?;
         queue.present(frame);
+        if self.first_frame {
+            crate::diagnostics::breadcrumb(
+                "mui-vello",
+                "frame_presented",
+                "first frame submitted to the window surface",
+            );
+            self.first_frame = false;
+        }
         Ok(Frame::Presented(stats))
     }
 }

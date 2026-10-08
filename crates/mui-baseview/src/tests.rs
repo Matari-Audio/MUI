@@ -33,6 +33,34 @@ fn handler(size: (u32, u32), scale: f64) -> Handler<Knob> {
 }
 
 #[test]
+fn an_error_logger_cannot_unwind_out_of_the_native_callback_guard() {
+    struct PanickingLogger;
+    impl View for PanickingLogger {
+        fn build(&mut self, _: &mut Ui, _: &Input) -> El {
+            mui::prelude::block(64., 64.)
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+        fn log(&mut self, _: &str) {
+            panic!("logger failed too");
+        }
+    }
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: PanickingLogger,
+    }));
+    let mut handler = Handler::new(shared, Arc::default(), (64, 64), 1.0);
+    assert_eq!(
+        guard(&mut handler, |_| panic!("window callback failed")),
+        None::<()>
+    );
+}
+
+#[test]
 fn native_close_signal_is_model_free_and_fires_once_before_drop() {
     let model = Arc::new(Mutex::new(()));
     let called = Arc::new(std::sync::atomic::AtomicUsize::new(0));

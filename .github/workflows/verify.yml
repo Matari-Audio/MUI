@@ -97,11 +97,17 @@ jobs:
         name: Desktop portal dialogs and owned worker teardown
         run: cargo test -p mui-native-dialog --features xdg-portal --locked --offline
       - if: matrix.section == 'root-test'
-        name: Native EGL presentation, accessibility and reopen
-        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-baseview --lib --locked --offline -- --ignored
+        name: Native Vulkan and EGL presentation, accessibility and reopen
+        run: |
+          for backend in vulkan gl; do
+            xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND="$backend" cargo test -p mui-baseview --lib --locked --offline -- --ignored
+          done
       - if: matrix.section == 'root-test'
-        name: Native multiwindow presentation and resize
-        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-winit --test native_windows --locked --offline -- --ignored
+        name: Native Vulkan and EGL multiwindow presentation and resize
+        run: |
+          for backend in vulkan gl; do
+            xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND="$backend" cargo test -p mui-winit --test native_windows --locked --offline -- --ignored
+          done
       # A failing test leaves the adapter builds good.
       - if: "!cancelled() && matrix.section == 'media-cut-test' && github.ref == 'refs/heads/main'"
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

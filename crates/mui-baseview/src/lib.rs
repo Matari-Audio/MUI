@@ -428,9 +428,15 @@ impl<V: View> Handler<V> {
             window.set_ime_configuration(ime_configuration.clone());
             self.applied_ime = Some(ime_configuration);
         }
-        if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
+        if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene)
+            && now >= self.gpu_retry_at
+        {
             if let Err(e) = gpu.resize(size.0, size.1) {
                 log(&self.shared, &format!("mui-baseview: {e}"));
+                // Configuration and allocation may have only partly succeeded.
+                // Keep the frame dirty and retry before presenting that surface.
+                self.gpu_retry_at = now + GPU_RETRY;
+                return;
             }
             let draw_start = self.driver.profiler().map(|_| Instant::now());
             let frame = gpu.present(&scene, Affine::scale(self.driver.ui_scale()));
@@ -620,8 +626,17 @@ impl NativeClose {
             && let Some(hook) = &self.hook
         {
             // This callback precedes the handler's panic guard at the FFI edge.
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook())).is_err() {
-                eprintln!("mui-baseview: panic in native close signal");
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook()))
+            {
+                mui::diagnostics::error(
+                    "mui-baseview",
+                    "close_panic",
+                    mui::diagnostics::panic_message(&*payload),
+                );
+                eprintln!(
+                    "mui-baseview: panic in native close signal: {}",
+                    mui::diagnostics::panic_message(&*payload)
+                );
             }
         }
     }
@@ -658,14 +673,19 @@ fn drain_events<T>(queue: &RefCell<VecDeque<T>>, mut deliver: impl FnMut(T)) {
 /// `panic = "unwind"` (the `plugin` profile); under release's abort the
 /// panic kills the process before it gets here.
 fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -> Option<R> {
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(h))).ok();
-    if r.is_none() {
-        log(
-            &h.shared,
-            "mui-baseview: panic in the window, swallowed at the FFI edge",
-        );
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(h))) {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            log(
+                &h.shared,
+                &format!(
+                    "mui-baseview: panic at the window FFI edge: {}",
+                    mui::diagnostics::panic_message(&*payload)
+                ),
+            );
+            None
+        }
     }
-    r
 }
 
 impl<V: View + 'static> WindowHandler for Adapter<V> {
@@ -827,7 +847,16 @@ impl Clipboard {
 }
 
 fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
-    lock(shared).view.log(line);
+    mui::diagnostics::error("mui-baseview", "window_error", line);
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lock(shared).view.log(line);
+    })) {
+        mui::diagnostics::error(
+            "mui-baseview",
+            "logger_panic",
+            mui::diagnostics::panic_message(&*payload),
+        );
+    }
 }
 
 /// A device and renderer for this window's surface. A driver panic becomes
@@ -835,9 +864,22 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 /// `panic = "abort"` it is the host's crash.
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let operation = mui::diagnostics::operation(
+            "mui-baseview",
+            "create_instance",
+            &format!("size={size:?}"),
+            None,
+        );
         let display = surface::Display::new(window).map_err(|e| e.to_string())?;
         let instance = wgpu::Instance::new(
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)),
+        );
+        drop(operation);
+        let operation = mui::diagnostics::operation(
+            "mui-baseview",
+            "create_surface",
+            "creating native window surface",
+            None,
         );
         // SAFETY: the surface uses this window's live native handle. Baseview's
         // owned close paths drop the handler/renderer before destroying it.
@@ -846,9 +888,15 @@ fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
         #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
         let surface = unsafe { surface::create(&instance, window) }
             .ok_or("native surface creation failed")?;
+        drop(operation);
         Host::new(instance, surface, size).map_err(|e| e.to_string())
     }))
-    .map_err(|_| "panic while creating GPU resources".to_owned())?
+    .map_err(|payload| {
+        format!(
+            "panic while creating GPU resources: {}",
+            mui::diagnostics::panic_message(&*payload)
+        )
+    })?
 }
 
 mod a11y;

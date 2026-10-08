@@ -352,6 +352,59 @@ DAW down instead of being caught at the FFI edge.
   whether it did): paint a faded root, `Role::Surface.alpha(0.7)`, over an OS
   blur for frosted glass.
 
+### Native graphics diagnostics and automatic MUI issues
+
+Native hosts persist adapter attempts, startup stages, device errors and caught
+window panics automatically. `mui::diagnostics::log_path()` finds the current
+session; `MUI_DIAGNOSTICS_DIR` overrides its directory. Session files rotate at
+1 MiB with one previous file, and startup retains the newest 64 session files.
+Browser hosts use no-op native diagnostics.
+
+Enable `mui`'s optional `reporting` feature, then retain one reporter in the
+app/plugin's owned state **before opening windows**. Registration failure can
+leave reporting disabled while the editor continues to work:
+
+```rust,ignore
+let mut config = mui::diagnostics::Config::new("my-plugin", env!("CARGO_PKG_VERSION"));
+config.build = option_env!("APP_GIT_REVISION").unwrap_or("unknown").into();
+config.mui_revision = "your-MUI-git-pin".into();
+let reporter = mui::diagnostics::Reporter::start(config)
+    .inspect_err(|error| eprintln!("MUI reporting unavailable: {error}"))
+    .ok();
+// Store `reporter` on owned app/plugin state until all MUI windows are closed.
+```
+
+The reporter queues bounded, sanitized diagnostics locally and delivers them
+on a managed background thread to `https://matari-audio.com/api/support/mui`.
+Failed submissions retain their original bytes and retry after a minute or on
+the next load. A report is deleted only after support acknowledges its exact
+SHA-256 and a verified issue URL in `Matari-Audio/MUI`. Apps contain no GitHub
+credentials. The server groups matching failures across apps, publishes only
+bounded environment metadata, and retains detailed evidence privately for
+30 days. The endpoint must be deployed and configured before delivery works.
+Set `MUI_REPORTING_DISABLED=1` in CI or an offline diagnostic session to retain
+local evidence while preventing network delivery and live issue creation.
+
+Startup, surface configuration and the first draw also use locked operation
+markers. Normal completion and Rust unwind clear them; abrupt termination
+leaves an **unconfirmed operation interruption** for recovery on the next
+reporter load. Live operations in another process are skipped. This is not a
+native stack dump and does not prove that MUI or a particular GPU caused the
+host to terminate. Steady-frame native crashes and unrelated DAW crashes still
+need OS postmortem evidence; no process-wide signal or panic hook is installed.
+Custom hosts can use `mui::diagnostics::operation(..)` around their own risky
+MUI startup calls and `error(..)` for MUI-owned failures.
+
+Start and drop the reporter off the audio thread. Close/drop all windows first,
+then drop the last reporter (put its field after window fields if relying on
+struct field drop order). Shutdown joins its worker. HTTP has a five-second
+deadline; the OS DNS resolver can take longer, so reporting shutdown can wait
+for it. No timeout helper thread is detached from a plugin being unloaded.
+The default queue holds 32 reports and 32 live or
+interrupted operation markers per app directory. Export local diagnostics if
+these limits are reached. Multiple instances of the same app/build share the
+worker within one loaded MUI image.
+
 ## Motion
 
 Nothing is keyframed. `.animate()` puts a spring on a node's own visual
@@ -512,6 +565,56 @@ each resolve makes. It lives in `examples` because it installs a counting
 global allocator, which the library itself forbids.
 
 ## Verify
+
+### Plugin editor CI on GitHub runners
+
+[`.github/workflows/plugin-ui.yml`](.github/workflows/plugin-ui.yml) is a reusable
+workflow for already-built Linux x86_64 VST3 plugins. It runs pluginval 1.0.4
+under Xvfb on Mesa software Vulkan and GL, with GUI tests enabled. Strictness 6
+and three repeats exercise editor creation, close/reopen, automation and opening
+while processing audio. Every job saves validator output, graphics environment,
+MUI journals and a display recording, including on failure. A missing editor
+test fails the job. CI disables automatic MUI issue submission.
+
+Upload an **unpacked** bundle in the caller's build job, keeping the `.vst3`
+directory in the artifact. Use a distinct artifact name for each plugin / call:
+
+```yaml
+# In the Linux build job, after producing target/bundled/MyPlugin.vst3:
+- uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+  with:
+    name: my-plugin-linux-vst3
+    path: target/bundled/
+
+# Under the caller workflow's jobs:, alongside its build job:
+ui:
+  needs: build-linux
+  uses: Matari-Audio/MUI/.github/workflows/plugin-ui.yml@FULL_MUI_COMMIT
+  with:
+    artifact-name: my-plugin-linux-vst3
+    plugin-path: MyPlugin.vst3
+    require-mui-diagnostics: true
+```
+
+Replace `FULL_MUI_COMMIT` with the reviewed workflow commit. The caller's build
+must also pin instrumented MUI for `require-mui-diagnostics: true`; that option
+requires a first-frame submission record and rejects MUI error records. It is
+false by default for older plugin builds. The record proves submission to the
+surface, not visible pixels. Pluginval does not assert screenshots or editor
+resizing; MUI's native presentation tests assert displayed pixels, resize and
+close/reopen separately, on both software backends.
+
+[Standard runners are free for public repositories](https://docs.github.com/en/actions/concepts/billing-and-usage).
+Software graphics catch lifecycle / rendering regressions but cannot reproduce
+NVIDIA or Intel driver bugs. [GitHub's paid larger runners](https://docs.github.com/en/actions/reference/runners/larger-runners)
+offer NVIDIA Tesla T4 on Linux / Windows and M2 GPU acceleration on macOS.
+Use dedicated hardware runners for affected Intel / consumer NVIDIA models and
+DAW-specific tests; the documented hosted GPU list does not offer Intel GPUs.
+This workflow covers VST3: CLAP requires a host that exercises its GUI extension.
+MUI's existing Windows verification deliberately skips GPU tests due to a WARP
+fault, so a green Windows check currently does not certify Windows rendering.
+
+### Library checks
 
 ```bash
 ./tools/verify.sh
