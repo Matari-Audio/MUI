@@ -117,7 +117,7 @@ jobs:
             /usr/bin/python3 tools/ci/ui.py --output ui-results/standalone-cpu --gallery --renderer cpu -- \
             target/debug/mui-preview --test-ui
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
-            /usr/bin/python3 tools/ci/ui.py --output ui-results/windows-cpu --timeout 60 -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/windows-cpu --renderer cpu --timeout 60 -- \
             target/debug/examples/native_windows
       - name: Standalone Wayland presentation, resize and two-window teardown
         if: ${{ !cancelled() && matrix.backend == 'vulkan' }}
@@ -185,7 +185,7 @@ jobs:
           MUI_RENDERER: cpu
         run: |
           python3 tools/ci/ui.py --output ui-results/standalone-cpu --gallery --renderer cpu -- target/debug/mui-preview --test-ui
-          python3 tools/ci/ui.py --output ui-results/windows-cpu --timeout 60 -- target/debug/examples/native_windows
+          python3 tools/ci/ui.py --output ui-results/windows-cpu --renderer cpu --timeout 60 -- target/debug/examples/native_windows
       - name: Explicit CPU selection, resize, close and reopen
         shell: bash
         env:
@@ -274,7 +274,7 @@ jobs:
       - name: Native GPU multiwindow resize and teardown
         if: ${{ !cancelled() }}
         shell: bash
-        run: python3 tools/ci/ui.py --output ui-results/multiwindow-gpu --timeout 60 -- target/debug/examples/native_windows
+        run: python3 tools/ci/ui.py --output ui-results/multiwindow-gpu --renderer gpu --timeout 60 -- target/debug/examples/native_windows
       - name: Replay Windows fault under CDB
         if: always() && runner.os == 'Windows' && steps.native_probe.outcome == 'failure'
         continue-on-error: true

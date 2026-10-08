@@ -87,6 +87,30 @@ class UiEvidenceTests(unittest.TestCase):
             frame["rendering_mode"] = "cpu"
         self.assertEqual(gallery_summary(events, "cpu")["presented"], 1)
 
+    def test_native_window_renderer_is_verified_even_when_child_succeeds(self):
+        for modes, expected, passed in [(["gpu", "gpu"], "gpu", True),
+                                        (["cpu", "cpu"], "gpu", False),
+                                        (["gpu", "cpu"], "gpu", False),
+                                        ([None], "gpu", False),
+                                        ([], "gpu", False),
+                                        (["cpu", "cpu"], "cpu", True)]:
+            frames = "\n".join(f"WindowToken({i}): Frame::Presented (320, 240)" +
+                               (f", renderer={mode}" if mode else "")
+                               for i, mode in enumerate(modes, 1))
+            with tempfile.TemporaryDirectory() as name:
+                with patch("sys.argv", ["ui.py", "--output", name, "--renderer", expected,
+                                        "--", sys.executable, "-c", f"print({frames!r})"]), \
+                     patch("platform.system", return_value="fixture"), \
+                     contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(main(), 0 if passed else 1)
+                result = json.loads((Path(name) / "result.json").read_text())
+                self.assertEqual(result["exit_code"], 0)
+                self.assertEqual(result["status"], "passed" if passed else "failed")
+                if passed:
+                    self.assertEqual(result["native"]["rendering_modes"], [expected])
+                else:
+                    self.assertIn("expected gpu presentation", result["error"])
+
     def test_partial_crash_record_keeps_last_completed_stage(self):
         with tempfile.TemporaryDirectory() as name:
             path = Path(name) / "events.jsonl"

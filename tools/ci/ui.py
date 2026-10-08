@@ -166,7 +166,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=1200)
     parser.add_argument("--gallery", action="store_true")
-    parser.add_argument("--renderer", choices=("gpu", "cpu"), help="required gallery presentation mode")
+    parser.add_argument("--renderer", choices=("gpu", "cpu"), help="required gallery or native-window presentation mode")
     parser.add_argument("--record", action="store_true")
     parser.add_argument("--capture", action="store_true", help="verify native capture requests without gallery schema")
     parser.add_argument("--gpui", action="store_true", help="require GPUI input, resize and native shutdown evidence")
@@ -227,6 +227,15 @@ def main():
                 result["gallery"] = gallery_summary(read_events(output / "events.jsonl"), args.renderer)
                 if captures and len(recorded) != result["gallery"]["cases"]:
                     raise ValueError("not every gallery case has a verified native screenshot")
+            elif args.renderer:
+                stdout.flush()
+                frames = [line for line in (output / "stdout.log").read_text().splitlines()
+                          if "Frame::Presented " in line]
+                modes = sorted({line.split("renderer=", 1)[1].strip()
+                                if "renderer=" in line else "unknown" for line in frames})
+                if modes != [args.renderer]:
+                    raise ValueError(f"expected {args.renderer} presentation, observed {modes}")
+                result["native"] = {"presented": len(frames), "rendering_modes": modes}
             if args.capture and captures and not recorded:
                 raise ValueError("native tester supplied no verified capture requests")
             if args.gpui:
