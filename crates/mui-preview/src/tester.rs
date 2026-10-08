@@ -18,6 +18,7 @@ pub(super) struct Tester {
     capture: bool,
     waiting_capture: bool,
     error: Option<String>,
+    wanted: winit::dpi::PhysicalSize<u32>,
 }
 
 impl Tester {
@@ -38,6 +39,7 @@ impl Tester {
             capture: std::env::var_os("MUI_TEST_CAPTURE").is_some_and(|v| v == "1"),
             waiting_capture: false,
             error: None,
+            wanted: winit::dpi::PhysicalSize::new(0, 0),
         };
         tester.record(json!({"event":"run_begin", "schema":1,
             "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
@@ -101,15 +103,32 @@ impl Tester {
                 .as_ref()
                 .ok_or("native GPU initialization is required")?;
             gpu.window().set_title("MUI tester");
-            let _ = gpu
+            // Hosted desktops can be smaller than a portrait specimen. Fit
+            // within the monitor so OS work-area clamping cannot stall traversal.
+            let fit = gpu.window().current_monitor().map_or(1., |monitor| {
+                let screen = monitor.size();
+                let scale = gpu.window().scale_factor();
+                ((f64::from(screen.width) / scale - 80.).max(64.) / f64::from(size.0))
+                    .min((f64::from(screen.height) / scale - 80.).max(64.) / f64::from(size.1))
+                    .min(1.)
+            });
+            let size = winit::dpi::LogicalSize::new(
+                (f64::from(size.0) * fit).floor().max(1.) as u32,
+                (f64::from(size.1) * fit).floor().max(1.) as u32,
+            );
+            // Synchronous platforms return the size actually accepted by the OS.
+            self.wanted = gpu
                 .window()
-                .request_inner_size(winit::dpi::LogicalSize::new(size.0, size.1));
+                .request_inner_size(size)
+                .unwrap_or_else(|| size.to_physical(gpu.window().scale_factor()));
             self.deadline = Instant::now() + Duration::from_secs(60);
             self.presented = 0;
             self.started = true;
+            let logical = self.wanted.to_logical::<f64>(gpu.window().scale_factor());
+            let requested = SIZES[variant / 2];
             self.record(json!({"event":"case_begin", "case":self.case,
                 "scene":app.scenes[scene_index].name(), "light":app.light,
-                "logical_size":[size.0,size.1], "overlay":app.frames,
+                "requested_logical_size":[requested.0,requested.1], "logical_size":[logical.width,logical.height], "overlay":app.frames,
                 "gpu":gpu.diagnostics().to_string()}))?;
             return Ok(());
         }
@@ -125,9 +144,7 @@ impl Tester {
         let gpu = app.gpu.as_mut().ok_or("window GPU disappeared")?;
         let scale = gpu.window().scale_factor();
         let actual = gpu.window().inner_size();
-        let wanted: winit::dpi::PhysicalSize<u32> =
-            winit::dpi::LogicalSize::new(size.0, size.1).to_physical(scale);
-        if actual != wanted {
+        if actual != self.wanted {
             return Ok(());
         }
         gpu.try_resize(actual.width, actual.height)?;

@@ -1,6 +1,7 @@
 import json
 import contextlib
 import io
+import importlib.util
 from pathlib import Path
 import sys
 import tempfile
@@ -52,6 +53,7 @@ class UiEvidenceTests(unittest.TestCase):
             path.write_text(json.dumps({"event": "frame_begin", "case": 7}) + '\n{"event":')
             self.assertEqual(read_events(path), [{"event": "frame_begin", "case": 7}])
 
+    @unittest.skipUnless(importlib.util.find_spec("PIL"), "pixel checks run in the display job with Pillow")
     def test_visible_specimen_required_in_captured_window(self):
         from PIL import Image
         with tempfile.TemporaryDirectory() as name:

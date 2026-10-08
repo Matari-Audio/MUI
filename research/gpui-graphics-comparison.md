@@ -5,6 +5,12 @@ Source audit on 2026-10-08, pinned to Zed
 Two independent researchers examined device requirements and native lifecycle.
 This establishes implementation differences, not comparative crash rates.
 
+The [GPUI/Vello integration decision](gpui-vello-integration.md) supersedes a
+native-callback-only integration: GPUI must replace UI ownership to earn the
+breaking change. The [renderer comparison](plugin-renderer-choice.md) now favors
+Vello GPU over classic compute Vello for the first material-preserving proof;
+native GPUI and Skia raster remain concrete alternatives.
+
 | Area | GPUI evidence | Implication for MUI |
 | --- | --- | --- |
 | Windows renderer | [D3D11 feature levels 11.1, 11.0 and 10.1, with capability checks](https://github.com/zed-industries/zed/blob/f1a10a5227a331e86bdb006301e1090a21d33e7a/crates/gpui_windows/src/directx_devices.rs#L103-L195); [raster shader model 4.1](https://github.com/zed-industries/zed/blob/f1a10a5227a331e86bdb006301e1090a21d33e7a/crates/gpui_windows/build.rs#L143-L174) | Classic Vello uses compute shaders. Working GPUI does not establish that an adapter can run MUI's renderer. Validate actual compute requirements and use the native baseview CPU fallback for returned failures. |

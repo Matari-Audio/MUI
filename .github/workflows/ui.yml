@@ -43,7 +43,7 @@ jobs:
             libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev \
             libzstd-dev mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri \
-            mesa-utils vulkan-tools xvfb xauth dbus-x11 ffmpeg imagemagick xdotool python3-pil
+            mesa-utils vulkan-tools xvfb xauth dbus-x11 ffmpeg imagemagick xdotool python3-pil ripgrep
           icd=$(dpkg -L mesa-vulkan-drivers | rg '/lvp_icd[^/]*\.json$' | head -n 1)
           test -f "$icd"
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
@@ -81,7 +81,9 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/device-loss -- \
-            cargo test -p mui-vello --lib --locked host::tests -- --ignored --test-threads=1
+            cargo test -p mui-vello --lib --features gpu-effects --locked host::tests -- --ignored --test-threads=1
+          rg -q 'a_destroyed_device_is_seen_and_a_new_one_renders .*ok' ui-results/device-loss/stdout.log
+          rg -q 'a_failed_replacement_state_requires_a_surface_before_presenting .*ok' ui-results/device-loss/stdout.log
       - name: CPU fallback when every GPU backend is unavailable
         if: ${{ !cancelled() && matrix.backend == 'vulkan' }}
         env:
@@ -131,6 +133,17 @@ jobs:
         run: |
           mkdir -p ui-results
           cargo build -p mui-preview --bin mui-preview --locked 2>&1 | tee ui-results/build.log
+      - name: Collect Windows native fault stacks for the tester
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dumps = Join-Path $env:GITHUB_WORKSPACE 'ui-results/native/dumps'
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\mui-preview.exe'
+          New-Item -Force -Path $key | Out-Null
+          New-ItemProperty -Force -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dumps | Out-Null
+          New-ItemProperty -Force -Path $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+          New-ItemProperty -Force -Path $key -Name DumpCount -PropertyType DWord -Value 3 | Out-Null
       - name: Actual native presentation, with crash exit status
         shell: bash
         run: |
