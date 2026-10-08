@@ -80,8 +80,8 @@ with tempfile.TemporaryDirectory() as directory:
 
 # Execute the actual aggregate shell body against every success/skip/failure/
 # cancellation combination. A skipped matrix must never satisfy required work.
-aggregate = workflow.split("\n  linux:\n", 1)[1].split("\n  platforms:\n", 1)[0]
-assert "needs: [gate, platforms]" in aggregate and "if: always()" in aggregate
+aggregate = workflow.split("\n  linux:\n", 1)[1].split("\n  ui:\n", 1)[0]
+assert "needs: [gate, platforms, ui]" in aggregate and "if: always()" in aggregate
 # Scheduling and the aggregate's expectation must stay identical.
 required = re.search(r"PLATFORMS_REQUIRED: \$\{\{ (.+) \}\}", aggregate).group(1)
 platforms = workflow.split("\n  platforms:\n", 1)[1]
@@ -94,8 +94,8 @@ scheduled = platforms.split("    if: >-\n", 1)[1].split("    strategy:", 1)[0]
 assert " ".join(scheduled.split()) == required
 body = textwrap.dedent(aggregate.split("        run: |\n", 1)[1])
 results = ("success", "skipped", "failure", "cancelled")
-for gate, platform, required in itertools.product(results, results, (True, False)):
-    env = {**os.environ, "GATE_RESULT": gate, "PLATFORM_RESULT": platform, "PLATFORMS_REQUIRED": str(required).lower()}
+for gate, platform, ui, required in itertools.product(results, results, results, (True, False)):
+    env = {**os.environ, "GATE_RESULT": gate, "UI_RESULT": ui, "PLATFORM_RESULT": platform, "PLATFORMS_REQUIRED": str(required).lower()}
     passed = subprocess.run(["bash", "-e", "-c", body], env=env).returncode == 0
-    assert passed == (gate == "success" and platform == ("success" if required else "skipped")), (gate, platform, required)
+    assert passed == (gate == "success" and ui == "success" and platform == ("success" if required else "skipped")), (gate, platform, ui, required)
 print("verify: complete disjoint media coverage, locked/offline commands, aggregate truth table OK")
