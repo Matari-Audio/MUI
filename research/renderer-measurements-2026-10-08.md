@@ -32,6 +32,9 @@ The software run also passed all engines. Its Vello CPU job used an EPYC 9V74;
 the other engines used EPYC 7763 hosts. Those separate-job numbers are recorded
 in the JSONL but must not be treated as a controlled ranking. CI now adds a
 sequential same-host comparison job using all five already-built binaries.
+The earlier 010c5cd1 benchmark attempt failed to compile because a local
+`classic` module shadowed the dependency in the shared path helper. The helper
+now imports kurbo directly; that harness bug was not a renderer runtime failure.
 
 MUI's existing full editor baseline used 673 surfaces, 612 paint operations and
 474 glyph runs on software Vulkan. A moving knob took 3.678 ms with retained CPU
