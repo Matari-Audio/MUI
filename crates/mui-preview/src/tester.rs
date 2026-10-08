@@ -24,8 +24,7 @@ pub(super) struct Tester {
 impl Tester {
     pub fn new() -> Result<Self, String> {
         let directory = std::env::var_os("MUI_TEST_RESULTS")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("ui-results"));
+            .map_or_else(|| PathBuf::from("ui-results"), PathBuf::from);
         fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         let journal = File::create(directory.join("events.jsonl")).map_err(|e| e.to_string())?;
         let mut tester = Self {
@@ -41,7 +40,7 @@ impl Tester {
             error: None,
             wanted: winit::dpi::PhysicalSize::new(0, 0),
         };
-        tester.record(json!({"event":"run_begin", "schema":1,
+        tester.record(&json!({"event":"run_begin", "schema":1,
             "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
             "revision":option_env!("MUI_BUILD_REVISION").unwrap_or("unknown"),
             "backend":std::env::var("WGPU_BACKEND").unwrap_or_default(),
@@ -50,15 +49,15 @@ impl Tester {
         Ok(tester)
     }
 
-    fn record(&mut self, value: Value) -> Result<(), String> {
-        serde_json::to_writer(&mut self.journal, &value).map_err(|e| e.to_string())?;
+    fn record(&mut self, value: &Value) -> Result<(), String> {
+        serde_json::to_writer(&mut self.journal, value).map_err(|e| e.to_string())?;
         writeln!(self.journal).map_err(|e| e.to_string())?;
         // Keep the last stage through a native fault; exclude this from timings.
         self.journal.sync_data().map_err(|e| e.to_string())
     }
 
     fn fail(&mut self, event_loop: &ActiveEventLoop, error: String) {
-        let _ = self.record(json!({"event":"failed", "case":self.case,
+        let _ = self.record(&json!({"event":"failed", "case":self.case,
             "step":self.step,"message":error}));
         eprintln!("MUI tester failed: {error}");
         self.error = Some(error);
@@ -129,7 +128,7 @@ impl Tester {
             self.started = true;
             let logical = self.wanted.to_logical::<f64>(gpu.window().scale_factor());
             let requested = SIZES[variant / 2];
-            self.record(json!({"event":"case_begin", "case":self.case,
+            self.record(&json!({"event":"case_begin", "case":self.case,
                 "scene":app.scenes[scene_index].name(), "light":app.light,
                 "requested_logical_size":[requested.0,requested.1], "logical_size":[logical.width,logical.height], "overlay":app.frames,
                 "gpu":gpu.diagnostics().to_string()}))?;
@@ -187,7 +186,7 @@ impl Tester {
             app.typed = Some('A');
         }
         app.frame_error = None;
-        self.record(json!({"event":"frame_begin", "case":self.case,
+        self.record(&json!({"event":"frame_begin", "case":self.case,
             "step":self.step,"target":target.as_ref().map(|t| &t.0)}))?;
         let start = Instant::now();
         app.replay(physical, scale);
@@ -207,7 +206,7 @@ impl Tester {
         if scene.paint.len() <= 3 {
             return Err("gallery scene painted no specimen".into());
         }
-        self.record(json!({"event":"frame", "case":self.case, "step":self.step,
+        self.record(&json!({"event":"frame", "case":self.case, "step":self.step,
             "resolve_ms":resolve_ms,"submit_ms":submit_ms,"presented":stats.is_some(),
             "current":current,"physical_size":[physical.0,physical.1],"scale":scale,
             "paint_items":scene.paint.len(),"surfaces":scene.surfaces().count(),
@@ -247,7 +246,7 @@ impl Tester {
     }
 
     fn complete_case(&mut self) -> Result<(), String> {
-        self.record(json!({"event":"case_end","case":self.case,"presented":self.presented}))?;
+        self.record(&json!({"event":"case_end","case":self.case,"presented":self.presented}))?;
         self.case += 1;
         self.step = 0;
         self.started = false;
@@ -265,6 +264,6 @@ impl Tester {
                 self.case
             ));
         }
-        self.record(json!({"event":"run_end","completed":self.case,"expected":expected}))
+        self.record(&json!({"event":"run_end","completed":self.case,"expected":expected}))
     }
 }

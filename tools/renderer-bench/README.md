@@ -8,6 +8,9 @@ Each engine has its own build/job and failure does not cancel the other engines
 or cases. Relevant renderer/dependency PR changes and main pushes run it
 automatically; it can also be dispatched manually. The always-run job summary
 lists all four cases, including build/setup failures and cases that never ran.
+After the independent jobs, a separate runner downloads their binaries and
+measures all engines sequentially on the same host. Use that artifact for speed
+comparisons: independent GitHub jobs can receive different CPU generations.
 Only a successful child with all 60 unique samples, pixel checks and completion
 marker passes. Stage markers are written outside timed sections before startup,
 draw/readback and pixel validation; an interrupted stage is evidence, not a

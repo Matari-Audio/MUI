@@ -145,9 +145,36 @@ jobs:
           New-ItemProperty -Force -Path $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
           New-ItemProperty -Force -Path $key -Name DumpCount -PropertyType DWord -Value 3 | Out-Null
       - name: Actual native presentation, with crash exit status
+        id: native_probe
         shell: bash
         run: |
           python3 tools/ci/ui.py --output ui-results/native --gallery -- target/debug/mui-preview --test-ui
+      - name: Replay Windows fault under CDB
+        if: always() && runner.os == 'Windows' && steps.native_probe.outcome == 'failure'
+        continue-on-error: true
+        timeout-minutes: 5
+        shell: pwsh
+        run: |
+          $diagnostic = Join-Path $env:GITHUB_WORKSPACE 'ui-results/native-debug'
+          $symbols = Join-Path $diagnostic 'symbols'
+          New-Item -ItemType Directory -Force -Path $symbols | Out-Null
+          $cdb = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits/10/Debuggers/x64/cdb.exe'
+          if (!(Test-Path $cdb)) {
+            throw "Windows SDK CDB is unavailable at $cdb; original probe result is preserved"
+          }
+          Copy-Item 'target/debug/mui-preview.exe' $symbols
+          Get-ChildItem 'target/debug' -Filter '*preview*.pdb' | Copy-Item -Destination $symbols
+          $commands = Join-Path $diagnostic 'commands.txt'
+          @'
+          sxd -c2 ".dump /mA ui-results/native-debug/crash.dmp; .exr -1; .ecxr; r; kv; ~* kv; lm; q" av
+          g
+          '@ | Set-Content -Path $commands -Encoding ascii
+          $symbolPath = "$symbols;srv*$env:RUNNER_TEMP/cdb-symbols*https://msdl.microsoft.com/download/symbols"
+          # Keep the initial breakpoint so -cf installs the second-chance AV
+          # commands before g resumes. -G exits on normal process termination;
+          # -hd avoids the debugger's special heap. This is diagnostic replay,
+          # not a replacement for the original status or frame measurements.
+          python3 tools/ci/ui.py --output ui-results/native-debug --timeout 180 --gallery -- $cdb -G -hd -lines -y $symbolPath -cf $commands target/debug/mui-preview.exe --test-ui
       - name: State native probe outcome
         if: always()
         shell: bash

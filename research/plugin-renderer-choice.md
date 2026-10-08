@@ -2,7 +2,9 @@
 
 Source audit, 2026-10-08. This changes the provisional classic-Vello choice in
 [the GPUI integration proposal](gpui-vello-integration.md). It does not establish
-comparative crash rates or measured frame times.
+comparative crash rates. [The measured follow-up](renderer-measurements-2026-10-08.md)
+now covers software Vulkan and RX 6600 fixtures; its evidence qualifies the
+source-based recommendations below.
 
 ## Recommendation
 
@@ -12,7 +14,11 @@ WGSL material pass. Evaluate **GPUI's native renderer** first for editors whose
 visual requirements fit its primitives. **Skia raster** is the serious third
 candidate: a successful CPU-first proof could remove GPU lifecycle entirely.
 
-Do not keep classic compute Vello as the default without a measured benefit.
+The first hardware measurements show a benefit for classic Vello on dense
+animated vectors, including lower process CPU usage. Vello CPU wins ordinary
+controls in this fixture. GPUI's wgpu rasterizer does not improve these timings.
+Keep production renderer choices provisional until full scenes, materials,
+native embedding and device failures have been tested.
 Upstream now puts it under `research/`, describes it as experimental, and
 identifies `vello_gpu` (formerly Vello Hybrid) as its developing production GPU
 direction. Vello CPU is currently its most mature renderer.

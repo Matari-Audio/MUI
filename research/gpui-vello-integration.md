@@ -2,12 +2,14 @@
 
 Decision under investigation, 2026-10-08. The user authorizes breaking host APIs
 only when the replacement reduces unnecessary complexity and improves stability
-or performance. No improvement has been measured yet. Do not ship a migration
-on the strength of GPUI's reputation alone.
+or performance. [Renderer fixture measurements](renderer-measurements-2026-10-08.md)
+now exist, but no host-layer integration benefit has been established. Do not
+ship a migration on the strength of GPUI's reputation alone.
 
-The [renderer comparison](plugin-renderer-choice.md) supersedes classic Vello
-as the assumed backend. Vello GPU is the first proof for material reuse; GPUI
-native and Skia raster are alternatives with different deletion opportunities.
+The [renderer comparison](plugin-renderer-choice.md) leaves the backend choice
+open. Classic Vello has a measured advantage on dense vectors in the RX 6600
+fixture; Vello CPU leads ordinary controls. Vello GPU still deserves a material
+reuse proof. GPUI native and Skia raster require their own measurable benefits.
 
 ## Why the current patch grew
 
