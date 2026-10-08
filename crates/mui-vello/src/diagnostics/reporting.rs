@@ -229,7 +229,7 @@ pub(super) fn enqueue(
     component: &str,
     stage: &str,
     message: &str,
-    history: Vec<String>,
+    history: &[String],
     adapter: Option<&wgpu::AdapterInfo>,
 ) {
     let worker = ACTIVE
@@ -253,7 +253,7 @@ fn report(
     component: &str,
     stage: &str,
     message: &str,
-    history: Vec<String>,
+    history: &[String],
     adapter: Option<&wgpu::AdapterInfo>,
 ) -> Value {
     let host = std::env::current_exe()
@@ -359,13 +359,13 @@ pub(super) fn operation(
         .history
         .iter()
         .cloned()
-        .collect();
+        .collect::<Vec<_>>();
     let report = report(
         &worker.config,
         component,
         &format!("interrupted_{}", super::bounded(stage, 36)),
         &format!("Process ended during this MUI operation; cause unconfirmed: {message}"),
-        history,
+        &history,
         adapter,
     );
     match Operation::create(&worker.config.directory, &report) {

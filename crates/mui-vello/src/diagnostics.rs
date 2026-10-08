@@ -118,11 +118,11 @@ pub(super) fn private_file(path: &std::path::Path) -> io::Result<std::fs::File> 
 
 #[cfg(not(target_arch = "wasm32"))]
 impl Journal {
-    fn append(&mut self, line: String) -> io::Result<()> {
+    fn append(&mut self, line: &str) -> io::Result<()> {
         if self.history.len() == HISTORY {
             self.history.pop_front();
         }
-        self.history.push_back(line.clone());
+        self.history.push_back(line.to_owned());
         std::fs::create_dir_all(
             self.path
                 .parent()
@@ -234,7 +234,7 @@ fn record(
             "{} {component}/{stage}: {message}",
             if failed { "ERROR" } else { "INFO" }
         );
-        if let Err(error) = log.append(line) {
+        if let Err(error) = log.append(&line) {
             eprintln!("MUI diagnostics could not write its journal: {error}");
         }
         if failed {
@@ -245,7 +245,7 @@ fn record(
     };
     #[cfg(all(feature = "reporting", not(target_arch = "wasm32")))]
     if failed {
-        reporting::enqueue(component, stage, message, history, adapter);
+        reporting::enqueue(component, stage, message, &history, adapter);
     }
     #[cfg(not(all(feature = "reporting", not(target_arch = "wasm32"))))]
     let _ = (history, adapter);
@@ -278,12 +278,12 @@ mod tests {
             history: VecDeque::new(),
         };
         for i in 0..(HISTORY + 1) {
-            log.append(format!("stage {i}")).unwrap();
+            log.append(&format!("stage {i}")).unwrap();
         }
         let file = OpenOptions::new().write(true).open(&path).unwrap();
         file.set_len(LOG_BYTES).unwrap();
         drop(file);
-        log.append("before driver call".into()).unwrap();
+        log.append("before driver call").unwrap();
         assert_eq!(log.history.len(), HISTORY);
         assert!(
             std::fs::read_to_string(&path)

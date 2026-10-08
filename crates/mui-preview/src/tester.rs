@@ -83,8 +83,11 @@ impl Tester {
         }
         if Instant::now() > self.deadline {
             return Err(format!(
-                "case {} step {} did not complete before its deadline",
-                self.case, self.step
+                "case {} step {} did not complete before its deadline; wanted {:?}, actual {:?}",
+                self.case,
+                self.step,
+                self.wanted,
+                app.gpu.as_ref().map(|gpu| gpu.window().inner_size())
             ));
         }
         app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
@@ -108,8 +111,8 @@ impl Tester {
             let fit = gpu.window().current_monitor().map_or(1., |monitor| {
                 let screen = monitor.size();
                 let scale = gpu.window().scale_factor();
-                ((f64::from(screen.width) / scale - 80.).max(64.) / f64::from(size.0))
-                    .min((f64::from(screen.height) / scale - 80.).max(64.) / f64::from(size.1))
+                ((f64::from(screen.width) / scale - 160.).max(64.) / f64::from(size.0))
+                    .min((f64::from(screen.height) / scale - 160.).max(64.) / f64::from(size.1))
                     .min(1.)
             });
             let size = winit::dpi::LogicalSize::new(
