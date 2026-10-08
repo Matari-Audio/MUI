@@ -1,0 +1,22 @@
+[package]
+name = "mui-gpui-host-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# GPUI remains outside MUI's production dependency graph.
+[workspace]
+
+[dependencies]
+anyhow = "1"
+epaint_default_fonts = "0.36"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "f1a10a5227a331e86bdb006301e1090a21d33e7a", default-features = false, features = ["wayland", "x11", "windows-manifest"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f1a10a5227a331e86bdb006301e1090a21d33e7a", features = ["wayland", "x11"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+mui = { path = "../../crates/mui", features = ["cpu"] }
+mui-material = { path = "../../crates/mui-material" }
+mui-scene = { path = "../../crates/mui-scene" }
+mui-text = { path = "../../crates/mui-text" }
+mui-vello = { path = "../../crates/mui-vello", features = ["cpu"] }
+serde_json = "1"
+smallvec = "1"

@@ -238,6 +238,9 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
             return;
         };
         driver.min_interval = Some(interval);
+        lock(&self.shared)
+            .ui
+            .set_gpu_welding_available(gpu.rendering_mode() == "gpu");
         let (changed, scene) = prepare_frame(driver, &self.shared, Instant::now());
         let window = gpu.window();
         let current_cursor = driver.cursor();
@@ -280,6 +283,7 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
         }
         if let Some(Err(error)) = presented {
             lock(&self.shared).view.log(&format!("mui-winit: {error}"));
+            driver.redraw();
         }
         if changed {
             self.publish();
@@ -486,6 +490,9 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
                 return;
             }
             WindowEvent::RedrawRequested => {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.invalidate();
+                }
                 self.draw();
                 return;
             }

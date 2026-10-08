@@ -274,6 +274,17 @@ fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
     Ok(())
 }
 
+fn retained_target_size(have: [u32; 2], wanted: [u32; 2]) -> [u32; 2] {
+    let grown = [have[0].max(wanted[0]), have[1].max(wanted[1])];
+    let pixels = |size: [u32; 2]| u64::from(size[0]) * u64::from(size[1]);
+    // Retain small resize slack, but reclaim crossed-aspect or oversized targets.
+    if pixels(grown) > pixels(wanted).saturating_mul(2) {
+        wanted
+    } else {
+        grown
+    }
+}
+
 fn visible(e: &ExternalWeld, xf: Affine, size: [u32; 2]) -> bool {
     let b = e.bounds();
     let r = xf.transform_rect_bbox(b);
@@ -486,12 +497,14 @@ impl GpuRenderer {
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
         checked_size(&self.device, size)?;
         if size != self.size {
-            self.size = size;
             let have = self.target.size;
-            if size[0] > have[0] || size[1] > have[1] {
-                let grown = [size[0].max(have[0]), size[1].max(have[1])];
-                self.target = Self::target(&self.device, &self.passes, grown);
+            let capacity = retained_target_size(have, size);
+            if capacity != have {
+                self.target = Self::target(&self.device, &self.passes, capacity);
             }
+            // An allocation panic must leave the old size intact so a caught
+            // failure cannot make the next resize skip the required allocation.
+            self.size = size;
             self.write_frame();
             self.invalidate();
         }
@@ -1189,6 +1202,18 @@ impl GpuRenderer {
 mod rotation_tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn resizing_does_not_retain_the_product_of_previous_axis_maxima() {
+        assert_eq!(retained_target_size([8192, 512], [512, 8192]), [512, 8192]);
+        assert_eq!(retained_target_size([8192, 8192], [512, 512]), [512, 512]);
+        assert_eq!(retained_target_size([1024, 768], [1000, 750]), [1024, 768]);
+        assert_eq!(retained_target_size([1024, 768], [1200, 800]), [1200, 800]);
+        assert_eq!(
+            retained_target_size([u32::MAX, u32::MAX], [u32::MAX, u32::MAX]),
+            [u32::MAX, u32::MAX]
+        );
+    }
 
     #[test]
     fn rotation_damage_reaches_both_original_and_rotated_footprints() {

@@ -7,14 +7,19 @@ license.workspace = true
 
 [features]
 default = []
+reporting = ["dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
 # sized pixmap loses more to thread hand-off than it gains.
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
+# Native CPU presentation, independent of GPU drivers.
+software-window = ["cpu", "dep:softbuffer", "dep:raw-window-handle"]
 
 [dependencies]
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 mui-scene.workspace = true
 mui-weld.workspace = true
 mui-geometry.workspace = true
@@ -49,6 +54,14 @@ png.workspace = true
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster.workspace = true
 mui.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+hickory-resolver = { version = "=0.26.3", default-features = false, features = ["system-config", "tokio"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"], optional = true }
+# The joined resolver uses ureq's explicitly unversioned low-level API.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
 
 [[example]]
 name = "gpu_contract"

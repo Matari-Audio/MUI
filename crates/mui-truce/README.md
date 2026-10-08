@@ -55,7 +55,20 @@ What the window does:
   below `.resizable(min)`. A window that opens smaller than the tree's
   `ui.min_size()` asks the host once to grow.
 - Cursor shapes.
-- GPU recovery: a lost device or surface is rebuilt on the next tick.
+- Native GPU APIs are tried before GL; `WGPU_BACKEND` still restricts which
+  APIs may be used. Surface/device recovery stays in the GPU host.
+- If GPU initialization or rendering fails, the editor uses Vello CPU and
+  native software buffers for the rest of that window's lifetime. Reopening
+  tries the GPU again. This does not require a software Vulkan driver.
+- `MUI_RENDERER=cpu` skips GPU initialization entirely. For example,
+  `MUI_RENDERER=cpu reaper` forces software rendering for MUI editors in that
+  process. This is a rendering diagnostic, not a fix for plugin-format or
+  native-window initialization errors.
+- CPU fallback retains unchanged pixels and uses one rasterization thread
+  with runtime SIMD selection. Changed frames currently repaint fully. The
+  RGBA target is limited to 64 MiB; presentation buffers and scratch storage
+  are additional. GPU weld declarations are rebuilt with the reference CPU
+  backend, rather than omitted. Software plugin windows are opaque.
 
 ## Accessibility
 

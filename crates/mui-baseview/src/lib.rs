@@ -52,6 +52,14 @@ pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 /// only signal cancellation, never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
 
+/// Last frame submitted to the native child; not GPU completion or scanout.
+#[derive(Clone, Copy, Debug)]
+pub struct Presentation {
+    pub frames: u64,
+    pub size: (u32, u32),
+    pub software: bool,
+}
+
 /// Requests from the host's thread, applied by the window's next tick,
 /// which is the only place baseview's `WindowContext` can be touched.
 #[derive(Default)]
@@ -61,11 +69,40 @@ pub struct Requests {
     redraw: AtomicBool,
     keys: Mutex<Option<KeyHook>>,
     close: Mutex<Option<CloseHook>>,
+    presentation: Mutex<Option<Presentation>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
 }
 
 impl Requests {
+    /// Coherent presentation evidence; absent until the first successful submit.
+    pub fn presentation(&self) -> Option<Presentation> {
+        *self
+            .presentation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    fn presented(&self, size: (u32, u32), software: bool) {
+        let mut status = self
+            .presentation
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let first_cpu_frame = software && status.is_none_or(|old| !old.software);
+        let frames = status.map_or(1, |old| old.frames.saturating_add(1));
+        *status = Some(Presentation {
+            frames,
+            size,
+            software,
+        });
+        drop(status);
+        if first_cpu_frame {
+            mui::diagnostics::breadcrumb(
+                "mui-baseview",
+                "cpu_frame_presented",
+                "native CPU presentation succeeded",
+            );
+        }
+    }
     /// Register the close signal for the next native window, before opening it.
     /// It runs once on native close, or when the window adapter is dropped.
     pub fn on_close(&self, hook: CloseHook) {
@@ -241,6 +278,8 @@ pub struct Handler<V> {
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
     gpu: Option<Host>,
+    software: Option<mui::vello::software::Window<WindowContext>>,
+    software_only: bool,
     gpu_retry_at: Instant,
     applied_cursor: Option<MouseCursor>,
     /// The current scene is not on screen yet: paint it.
@@ -259,6 +298,7 @@ pub struct Handler<V> {
     pub driver: Driver,
     #[cfg(target_os = "linux")]
     x11_window: u32,
+    _reporting: mui::diagnostics::ReportingGuard,
 }
 
 #[cfg(target_os = "linux")]
@@ -293,6 +333,9 @@ impl<V: View> Handler<V> {
             shared,
             requests,
             gpu: None,
+            software: None,
+            software_only: std::env::var("MUI_RENDERER")
+                .is_ok_and(|v| v.eq_ignore_ascii_case("cpu")),
             gpu_retry_at: Instant::now(),
             applied_cursor: None,
             unpainted: true,
@@ -304,6 +347,7 @@ impl<V: View> Handler<V> {
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
             #[cfg(target_os = "linux")]
             x11_window: 0,
+            _reporting: mui::diagnostics::retain_reporter(),
         }
     }
 
@@ -353,24 +397,51 @@ impl<V: View> Handler<V> {
         let size = self.driver.size();
         if self.requests.redraw.swap(false, Ordering::AcqRel) {
             self.driver.redraw();
+            if let Some(software) = &mut self.software {
+                software.invalidate();
+            }
         }
         // Lost between presents: an idle editor would never find out. The
         // next present rebuilds the device.
         if self.gpu.as_ref().is_some_and(Host::device_lost) {
             self.unpainted = true;
         }
-        if self.gpu.is_none() && target_size(size.0, size.1).is_some() && now >= self.gpu_retry_at {
-            match open_gpu(window, size) {
-                Ok(gpu) => {
-                    self.gpu = Some(gpu);
-                    self.unpainted = true;
+        if self.gpu.is_none()
+            && self.software.is_none()
+            && target_size(size.0, size.1).is_some()
+            && now >= self.gpu_retry_at
+        {
+            if !self.software_only {
+                match open_gpu(window, size) {
+                    Ok(gpu) => {
+                        self.gpu = Some(gpu);
+                        lock(&self.shared).ui.set_gpu_welding_available(true);
+                        self.unpainted = true;
+                    }
+                    Err(e) => {
+                        log(
+                            &self.shared,
+                            &format!("mui-baseview: GPU unavailable ({e}); using CPU rendering"),
+                        );
+                        self.software_only = true;
+                    }
                 }
-                Err(e) => {
-                    log(
-                        &self.shared,
-                        &format!("mui-baseview: GPU unavailable ({e}); retrying"),
-                    );
-                    self.gpu_retry_at = now + GPU_RETRY;
+            }
+            if self.software_only {
+                match mui::vello::software::Window::new(window.clone(), size) {
+                    Ok(software) => {
+                        self.software = Some(software);
+                        lock(&self.shared).ui.set_gpu_welding_available(false);
+                        self.driver.redraw();
+                        self.unpainted = true;
+                    }
+                    Err(e) => {
+                        log(
+                            &self.shared,
+                            &format!("mui-baseview: CPU presentation unavailable ({e})"),
+                        );
+                        self.gpu_retry_at = Instant::now() + GPU_RETRY;
+                    }
                 }
             }
         }
@@ -409,7 +480,7 @@ impl<V: View> Handler<V> {
                 accessibility_update = a11y.prepare(&s.ui);
             }
             self.unpainted |= fresh;
-            if self.unpainted && self.gpu.is_some() {
+            if self.unpainted && (self.gpu.is_some() || self.software.is_some()) {
                 s.ui.scene_snapshot()
             } else {
                 None
@@ -428,9 +499,46 @@ impl<V: View> Handler<V> {
             window.set_ime_configuration(ime_configuration.clone());
             self.applied_ime = Some(ime_configuration);
         }
-        if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene) {
+        if let (Some(software), Some(scene)) = (self.software.as_mut(), scene.as_ref()) {
+            let start = self.driver.profiler().map(|_| Instant::now());
+            let result = software.present(scene, Affine::scale(self.driver.ui_scale()), size);
+            if let (Some(profile), Some(start)) = (self.driver.profiler_mut(), start) {
+                profile.record_since(mui::profiling::Phase::BackendDraw, start);
+                if matches!(result, Ok(true)) {
+                    profile.record_since(mui::profiling::Phase::PresentCall, start);
+                } else if matches!(result, Ok(false)) {
+                    profile.discard_pending_presentation();
+                }
+            }
+            match result {
+                Ok(drew) => {
+                    self.unpainted = false;
+                    if drew {
+                        self.requests.presented(size, true);
+                    }
+                }
+                Err(e) => {
+                    log(
+                        &self.shared,
+                        &format!("mui-baseview: CPU render failed ({e})"),
+                    );
+                    self.software = None;
+                    self.gpu_retry_at = Instant::now() + GPU_RETRY;
+                }
+            }
+        }
+        if let (Some(gpu), Some(scene)) = (self.gpu.as_mut(), scene)
+            && now >= self.gpu_retry_at
+        {
             if let Err(e) = gpu.resize(size.0, size.1) {
                 log(&self.shared, &format!("mui-baseview: {e}"));
+                // Resize errors are terminal configuration/allocation failures.
+                // Drop the partly configured surface before attaching CPU presentation.
+                self.gpu = None;
+                self.software_only = true;
+                self.gpu_retry_at = now;
+                self.unpainted = true;
+                return;
             }
             let draw_start = self.driver.profiler().map(|_| Instant::now());
             let frame = gpu.present(&scene, Affine::scale(self.driver.ui_scale()));
@@ -442,7 +550,10 @@ impl<V: View> Handler<V> {
                 }
             }
             match frame {
-                Ok(Frame::Presented(_)) => self.unpainted = false,
+                Ok(Frame::Presented(_)) => {
+                    self.unpainted = false;
+                    self.requests.presented(gpu.size(), false);
+                }
                 Ok(Frame::Current) => {
                     self.unpainted = false;
                     if let Some(profiler) = self.driver.profiler_mut() {
@@ -465,10 +576,14 @@ impl<V: View> Handler<V> {
                     }
                 }
                 Err(e) => {
-                    // Not a lost surface: painting it again would fail
-                    // again. A lost device rebuilds on its own schedule.
                     log(&self.shared, &format!("mui-baseview: {e}"));
-                    self.unpainted = false;
+                    // Drop the GPU surface before attaching software presentation.
+                    // Keep CPU rendering for this window; do not retry broken
+                    // drivers periodically while the user is working.
+                    self.gpu = None;
+                    self.software_only = true;
+                    self.gpu_retry_at = Instant::now();
+                    self.unpainted = true;
                 }
             }
         }
@@ -506,6 +621,12 @@ impl<V: View> Handler<V> {
         let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
         let d = &mut self.driver;
         match event {
+            Event::Window(WindowEvent::RedrawRequested) => {
+                if let Some(software) = &mut self.software {
+                    software.invalidate();
+                    self.unpainted = true;
+                }
+            }
             Event::Ime(event) => d.ime(native::ime_event(event)),
             Event::Keyboard(key) => {
                 let event = key_event(key);
@@ -585,6 +706,8 @@ impl<V: View> Handler<V> {
             Event::Window(WindowEvent::WillClose) => {
                 // Drop retained native accessibility views before locking the model.
                 drop(self.a11y.take());
+                drop(self.software.take());
+                drop(self.gpu.take());
                 self.applied_ime = None;
                 d.close(&mut lock(&self.shared));
             }
@@ -620,8 +743,17 @@ impl NativeClose {
             && let Some(hook) = &self.hook
         {
             // This callback precedes the handler's panic guard at the FFI edge.
-            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook())).is_err() {
-                eprintln!("mui-baseview: panic in native close signal");
+            if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| hook()))
+            {
+                mui::diagnostics::error(
+                    "mui-baseview",
+                    "close_panic",
+                    mui::diagnostics::panic_message(&*payload),
+                );
+                eprintln!(
+                    "mui-baseview: panic in native close signal: {}",
+                    mui::diagnostics::panic_message(&*payload)
+                );
             }
         }
     }
@@ -658,14 +790,19 @@ fn drain_events<T>(queue: &RefCell<VecDeque<T>>, mut deliver: impl FnMut(T)) {
 /// `panic = "unwind"` (the `plugin` profile); under release's abort the
 /// panic kills the process before it gets here.
 fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -> Option<R> {
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(h))).ok();
-    if r.is_none() {
-        log(
-            &h.shared,
-            "mui-baseview: panic in the window, swallowed at the FFI edge",
-        );
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(h))) {
+        Ok(value) => Some(value),
+        Err(payload) => {
+            log(
+                &h.shared,
+                &format!(
+                    "mui-baseview: panic at the window FFI edge: {}",
+                    mui::diagnostics::panic_message(&*payload)
+                ),
+            );
+            None
+        }
     }
-    r
 }
 
 impl<V: View + 'static> WindowHandler for Adapter<V> {
@@ -827,28 +964,54 @@ impl Clipboard {
 }
 
 fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
-    lock(shared).view.log(line);
+    mui::diagnostics::error("mui-baseview", "window_error", line);
+    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lock(shared).view.log(line);
+    })) {
+        mui::diagnostics::error(
+            "mui-baseview",
+            "logger_panic",
+            mui::diagnostics::panic_message(&*payload),
+        );
+    }
 }
 
 /// A device and renderer for this window's surface. A driver panic becomes
 /// an error the editor can show, when the plugin unwinds; under
 /// `panic = "abort"` it is the host's crash.
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let display = surface::Display::new(window).map_err(|e| e.to_string())?;
-        let instance = wgpu::Instance::new(
-            wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display)),
-        );
-        // SAFETY: the surface uses this window's live native handle. Baseview's
-        // owned close paths drop the handler/renderer before destroying it.
-        // An embedding host must keep that handle alive during callbacks;
-        // forced external destruction cannot satisfy the surface lifetime.
-        #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
-        let surface = unsafe { surface::create(&instance, window) }
-            .ok_or("native surface creation failed")?;
-        Host::new(instance, surface, size).map_err(|e| e.to_string())
-    }))
-    .map_err(|_| "panic while creating GPU resources".to_owned())?
+    Host::open_native(
+        |backends| {
+            let operation = mui::diagnostics::operation(
+                "mui-baseview",
+                "create_instance",
+                &format!("backends={backends:?}"),
+                None,
+            );
+            let display = surface::Display::new(window).map_err(|e| e.to_string())?;
+            let mut descriptor =
+                wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
+            descriptor.backends = backends;
+            let instance = wgpu::Instance::new(descriptor);
+            drop(operation);
+            let operation = mui::diagnostics::operation(
+                "mui-baseview",
+                "create_surface",
+                "creating native window surface",
+                None,
+            );
+            // SAFETY: the surface uses this window's live native handle. Baseview's
+            // owned close paths drop the handler/renderer before destroying it.
+            // An embedding host must keep that handle alive during callbacks;
+            // forced external destruction cannot satisfy the surface lifetime.
+            #[expect(unsafe_code, reason = "calls the unsafe surface constructor")]
+            let surface = unsafe { surface::create(&instance, window) }
+                .ok_or("native surface creation failed")?;
+            drop(operation);
+            Ok((instance, surface))
+        },
+        size,
+    )
 }
 
 mod a11y;

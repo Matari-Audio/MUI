@@ -11,6 +11,7 @@
 mod host;
 mod scenes;
 mod skin;
+mod tester;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +21,6 @@ use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindow
 use host::Gpu;
 use mui::geometry::{Point, Vec2};
 use mui::prelude::*;
-use mui::vello::Canvas as _;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui_access::accesskit::{Action as AccessAction, NodeId};
 use scenes::PreviewScene;
@@ -119,7 +119,7 @@ fn parse_theme(src: &str) -> (Theme, Vec<String>) {
 /// Keys a scene actually wrote draw at 1 px and the tree-path keys (`/0/2`)
 /// nobody named draw at 0.5, so a scene's ids stand out of its scaffolding.
 fn inspect(
-    canvas: &mut impl mui::vello::Canvas,
+    canvas: &mut (impl mui::vello::Canvas + ?Sized),
     scene: &mui::scene::ResolvedScene,
     xf: Affine,
     palette: &Palette,
@@ -185,6 +185,8 @@ fn inspect(
 }
 
 struct App {
+    tester: Option<tester::Tester>,
+    frame_error: Option<String>,
     ui: Ui,
     /// The gallery's own font, kept so the inspector can set its own labels
     /// without going through the scene.
@@ -247,6 +249,8 @@ impl App {
     fn new() -> Self {
         let font = Font::new(epaint_default_fonts::HACK_REGULAR).expect("bundled Hack parses");
         Self {
+            tester: None,
+            frame_error: None,
             ui: {
                 let ui = Ui::new(skin::SKIN).font(font.clone()).fallback_font(
                     Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR)
@@ -414,6 +418,10 @@ impl App {
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
         self.ui.set_scale(Some(scale));
+        if let Some(gpu) = &self.gpu {
+            self.ui
+                .set_gpu_welding_available(gpu.rendering_mode() == "gpu");
+        }
         let root = self.tree(w, h);
         let (animating, cursor) = match self.ui.frame(root, Some(Size::new(w, h)), input, dt) {
             // Destructured first: `f` borrows `self.ui`, and handing the
@@ -430,6 +438,7 @@ impl App {
             }
             Err(e) => {
                 eprintln!("frame: {e}");
+                self.frame_error = Some(e.to_string());
                 (false, Cursor::Arrow)
             }
         };
@@ -568,15 +577,19 @@ impl App {
         self.ui.request_action(SemanticAction::activate(key));
     }
 
-    fn draw(&mut self) {
-        let Some(gpu) = &mut self.gpu else { return };
+    fn draw(&mut self) -> Result<Option<mui::vello::effects::EffectStats>, String> {
+        let Some(gpu) = &mut self.gpu else {
+            return Ok(None);
+        };
         let scale = gpu.window().scale_factor();
         let height = f64::from(gpu.size().1) / scale;
-        let Some(scene) = self.ui.scene() else { return };
+        let Some(scene) = self.ui.scene() else {
+            return Ok(None);
+        };
         let xf = Affine::scale(scale);
         let extra = self.scenes[self.selected].overlay();
         let wants_overlay = self.frames || extra.is_some();
-        let draw_extra = |canvas: &mut mui::vello::Classic<'_>| {
+        let draw_extra = |canvas: &mut dyn mui::vello::Canvas| {
             if let Some((key, path)) = extra
                 && let (Some(s), Ok(bez)) = (
                     scene.surface(key),
@@ -610,13 +623,10 @@ impl App {
                 );
             }
         };
-        let result = if wants_overlay {
+        if wants_overlay {
             gpu.present_with_overlay(scene, xf, draw_extra)
         } else {
             gpu.present(scene, xf)
-        };
-        if let Err(e) = result {
-            eprintln!("GPU paint: {e}");
         }
     }
 }
@@ -705,7 +715,13 @@ impl ApplicationHandler<AccessEvent> for App {
         window.set_visible(true);
         window.request_redraw();
         let display = Box::new(event_loop.owned_display_handle());
-        self.gpu = Some(Gpu::new(window, display));
+        match Gpu::try_new(window, display) {
+            Ok(gpu) => self.gpu = Some(gpu),
+            Err(error) => {
+                self.frame_error = Some(error);
+                event_loop.exit();
+            }
+        }
     }
 
     /// The theme file is the only thing that changes with no event behind it,
@@ -846,6 +862,14 @@ impl ApplicationHandler<AccessEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.invalidate();
+                }
+                if let Some(mut tester) = self.tester.take() {
+                    tester.draw(self, event_loop);
+                    self.tester = Some(tester);
+                    return;
+                }
                 if !self.visible {
                     return;
                 }
@@ -854,7 +878,9 @@ impl ApplicationHandler<AccessEvent> for App {
                 let start = Instant::now();
                 let animating = self.replay(size, scale);
                 let resolved = Instant::now();
-                self.draw();
+                if let Err(error) = self.draw() {
+                    eprintln!("GPU paint: {error}");
+                }
                 self.title(
                     resolved.duration_since(start).as_secs_f64(),
                     resolved.elapsed().as_secs_f64(),
@@ -877,14 +903,28 @@ impl ApplicationHandler<AccessEvent> for App {
     }
 }
 
-fn main() {
+fn main() -> Result<(), String> {
+    let tester = std::env::args()
+        .any(|arg| arg == "--test-ui")
+        .then(tester::Tester::new)
+        .transpose()?;
     let event_loop = EventLoop::<AccessEvent>::with_user_event()
         .build()
         .expect("event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App::new();
+    app.tester = tester;
     app.proxy = Some(event_loop.create_proxy());
     event_loop.run_app(&mut app).expect("run");
+    // Test completion includes native teardown, so a destroy-time fault fails CI.
+    if app.tester.is_some() {
+        drop(app.access.take());
+        drop(app.gpu.take());
+    }
+    if let Some(error) = app.frame_error {
+        return Err(error);
+    }
+    app.tester.as_mut().map_or(Ok(()), tester::Tester::finish)
 }
 
 #[cfg(test)]

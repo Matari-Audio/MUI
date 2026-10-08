@@ -8,6 +8,8 @@
 //! paint-list walk onto a `Canvas`) and render (rasterise and wait for it).
 //! Reported as the median of 50 frames after 5 warm-ups, so a stray scheduler
 //! hiccup cannot move a number.
+//! GPU initialization is reported separately; `WGPU_BACKEND` selects backends
+//! for startup comparisons, as it does in the native hosts.
 
 use std::time::Instant;
 
@@ -389,6 +391,26 @@ fn main() {
         }
     }
 
+    // The fallback retains pixels. Its render column includes both preparation
+    // and rasterization; unlike the raw CPU rows, unchanged pixels need neither.
+    let mut retained = mui_vello::software::Renderer::new((W.into(), H.into())).unwrap();
+    for case in CASES {
+        let mut draws = 0;
+        rows.push(run("CPU retained", case, font, |scene| {
+            let start = Instant::now();
+            draws += usize::from(
+                retained
+                    .render(scene, Affine::IDENTITY)
+                    .expect("CPU render"),
+            );
+            (0.0, since(start))
+        }));
+        println!(
+            "CPU retained {}: {draws} rasterizations (render includes preparation)",
+            case.name()
+        );
+    }
+
     match pollster::block_on(gpu()) {
         Some((info, mut gpu_rows)) => {
             println!(
@@ -416,11 +438,19 @@ fn main() {
 /// The retained GPU renderer. `None` when there is no adapter.
 async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
     let font = epaint_default_fonts::HACK_REGULAR;
-    let instance = wgpu::Instance::default();
+    // The cold frame case resets UI state, not the device or its pipelines.
+    // Report startup separately so editor-open stalls are not hidden by warmup.
+    let startup = Instant::now();
+    let instance =
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let instance_ms = since(startup);
+    let start = Instant::now();
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions::default())
         .await
         .ok()?;
+    let adapter_ms = since(start);
+    let start = Instant::now();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             // Vello's compute pipeline needs more than the downlevel defaults.
@@ -429,6 +459,8 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         })
         .await
         .ok()?;
+    let device_ms = since(start);
+    let start = Instant::now();
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("bench target"),
         size: wgpu::Extent3d {
@@ -453,6 +485,11 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
     )
     .await
     .expect("GPU renderer");
+    println!(
+        "GPU startup (ms): instance {instance_ms:.3}, adapter {adapter_ms:.3}, device {device_ms:.3}, renderer+target {:.3}, total {:.3}",
+        since(start),
+        since(startup),
+    );
     // An unchanged paint list skips the encode and the render entirely.
     // `encode` is everything `render` spends on the CPU; `render` is the
     // wait for the GPU.

@@ -50,8 +50,14 @@ fn window(index: usize, progress: Arc<Mutex<Progress>>) -> WindowSpec<Pad> {
                 .expect("native notification must release the model lock"),
         );
         match event {
-            HostEvent::Presented { size } => {
-                println!("{token:?}: Frame::Presented {size:?}");
+            HostEvent::Presented {
+                size,
+                rendering_mode,
+            } => {
+                println!("{token:?}: Frame::Presented {size:?}, renderer={rendering_mode}");
+                if std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu")) {
+                    assert_eq!(rendering_mode, "cpu", "forced CPU run used a GPU");
+                }
                 let mut progress = progress.lock().unwrap();
                 if let Some(first) = progress.first.get(&token) {
                     if size != *first && progress.resized.insert(token) {
