@@ -571,6 +571,41 @@ global allocator, which the library itself forbids.
 
 ## Verify
 
+### MUI tester and UI evidence
+
+`cargo run -p mui-preview -- --test-ui` runs the existing gallery as a small
+MUI tester. It traverses every registered scene at three window sizes in both
+themes, sends pointer, drag, wheel, keyboard and text input, and exercises the
+overlay path. New gallery scenes join the traversal automatically. Each case
+requires a submitted native frame; completion is recorded after window teardown.
+This covers the gallery and existing native regressions, rather than every MUI
+API or every DAW host.
+
+[`.github/workflows/ui.yml`](.github/workflows/ui.yml) runs on every Verify
+event, independently of the library test jobs. Linux Vulkan/lavapipe and
+OpenGL/llvmpipe presentation are required checks. Xvfb provides a real X11
+display: the collector requires a nonuniform specimen in every native window
+screenshot. Separate regressions check embedded editor pixels, expose, resize,
+multiple windows, close/reopen, device loss and CPU fallback without a GPU.
+
+Windows DX12 and macOS Metal are **informational native probes** on standard
+VMs. An unavailable adapter or native fault fails the probe and saves evidence;
+it is not converted into a skipped graphics test. They do not block the Linux
+gate until the hosted adapter behavior is established. Neither those probes
+nor software Linux rendering certify consumer NVIDIA/Intel driver support.
+
+`tools/ci/ui.py --output ui-results --gallery -- COMMAND` supervises the tester
+as a child process. On Linux, add `--record` and run inside a 1600×1200 Xvfb
+display. Artifacts include adapter inventory, durable JSONL stages, stdout,
+stderr, exit code/signal, screenshots, a video and per-scene cost summaries.
+Measurements cover CPU resolve/submission time and retained texture memory;
+they do not measure GPU completion or display latency. Interrupted journals
+retain their last complete stage. CI disables network reporting to keep test
+failures from creating production issues.
+
+The [GPUI comparison](research/gpui-graphics-comparison.md) explains the device
+requirements and recovery differences observed in upstream source.
+
 ### Plugin editor CI on GitHub runners
 
 [`.github/workflows/plugin-ui.yml`](.github/workflows/plugin-ui.yml) is a reusable

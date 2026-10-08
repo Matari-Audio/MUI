@@ -11,6 +11,7 @@
 mod host;
 mod scenes;
 mod skin;
+mod tester;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -185,6 +186,8 @@ fn inspect(
 }
 
 struct App {
+    tester: Option<tester::Tester>,
+    frame_error: Option<String>,
     ui: Ui,
     /// The gallery's own font, kept so the inspector can set its own labels
     /// without going through the scene.
@@ -247,6 +250,8 @@ impl App {
     fn new() -> Self {
         let font = Font::new(epaint_default_fonts::HACK_REGULAR).expect("bundled Hack parses");
         Self {
+            tester: None,
+            frame_error: None,
             ui: {
                 let ui = Ui::new(skin::SKIN).font(font.clone()).fallback_font(
                     Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR)
@@ -430,6 +435,7 @@ impl App {
             }
             Err(e) => {
                 eprintln!("frame: {e}");
+                self.frame_error = Some(e.to_string());
                 (false, Cursor::Arrow)
             }
         };
@@ -568,11 +574,15 @@ impl App {
         self.ui.request_action(SemanticAction::activate(key));
     }
 
-    fn draw(&mut self) {
-        let Some(gpu) = &mut self.gpu else { return };
+    fn draw(&mut self) -> Result<Option<mui::vello::effects::EffectStats>, String> {
+        let Some(gpu) = &mut self.gpu else {
+            return Ok(None);
+        };
         let scale = gpu.window().scale_factor();
         let height = f64::from(gpu.size().1) / scale;
-        let Some(scene) = self.ui.scene() else { return };
+        let Some(scene) = self.ui.scene() else {
+            return Ok(None);
+        };
         let xf = Affine::scale(scale);
         let extra = self.scenes[self.selected].overlay();
         let wants_overlay = self.frames || extra.is_some();
@@ -610,13 +620,10 @@ impl App {
                 );
             }
         };
-        let result = if wants_overlay {
+        if wants_overlay {
             gpu.present_with_overlay(scene, xf, draw_extra)
         } else {
             gpu.present(scene, xf)
-        };
-        if let Err(e) = result {
-            eprintln!("GPU paint: {e}");
         }
     }
 }
@@ -846,6 +853,11 @@ impl ApplicationHandler<AccessEvent> for App {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if let Some(mut tester) = self.tester.take() {
+                    tester.draw(self, event_loop);
+                    self.tester = Some(tester);
+                    return;
+                }
                 if !self.visible {
                     return;
                 }
@@ -854,7 +866,9 @@ impl ApplicationHandler<AccessEvent> for App {
                 let start = Instant::now();
                 let animating = self.replay(size, scale);
                 let resolved = Instant::now();
-                self.draw();
+                if let Err(error) = self.draw() {
+                    eprintln!("GPU paint: {error}");
+                }
                 self.title(
                     resolved.duration_since(start).as_secs_f64(),
                     resolved.elapsed().as_secs_f64(),
@@ -877,14 +891,25 @@ impl ApplicationHandler<AccessEvent> for App {
     }
 }
 
-fn main() {
+fn main() -> Result<(), String> {
+    let tester = std::env::args()
+        .any(|arg| arg == "--test-ui")
+        .then(tester::Tester::new)
+        .transpose()?;
     let event_loop = EventLoop::<AccessEvent>::with_user_event()
         .build()
         .expect("event loop");
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut app = App::new();
+    app.tester = tester;
     app.proxy = Some(event_loop.create_proxy());
     event_loop.run_app(&mut app).expect("run");
+    // Test completion includes native teardown, so a destroy-time fault fails CI.
+    if app.tester.is_some() {
+        drop(app.access.take());
+        drop(app.gpu.take());
+    }
+    app.tester.as_mut().map_or(Ok(()), tester::Tester::finish)
 }
 
 #[cfg(test)]

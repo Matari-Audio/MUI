@@ -1,0 +1,158 @@
+name: MUI UI
+
+# Called by Verify on every PR update, main push, merge queue and manual run.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  MUI_BUILD_REVISION: ${{ github.sha }}
+  MUI_REPORTING_DISABLED: "1"
+
+jobs:
+  display:
+    name: Gallery and native lifecycle / ${{ matrix.backend }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [vulkan, gl]
+    env:
+      WGPU_BACKEND: ${{ matrix.backend }}
+      LIBGL_ALWAYS_SOFTWARE: "1"
+      GALLIUM_DRIVER: llvmpipe
+      WINIT_UNIX_BACKEND: x11
+      WINIT_X11_SCALE_FACTOR: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Display and development dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libasound2-dev libjack-jackd2-dev libx11-dev libx11-xcb-dev \
+            libxcb1-dev libxcb-icccm4-dev libxcb-dri2-0-dev libxcb-xkb-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev \
+            libzstd-dev mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri \
+            mesa-utils vulkan-tools xvfb xauth dbus-x11 ffmpeg imagemagick xdotool python3-pil
+          icd=$(dpkg -L mesa-vulkan-drivers | rg '/lvp_icd[^/]*\.json$' | head -n 1)
+          test -f "$icd"
+          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ui-${{ matrix.backend }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Evidence collector self-check
+        run: /usr/bin/python3 -m unittest discover -s tools/ci -p test_ui.py -v
+      - name: Build tester
+        shell: bash
+        run: |
+          mkdir -p ui-results
+          cargo build -p mui-preview --bin mui-preview --locked 2>&1 | tee ui-results/build.log
+      - name: All gallery scenes, themes, sizes, input and visible pixels
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/gallery \
+            --gallery --record -- target/debug/mui-preview --test-ui
+      - name: Embedded editor pixels, accessibility, expose, close and reopen
+        if: ${{ !cancelled() }}
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/baseview -- \
+            cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1
+      - name: Multiwindow resize and close
+        if: ${{ !cancelled() }}
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/windows -- \
+            cargo test -p mui-winit --test native_windows --locked -- --ignored --test-threads=1
+      - name: Device loss and incomplete surface replacement
+        if: ${{ !cancelled() }}
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/device-loss -- \
+            cargo test -p mui-vello --lib --locked host::tests -- --ignored --test-threads=1
+      - name: CPU fallback when every GPU backend is unavailable
+        if: ${{ !cancelled() && matrix.backend == 'vulkan' }}
+        env:
+          WGPU_BACKEND: metal
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/cpu -- \
+            cargo test -p mui-baseview --lib --locked native_cpu_fallback_presents_and_reopens -- --ignored --test-threads=1
+          rg -q 'native_cpu_fallback_presents_and_reopens .*ok' ui-results/cpu/stdout.log
+      - name: Retain evidence even after a native fault
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mui-ui-linux-${{ matrix.backend }}
+          path: ui-results/
+          if-no-files-found: warn
+          retention-days: 7
+
+  native-probe:
+    # Standard VMs do not promise an accelerated adapter. Preserve a failed
+    # probe as failed evidence; Linux software presentation remains the gate.
+    name: Native GPU probe / ${{ matrix.os }} / ${{ matrix.backend }}
+    continue-on-error: true
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            backend: dx12
+          - os: macos-15
+            backend: metal
+    env:
+      WGPU_BACKEND: ${{ matrix.backend }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ui-native-${{ matrix.backend }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build tester
+        shell: bash
+        run: |
+          mkdir -p ui-results
+          cargo build -p mui-preview --bin mui-preview --locked 2>&1 | tee ui-results/build.log
+      - name: Actual native presentation, with crash exit status
+        shell: bash
+        run: |
+          python3 tools/ci/ui.py --output ui-results/native --gallery -- target/debug/mui-preview --test-ui
+      - name: State native probe outcome
+        if: always()
+        shell: bash
+        env:
+          PROBE_STATUS: ${{ job.status }}
+        run: |
+          echo "### $WGPU_BACKEND native probe: $PROBE_STATUS" >> "$GITHUB_STEP_SUMMARY"
+          echo 'Informational VM coverage. Missing adapters and native faults fail the probe; no tests are silently skipped.' >> "$GITHUB_STEP_SUMMARY"
+          if test -f ui-results/native/result.json; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat ui-results/native/result.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain adapter inventory, frame events and native exit status
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mui-ui-native-${{ matrix.os }}-${{ matrix.backend }}
+          path: ui-results/
+          if-no-files-found: warn
+          retention-days: 7

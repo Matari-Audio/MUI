@@ -55,9 +55,17 @@ impl Gpu {
         self.host.size()
     }
     pub fn resize(&mut self, width: u32, height: u32) {
-        if let Err(e) = self.host.resize(width, height) {
+        if let Err(e) = self.try_resize(width, height) {
             eprintln!("MUI {e}");
         }
+    }
+    /// Resize with an observable failure, for hosts that must verify presentation.
+    pub fn try_resize(&mut self, width: u32, height: u32) -> Result<(), String> {
+        self.host.resize(width, height).map_err(|e| e.to_string())
+    }
+    /// Actual selected adapter and all failed initialization candidates.
+    pub fn diagnostics(&self) -> &mui::vello::host::GpuDiagnostics {
+        self.host.diagnostics()
     }
     pub fn present(
         &mut self,
@@ -86,7 +94,8 @@ impl Gpu {
             .map_err(|e| e.to_string())?;
         self.after(&frame)
     }
-    pub(crate) fn frame_was_current(&self) -> bool {
+    /// The last present reused current pixels instead of submitting another frame.
+    pub fn frame_was_current(&self) -> bool {
         self.current
     }
     /// A frame that did not reach the screen asks for another.

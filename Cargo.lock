@@ -1976,6 +1976,7 @@ dependencies = [
  "mui-text",
  "mui-winit",
  "pollster",
+ "serde_json",
  "wgpu",
  "winit",
 ]

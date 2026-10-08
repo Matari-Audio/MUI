@@ -892,6 +892,12 @@ impl Host {
                 }
             }
         }
+        // Callers may have logged a failed resize. Retry it before acquiring a
+        // surface configured to a different extent than the retained renderer.
+        self.resize(size.0, size.1)?;
+        let Some(surface) = &self.surface else {
+            return Ok(Frame::SurfaceLost);
+        };
         let _operation = self.first_frame.then(|| {
             crate::diagnostics::operation(
                 "mui-vello",
@@ -1267,6 +1273,7 @@ mod tests {
             retry_at: None,
             generation: 4,
             transparency: Transparency::Opaque,
+            first_frame: true,
         };
         let root = block(16., 16.).fill(Role::Primary);
         let scene = resolve(&SceneSpec::new(root).offered(Size::new(16., 16.))).unwrap();

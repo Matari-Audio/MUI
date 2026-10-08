@@ -96,21 +96,6 @@ jobs:
       - if: matrix.section == 'root-test'
         name: Desktop portal dialogs and owned worker teardown
         run: cargo test -p mui-native-dialog --features xdg-portal --locked --offline
-      - if: matrix.section == 'root-test'
-        name: Native Vulkan and EGL presentation, accessibility and reopen
-        run: |
-          for backend in vulkan gl; do
-            xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND="$backend" cargo test -p mui-baseview --lib --locked --offline -- --ignored
-          done
-      - if: matrix.section == 'root-test'
-        name: Native Vulkan and EGL multiwindow presentation and resize
-        run: |
-          for backend in vulkan gl; do
-            xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND="$backend" cargo test -p mui-winit --test native_windows --locked --offline -- --ignored
-          done
-      - if: matrix.section == 'root-test'
-        name: CPU presentation when no GPU backend is available
-        run: xvfb-run -a env WGPU_BACKEND=metal cargo test -p mui-baseview --lib --locked --offline native_cpu_fallback_presents_and_reopens -- --ignored
       # A failing test leaves the adapter builds good.
       - if: "!cancelled() && matrix.section == 'media-cut-test' && github.ref == 'refs/heads/main'"
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -122,20 +107,25 @@ jobs:
   # but failures/cancellations on main, merge queue or labelled PRs fail the gate.
   linux:
     if: always()
-    needs: [gate, platforms]
+    needs: [gate, platforms, ui]
     runs-on: ubuntu-latest
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
+          UI_RESULT: ${{ needs.ui.result }}
           PLATFORM_RESULT: ${{ needs.platforms.result }}
           PLATFORMS_REQUIRED: ${{ (github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.platforms) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms')) }}
         run: |
           test "$GATE_RESULT" = success
+          test "$UI_RESULT" = success
           if [ "$PLATFORMS_REQUIRED" = true ]; then
             test "$PLATFORM_RESULT" = success
           else
             test "$PLATFORM_RESULT" = skipped
           fi
+
+  ui:
+    uses: ./.github/workflows/ui.yml
 
   platforms:
     if: >-
