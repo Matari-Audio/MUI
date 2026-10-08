@@ -21,7 +21,6 @@ use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindow
 use host::Gpu;
 use mui::geometry::{Point, Vec2};
 use mui::prelude::*;
-use mui::vello::Canvas as _;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui_access::accesskit::{Action as AccessAction, NodeId};
 use scenes::PreviewScene;
