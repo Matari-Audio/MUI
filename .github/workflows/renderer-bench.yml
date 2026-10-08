@@ -6,6 +6,21 @@ on:
     paths:
       - tools/renderer-bench/**
       - .github/workflows/renderer-bench.yml
+      - crates/mui-vello/**
+      - vendor/vello*/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+  push:
+    branches: [main]
+    paths:
+      - tools/renderer-bench/**
+      - .github/workflows/renderer-bench.yml
+      - crates/mui-vello/**
+      - vendor/vello*/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
 
 permissions:
   contents: read
@@ -16,6 +31,8 @@ env:
   MUI_REPORTING_DISABLED: "1"
   WGPU_BACKEND: vulkan
   LIBGL_ALWAYS_SOFTWARE: "1"
+  RUST_BACKTRACE: "1"
+  RUST_LOG: gpui_wgpu=info,wgpu_core=warn
 
 jobs:
   draw:
@@ -25,7 +42,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [core, gpui]
+        engine: [classic, vello-gpu, vello-cpu, skia-cpu, gpui]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,7 +50,7 @@ jobs:
       - name: Software Vulkan and native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools libfontconfig1-dev libclang-dev libssl-dev libzstd-dev libxcb1-dev libxkbcommon-dev libwayland-dev
+          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools libfontconfig1-dev libclang-dev libssl-dev libzstd-dev libxcb1-dev libxkbcommon-dev libwayland-dev gdb
           icd=$(dpkg -L mesa-vulkan-drivers | sed -n '/\/lvp_icd[^/]*\.json$/p' | head -n 1)
           test -f "$icd"
           echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
@@ -48,34 +65,46 @@ jobs:
           workspaces: tools/renderer-bench -> target
           key: renderer-${{ matrix.engine }}
       - name: Build isolated measurement binary
+        id: build
         env:
           ENGINE: ${{ matrix.engine }}
         run: |
           rustc -Vv >> renderer-results/host.txt
           vulkaninfo --summary > renderer-results/vulkan.txt 2>&1
-          features=()
-          if [ "$ENGINE" = gpui ]; then features=(--features gpui); fi
-          cargo build --release --manifest-path tools/renderer-bench/Cargo.toml "${features[@]}" 2>&1 | tee renderer-results/build.log
+          cargo build --release --manifest-path tools/renderer-bench/Cargo.toml --no-default-features --features "$ENGINE" 2>&1 | tee renderer-results/build.log
           cp tools/renderer-bench/Cargo.lock renderer-results/Cargo.lock
           cp tools/renderer-bench/target/release/mui-renderer-bench renderer-results/mui-renderer-bench
       - name: Measure each engine in a fresh process
         env:
           ENGINE: ${{ matrix.engine }}
         run: |
-          engines=(classic vello-gpu vello-cpu skia-cpu)
-          if [ "$ENGINE" = gpui ]; then engines=(gpui); fi
           failed=0
-          for engine in "${engines[@]}"; do
-            for workload in controls vectors; do
-              for scale in 1 2; do
-                output="renderer-results/$engine-$workload-$scale"
-                mkdir -p "$output"
-                if ! python3 tools/ci/ui.py --timeout 300 --output "$output/process" -- \
-                  tools/renderer-bench/target/release/mui-renderer-bench "$engine" "$workload" "$scale" "$output"; then failed=1; fi
-              done
+          for workload in controls vectors; do
+            for scale in 1 2; do
+              output="renderer-results/$ENGINE-$workload-$scale"
+              mkdir -p "$output"
+              if ! python3 tools/ci/ui.py --timeout 300 --output "$output/process" -- \
+                tools/renderer-bench/target/release/mui-renderer-bench "$ENGINE" "$workload" "$scale" "$output"; then
+                failed=1
+                if python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r.get("signal") in {"SIGSEGV","SIGABRT","SIGBUS","SIGILL","SIGFPE"} else 1)' "$output/process/result.json"; then
+                  # Diagnostic replay does not replace failed timing evidence.
+                  python3 tools/ci/ui.py --timeout 120 --output "$output/debugger/process" -- \
+                    gdb --nx --batch --return-child-result -ex run -ex 'thread apply all bt' --args \
+                    tools/renderer-bench/target/release/mui-renderer-bench "$ENGINE" "$workload" "$scale" "$output/debugger" || true
+                fi
+              fi
             done
           done
           exit "$failed"
+      - name: Evidence report self-check
+        if: always()
+        run: python3 -m unittest discover -s tools/renderer-bench -p test_report.py -v
+      - name: Show every case, including failures and runs that never started
+        if: always()
+        env:
+          ENGINE: ${{ matrix.engine }}
+          BUILD_STATUS: ${{ steps.build.outcome }}
+        run: python3 tools/renderer-bench/report.py renderer-results "$ENGINE" "$BUILD_STATUS" | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Preserve measurements, lockfile, binary, pixels and failures
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

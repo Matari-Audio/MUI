@@ -2,12 +2,17 @@
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use std::{fs::File, io::Write, time::Instant};
+#[cfg(feature = "classic")]
 mod classic;
+#[cfg(feature = "vello-cpu")]
 mod cpu;
+#[cfg(any(feature = "classic", feature = "vello-gpu"))]
 mod gpu;
 #[cfg(feature = "gpui")]
 mod gpui;
+#[cfg(feature = "vello-gpu")]
 mod hybrid;
+#[cfg(feature = "skia-cpu")]
 mod skia;
 
 pub enum Shape {
@@ -31,8 +36,9 @@ impl Shape {
         }
     }
 }
-fn path(points: &[[f64; 2]]) -> classic::kurbo::BezPath {
-    let mut path = classic::kurbo::BezPath::new();
+#[cfg(any(feature = "classic", feature = "vello-cpu"))]
+fn path(points: &[[f64; 2]]) -> kurbo::BezPath {
+    let mut path = kurbo::BezPath::new();
     path.move_to((points[0][0], points[0][1]));
     for p in &points[1..] {
         path.line_to((p[0], p[1]));
@@ -89,9 +95,13 @@ fn fixture(workload: &str, scale: f64, phase: f64) -> Vec<Shape> {
 }
 
 enum Renderer {
+    #[cfg(feature = "classic")]
     Classic(classic::Renderer),
+    #[cfg(feature = "vello-gpu")]
     Hybrid(hybrid::Renderer),
+    #[cfg(feature = "vello-cpu")]
     Cpu(cpu::Renderer),
+    #[cfg(feature = "skia-cpu")]
     Skia(skia::Renderer),
     #[cfg(feature = "gpui")]
     Gpui(gpui::Renderer),
@@ -99,9 +109,13 @@ enum Renderer {
 impl Renderer {
     fn new(name: &str, w: u32, h: u32) -> Result<Self> {
         Ok(match name {
+            #[cfg(feature = "classic")]
             "classic" => Self::Classic(pollster::block_on(classic::Renderer::new(w, h))?),
+            #[cfg(feature = "vello-gpu")]
             "vello-gpu" => Self::Hybrid(pollster::block_on(hybrid::Renderer::new(w, h))?),
+            #[cfg(feature = "vello-cpu")]
             "vello-cpu" => Self::Cpu(cpu::Renderer::new(w, h)),
+            #[cfg(feature = "skia-cpu")]
             "skia-cpu" => Self::Skia(skia::Renderer::new(w, h)?),
             #[cfg(feature = "gpui")]
             "gpui" => Self::Gpui(gpui::Renderer::new(w, h)?),
@@ -110,9 +124,13 @@ impl Renderer {
     }
     fn draw(&mut self, shapes: &[Shape]) -> Result<Vec<u8>> {
         match self {
+            #[cfg(feature = "classic")]
             Self::Classic(r) => r.draw(shapes),
+            #[cfg(feature = "vello-gpu")]
             Self::Hybrid(r) => r.draw(shapes),
+            #[cfg(feature = "vello-cpu")]
             Self::Cpu(r) => r.draw(shapes),
+            #[cfg(feature = "skia-cpu")]
             Self::Skia(r) => r.draw(shapes),
             #[cfg(feature = "gpui")]
             Self::Gpui(r) => r.draw(shapes),
@@ -172,7 +190,17 @@ fn cpu_ms() -> Option<f64> {
     }
     None
 }
+fn stage(file: &mut File, stage: &str, mode: &str, sample: i32) -> Result<()> {
+    writeln!(
+        file,
+        "{}",
+        json!({"stage":stage,"mode":mode,"sample":sample})
+    )?;
+    file.flush()?;
+    Ok(())
+}
 fn main() -> Result<()> {
+    env_logger::init();
     let args: Vec<_> = std::env::args().collect();
     ensure!(
         args.len() == 5,
@@ -190,14 +218,19 @@ fn main() -> Result<()> {
     let directory = std::path::Path::new(&args[4]);
     std::fs::create_dir_all(directory)?;
     let mut output = File::create(directory.join("samples.jsonl"))?;
+    let mut stages = File::create(directory.join("stages.jsonl"))?;
+    stage(&mut stages, "initialize", "first", -1)?;
     let start = Instant::now();
     let mut renderer = Renderer::new(name, w, h).context("renderer initialization")?;
     let startup_ms = start.elapsed().as_secs_f64() * 1000.;
     let first_shapes = fixture(workload, f64::from(scale), 0.);
+    stage(&mut stages, "draw_readback", "first", -1)?;
     let start = Instant::now();
     let first = renderer.draw(&first_shapes)?;
     let first_ms = start.elapsed().as_secs_f64() * 1000.;
-    validate(&first, w, h, scale)?;
+    stage(&mut stages, "validate_pixels", "first", -1)?;
+    validate(&first, w, h, scale).context("first frame pixel checks")?;
+    stage(&mut stages, "write_image", "first", -1)?;
     let mut png = png::Encoder::new(File::create(directory.join("first.png"))?, w, h);
     png.set_color(png::ColorType::Rgba);
     png.set_depth(png::BitDepth::Eight);
@@ -216,12 +249,14 @@ fn main() -> Result<()> {
                     0.
                 },
             );
+            stage(&mut stages, "draw_readback", mode, i)?;
             let cpu_start = cpu_ms();
             let start = Instant::now();
             let pixels = renderer.draw(&shapes)?;
             let ms = start.elapsed().as_secs_f64() * 1000.;
             let cpu = cpu_start.zip(cpu_ms()).map(|(start, end)| end - start);
-            validate(&pixels, w, h, scale)?;
+            stage(&mut stages, "validate_pixels", mode, i)?;
+            validate(&pixels, w, h, scale).context("redraw pixel checks")?;
             if mode == "dynamic-redraw" {
                 ensure!(pixels != first, "animation did not change pixels");
             }
@@ -238,6 +273,7 @@ fn main() -> Result<()> {
                 output.flush()?;
             }
         }
+        stage(&mut stages, "summarize", mode, -1)?;
         samples.sort_by(f64::total_cmp);
         cpu_samples.sort_by(f64::total_cmp);
         let idle_cpu_start = cpu_ms();
@@ -250,5 +286,6 @@ fn main() -> Result<()> {
         writeln!(output, "{row}")?;
         output.flush()?;
     }
+    stage(&mut stages, "complete", "all", -1)?;
     Ok(())
 }

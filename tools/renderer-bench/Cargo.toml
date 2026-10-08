@@ -8,6 +8,11 @@ publish = false
 [workspace]
 
 [features]
+default = ["classic", "vello-gpu", "vello-cpu", "skia-cpu"]
+classic = ["dep:classic", "dep:wgpu", "dep:kurbo"]
+vello-gpu = ["dep:vello_gpu", "dep:wgpu"]
+vello-cpu = ["dep:vello_cpu", "dep:kurbo"]
+skia-cpu = ["dep:skia-safe"]
 gpui = ["dep:gpui", "dep:gpui_wgpu"]
 
 [dependencies]
@@ -16,11 +21,13 @@ pollster = "0.4"
 serde_json = "1"
 png = "0.18"
 libc = "0.2"
-wgpu = "30"
-classic = { package = "vello", path = "../../vendor/vello" }
-vello_cpu = { git = "https://github.com/linebender/vello", rev = "96d4643cca622259acad44e9e715e3e3fac3c09f" }
-vello_gpu = { git = "https://github.com/linebender/vello", rev = "96d4643cca622259acad44e9e715e3e3fac3c09f", features = ["wgpu"] }
-skia-safe = "=0.153.3"
+env_logger = "0.11"
+kurbo = { version = "0.13", optional = true }
+wgpu = { version = "30", optional = true }
+classic = { package = "vello", path = "../../vendor/vello", optional = true }
+vello_cpu = { git = "https://github.com/linebender/vello", rev = "96d4643cca622259acad44e9e715e3e3fac3c09f", optional = true }
+vello_gpu = { git = "https://github.com/linebender/vello", rev = "96d4643cca622259acad44e9e715e3e3fac3c09f", features = ["wgpu"], optional = true }
+skia-safe = { version = "=0.153.3", optional = true }
 gpui = { git = "https://github.com/zed-industries/zed", rev = "f1a10a5227a331e86bdb006301e1090a21d33e7a", default-features = false, features = ["bench-support"], optional = true }
 gpui_wgpu = { git = "https://github.com/zed-industries/zed", rev = "f1a10a5227a331e86bdb006301e1090a21d33e7a", default-features = false, features = ["bench-support"], optional = true }
 
