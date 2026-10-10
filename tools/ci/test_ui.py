@@ -89,6 +89,8 @@ class UiEvidenceTests(unittest.TestCase):
 
     def test_native_window_renderer_is_verified_even_when_child_succeeds(self):
         for modes, expected, passed in [(["gpu", "gpu"], "gpu", True),
+                                        (["cpu", "gpu", "gpu"], "gpu", True),
+                                        (["cpu", "gpu", "cpu"], "gpu", False),
                                         (["cpu", "cpu"], "gpu", False),
                                         (["gpu", "cpu"], "gpu", False),
                                         ([None], "gpu", False),
@@ -107,7 +109,7 @@ class UiEvidenceTests(unittest.TestCase):
                 self.assertEqual(result["exit_code"], 0)
                 self.assertEqual(result["status"], "passed" if passed else "failed")
                 if passed:
-                    self.assertEqual(result["native"]["rendering_modes"], [expected])
+                    self.assertIn(expected, result["native"]["rendering_modes"])
                 else:
                     self.assertIn("expected gpu presentation", result["error"])
 

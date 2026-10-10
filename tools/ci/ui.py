@@ -21,6 +21,15 @@ def read_events(path):
     return events
 
 
+def presentation_matches(sequence, renderer):
+    """GPU windows present a CPU first frame while the device initializes in the
+    background: a CPU prefix is allowed, a fall back to CPU after GPU is not."""
+    if renderer == "gpu":
+        while sequence and sequence[0] == "cpu":
+            sequence = sequence[1:]
+    return bool(sequence) and all(mode == renderer for mode in sequence)
+
+
 def gallery_summary(events, renderer=None):
     if not events or events[0].get("event") != "run_begin":
         raise ValueError("tester did not record startup")
@@ -32,7 +41,8 @@ def gallery_summary(events, renderer=None):
         raise ValueError("gallery cases are missing or duplicated")
     frames = [e for e in events if e.get("event") == "frame"]
     modes = sorted({f.get("rendering_mode", "unknown") for f in frames})
-    if renderer is not None and modes != [renderer]:
+    if renderer is not None and not presentation_matches(
+            [f.get("rendering_mode", "unknown") for f in frames], renderer):
         raise ValueError(f"expected {renderer} presentation, observed {modes}")
     for case in range(expected):
         found = [f for f in frames if f["case"] == case]
@@ -231,9 +241,10 @@ def main():
                 stdout.flush()
                 frames = [line for line in (output / "stdout.log").read_text().splitlines()
                           if "Frame::Presented " in line]
-                modes = sorted({line.split("renderer=", 1)[1].strip()
-                                if "renderer=" in line else "unknown" for line in frames})
-                if modes != [args.renderer]:
+                sequence = [line.split("renderer=", 1)[1].strip()
+                            if "renderer=" in line else "unknown" for line in frames]
+                modes = sorted(set(sequence))
+                if not presentation_matches(sequence, args.renderer):
                     raise ValueError(f"expected {args.renderer} presentation, observed {modes}")
                 result["native"] = {"presented": len(frames), "rendering_modes": modes}
             if args.capture and captures and not recorded:
