@@ -7,6 +7,26 @@ use std::marker::PhantomData;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
+/// A cloneable, thread-safe wake handle. It does not keep the window alive.
+/// Requests coalesce on X11; calling it after close is harmless.
+#[derive(Clone)]
+pub struct FrameRequester {
+    wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+impl FrameRequester {
+    /// Creates a requester from a platform wake operation. The operation must
+    /// not block, retain native/editor resources, or call a window handler.
+    pub fn new(wake: impl Fn() + Send + Sync + 'static) -> Self {
+        Self { wake: std::sync::Arc::new(wake) }
+    }
+
+    /// Requests one frame from any thread without waiting for the handler.
+    pub fn request_frame(&self) {
+        (self.wake)();
+    }
+}
+
 /// A handle to a Window created by baseview.
 ///
 /// Unlike some other windowing libraries like `winit`, baseview [`Window`]s manage their own
@@ -94,6 +114,15 @@ impl Window {
     pub fn run_until_closed(self) -> Result<(), Error> {
         self.inner.run_until_closed()?;
         Ok(())
+    }
+
+    /// Returns a thread-safe frame wake handle without extending native lifetime.
+    /// Currently implemented on X11; other platforms retain continuous pacing.
+    pub fn frame_requester(&self) -> Option<FrameRequester> {
+        #[cfg(target_os = "linux")]
+        { Some(self.inner.frame_requester()) }
+        #[cfg(not(target_os = "linux"))]
+        { None }
     }
 
     /// The current size of the window.
