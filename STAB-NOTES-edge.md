@@ -64,8 +64,8 @@ hatch: direct context mutations bypass the queue and are caller-owned.
 
 Evidence below is from fetched **truce 6.3.0**, under
 `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/`. These are not MUI
-vendor files, and were not edited. Context7 was consulted; the pinned registry
-source is authoritative for the shipped version.
+vendor files, and were not edited. The pinned registry source is the API
+evidence for the shipped version.
 
 1. `truce-core-6.3.0/src/editor.rs:96-110` documents `Editor::idle` on the host
    UI thread. Exhaustive searches of CLAP/VST3 Rust and the VST3 shim find no
