@@ -129,6 +129,7 @@ pub struct Ui {
     /// See [`Ui::set_scale`].
     scale: Option<f64>,
     weld_backend: mui_scene::WeldBackend,
+    gpu_welding_available: bool,
     /// See [`Ui::set_double_click`].
     double_click: f64,
     interaction: Pointer,
@@ -278,6 +279,7 @@ impl Ui {
             runs: TextRuns::default(),
             scale: None,
             weld_backend: mui_scene::WeldBackend::Reference,
+            gpu_welding_available: true,
             interaction: Pointer::new(),
             capture_pose: None,
             actions: Vec::new(),
@@ -386,6 +388,17 @@ impl Ui {
     pub fn gpu_welding(mut self) -> Self {
         self.weld_backend = mui_scene::WeldBackend::AnalyticGpu;
         self
+    }
+
+    /// Native hosts disable GPU welding when using software presentation.
+    /// Rebuild cached material scenes without changing the application's preference.
+    pub fn set_gpu_welding_available(&mut self, available: bool) {
+        if self.gpu_welding_available != available {
+            self.gpu_welding_available = available;
+            self.scene = None;
+            self.resolver = Resolver::default();
+            self.hot_all = true;
+        }
     }
     /// Morph-only render update: keep the application declaration synchronized.
     /// Input reads the live scene's analytic predicate, so no hit-mask or closure
@@ -1133,7 +1146,11 @@ impl Ui {
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();
         spec.device_scale = self.scale;
-        spec.weld_backend = self.weld_backend;
+        spec.weld_backend = if self.gpu_welding_available {
+            self.weld_backend
+        } else {
+            mui_scene::WeldBackend::Reference
+        };
         spec.scroll_bars = Some(heats);
         let mut glided = false;
         let reduced = self.reduced_motion();

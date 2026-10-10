@@ -105,7 +105,30 @@ mod close_tests {
     }
 }
 
+/// The work a handler needs after its current frame or event.
+///
+/// X11 sleeps without a frame timer for `Idle`. Other platforms may continue
+/// polling until their pacers implement this contract. Input, exposure and an
+/// explicit [`FrameRequester`](crate::FrameRequester) wake still request a frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum FrameDemand {
+    /// Preserve the fork's refresh-rate callbacks.
+    #[default]
+    Continuous,
+    /// Sleep until input, exposure, resize or an explicit frame request.
+    Idle,
+    /// Request one frame at this monotonic deadline, then ask again.
+    At(std::time::Instant),
+}
+
 pub trait WindowHandler: 'static {
+    /// Reports frame demand after callbacks. This must not block or mutate the
+    /// native window. Poll-based models must report their own polling deadline.
+    fn frame_demand(&self) -> FrameDemand {
+        FrameDemand::Continuous
+    }
+
     /// Requests the handler to draw a new frame.
     ///
     /// If this returns an error, the window will be considered unable to render its contents, and

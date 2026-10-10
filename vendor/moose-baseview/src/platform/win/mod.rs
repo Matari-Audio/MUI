@@ -1,9 +1,14 @@
+mod callback;
+mod clipboard;
 mod dpi;
 mod drop_target;
 mod error;
+mod frame;
+mod frame_state;
 mod hook;
 mod ime;
 mod keyboard;
+mod native;
 mod window;
 mod window_state;
 
@@ -71,7 +76,8 @@ impl ParentWindowHandle {
             h => return Err(ParentWindowHandleError::UnsupportedWindowHandleType(h)),
         };
 
-        let Some(parent) = NonNull::new(parent.get() as _) else { unreachable!() };
+        // SAFETY: Win32WindowHandle stores a NonZeroIsize, so the pointer is non-null.
+        let parent = unsafe { NonNull::new_unchecked(parent.get() as _) };
 
         Ok(Self { handle: unsafe { HWnd::from_raw(parent) } })
     }

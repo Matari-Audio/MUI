@@ -7,6 +7,26 @@ use std::marker::PhantomData;
 #[cfg(target_os = "linux")]
 use std::time::Duration;
 
+/// A cloneable, thread-safe wake handle. It does not keep the window alive.
+/// Requests coalesce on X11; calling it after close is harmless.
+#[derive(Clone)]
+pub struct FrameRequester {
+    wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+impl FrameRequester {
+    /// Creates a requester from a platform wake operation. The operation must
+    /// not block, retain native/editor resources, or call a window handler.
+    pub fn new(wake: impl Fn() + Send + Sync + 'static) -> Self {
+        Self { wake: std::sync::Arc::new(wake) }
+    }
+
+    /// Requests one frame from any thread without waiting for the handler.
+    pub fn request_frame(&self) {
+        (self.wake)();
+    }
+}
+
 /// A handle to a Window created by baseview.
 ///
 /// Unlike some other windowing libraries like `winit`, baseview [`Window`]s manage their own
@@ -15,8 +35,9 @@ use std::time::Duration;
 /// All of its events and internal operations (such as rendering) are handled in a separate
 /// [`WindowHandler`] type, which is owned by the window itself.
 ///
-/// Dropping this [`Window`] handle will always destroy the window, and drop its associated
-/// [`WindowHandler`] and [`Host`] types.
+/// Dropping this [`Window`] handle requests native teardown. On X11 the host
+/// waits at most 250 ms; a stalled worker may finish teardown later, with its
+/// image pinned and callbacks revoked. See [`close_bounded`](Self::close_bounded).
 ///
 /// # Window lifecycle and ownership
 ///
@@ -96,6 +117,13 @@ impl Window {
         Ok(())
     }
 
+    /// Returns a thread-safe frame wake handle without extending native lifetime.
+    /// It is inert after close. `Option` is kept for callers written before every
+    /// platform had one; all current platforms return `Some`.
+    pub fn frame_requester(&self) -> Option<FrameRequester> {
+        Some(self.inner.frame_requester())
+    }
+
     /// The current size of the window.
     #[inline]
     pub fn size(&self) -> WindowSize {
@@ -157,10 +185,10 @@ impl Window {
 
     /// Closes and destroys the window.
     ///
-    /// This releases all resources the window uses.
-    ///
-    /// It is guaranteed that no other objects (e.g. the parent window) are used by this window after
-    /// this call.
+    /// On X11 this waits at most 250 ms, then revokes callbacks and detaches a
+    /// stalled, pinned worker. Native resources can outlive this call on that
+    /// exceptional path. Revoke the handler's access to host state first.
+    /// Other platforms release native resources synchronously.
     ///
     /// Calling this method is more explicit, but otherwise identical to just dropping this [`Window`].
     #[inline]
@@ -168,13 +196,15 @@ impl Window {
         drop(self)
     }
 
-    /// Closes an X11 editor without waiting forever for a stalled render thread.
+    /// Requests an X11 close with a bounded host-thread wait.
     ///
-    /// After `timeout`, the window thread is detached only if its plug-in image
-    /// can be pinned and no host callbacks were registered. The handler may
-    /// finish its current callback; X11 enters no more after observing the
-    /// revocation. Call this only after revoking the handler's host
-    /// state; ordinary [`close`](Self::close) remains synchronous.
+    /// After `timeout`, a stalled worker detaches with its image pinned and
+    /// future callbacks revoked. A callback/driver call already in progress can
+    /// finish later, including native/GPU destruction. Pinning preserves code,
+    /// not host state or a host-owned parent drawable. Call this only after
+    /// revoking all handler/HostCallbacks access to host state. A third-party
+    /// callback already waiting on a host API cannot be forcibly cancelled.
+    /// Ordinary [`close`](Self::close) uses the same policy with a 250 ms budget.
     #[cfg(target_os = "linux")]
     pub fn close_bounded(self, timeout: Duration) {
         self.inner.set_close_timeout(timeout);

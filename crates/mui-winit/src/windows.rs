@@ -16,8 +16,13 @@ pub struct WindowToken(u64);
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostEvent {
     Opened,
-    Presented { size: (u32, u32) },
-    Resized { size: (u32, u32) },
+    Presented {
+        size: (u32, u32),
+        rendering_mode: &'static str,
+    },
+    Resized {
+        size: (u32, u32),
+    },
     Focused(bool),
     PointerEntered,
     PointerLeft,
@@ -367,12 +372,27 @@ impl<V: View + 'static> ApplicationHandler<Event<V>> for Windows<V> {
         let host = self.windows.get_mut(&token).expect("known window");
         let presentations = host.app.presentations;
         host.app.window_event(event_loop, id, event);
-        let presented = (host.app.presentations != presentations).then_some(host.app.state.size);
+        let presented = (host.app.presentations != presentations).then(|| {
+            (
+                host.app.state.size,
+                host.app
+                    .gpu
+                    .as_ref()
+                    .expect("presented window")
+                    .rendering_mode(),
+            )
+        });
         if let Some(event) = notification {
             self.notify(token, event);
         }
-        if let Some(size) = presented {
-            self.notify(token, HostEvent::Presented { size });
+        if let Some((size, rendering_mode)) = presented {
+            self.notify(
+                token,
+                HostEvent::Presented {
+                    size,
+                    rendering_mode,
+                },
+            );
         }
     }
 }

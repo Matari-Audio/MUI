@@ -95,7 +95,7 @@ impl GlContextInner {
                 connection: Rc::clone(&connection),
                 context,
             }))
-        })
+        })?
     }
 
     /// Find a matching framebuffer config and window visual for the given OpenGL configuration.
@@ -120,7 +120,7 @@ impl GlContextInner {
                 FbConfig { fb_config, gl_config: config },
                 WindowConfig { depth: visual.depth as u8, visual: visual.visualid as u32 },
             ))
-        })
+        })?
     }
 
     pub unsafe fn make_current(&self) -> Result<()> {
@@ -131,13 +131,13 @@ impl GlContextInner {
                 self.context,
                 error_handler,
             )
-        })
+        })?
     }
 
     pub unsafe fn make_not_current(&self) -> Result<()> {
         XErrorHandler::handle(self.connection.conn.xlib_connection(), |error_handler| {
             self.glx.clear_current(self.connection.conn.xlib_connection(), error_handler)
-        })
+        })?
     }
 
     fn window_id(&self) -> c_ulong {
@@ -158,12 +158,20 @@ impl GlContextInner {
                 self.window_id(),
                 error_handler,
             )
-        })
+        })?
     }
 }
 
 impl Drop for GlContextInner {
     fn drop(&mut self) {
-        unsafe { self.glx.destroy_context(self.connection.conn.xlib_connection(), self.context) }
+        let result = XErrorHandler::handle(self.connection.conn.xlib_connection(), |errors| {
+            unsafe {
+                self.glx.destroy_context(self.connection.conn.xlib_connection(), self.context)
+            };
+            errors.check()
+        });
+        if !matches!(result, Ok(Ok(()))) {
+            crate::warn!("Failed to destroy X11 GL context");
+        }
     }
 }

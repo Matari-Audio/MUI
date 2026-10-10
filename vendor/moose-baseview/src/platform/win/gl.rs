@@ -25,6 +25,15 @@ impl GlContextInner {
 
         // Create temporary window and context to load function pointers
         let extra = with_dummy_window(|hwnd_tmp| {
+            // The wrapper retains its class until this closure returns. Destroy
+            // the temporary HWND after GL/DC guards, even on early errors.
+            struct TemporaryWindow(HWnd);
+            impl Drop for TemporaryWindow {
+                fn drop(&mut self) {
+                    let _ = self.0.destroy();
+                }
+            }
+            let _temporary = TemporaryWindow(hwnd_tmp);
             let hdc = hwnd_tmp.get_own_dc()?;
             hdc.set_pixel_format(&PixelFormat::default())?;
 

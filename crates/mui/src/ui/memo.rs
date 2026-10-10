@@ -252,10 +252,34 @@ thread_local! {
 }
 pub(super) static NEXT_UI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+impl Ui {
+    /// Release this UI's memo trees on the calling thread.
+    ///
+    /// Native hosts must call this on the rendering thread before closing or
+    /// moving the UI to another thread. Memo trees can hold plugin closures;
+    /// leaving them in a long-lived host thread delays their destruction until
+    /// thread exit. The next frame rebuilds missing memos normally.
+    pub fn release_thread_memos(&self) {
+        let removed = TREES.try_with(|trees| {
+            let mut trees = trees.borrow_mut();
+            let keys: Vec<_> = trees
+                .keys()
+                .filter(|(ui, _)| *ui == self.me)
+                .copied()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| trees.remove(&key))
+                .collect::<Vec<_>>()
+        });
+        // Captured destructors can re-enter the memo table (or drop a UI).
+        // Never execute them while holding its RefCell borrow.
+        drop(removed);
+    }
+}
+
 impl Drop for Ui {
     fn drop(&mut self) {
-        let me = self.me;
-        let _ = TREES.try_with(|t| t.borrow_mut().retain(|(ui, _), _| *ui != me));
+        self.release_thread_memos();
     }
 }
 
@@ -287,4 +311,33 @@ pub(super) fn placeholder(id: u64) -> El {
 /// The node at child-index `path` below `n`.
 pub(super) fn node_at<'a>(n: &'a mut El, path: &[usize]) -> &'a mut El {
     path.iter().fold(n, |n, &j| &mut n.children_mut()[j])
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn releasing_memos_drops_captures_outside_the_thread_local_borrow() {
+        struct Capture(Rc<Cell<bool>>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                TREES.with(|trees| assert!(trees.try_borrow_mut().is_ok()));
+                self.0.set(true);
+            }
+        }
+        let ui = Ui::default();
+        let dropped = Rc::new(Cell::new(false));
+        let capture = Capture(dropped.clone());
+        let el = mui_scene::canvas(move |_| {
+            let _ = &capture;
+            Vec::new()
+        });
+        TREES.with(|trees| trees.borrow_mut().insert((ui.me, 0), el));
+        ui.release_thread_memos();
+        assert!(dropped.get());
+        TREES.with(|trees| assert!(!trees.borrow().keys().any(|(owner, _)| *owner == ui.me)));
+    }
 }

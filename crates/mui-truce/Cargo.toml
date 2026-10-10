@@ -5,6 +5,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+# Only for applications that deliberately accept process termination on panic.
+# Never enable this in a plugin loaded by a DAW.
+[features]
+allow-panic-abort = ["mui-baseview/allow-panic-abort"]
+
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }
 truce-core = "6.3"

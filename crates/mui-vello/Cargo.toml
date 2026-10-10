@@ -7,14 +7,19 @@ license.workspace = true
 
 [features]
 default = []
+reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
 # sized pixmap loses more to thread hand-off than it gains.
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
+# Native CPU presentation, independent of GPU drivers.
+software-window = ["cpu", "dep:softbuffer", "dep:raw-window-handle", "dep:objc"]
 
 [dependencies]
+softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
 mui-scene.workspace = true
 mui-weld.workspace = true
 mui-geometry.workspace = true
@@ -50,6 +55,21 @@ wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"
 pollster.workspace = true
 mui.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Remove only softbuffer's CPU CALayer on native CPU -> Metal handover.
+objc = { version = "0.2", optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Pin only: safe nonblocking report cancellation requires keeping this native
+# image mapped if a network operation outlives the last editor. Never used on WASM.
+baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview", optional = true }
+serde_json = { version = "1", optional = true }
+sha2 = { version = "0.10", optional = true }
+hickory-resolver = { version = "=0.26.3", default-features = false, features = ["system-config", "tokio"], optional = true }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time"], optional = true }
+# The joined resolver uses ureq's explicitly unversioned low-level API.
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], optional = true }
+
 [[example]]
 name = "gpu_contract"
 required-features = ["gpu-effects"]
@@ -64,3 +84,16 @@ required-features = ["cpu", "gpu-effects"]
 
 [lints]
 workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Browser wasm is single-threaded: wgpu's handles are Send/Sync there only with
+# this feature. The shared GPU session needs it to compile; spawning its
+# initializer fails on wasm and the caller takes the recorded failure path.
+wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
+
+[target.'cfg(all(windows, not(target_arch = "aarch64"), target_env = "msvc"))'.dependencies]
+# Not used directly: pins wgpu's static-dxc backend for every downstream lock.
+# 0.1.6's build script refuses its own (mutable) GitHub release and 0.1.5 is
+# yanked, so a fresh resolve breaks every Windows build. Unpin once upstream
+# publishes an immutable release.
+mach-dxcompiler-rs = { version = "=0.1.4", default-features = false }

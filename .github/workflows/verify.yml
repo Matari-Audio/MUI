@@ -1,28 +1,17 @@
 name: Verify
-# PRs get the full gate on Linux, as parallel jobs. Windows and macOS (wgpu
-# backends, baseview embedding, truce wrappers) build and test only after a
-# merge to main, from the merge queue, on demand, or on a PR labelled
-# `ci:all-platforms`.
+# Every update checks Linux, Windows and macOS; platform cfgs are part of the gate.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
   merge_group:
-  # `gh workflow run verify.yml --ref <branch> [-f platforms=false]`
+  # `gh workflow run verify.yml --ref <branch>`
   workflow_dispatch:
-    inputs:
-      platforms:
-        description: Also build and test on Windows and macOS
-        type: boolean
-        default: true
 permissions:
   contents: read
 concurrency:
-  # Label runs include the gate too: skipping a required check can turn it green
-  # on the same SHA even when the original code run failed. Replace older PR
-  # code/label runs instead of repeating costly tests in separate groups. Event
-  # types stay isolated so dispatch cannot supersede a push or merge queue run.
+  # A dispatch cannot supersede a push or merge queue run.
   group: verify-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
@@ -96,12 +85,6 @@ jobs:
       - if: matrix.section == 'root-test'
         name: Desktop portal dialogs and owned worker teardown
         run: cargo test -p mui-native-dialog --features xdg-portal --locked --offline
-      - if: matrix.section == 'root-test'
-        name: Native EGL presentation, accessibility and reopen
-        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-baseview --lib --locked --offline -- --ignored
-      - if: matrix.section == 'root-test'
-        name: Native multiwindow presentation and resize
-        run: xvfb-run -a env LIBGL_ALWAYS_SOFTWARE=1 WGPU_BACKEND=gl cargo test -p mui-winit --test native_windows --locked --offline -- --ignored
       # A failing test leaves the adapter builds good.
       - if: "!cancelled() && matrix.section == 'media-cut-test' && github.ref == 'refs/heads/main'"
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -109,30 +92,25 @@ jobs:
           path: media/target/tmp/adapters/target
           key: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
 
-  # Keep the existing required check name. Platforms may skip on default PRs,
-  # but failures/cancellations on main, merge queue or labelled PRs fail the gate.
+  # Keep the existing required check name; every platform must pass.
   linux:
     if: always()
-    needs: [gate, platforms]
+    needs: [gate, platforms, ui]
     runs-on: ubuntu-latest
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
+          UI_RESULT: ${{ needs.ui.result }}
           PLATFORM_RESULT: ${{ needs.platforms.result }}
-          PLATFORMS_REQUIRED: ${{ (github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch') || (github.event_name == 'workflow_dispatch' && inputs.platforms) || (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms')) }}
         run: |
           test "$GATE_RESULT" = success
-          if [ "$PLATFORMS_REQUIRED" = true ]; then
-            test "$PLATFORM_RESULT" = success
-          else
-            test "$PLATFORM_RESULT" = skipped
-          fi
+          test "$UI_RESULT" = success
+          test "$PLATFORM_RESULT" = success
+
+  ui:
+    uses: ./.github/workflows/ui.yml
 
   platforms:
-    if: >-
-      (github.event_name != 'pull_request' && github.event_name != 'workflow_dispatch') ||
-      (github.event_name == 'workflow_dispatch' && inputs.platforms) ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms'))
     strategy:
       fail-fast: false
       matrix:

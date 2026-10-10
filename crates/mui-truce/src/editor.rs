@@ -7,9 +7,10 @@ use mui::scene::{El, Size};
 use truce_core::editor::{Editor, PluginContext, RawWindowHandle};
 use truce_params::Params;
 
-use crate::Bridge;
+use crate::boundary::guard;
 use crate::platform::{HostScale, ParentWindow};
 use crate::window::{self, Requests, Shared, View, baseview, lock};
+use crate::{Bridge, HostPump};
 
 type Build<P> = Box<dyn FnMut(&mut Ui, &mut Bridge<P>) -> El + Send>;
 type Changed = Box<dyn FnMut() -> bool + Send>;
@@ -35,15 +36,18 @@ impl<P: Params> View for Session<P> {
         // Both run every tick: the bridge snapshots values as it compares.
         self.bridge.changed() | self.changed.as_mut().is_some_and(|f| f())
     }
+    fn cancel(&mut self, ui: &Ui) {
+        // Runs on the native rendering thread at close/focus cancellation.
+        // In particular, no plugin closure may be left in host-thread TLS.
+        ui.release_thread_memos();
+    }
     fn zoom(&self, window: Size) -> f64 {
         self.design.map_or(1.0, |d| {
             (window.width / d.width).min(window.height / d.height)
         })
     }
     fn request_resize(&mut self, width: u32, height: u32) -> bool {
-        self.bridge
-            .context()
-            .is_some_and(|c| c.request_resize(width, height))
+        self.bridge.request_resize(width, height)
     }
 }
 
@@ -78,9 +82,9 @@ impl<P: Params> View for Session<P> {
 /// # Panics and build profile
 ///
 /// The editor's window callbacks catch panics so a UI bug stays in the UI.
-/// That only works when the plugin cdylib unwinds: build it with the
-/// workspace's `plugin` profile (`cargo build --profile plugin`), never plain
-/// `--release`, whose `panic = "abort"` makes every UI panic abort the DAW.
+/// That only works when the final plugin cdylib unwinds. This workspace's
+/// release and plugin profiles do; downstream workspaces must set their own
+/// `panic = "unwind"`. The crate rejects abort unless explicitly opted out.
 pub struct MuiEditor<P: Params> {
     shared: Arc<Mutex<Shared<Session<P>>>>,
     requests: Arc<Requests>,
@@ -124,6 +128,7 @@ impl<P: Params> MuiEditor<P> {
         build: impl FnMut(&mut Ui, &mut Bridge<P>) -> El + Send + 'static,
     ) -> Self {
         let size = size.into();
+        let size = Size::new(size.width.max(1.0), size.height.max(1.0));
         let session = Session {
             bridge: Bridge::new(Arc::clone(&params)),
             build: Box::new(build),
@@ -134,7 +139,10 @@ impl<P: Params> MuiEditor<P> {
             shared: Arc::new(Mutex::new(Shared { ui, view: session })),
             requests: Arc::default(),
             params,
-            size: points(size),
+            size: {
+                let (w, h) = points(size);
+                (w.max(1), h.max(1))
+            },
             min: None,
             scale: HostScale::default(),
             window: None,
@@ -161,12 +169,98 @@ impl<P: Params> MuiEditor<P> {
         self
     }
 
+    /// Select only when the framework drives a main-thread pump outside its
+    /// editor lock. Truce 6.3 CLAP/VST3 do not; leave this off for those wrappers.
+    #[must_use]
+    pub fn with_host_pump(self) -> Self {
+        let mut shared = lock(&self.shared);
+        let bridge = std::mem::replace(
+            &mut shared.view.bridge,
+            Bridge::new(Arc::clone(&self.params)),
+        );
+        shared.view.bridge = bridge.with_host_pump();
+        drop(shared);
+        self
+    }
+
+    /// Retain this handle in a framework callback and flush outside locks.
+    pub fn host_pump(&self) -> Option<Arc<HostPump>> {
+        lock(&self.shared).view.bridge.host_pump()
+    }
+
     fn close_window(&mut self) {
+        // Take first: teardown panics cannot leave a live handle in the editor.
         if let Some(Handle(window)) = self.window.take() {
-            #[cfg(target_os = "linux")]
-            window.close_bounded(std::time::Duration::from_millis(250));
-            #[cfg(not(target_os = "linux"))]
-            window.close();
+            guard("native close", move || {
+                #[cfg(target_os = "linux")]
+                window.close_bounded(std::time::Duration::from_millis(250));
+                #[cfg(not(target_os = "linux"))]
+                window.close();
+            });
+        }
+    }
+
+    fn close_model(&self, notify_host: bool) {
+        guard("close bridge", || {
+            let mut shared = lock(&self.shared);
+            if notify_host {
+                shared.view.bridge.close();
+            } else {
+                shared.view.bridge.detach();
+            }
+        });
+        // Separate guard: a bridge failure must not skip UI cancellation.
+        guard("close UI", || {
+            let mut shared = lock(&self.shared);
+            shared.ui.close();
+            shared.ui.release_thread_memos();
+        });
+    }
+
+    fn open_native(
+        &mut self,
+        context: &PluginContext,
+        create: impl FnOnce(&Self) -> Option<Handle>,
+    ) {
+        self.close();
+        self.requests = Arc::default();
+        let opened = guard("editor open", || {
+            let mut shared = lock(&self.shared);
+            shared
+                .view
+                .bridge
+                .attach(context.with_params(Arc::clone(&self.params)));
+            // Validate author code before allocating any native window. The
+            // normal first native tick still resolves at its actual device scale.
+            let Shared { ui, view } = &mut *shared;
+            let input = Input::default();
+            let root = view.build(ui, &input);
+            if ui
+                .frame(
+                    root,
+                    Some(Size::new(f64::from(self.size.0), f64::from(self.size.1))),
+                    input,
+                    0.0,
+                )
+                .is_err()
+            {
+                return Err(());
+            }
+            ui.release_thread_memos();
+            drop(shared);
+            Ok(create(self))
+        });
+        match opened {
+            Some(Ok(Some(window))) => self.window = Some(window),
+            // Only a completed factory can hand ownership to a headless adapter.
+            Some(Ok(None)) if mui::host::headless::time().is_some() => {}
+            _ => self.close(),
+        }
+    }
+
+    fn idle_with(&mut self, callback: impl FnOnce(&Self)) {
+        if guard("editor idle", || callback(self)).is_none() {
+            self.close();
         }
     }
 }
@@ -185,73 +279,94 @@ impl<P: Params> Editor for MuiEditor<P> {
     }
 
     fn open(&mut self, parent: RawWindowHandle, context: PluginContext) {
-        if self.window.is_some() {
-            self.close();
-        }
-        lock(&self.shared)
-            .view
-            .bridge
-            .attach(context.with_params(Arc::clone(&self.params)));
-        // A request made while closed was for the last window.
-        self.requests = Arc::default();
-        self.window = window::open(
-            &ParentWindow(parent),
-            "MUI",
-            self.size,
-            self.scale.policy(),
-            Arc::clone(&self.shared),
-            Arc::clone(&self.requests),
-        )
-        .map(Handle);
+        self.open_native(&context, |editor| {
+            window::open(
+                &ParentWindow(parent),
+                "MUI",
+                editor.size,
+                editor.scale.policy(),
+                Arc::clone(&editor.shared),
+                Arc::clone(&editor.requests),
+            )
+            .map(Handle)
+        });
     }
 
     fn close(&mut self) {
-        {
-            // Released before the window closes: on macOS and Windows
-            // baseview tears the handler down on this thread, inside
-            // `close`, and its last event would wait on this lock.
-            let mut s = lock(&self.shared);
-            s.view.bridge.close();
-            // The bridge ended the host's gestures; these are the same edges.
-            s.ui.close();
+        self.close_model(true);
+        // No model lock across callbacks or native destruction. Queued Ends
+        // must reach the host before tearing the native child down.
+        if let Some(pump) = self.host_pump() {
+            pump.flush();
         }
         self.close_window();
     }
 
+    fn idle(&mut self) {
+        self.idle_with(|editor| {
+            if let Some(pump) = editor.host_pump() {
+                pump.flush();
+            }
+        });
+    }
+
     fn set_size(&mut self, width: u32, height: u32) -> bool {
-        match self.min {
-            Some((w, h)) if width >= w && height >= h => {
+        guard("editor resize", || match self.min {
+            Some((w, h)) if width > 0 && height > 0 && width >= w && height >= h => {
                 self.size = (width, height);
                 self.requests.resize(width, height);
+                self.requests.redraw();
                 true
             }
             _ => false,
-        }
+        })
+        .unwrap_or(false)
     }
 
     fn set_scale_factor(&mut self, factor: f64) {
-        self.scale.set(factor);
-        self.requests.scale(factor);
+        guard("editor scale", || {
+            self.scale.set(factor);
+            // Apply exactly the same policy as open. In particular, never
+            // force AppKit's Retina backing to a host's default 1x.
+            if let Some(scale) = self.scale.policy() {
+                self.requests.scale(scale);
+                // A late scale preserves the last committed logical size,
+                // even when native parenting reported zero or stale bounds.
+                self.requests.resize(self.size.0, self.size.1);
+                self.requests.redraw();
+            }
+        });
     }
 
     fn set_uses_system_scale(&mut self, yes: bool) {
-        self.scale.set_uses_system(yes);
+        guard("system scale", || {
+            self.scale.set_uses_system(yes);
+            if let Some(Handle(window)) = &self.window {
+                let _ = window.set_scale_factor_override(self.scale.policy());
+            }
+        });
     }
 
     fn state_changed(&mut self) {
         // A preset replaced what a gesture in flight was editing: end it,
         // and stop the drag so it cannot keep writing the old value.
-        let mut s = lock(&self.shared);
-        s.ui.cancel();
-        s.view.bridge.end_all();
-        self.requests.redraw();
+        if guard("state changed", || {
+            let mut s = lock(&self.shared);
+            s.ui.cancel();
+            s.view.bridge.end_all();
+            self.requests.redraw();
+        })
+        .is_none()
+        {
+            self.close();
+        }
     }
 }
 
 impl<P: Params> Drop for MuiEditor<P> {
     fn drop(&mut self) {
         // The host may have torn its side down already: no callbacks here.
-        lock(&self.shared).view.bridge.detach();
+        self.close_model(false);
         self.close_window();
     }
 }
