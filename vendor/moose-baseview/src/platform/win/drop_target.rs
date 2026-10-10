@@ -230,6 +230,9 @@ impl DropTarget {
                         effect.write(DROPEFFECT_NONE);
                     }
                 }
+                if let Some(state) = self.window_state.upgrade() {
+                    state.request_close();
+                }
                 Ok(())
             },
             body,

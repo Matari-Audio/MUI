@@ -76,7 +76,8 @@ impl ParentWindowHandle {
             h => return Err(ParentWindowHandleError::UnsupportedWindowHandleType(h)),
         };
 
-        let Some(parent) = NonNull::new(parent.get() as _) else { unreachable!() };
+        // SAFETY: Win32WindowHandle stores a NonZeroIsize, so the pointer is non-null.
+        let parent = unsafe { NonNull::new_unchecked(parent.get() as _) };
 
         Ok(Self { handle: unsafe { HWnd::from_raw(parent) } })
     }

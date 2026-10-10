@@ -56,7 +56,13 @@ impl Drop for RegisteredClass {
         if unsafe { UnregisterClassW(self.atom_ptr(), self.instance.as_raw()) } == 0 {
             // Creation pins the image before publishing any callback, including
             // the class procedure. A failed unregister cannot leave an unmapped proc.
-            crate::warn!("UnregisterClassW failed: {}", Error::from_thread());
+            callback::guard(
+                "class cleanup diagnostic",
+                || (),
+                || {
+                    crate::warn!("UnregisterClassW failed: {}", Error::from_thread());
+                },
+            );
         }
     }
 }
@@ -107,6 +113,15 @@ pub(super) fn create_window(
         )
     };
     let Some(hwnd) = NonNull::new(hwnd) else {
+        let error = Error::from_thread();
+        let error = if error.code().is_ok() {
+            Error::new(
+                windows_core::HRESULT(0x80004005u32 as i32),
+                "Window initializer rejected creation",
+            )
+        } else {
+            error
+        };
         // Windows normally sends NCDESTROY on create failure. If an early
         // NCCREATE rejection skips it, recover precisely the attached Rc once.
         if data.attached.replace(false) {
@@ -125,7 +140,7 @@ pub(super) fn create_window(
             }
             drop(unsafe { Rc::from_raw(Rc::as_ptr(&data)) });
         }
-        return Err(Error::from_thread());
+        return Err(error);
     };
     // Retain the class until WindowHandle is dropped, AFTER DestroyWindow returns.
     // Unregistering inside WM_DESTROY/WM_NCDESTROY is too early.

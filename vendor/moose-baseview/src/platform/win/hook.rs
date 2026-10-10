@@ -57,6 +57,7 @@ pub(crate) fn init_keyboard_hook(hwnd: HWND) -> KeyboardHookHandle {
     let id = unsafe { GetCurrentThreadId() };
     let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
     let thread = state.entry(id).or_default();
+    let mut error = None;
     thread.windows.insert(hwnd as usize, KeyboardOwnership::new());
     if thread.hook == 0 {
         // For a thread in this process hMod must be NULL, not the host EXE.
@@ -66,8 +67,16 @@ pub(crate) fn init_keyboard_hook(hwnd: HWND) -> KeyboardHookHandle {
         };
         thread.hook = hook as usize;
         if hook.is_null() {
-            crate::warn!("SetWindowsHookExW failed: {}", windows_core::Error::from_thread());
+            error = Some(windows_core::Error::from_thread());
         }
+    }
+    drop(state);
+    if let Some(error) = error {
+        callback::guard(
+            "hook install diagnostic",
+            || (),
+            || crate::warn!("SetWindowsHookExW failed: {}", error),
+        );
     }
     KeyboardHookHandle { hwnd: hwnd as usize, thread: id }
 }
@@ -78,14 +87,23 @@ impl Drop for KeyboardHookHandle {
         let Some(thread) = state.get_mut(&self.thread) else {
             return;
         };
+        let mut error = None;
         if super::frame_state::remove_window(&mut thread.windows, self.hwnd) {
             if thread.hook != 0 && unsafe { UnhookWindowsHookEx(thread.hook as HHOOK) } == 0 {
                 // Keep the handle for a later retry. No windows remain to capture
                 // keys; the pinned image makes the still-installed proc safe.
-                crate::warn!("UnhookWindowsHookEx failed: {}", windows_core::Error::from_thread());
+                error = Some(windows_core::Error::from_thread());
             } else {
                 state.remove(&self.thread);
             }
+        }
+        drop(state);
+        if let Some(error) = error {
+            callback::guard(
+                "hook uninstall diagnostic",
+                || (),
+                || crate::warn!("UnhookWindowsHookEx failed: {}", error),
+            );
         }
     }
 }

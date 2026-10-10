@@ -11,12 +11,23 @@ use std::{
 use windows_sys::Win32::{Foundation::HWND, Graphics::Dwm::DwmFlush, UI::WindowsAndMessaging::*};
 
 pub(super) struct FrameSignal {
+    serial: usize,
+    image_marker: usize,
     state: Mutex<FrameState>,
     changed: Condvar,
 }
 impl FrameSignal {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { state: Mutex::new(FrameState::new()), changed: Condvar::new() })
+        static SERIAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        Arc::new(Self {
+            serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            image_marker: std::ptr::addr_of!(SERIAL) as usize,
+            state: Mutex::new(FrameState::new()),
+            changed: Condvar::new(),
+        })
+    }
+    pub fn matches_message(&self, serial: usize, marker: isize) -> bool {
+        serial == self.serial && marker as usize == self.image_marker
     }
     pub fn requester(self: &Arc<Self>) -> FrameRequester {
         let signal = Arc::clone(self);
@@ -48,9 +59,25 @@ impl FrameSignal {
         self.changed.notify_all();
     }
     fn wait_for(&self, delay: Duration) {
-        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        if !state.revoked {
-            drop(self.changed.wait_timeout(state, delay).unwrap_or_else(PoisonError::into_inner));
+        let started = Instant::now();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        while !state.revoked && state.visible && started.elapsed() < delay {
+            let left = delay.saturating_sub(started.elapsed());
+            state =
+                self.changed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
+        }
+    }
+    fn wait_fallback(&self, delay: Duration) {
+        let started = Instant::now();
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        // Unchanged demand notifications must not shorten the no-DWM cadence.
+        // Close or a change to Idle/At still interrupts the wait immediately.
+        while matches!(state.next(Instant::now()), Wake::Frame { compositor: true })
+            && started.elapsed() < delay
+        {
+            let left = delay.saturating_sub(started.elapsed());
+            state =
+                self.changed.wait_timeout(state, left).unwrap_or_else(PoisonError::into_inner).0;
         }
     }
 }
@@ -108,7 +135,7 @@ impl FramePacer {
                                 let started = Instant::now();
                                 let flushed = unsafe { DwmFlush() } >= 0;
                                 if !flushed || started.elapsed() < Duration::from_millis(1) {
-                                    worker.wait_for(fallback);
+                                    worker.wait_fallback(fallback);
                                 }
                                 state = worker.state.lock().unwrap_or_else(PoisonError::into_inner);
                             }
@@ -120,7 +147,15 @@ impl FramePacer {
                         let Some(hwnd) = state.hwnd else {
                             continue;
                         };
-                        if unsafe { PostMessageW(hwnd as HWND, BV_FRAME, 0, 0) } != 0 {
+                        if unsafe {
+                            PostMessageW(
+                                hwnd as HWND,
+                                BV_FRAME,
+                                worker.serial,
+                                worker.image_marker as isize,
+                            )
+                        } != 0
+                        {
                             state.posted();
                         } else {
                             state.revoke();
@@ -135,16 +170,27 @@ impl Drop for FramePacer {
     fn drop(&mut self) {
         self.signal.revoke();
         if let Some(thread) = self.thread.take() {
-            let started = Instant::now();
-            while !thread.is_finished() && started.elapsed() < Duration::from_millis(25) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            if thread.is_finished() {
+            // Kernel completion includes TLS destructors. is_finished() alone
+            // can be true just before TLS cleanup, which could still block join.
+            use std::os::windows::io::AsRawHandle;
+            let finished = unsafe {
+                windows_sys::Win32::System::Threading::WaitForSingleObject(
+                    thread.as_raw_handle(),
+                    25,
+                ) == windows_sys::Win32::Foundation::WAIT_OBJECT_0
+            };
+            if finished {
                 let _ = thread.join();
             } else {
                 // create_window pinned the image before publishing callbacks.
                 // A stuck driver wait may resume, but its target is revoked.
-                crate::warn!("Frame pacer stop exceeded 25 ms; detached from pinned image");
+                super::callback::guard(
+                    "pacer stop diagnostic",
+                    || (),
+                    || {
+                        crate::warn!("Frame pacer stop exceeded 25 ms; detached from pinned image");
+                    },
+                );
             }
         }
     }

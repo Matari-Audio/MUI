@@ -128,9 +128,11 @@ impl WindowHandle {
         if !self.state.is_alive.get() {
             return Ok(());
         }
-        if !scale_factor.is_finite() || scale_factor <= 0.0 {
+        let Some(dpi) =
+            super::frame_state::scale_to_dpi(scale_factor).and_then(NonZeroU32::new).map(Dpi)
+        else {
             return Err(PlatformError::ResizeFailed);
-        }
+        };
         let current_scale_factor = self.state.scale_factor();
         self.state.fallback_scale_factor.set(Some(scale_factor));
 
@@ -141,6 +143,9 @@ impl WindowHandle {
             return Ok(());
         }
 
+        if strategy.should_use_host_suggested_scale_factor {
+            self.state.current_dpi.set(Some(dpi));
+        }
         let Some(hwnd) = self.hwnd.get() else { return Ok(()) };
 
         let current_size = self.state.current_size.get();
@@ -160,8 +165,7 @@ impl WindowHandle {
         let dpi_ctx =
             DpiAwarenessGuard::new(&self.state.user32, self.state.dpi_scaling_strategy.get())?;
 
-        let dpi = NonZeroU32::new((scale_factor * 96.0) as u32).map(Dpi);
-        super::native::resize(hwnd, new_size, dpi, &dpi_ctx)?;
+        super::native::resize(hwnd, new_size, Some(dpi), &dpi_ctx)?;
 
         if self.state.current_size.get() == new_size {
             Ok(())
@@ -370,9 +374,13 @@ impl BaseviewWindow {
         }
         // Revoke producers before native destruction; none may target a reused HWND.
         self.shared_state.frame_signal.revoke();
-        drop(self.frame_pacer.take());
-        drop(self._keyboard_hook.take());
-        self.window_state.ime.close(window.as_raw());
+        super::callback::guard("pacer cleanup", || (), || drop(self.frame_pacer.take()));
+        super::callback::guard("hook cleanup", || (), || drop(self._keyboard_hook.take()));
+        super::callback::guard(
+            "IME cleanup",
+            || (),
+            || self.window_state.ime.close(window.as_raw()),
+        );
         if let Some(drop_target) = self._drop_target.take() {
             drop_target.revoke();
             if let Err(e) = window.revoke_drag_drop() {
@@ -496,7 +504,12 @@ impl BaseviewWindow {
 impl Drop for BaseviewWindow {
     fn drop(&mut self) {
         self.shared_state.is_alive.set(false);
-        self.notify_destroyed_to_host();
+        // Destruction may itself happen during an unwind from a callback.
+        super::callback::guard(
+            "host destroyed notification",
+            || (),
+            || self.notify_destroyed_to_host(),
+        );
     }
 }
 
@@ -764,6 +777,9 @@ unsafe fn wnd_proc_inner(
             Some(0)
         }
         BV_FRAME => {
+            if !window_bv.shared_state.frame_signal.matches_message(wparam, lparam) {
+                return Some(0);
+            }
             if unsafe {
                 IsWindowVisible(window.as_raw()) != 0
                     && IsIconic(GetAncestor(window.as_raw(), GA_ROOT)) == 0

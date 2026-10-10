@@ -51,7 +51,8 @@ impl FrameState {
             return Wake::Wait;
         }
         if self.requested {
-            return Wake::Frame { compositor: false };
+            // Explicit work must not bypass refresh pacing under Continuous.
+            return Wake::Frame { compositor: self.demand == FrameDemand::Continuous };
         }
         match self.demand {
             FrameDemand::Idle => Wake::Wait,
@@ -76,6 +77,15 @@ impl FrameState {
         self.hwnd = None;
         self.requested = false;
     }
+}
+
+pub(super) fn scale_to_dpi(scale: f64) -> Option<u32> {
+    // Reject invalid magnitudes before multiplication, rather than overflowing
+    // a host-provided value and inspecting infinity afterwards.
+    if !scale.is_finite() || scale < 1.0 / 96.0 || scale > f64::from(u32::MAX) / 96.0 {
+        return None;
+    }
+    Some((scale * 96.0) as u32)
 }
 
 pub(super) fn class_name(image: usize, serial: u64) -> String {
@@ -144,6 +154,12 @@ mod tests {
         state
     }
     #[test]
+    fn explicit_requests_do_not_bypass_continuous_pacing() {
+        let mut state = visible();
+        state.request();
+        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: true });
+    }
+    #[test]
     fn idle_has_no_timer_deadline() {
         let mut state = visible();
         state.set_demand(FrameDemand::Idle);
@@ -185,7 +201,9 @@ mod tests {
     #[test]
     fn future_deadline_survives_an_earlier_explicit_wake() {
         let mut state = visible();
-        let at = Instant::now().checked_add(std::time::Duration::from_secs(10)).unwrap_or_else(Instant::now);
+        let at = Instant::now()
+            .checked_add(std::time::Duration::from_secs(10))
+            .unwrap_or_else(Instant::now);
         state.set_demand(FrameDemand::At(at));
         assert_eq!(state.next(Instant::now()), Wake::At(at));
         state.request();
@@ -207,7 +225,16 @@ mod tests {
         state.hwnd = Some(10);
         assert_eq!(state.next(Instant::now()), Wake::Wait);
         state.visible = true;
-        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: false });
+        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: true });
+    }
+    #[test]
+    fn dpi_hints_are_finite_positive_and_representable() {
+        for scale in [f64::NAN, f64::INFINITY, -1.0, 0.0, 0.0001, f64::MAX] {
+            assert_eq!(scale_to_dpi(scale), None);
+        }
+        assert_eq!(scale_to_dpi(1.25), Some(120));
+        assert_eq!(scale_to_dpi(1.5), Some(144));
+        assert_eq!(scale_to_dpi(2.0), Some(192));
     }
     #[test]
     fn class_names_separate_images_and_windows() {
