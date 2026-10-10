@@ -10,7 +10,7 @@
 //! Arcs stay arcs until this point. MUI's tessellation path flattens them to
 //! line segments; here they become cubics instead, which is what Vello wants
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;

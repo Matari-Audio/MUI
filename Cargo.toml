@@ -62,7 +62,7 @@ color = "0.3"
 i_overlay = "8.1"
 rustc-hash = "2"
 kurbo = "0.13.1"
-wgpu = { version = "30", default-features = false }
+wgpu = { version = "30", default-features = false, features = ["static-dxc"] }
 pollster = "0.4"
 png = "0.18"
 epaint_default_fonts = "0.36"

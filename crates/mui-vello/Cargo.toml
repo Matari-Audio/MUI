@@ -7,7 +7,7 @@ license.workspace = true
 
 [features]
 default = []
-reporting = ["dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
+reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
@@ -15,7 +15,7 @@ cpu = ["dep:vello_cpu", "dep:glifo"]
 # sized pixmap loses more to thread hand-off than it gains.
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
 # Native CPU presentation, independent of GPU drivers.
-software-window = ["cpu", "dep:softbuffer", "dep:raw-window-handle"]
+software-window = ["cpu", "dep:softbuffer", "dep:raw-window-handle", "dep:objc"]
 
 [dependencies]
 softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"], optional = true }
@@ -55,7 +55,14 @@ wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"
 pollster.workspace = true
 mui.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+# Remove only softbuffer's CPU CALayer on native CPU -> Metal handover.
+objc = { version = "0.2", optional = true }
+
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Pin only: safe nonblocking report cancellation requires keeping this native
+# image mapped if a network operation outlives the last editor. Never used on WASM.
+baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview", optional = true }
 serde_json = { version = "1", optional = true }
 sha2 = { version = "0.10", optional = true }
 hickory-resolver = { version = "=0.26.3", default-features = false, features = ["system-config", "tokio"], optional = true }

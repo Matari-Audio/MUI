@@ -418,7 +418,8 @@ impl App {
         self.last = now;
         input.clipboard = Some(self.clipboard.clone());
         self.ui.set_scale(Some(scale));
-        if let Some(gpu) = &self.gpu {
+        if let Some(gpu) = &mut self.gpu {
+            gpu.update();
             self.ui
                 .set_gpu_welding_available(gpu.rendering_mode() == "gpu");
         }
@@ -724,8 +725,7 @@ impl ApplicationHandler<AccessEvent> for App {
         }
     }
 
-    /// The theme file is the only thing that changes with no event behind it,
-    /// so it is the only reason this loop ever wakes on a timer.
+    /// Theme reload, animation and renderer initialization/retry deadlines.
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if !self.visible {
             event_loop.set_control_flow(ControlFlow::Wait);
@@ -747,10 +747,23 @@ impl ApplicationHandler<AccessEvent> for App {
             .theme_path
             .as_ref()
             .and_then(|_| self.theme_at.checked_add(POLL));
-        let next = match (self.repaint_at, theme) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let renderer = self.gpu.as_ref().and_then(|gpu| gpu.next_wake(now));
+        if renderer.is_some_and(|at| at <= now)
+            && let Some(gpu) = &self.gpu
+        {
+            gpu.window().request_redraw();
+        }
+        let next = [self.repaint_at, theme, renderer]
+            .into_iter()
+            .flatten()
+            .min()
+            .map(|at| {
+                if at <= now {
+                    now + std::time::Duration::from_millis(16)
+                } else {
+                    at
+                }
+            });
         event_loop.set_control_flow(next.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 

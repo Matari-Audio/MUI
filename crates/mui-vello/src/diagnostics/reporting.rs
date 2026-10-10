@@ -117,9 +117,9 @@ impl Config {
 /// Retain this on the app/plugin's owned state, before creating MUI windows.
 /// Clones and repeated registrations of the same identity share one worker.
 /// Drop all windows first, then the last reporter, off the audio thread.
-/// Shutdown joins the worker. HTTP has a five-second deadline, but the OS DNS
-/// resolver may take longer; there is no detached timeout/DNS helper thread.
-/// No detached thread can outlive a plugin library being unloaded.
+/// Startup pins this native image or returns an actionable error. Shutdown
+/// cancels and detaches without joining the GUI. A bounded in-flight delivery
+/// can finish after the last editor, but cannot resume into unmapped code.
 #[derive(Clone)]
 pub struct Reporter(Arc<Worker>);
 
@@ -142,6 +142,15 @@ impl Reporter {
     /// Enable automatic local queuing and background delivery to MUI support.
     /// Offline/failed submissions remain on disk and retry on the next wake/load.
     pub fn start(config: Config) -> io::Result<Self> {
+        Self::start_pinned(config, baseview::pin_current_image_for_detached_work())
+    }
+    fn start_pinned(config: Config, pinned: bool) -> io::Result<Self> {
+        if !pinned {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "cannot pin this native image; automatic reports are disabled to keep editor close nonblocking and safe for plugin unload",
+            ));
+        }
         if !identity(&config.app, 64)
             || !identity(&config.version, 64)
             || (!config.build.is_empty() && !identity(&config.build, 64))
@@ -216,14 +225,15 @@ impl Drop for Worker {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         let _ = self.wake.try_send(());
-        if let Some(worker) = self
-            .thread
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        {
-            let _ = worker.join();
-        }
+        // Every worker was admitted only after a successful module pin. No
+        // window/model references enter this closure; only delivery data can
+        // survive until the bounded request exits and sees cancellation.
+        drop(
+            self.thread
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take(),
+        );
     }
 }
 
@@ -703,6 +713,12 @@ mod tests {
     }
 
     #[test]
+    fn reporting_refuses_detached_work_when_the_image_cannot_be_pinned() {
+        let result = Reporter::start_pinned(Config::new("no-pin-test", "1"), false);
+        assert!(matches!(result, Err(error) if error.kind() == io::ErrorKind::Unsupported));
+    }
+
+    #[test]
     fn native_window_guard_retains_worker_until_resource_teardown() {
         let directory = std::env::temp_dir().join(format!(
             "mui-reporting-lifetime-test-{}",
@@ -710,7 +726,9 @@ mod tests {
         ));
         let mut config = Config::new("lifetime-test", "1");
         config.directory = directory.clone();
-        let reporter = Reporter::start(config).unwrap();
+        // The test executable cannot unload; inject the otherwise required pin.
+        let reporter = Reporter::start_pinned(config, true).unwrap();
+        let thread = reporter.0.thread.lock().unwrap().take().unwrap();
         let worker = Arc::downgrade(&reporter.0);
         let guard = super::super::retain_reporter();
         drop(reporter);
@@ -718,11 +736,15 @@ mod tests {
             worker.upgrade().is_some(),
             "native resources retain reporting"
         );
+        let started = Instant::now();
         drop(guard);
+        assert!(started.elapsed() < Duration::from_millis(100));
         assert!(
             worker.upgrade().is_none(),
-            "final guard joins reporting worker"
+            "final guard releases reporting without joining"
         );
+        // Test cleanup waits outside resource teardown; production never joins.
+        thread.join().unwrap();
         fs::remove_dir_all(directory).unwrap();
     }
 

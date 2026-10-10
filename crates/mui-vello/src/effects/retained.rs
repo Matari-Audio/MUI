@@ -7,7 +7,46 @@ use crate::{
 use mui_geometry::PathCommand;
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Vello's compute pipelines and atlas are device-wide; retained encodings and
+/// targets stay per window. The short queue-submit critical section is serialized.
+#[derive(Clone)]
+pub(crate) struct SharedVello {
+    renderer: Arc<Mutex<vello::Renderer>>,
+    pending: Arc<Mutex<Vec<ImageUpdate>>>,
+    passes: Arc<[Passes; 2]>,
+    weld: Arc<WeldTextures>,
+}
+enum ImageUpdate {
+    Override(
+        ImageData,
+        Option<wgpu::TexelCopyTextureInfoBase<wgpu::Texture>>,
+    ),
+    Dirty(ImageData),
+}
+impl SharedVello {
+    fn override_image(
+        &self,
+        image: &ImageData,
+        texture: Option<wgpu::TexelCopyTextureInfoBase<wgpu::Texture>>,
+    ) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(ImageUpdate::Override(image.clone(), texture));
+    }
+    fn mark_override_image_dirty(&self, image: &ImageData) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(ImageUpdate::Dirty(image.clone()));
+    }
+    fn passes(&self, device: &wgpu::Device, format: wgpu::TextureFormat) -> Passes {
+        let index = usize::from(format == wgpu::TextureFormat::Bgra8Unorm);
+        self.passes[index].for_window(device)
+    }
+}
 use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
 
 /// Classic Vello on the host's device, retained: the frame is encoded once
@@ -23,7 +62,7 @@ use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    vello: vello::Renderer,
+    vello: SharedVello,
     scene: vello::Scene,
     /// A backdrop's prefix, encoded apart so it can be rendered first.
     prefix: vello::Scene,
@@ -59,6 +98,7 @@ pub struct GpuRenderer {
     presented: Option<wgpu::TextureView>,
     /// The present writes straight alpha: see [`GpuRenderer::set_straight_alpha`].
     straight: bool,
+    format: wgpu::TextureFormat,
 }
 
 /// Vello's output: compute shaders write only a storage texture, so the
@@ -237,6 +277,16 @@ impl Passes {
         }
     }
 
+    fn for_window(&self, device: &wgpu::Device) -> Self {
+        Self {
+            layout: self.layout.clone(),
+            blur: self.blur.clone(),
+            present: self.present.clone(),
+            present_straight: self.present_straight.clone(),
+            frame: uniform(device),
+        }
+    }
+
     fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -303,14 +353,32 @@ fn external_visible(
 }
 
 fn render(
-    vello: &mut vello::Renderer,
+    vello: &mut SharedVello,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     scene: &vello::Scene,
     view: &wgpu::TextureView,
     [width, height]: [u32; 2],
 ) -> Result<(), Error> {
-    vello
+    let mut renderer = match vello.renderer.try_lock() {
+        Ok(renderer) => renderer,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Err(Error::Busy),
+    };
+    for update in vello
+        .pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        match update {
+            ImageUpdate::Override(image, texture) => {
+                renderer.override_image(&image, texture);
+            }
+            ImageUpdate::Dirty(image) => renderer.mark_override_image_dirty(&image),
+        }
+    }
+    renderer
         .render_to_texture(
             device,
             queue,
@@ -399,6 +467,20 @@ fn reach(p: &Painted) -> Option<Rect> {
     (r == NOTHING || [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite())).then_some(r)
 }
 
+impl Drop for GpuRenderer {
+    fn drop(&mut self) {
+        // Queue removals instead of waiting for another editor's driver call.
+        for image in self
+            .welds
+            .values()
+            .chain(self.textures.values())
+            .chain(self.backdrops.iter().map(|b| &b.image))
+        {
+            self.vello.override_image(image, None);
+        }
+    }
+}
+
 impl GpuRenderer {
     pub async fn new(
         device: &wgpu::Device,
@@ -407,6 +489,21 @@ impl GpuRenderer {
         size: [u32; 2],
         budget: Budget,
     ) -> Result<Self, Error> {
+        Self::new_shared(device, queue, format, size, budget, None).await
+    }
+
+    pub(crate) fn shared_vello(&self) -> SharedVello {
+        self.vello.clone()
+    }
+
+    pub(crate) async fn new_shared(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        size: [u32; 2],
+        budget: Budget,
+        shared: Option<SharedVello>,
+    ) -> Result<Self, Error> {
         checked_size(device, size)?;
         // What leaves the present pass is sRGB-encoded (and premultiplied,
         // unless `set_straight_alpha`); an
@@ -414,19 +511,40 @@ impl GpuRenderer {
         if format.is_srgb() {
             return Err(Error::Unsupported("target must be a non-sRGB format"));
         }
-        let effects = WeldTextures::new(device, queue, budget).await?;
-        let vello = vello::Renderer::new(
-            device,
-            vello::RendererOptions {
-                use_cpu: false,
-                // Area coverage: analytic, and the only mode MUI's snapshots
-                // were drawn against.
-                antialiasing_support: vello::AaSupport::area_only(),
-                ..Default::default()
-            },
-        )
-        .map_err(|e| Error::Device(e.to_string()))?;
-        let passes = Passes::new(device, format);
+        let effects = match &shared {
+            Some(shared) => shared.weld.for_window(budget)?,
+            None => WeldTextures::new(device, queue, budget).await?,
+        };
+        let vello = if let Some(shared) = shared {
+            shared
+        } else {
+            let cache = crate::host::pipeline_cache::load(device);
+            let renderer = vello::Renderer::new(
+                device,
+                vello::RendererOptions {
+                    use_cpu: false,
+                    antialiasing_support: vello::AaSupport::area_only(),
+                    // Bound compile parallelism so opening an editor does not
+                    // saturate the DAW's audio cores.
+                    num_init_threads: std::num::NonZeroUsize::new(2),
+                    pipeline_cache: cache.as_ref().map(|c| c.cache.clone()),
+                },
+            )
+            .map_err(|e| Error::Device(e.to_string()))?;
+            if let Some(cache) = cache {
+                cache.save();
+            }
+            SharedVello {
+                weld: Arc::new(effects.for_window(budget)?),
+                renderer: Arc::new(Mutex::new(renderer)),
+                pending: Arc::new(Mutex::new(Vec::new())),
+                passes: Arc::new([
+                    Passes::new(device, wgpu::TextureFormat::Rgba8Unorm),
+                    Passes::new(device, wgpu::TextureFormat::Bgra8Unorm),
+                ]),
+            }
+        };
+        let passes = vello.passes(device, format);
         let target = Self::target(device, &passes, size);
         let renderer = Self {
             device: device.clone(),
@@ -454,9 +572,21 @@ impl GpuRenderer {
             stale: false,
             presented: None,
             straight: false,
+            format,
         };
         renderer.write_frame();
         Ok(renderer)
+    }
+
+    pub(crate) fn set_surface_format(&mut self, format: wgpu::TextureFormat) {
+        if self.format == format {
+            return;
+        }
+        self.format = format;
+        self.passes = self.vello.passes(&self.device, format);
+        self.target = Self::target(&self.device, &self.passes, self.size);
+        self.write_frame();
+        self.invalidate();
     }
 
     /// Tell the present pass the frame's size: past it, it writes clear.
@@ -927,7 +1057,9 @@ impl GpuRenderer {
             }
         }
         if part.is_none() {
-            self.backdrops.truncate(k);
+            for backdrop in self.backdrops.drain(k..) {
+                self.vello.override_image(&backdrop.image, None);
+            }
         }
 
         // A part renders its box alone, moved to the origin by whole

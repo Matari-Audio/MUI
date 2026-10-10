@@ -6,6 +6,10 @@ rust-version.workspace = true
 license.workspace = true
 
 # A native window: nothing here builds for wasm.
+[features]
+# Explicitly accepts that a plugin panic can terminate its DAW.
+allow-panic-abort = []
+
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects", "software-window"] }
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
