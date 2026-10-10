@@ -365,7 +365,10 @@ impl EventLoop {
             }
             WindowThreadRequest::Show => {
                 self.window.xcb_window.map_window()?.check()?;
-                self.window.visibility_state.window_mapped(self.window.xcb_window.id());
+                // A top-level MapWindow can be redirected to the WM. A
+                // checked reply is not proof of visibility: wait for the real
+                // MapNotify/Expose before calling the first renderer frame.
+                self.exposed = true;
                 Ok(())
             }
             WindowThreadRequest::Hide => {
