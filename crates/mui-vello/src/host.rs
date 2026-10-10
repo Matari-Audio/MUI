@@ -55,7 +55,8 @@ impl Retry {
 }
 
 /// Native instance policy: backend allowlist from WGPU_BACKEND, opt-in validation,
-/// static DXC (never FXC) and opaque HWND presentation without an acquisition wait.
+/// static DXC where wgpu links it (x86-64 MSVC), and opaque HWND presentation
+/// without an acquisition wait.
 pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
     descriptor.flags = if std::env::var("MUI_GPU_DEBUG").is_ok_and(|v| v == "1") {
@@ -63,7 +64,15 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     } else {
         wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
     };
-    descriptor.backend_options.dx12.shader_compiler = wgpu::Dx12Compiler::StaticDxc;
+    // wgpu-hal only links static DXC on x86-64 MSVC and *panics* if asked for it
+    // elsewhere. Windows GNU/ARM64 take Auto (dxcompiler.dll if present, else FXC):
+    // FXC can TDR on very large scenes (Vello #1991), but it never takes down init.
+    descriptor.backend_options.dx12.shader_compiler =
+        if cfg!(all(target_env = "msvc", not(target_arch = "aarch64"))) {
+            wgpu::Dx12Compiler::StaticDxc
+        } else {
+            wgpu::Dx12Compiler::Auto
+        };
     descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromHwnd;
     descriptor.backend_options.dx12.latency_waitable_object =
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
