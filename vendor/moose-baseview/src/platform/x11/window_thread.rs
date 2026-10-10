@@ -26,6 +26,7 @@ pub(crate) struct WindowThreadShared {
     stopped_requested_from_host: AtomicBool,
     callbacks_revoked: AtomicBool,
     sizing_strategy: OnceLock<SizingStrategy>,
+    frame_requested: AtomicBool,
 }
 
 impl WindowThreadShared {
@@ -38,6 +39,7 @@ impl WindowThreadShared {
             stopped_requested_from_host: false.into(),
             callbacks_revoked: false.into(),
             sizing_strategy: OnceLock::new(),
+            frame_requested: AtomicBool::new(false),
         }
     }
 
@@ -210,6 +212,18 @@ impl WindowThreadHandle {
         let result = self.response_receiver.recv().map_err(|_| RequestFailed::Recv)?;
 
         result.map_err(|e| RequestFailed::Response(e).into())
+    }
+
+    pub fn frame_requester(&self) -> crate::FrameRequester {
+        let shared = Arc::clone(&self.shared);
+        let signal = self.loop_signal.clone();
+        crate::FrameRequester::new(move || {
+            if !shared.callbacks_revoked() && !shared.stopped.load(Ordering::Acquire)
+                && !shared.frame_requested.swap(true, Ordering::AcqRel)
+            {
+                signal.wakeup();
+            }
+        })
     }
 
     pub fn run_until_closed(&self) -> Result<()> {
