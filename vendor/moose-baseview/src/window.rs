@@ -35,8 +35,9 @@ impl FrameRequester {
 /// All of its events and internal operations (such as rendering) are handled in a separate
 /// [`WindowHandler`] type, which is owned by the window itself.
 ///
-/// Dropping this [`Window`] handle will always destroy the window, and drop its associated
-/// [`WindowHandler`] and [`Host`] types.
+/// Dropping this [`Window`] handle requests native teardown. On X11 the host
+/// waits at most 250 ms; a stalled worker may finish teardown later, with its
+/// image pinned and callbacks revoked. See [`close_bounded`](Self::close_bounded).
 ///
 /// # Window lifecycle and ownership
 ///
@@ -120,9 +121,13 @@ impl Window {
     /// Currently implemented on X11; other platforms retain continuous pacing.
     pub fn frame_requester(&self) -> Option<FrameRequester> {
         #[cfg(target_os = "linux")]
-        { Some(self.inner.frame_requester()) }
+        {
+            Some(self.inner.frame_requester())
+        }
         #[cfg(not(target_os = "linux"))]
-        { None }
+        {
+            None
+        }
     }
 
     /// The current size of the window.
@@ -186,10 +191,10 @@ impl Window {
 
     /// Closes and destroys the window.
     ///
-    /// This releases all resources the window uses.
-    ///
-    /// It is guaranteed that no other objects (e.g. the parent window) are used by this window after
-    /// this call.
+    /// On X11 this waits at most 250 ms, then revokes callbacks and detaches a
+    /// stalled, pinned worker. Native resources can outlive this call on that
+    /// exceptional path. Revoke the handler's access to host state first.
+    /// Other platforms release native resources synchronously.
     ///
     /// Calling this method is more explicit, but otherwise identical to just dropping this [`Window`].
     #[inline]
@@ -197,14 +202,15 @@ impl Window {
         drop(self)
     }
 
-    /// Requests an X11 close with a bounded wait where ownership permits.
+    /// Requests an X11 close with a bounded host-thread wait.
     ///
-    /// After `timeout`, a floating window's thread may detach if its plug-in image
-    /// can be pinned and no host callbacks were registered. Embedded windows always
-    /// wait for teardown so the host can safely destroy its parent. The handler may
-    /// finish its current callback; X11 enters no more after observing the
-    /// revocation. Call this only after revoking the handler's host
-    /// state; ordinary [`close`](Self::close) remains synchronous.
+    /// After `timeout`, a stalled worker detaches with its image pinned and
+    /// future callbacks revoked. A callback/driver call already in progress can
+    /// finish later, including native/GPU destruction. Pinning preserves code,
+    /// not host state or a host-owned parent drawable. Call this only after
+    /// revoking all handler/HostCallbacks access to host state. A third-party
+    /// callback already waiting on a host API cannot be forcibly cancelled.
+    /// Ordinary [`close`](Self::close) uses the same policy with a 250 ms budget.
     #[cfg(target_os = "linux")]
     pub fn close_bounded(self, timeout: Duration) {
         self.inner.set_close_timeout(timeout);

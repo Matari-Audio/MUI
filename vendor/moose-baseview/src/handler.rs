@@ -111,6 +111,7 @@ mod close_tests {
 /// polling until their pacers implement this contract. Input, exposure and an
 /// explicit [`FrameRequester`](crate::FrameRequester) wake still request a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum FrameDemand {
     /// Preserve the fork's refresh-rate callbacks.
     #[default]
