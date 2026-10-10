@@ -90,3 +90,10 @@ workspace = true
 # this feature. The shared GPU session needs it to compile; spawning its
 # initializer fails on wasm and the caller takes the recorded failure path.
 wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
+
+[target.'cfg(all(windows, not(target_arch = "aarch64"), target_env = "msvc"))'.dependencies]
+# Not used directly: pins wgpu's static-dxc backend for every downstream lock.
+# 0.1.6's build script refuses its own (mutable) GitHub release and 0.1.5 is
+# yanked, so a fresh resolve breaks every Windows build. Unpin once upstream
+# publishes an immutable release.
+mach-dxcompiler-rs = { version = "=0.1.4", default-features = false }
