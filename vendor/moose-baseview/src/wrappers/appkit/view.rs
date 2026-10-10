@@ -44,37 +44,56 @@ impl<V: ViewImpl> View<V> {
         frame: CGRect, inner: V,
         init: impl FnOnce(ViewRef<V>) -> Result<(), crate::platform::PlatformError>,
     ) -> Result<Retained<View<V>>, crate::platform::PlatformError> {
-        let class = implementation::create_view_class::<V>();
+        // Objective-C caches these IMPs for the process lifetime, even if the
+        // DAW retains a detached view past plug-in unload. Pin before registration.
+        if !crate::pin_current_image_for_detached_work() {
+            return Err(crate::platform::PlatformError::CreationFailed(
+                "could not pin AppKit callback image",
+            ));
+        }
+        let class = implementation::create_view_class::<V>()?;
 
         // SAFETY: This function is valid to call, and Allocated<View> is the correct type for the
         // returned pointer
         let view: Allocated<View<V>> = unsafe { msg_send![class, alloc] };
-        Self::set_inner(&view, class, ViewInner { inner });
+        Self::set_inner(&view, class, ViewInner { inner })?;
 
         let view: Retained<View<V>> = unsafe { msg_send![view, initWithFrame: frame] };
 
-        let Some(inner_ref) = view.inner_ref() else { unreachable!() };
+        let inner_ref = view.inner_ref().ok_or(crate::platform::PlatformError::CreationFailed(
+            "view state missing after init",
+        ))?;
 
-        init(inner_ref)?;
+        if let Err(error) = super::callback(
+            "initialize view",
+            Err(crate::platform::PlatformError::CreationFailed("panic while initializing view")),
+            || init(inner_ref),
+        ) {
+            V::initialization_failed(inner_ref);
+            return Err(error);
+        }
 
         Ok(view)
     }
 
-    fn get_ivar(class: &AnyClass) -> &Ivar {
-        let Some(ivar) = class.instance_variable(BASEVIEW_STATE_IVAR) else { unreachable!() };
-        ivar
+    fn get_ivar(class: &AnyClass) -> Option<&Ivar> {
+        class.instance_variable(BASEVIEW_STATE_IVAR)
     }
 
-    fn set_inner(view: &Allocated<View<V>>, class: &AnyClass, inner: ViewInner<V>) {
+    fn set_inner(
+        view: &Allocated<View<V>>, class: &AnyClass, inner: ViewInner<V>,
+    ) -> Result<(), crate::platform::PlatformError> {
+        let ivar = Self::get_ivar(class)
+            .ok_or(crate::platform::PlatformError::CreationFailed("view state ivar missing"))?;
         let inner = Box::new(inner);
-        let ivar = Self::get_ivar(class);
         let ivar_target = unsafe { &*Allocated::as_ptr(view).cast() };
         let ivar = unsafe { ivar.load_ptr::<*mut c_void>(ivar_target) };
         unsafe { ivar.write(Box::into_raw(inner).cast()) };
+        Ok(())
     }
 
     fn free_inner(this: &AnyObject, class: &AnyClass) {
-        let ivar = Self::get_ivar(class);
+        let Some(ivar) = Self::get_ivar(class) else { return };
         let ivar = unsafe { ivar.load_ptr::<*mut c_void>(this) };
         let raw = unsafe { ivar.read() };
 
@@ -88,7 +107,7 @@ impl<V: ViewImpl> View<V> {
     }
 
     fn get_inner(&self) -> Option<&ViewInner<V>> {
-        let ivar = Self::get_ivar(self.class());
+        let ivar = Self::get_ivar(self.class())?;
         let ivar = unsafe { ivar.load::<*mut c_void>(self) };
         unsafe { ivar.cast::<ViewInner<V>>().as_ref() }
     }
@@ -99,6 +118,11 @@ impl<V: ViewImpl> View<V> {
 
     pub fn inner_ref(&self) -> Option<ViewRef<'_, V>> {
         Some(ViewRef { view: self, inner: self.inner()? })
+    }
+
+    fn callback_inner(&self) -> Option<ViewRef<'_, V>> {
+        let inner = self.inner_ref()?;
+        (!V::callbacks_revoked(inner)).then_some(inner)
     }
 
     pub fn window_handle_from_weak(this: &Weak<Self>) -> Option<WindowHandle<'_>> {
@@ -148,6 +172,12 @@ impl<V> Deref for ViewRef<'_, V> {
 }
 
 pub trait ViewImpl: Sized + 'static {
+    fn callbacks_revoked(this: ViewRef<Self>) -> bool;
+    fn initialization_failed(this: ViewRef<Self>);
+    fn view_did_move_to_window(this: ViewRef<Self>);
+    fn visibility_changed(this: ViewRef<Self>);
+    fn update_layer(this: ViewRef<Self>);
+    fn resized_by_appkit(this: ViewRef<Self>);
     fn become_first_responder(this: ViewRef<Self>) -> bool;
     fn resign_first_responder(this: ViewRef<Self>) -> bool;
 

@@ -79,7 +79,7 @@ impl GlContext {
             .checked_add(config.blue_bits as u32)
             .and_then(|c| c.checked_add(config.green_bits as u32))
         else {
-            panic!("Overflow when computing color size")
+            return Err(PlatformError::CreationFailed("OpenGL colour size overflow"));
         };
 
         #[rustfmt::skip]
@@ -104,10 +104,8 @@ impl GlContext {
 
         attrs.push(0);
 
-        let Some(attrs) = NonNull::new(attrs.as_mut_ptr()) else {
-            // PANIC: This cannot panic, as the pointer comes from the vec
-            unreachable!()
-        };
+        let attrs = NonNull::new(attrs.as_mut_ptr())
+            .ok_or(PlatformError::CreationFailed("OpenGL attribute pointer missing"))?;
 
         // SAFETY: Attribs pointer is valid (coming from the above vec) and null-terminated
         let pixel_format =
@@ -126,8 +124,8 @@ impl GlContext {
         view.display();
         parent_view.addSubview(&view);
 
-        // NSOpenGlView::openGLContext is not documented to possibly return NULL.
-        let Some(context) = view.openGLContext() else { unreachable!() };
+        let context =
+            view.openGLContext().ok_or(PlatformError::CreationFailed("OpenGL context missing"))?;
 
         let framework_name = CFString::from_static_str("com.apple.opengl");
         let gl_bundle = CFBundle::bundle_with_identifier(Some(&framework_name))
@@ -137,47 +135,58 @@ impl GlContext {
     }
 
     pub unsafe fn make_current(&self) -> Result<()> {
-        self.context.makeCurrentContext();
-        Ok(())
+        objc2::rc::autoreleasepool(|_| {
+            self.context.makeCurrentContext();
+            Ok(())
+        })
     }
 
     pub unsafe fn make_not_current(&self) -> Result<()> {
-        NSOpenGLContext::clearCurrentContext();
-        Ok(())
+        objc2::rc::autoreleasepool(|_| {
+            NSOpenGLContext::clearCurrentContext();
+            Ok(())
+        })
     }
 
     pub fn get_proc_address(&self, symbol: &CStr) -> *const c_void {
-        // PANIC: CStr alloc can not be longer than isize
-        let Ok(bytes_count) = symbol.count_bytes().try_into() else { unreachable!() };
+        objc2::rc::autoreleasepool(|_| {
+            let Ok(bytes_count) = symbol.count_bytes().try_into() else {
+                return core::ptr::null();
+            };
 
-        // SAFETY: The string pointer is valid
-        let symbol_name = unsafe {
-            CFString::with_bytes(
-                None,
-                symbol.as_ptr().cast(),
-                bytes_count,
-                CFStringBuiltInEncodings::EncodingUTF8.0,
-                false,
-            )
-        };
+            // SAFETY: The string pointer is valid
+            let symbol_name = unsafe {
+                CFString::with_bytes(
+                    None,
+                    symbol.as_ptr().cast(),
+                    bytes_count,
+                    CFStringBuiltInEncodings::EncodingUTF8.0,
+                    false,
+                )
+            };
 
-        let Some(symbol_name) = symbol_name else {
-            warn!("Failed to create CFString for symbol {:?}", symbol);
-            return core::ptr::null();
-        };
+            let Some(symbol_name) = symbol_name else {
+                warn!("Failed to create CFString for symbol {:?}", symbol);
+                return core::ptr::null();
+            };
 
-        self.gl_bundle.function_pointer_for_name(Some(&symbol_name))
+            self.gl_bundle.function_pointer_for_name(Some(&symbol_name))
+        })
     }
 
     pub fn swap_buffers(&self) -> Result<()> {
-        self.context.flushBuffer();
-        self.view.setNeedsDisplay(true);
-        Ok(())
+        objc2::rc::autoreleasepool(|_| {
+            self.context.flushBuffer();
+            self.view.setNeedsDisplay(true);
+            Ok(())
+        })
     }
 
     /// On macOS the `NSOpenGLView` needs to be resized separtely from our main view.
     pub(crate) fn resize(&self, size: NSSize) {
-        self.view.setFrameSize(size);
-        self.view.setNeedsDisplay(true);
+        objc2::rc::autoreleasepool(|_| {
+            self.view.setFrameSize(size);
+            self.view.setNeedsDisplay(true);
+        })
     }
 }
