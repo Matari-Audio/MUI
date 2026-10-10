@@ -26,6 +26,7 @@ struct State {
     flushing: bool,
     closing: bool,
     failed: bool,
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 /// An opt-in queue for frameworks with a host-main-thread pump.
@@ -53,12 +54,36 @@ impl HostPump {
         if state.host.is_some() || state.flushing {
             return false;
         }
+        let wake = state.wake.take();
         *state = State {
             host: Some(host),
             thread: Some(thread::current().id()),
+            wake,
             ..State::default()
         };
         true
+    }
+
+    /// Set a thread-safe wake notification, such as CLAP's request_callback.
+    /// Called on the clean-to-pending transition, or on registration when
+    /// commands are already pending, without the queue lock.
+    /// It must only schedule a later host callback: never flush inline or
+    /// synchronously re-enter the editor, whose model can still be locked.
+    pub fn set_waker(&self, wake: Arc<dyn Fn() + Send + Sync>) {
+        let (retired, notify) = {
+            let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            let retired = state.wake.replace(Arc::clone(&wake));
+            let notify = state.host.is_some()
+                && !state.pending.is_empty()
+                && !state.closing
+                && !state.failed;
+            (retired, notify)
+        };
+        guard("release host waker", || drop(retired));
+        if notify {
+            guard("wake host pump", || wake());
+        }
+        guard("release host waker", || drop(wake));
     }
 
     pub(crate) fn enqueue(&self, mutation: Mutation) -> bool {
@@ -92,7 +117,17 @@ impl HostPump {
             state.failed = true;
             return false;
         }
+        let wake = state
+            .pending
+            .is_empty()
+            .then(|| state.wake.clone())
+            .flatten();
         state.pending.push_back(mutation);
+        drop(state);
+        if let Some(wake) = wake {
+            guard("wake host pump", || wake());
+            guard("release host waker", || drop(wake));
+        }
         true
     }
 
@@ -124,7 +159,6 @@ impl HostPump {
                 // accepting the gesture. Cleanup still owes it an End.
                 match mutation {
                     Mutation::Begin(id) if !delivered.contains(&id) => delivered.push(id),
-                    Mutation::End(id) => delivered.retain(|&open| open != id),
                     _ => {}
                 }
                 let ok = guard("host mutation", || match mutation {
@@ -140,13 +174,16 @@ impl HostPump {
                     failed = true;
                     break;
                 }
+                if let Mutation::End(id) = mutation {
+                    delivered.retain(|&open| open != id);
+                }
             }
         }
-        let closing = self
-            .state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .closing;
+        let closing = {
+            let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            failed |= state.failed;
+            state.closing
+        };
         if failed || closing {
             for id in delivered.drain(..) {
                 guard("end gesture during teardown", || host.end_edit(id));
@@ -155,30 +192,36 @@ impl HostPump {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.flushing = false;
         state.failed |= failed;
-        if state.failed || state.closing {
+        let retired = if state.failed || state.closing {
             state.pending.clear();
-            state.host = None;
+            (state.host.take(), state.wake.take())
         } else {
             state.delivered = delivered;
-        }
-        !state.failed
+            (None, None)
+        };
+        let ok = !state.failed;
+        drop(state);
+        guard("release host channel", || drop(retired));
+        guard("release host callback", || drop(host));
+        ok
     }
 
     pub(crate) fn close(&self) {
-        self.state
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .closing = true;
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        state.closing = true;
+        state.pending.retain(|m| !matches!(m, Mutation::Resize(..)));
     }
 
     /// Revoke callbacks without calling the host. Use during plugin drop,
     /// after the host may have torn its own objects down.
     pub fn detach(&self) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.host = None;
+        let retired = (state.host.take(), state.wake.take());
         state.pending.clear();
         state.delivered.clear();
         state.closing = true;
+        drop(state);
+        guard("release host channel", || drop(retired));
     }
 }
 

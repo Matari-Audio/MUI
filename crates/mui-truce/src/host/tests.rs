@@ -24,6 +24,87 @@ fn host() -> (Arc<dyn EditorBridge>, Arc<Mutex<Vec<Mutation>>>) {
 }
 
 #[test]
+fn pending_wake_fires_only_on_clean_to_dirty_and_without_the_queue_lock() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (host, _) = host();
+    let pump = Arc::new(HostPump::default());
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let count = wakes.clone();
+    let weak = Arc::downgrade(&pump);
+    pump.set_waker(Arc::new(move || {
+        assert!(weak.upgrade().unwrap().state.try_lock().is_ok());
+        count.fetch_add(1, Ordering::Relaxed);
+    }));
+    assert!(pump.attach(host));
+    pump.enqueue(Mutation::Begin(1));
+    pump.enqueue(Mutation::Set(1, 0.2));
+    pump.enqueue(Mutation::Set(1, 0.7));
+    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    pump.flush();
+    pump.enqueue(Mutation::End(1));
+    assert_eq!(wakes.load(Ordering::Relaxed), 2);
+    pump.close();
+    pump.flush();
+    assert!(pump.state.lock().unwrap().wake.is_none());
+}
+
+#[test]
+fn a_waker_installed_after_open_notifies_already_pending_edits() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (host, _) = host();
+    let pump = HostPump::default();
+    assert!(pump.attach(host));
+    pump.enqueue(Mutation::Begin(1));
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let count = wakes.clone();
+    pump.set_waker(Arc::new(move || {
+        count.fetch_add(1, Ordering::Relaxed);
+    }));
+    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    pump.close();
+    pump.flush();
+}
+
+#[test]
+fn retiring_a_waker_releases_captures_outside_the_queue_lock() {
+    struct Capture {
+        pump: std::sync::Weak<HostPump>,
+        checks: Arc<Mutex<Vec<bool>>>,
+    }
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            let pump = self.pump.upgrade().unwrap();
+            self.checks
+                .lock()
+                .unwrap()
+                .push(pump.state.try_lock().is_ok());
+        }
+    }
+    for action in 0..3 {
+        let (host, _) = host();
+        let pump = Arc::new(HostPump::default());
+        assert!(pump.attach(host));
+        let checks = Arc::new(Mutex::new(Vec::new()));
+        let capture = Capture {
+            pump: Arc::downgrade(&pump),
+            checks: checks.clone(),
+        };
+        pump.set_waker(Arc::new(move || {
+            let _ = &capture;
+        }));
+        match action {
+            0 => pump.set_waker(Arc::new(|| {})),
+            1 => {
+                pump.close();
+                pump.flush();
+            }
+            _ => pump.detach(),
+        }
+        assert_eq!(*checks.lock().unwrap(), vec![true]);
+    }
+}
+
+#[test]
 fn sets_coalesce_without_crossing_gesture_edges_or_losing_end() {
     let (host, calls) = host();
     let pump = HostPump::default();
@@ -58,6 +139,21 @@ fn sets_coalesce_without_crossing_gesture_edges_or_losing_end() {
             Mutation::End(1)
         ]
     );
+}
+
+#[test]
+fn resize_coalesces_and_close_cancels_a_stale_resize_request() {
+    let (host, calls) = host();
+    let pump = HostPump::default();
+    assert!(pump.attach(host));
+    pump.enqueue(Mutation::Resize(400, 300));
+    pump.enqueue(Mutation::Resize(800, 600));
+    assert!(pump.flush());
+    assert_eq!(*calls.lock().unwrap(), vec![Mutation::Resize(800, 600)]);
+    pump.enqueue(Mutation::Resize(400, 300));
+    pump.close();
+    assert!(pump.flush());
+    assert_eq!(*calls.lock().unwrap(), vec![Mutation::Resize(800, 600)]);
 }
 
 #[test]

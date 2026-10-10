@@ -99,24 +99,39 @@ the example's directory so that `cargo truce` finds its `truce.toml`:
 
 ```sh
 cd examples/gain-plugin
-CARGO_PROFILE_RELEASE_PANIC=unwind cargo truce build --clap --vst3 -p mui-gain-plugin
+cargo truce build --clap --vst3 -p mui-gain-plugin
 ```
 
 The bundles land in `$CARGO_TARGET_DIR/bundles` (`target/bundles` by default):
 `MUI Gain.clap` and `MUI Gain.vst3`. For a quicker unoptimised build, add `--debug`.
 
-A plugin must be built with panics that unwind. The workspace release profile
-sets `panic = "abort"`, which turns every `catch_unwind` at the FFI edge (truce's
-and `mui-truce`'s window callbacks) into dead code: a panic in the editor then
-aborts the host and the user's session with it. The workspace has a `plugin`
-profile for this, release with `panic = "unwind"`:
+A plugin must use panics that unwind. Both workspace `release` and `plugin`
+profiles now set `panic = "unwind"`; plain `--release` and the bundle command
+are safe from an accidental abort strategy. Size optimization, LTO, one
+codegen unit and symbol stripping remain enabled. Unwind adds metadata and
+some code size, but saving a few bytes must not make the default plugin build
+terminate its host.
 
 ```sh
-cargo build --profile plugin -p mui-gain-plugin   # the bare cdylib
+cargo build --release -p mui-gain-plugin         # the bare cdylib
+cargo build --profile plugin -p mui-gain-plugin  # compatible explicit profile
 ```
 
-`cargo truce build` always builds `release`, hence the
-`CARGO_PROFILE_RELEASE_PANIC=unwind` override on the bundle command above.
+**Dependency profiles do not propagate.** A downstream plugin must set this
+in its final workspace manifest, including any custom shipping profile:
+
+```toml
+[profile.release]
+panic = "unwind"
+```
+
+`mui-truce` emits a compile error under `cfg(panic = "abort")`, including when
+an environment override changes the final strategy. The explicit
+`allow-panic-abort` feature disables that guard for applications which
+intentionally accept process termination. It does not make panic guards work
+under abort. Never enable it in a DAW plugin. `catch_unwind` also cannot
+contain native access violations, a panicking panic hook, or an aborting
+foreign library. MUI does not install a process-global panic hook.
 
 Validate the bundles (the commands and results below are from 2026-09-23,
 Linux, X11 display, clap-validator 0.4.1, pluginval 1.0.4):
@@ -138,10 +153,9 @@ pluginval --strictness-level 5 --validate "target/bundles/MUI Gain.vst3"
   IID as `0x2A654303, 0xEF764E3C, 0xA8E8C6F3, 0xDBAE0F77`. The SDK's IID is
   `0x2A654303, 0xEF764E3D, 0x95B5FE83, 0x730EF6D0`. This is upstream too.
 
-A downstream plugin can vendor truce with both fixes (`vendor/truce-clap-6.3.0`: `state_load`
-sets `needs_rescan` and calls `request_callback`; `vendor/truce-vst3-6.3.0`:
-the SDK IID). MUI does not vendor 12k lines of wrapper for two one-line
-fixes in an example; they belong upstream.
+Apply and qualify these wrapper fixes in the maintained
+[moose framework fork](https://github.com/Matari-Audio/moose).
+MUI does not patch or vendor truce's format wrappers.
 
 ## The baseview
 
@@ -156,7 +170,84 @@ links two baseviews.
   and X11 a key the editor ignores goes to the host. Always on; there is no
   feature to enable.
 - Scale: the host's scale is a scale override on Windows and X11 (macOS
-  follows its backing scale).
+  follows its backing scale). The same policy applies at open and on late
+  scale notifications; a host's default 1x never overrides AppKit Retina.
+
+## Size and scale handshake
+
+Each editor retains its own logical size and host scale. A new editor starts
+with the authored nonzero size; an invalid/zero resize is rejected without
+overwriting the last committed size. Accepted resizes are retained even
+before open. Open creates a fresh request channel from that retained state.
+A late scale notification queues both the scale and the latest logical size,
+so a stale native/parent size cannot become the scale change's reference size.
+Late resize notifications replace that logical size. Neither path requests a
+host resize synchronously from `set_size`.
+
+All six orders of set-scale/open/resize converge on the same retained
+geometry. That is policy-test evidence, not proof of every host's native
+parenting behavior. An initially hidden parent still relies on baseview's
+visibility/expose events; see the platform smoke checks.
+
+Close/reopen of the **same editor** retains its scale. If a framework creates
+a new editor, it must replay the plugin instance's last host scale.
+Truce 6.3 VST3 does this; CLAP stores the scale on its instance but does not
+replay it in `gui_create`/`gui_set_parent`. MUI no longer borrows another
+editor's scale to hide that wrapper bug.
+
+## Host-thread delivery
+
+Direct synchronous begin/set/end remains the default for compatibility.
+**On Linux, truce 6.3 VST3 consequently calls host edit APIs from baseview's
+X11 window thread. That is outside VST3's GUI-thread contract.** Its resize
+callback, and CLAP's GUI resize callback, can likewise run on that thread.
+Calls can occur under MUI's model lock. The fix requires a main-thread pump
+in the framework; the current truce CLAP/VST3 wrappers do not call
+`Editor::idle`. An idle queue alone would silently strand edits.
+
+Frameworks with that pump can select `MuiEditor::with_host_pump()` (or
+`Bridge::with_host_pump()`) before opening. Retain `host_pump()`'s
+`Arc<HostPump>` in the main-thread callback and call `flush()` **outside**
+the framework's editor/model lock. For event-driven delivery, register
+`HostPump::set_waker` with a thread-safe notification such as CLAP's
+`request_callback`; it fires once when an empty queue becomes pending and
+must never flush/re-enter the editor inline. Re-register it for each open.
+`Editor::idle` also flushes, if the
+framework can guarantee that entry is safe. A wrong-thread flush does
+nothing. No lock in this queue is shared with the audio thread.
+
+Queued sets coalesce per parameter within a pending gesture; begin/end
+boundaries remain ordered. Close queues the remaining Ends and flushes after
+releasing the model lock. Drop revokes without calling a possibly destroyed
+host. A stalled queue is bounded to 4096 commands; overflow revokes further
+edits and the next host-thread flush ends already-delivered gestures. Direct
+`Bridge::context()` mutations bypass the queue and remain the caller's
+responsibility. Deferred resize returns no immediate acceptance: the wrapper
+must forward the host's accepted logical size through `Editor::set_size`.
+MUI does not optimistically resize the child merely because it queued a
+request. Rejected requests keep the old size. Close cancels stale resizes.
+Without a pump and authoritative resize replies, do not select deferred mode.
+
+## Shipping a MUI plugin safely
+
+- Set `panic = "unwind"` in the **final** workspace's shipping profile.
+  Keep `allow-panic-abort` disabled and check the exact packaging command.
+- Use the example's fallible font initialization and MUI's editor guards.
+  A build/initialization panic produces no live child or attached bridge;
+  truce's `Editor::open` returns `()`, so MUI cannot report a format-level
+  open failure until the framework offers a fallible entry.
+- Keep parameter/meter storage lock-free for audio. Never hold the UI lock
+  during framework-pump host delivery.
+- Do not ship an opt-in queued adapter until its main-thread pump exists.
+  Fix/qualify the default Linux VST3 thread-contract limitation in moose.
+- When recreating an editor, replay the plugin instance's host scale. Test
+  late scale/resize, zero/stale parent bounds and hidden-parent first open.
+- Before moving a UI across threads or unloading its image, release memo
+  captures on their rendering thread (`Ui::release_thread_memos`).
+  MUI's truce session does this on native cancellation and preflight handoff.
+- Run CLAP/VST3 validation, two same-plugin editors, two different plugin
+  binaries/versions, close/reopen and unload tests in real DAWs on each OS.
+  Repeat with `MUI_RENDERER=cpu`. Headless tests are not a DAW qualification.
 
 ## Tests
 
@@ -166,7 +257,12 @@ links two baseviews.
   the cancel on focus loss, idle skipping and minimised windows.
 - The bridge tests use truce's `ClosureBridge`. They record the exact host
   begin/set/end sequence for drags, key steps, toggles, discrete steps, closes
-  and state loads.
+  and state loads. These default-delivery regressions stay unchanged.
+- Policy tests cover per-editor scale, all six scale/open/resize orders,
+  invalid sizes/scales, panicking open/idle author callbacks and abort guards.
+- Optional pump tests cover gesture ordering, coalescing, wrong-thread calls,
+  re-entry, wake notifications, overflow cleanup, callback panics and close
+  delivery without the model lock. None needs a native window.
 
 Not implemented:
 

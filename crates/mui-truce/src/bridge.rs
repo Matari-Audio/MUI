@@ -137,11 +137,15 @@ impl<P: Params + ?Sized> Bridge<P> {
         self.open.clear();
     }
 
-    /// Ask for a logical-point resize. In queued mode, true means queued,
-    /// not accepted by the host; the later committed resize is authoritative.
+    /// Ask for a logical-point resize. Direct mode returns host acceptance.
+    /// Queued mode returns false (no immediate acceptance). The framework must
+    /// forward an accepted logical size through `Editor::set_size` later.
     pub fn request_resize(&self, width: u32, height: u32) -> bool {
         if let Some(pump) = &self.pump {
-            pump.enqueue(Mutation::Resize(width, height))
+            pump.enqueue(Mutation::Resize(width, height));
+            // The host has not accepted yet. Its authoritative size reply
+            // must come through Editor::set_size; do not resize optimistically.
+            false
         } else {
             self.context.as_ref().is_some_and(|context| {
                 guard("request resize", || context.request_resize(width, height)).unwrap_or(false)

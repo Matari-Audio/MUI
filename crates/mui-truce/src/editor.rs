@@ -128,6 +128,7 @@ impl<P: Params> MuiEditor<P> {
         build: impl FnMut(&mut Ui, &mut Bridge<P>) -> El + Send + 'static,
     ) -> Self {
         let size = size.into();
+        let size = Size::new(size.width.max(1.0), size.height.max(1.0));
         let session = Session {
             bridge: Bridge::new(Arc::clone(&params)),
             build: Box::new(build),
@@ -218,7 +219,7 @@ impl<P: Params> MuiEditor<P> {
 
     fn open_native(
         &mut self,
-        context: PluginContext,
+        context: &PluginContext,
         create: impl FnOnce(&Self) -> Option<Handle>,
     ) {
         self.close();
@@ -243,16 +244,16 @@ impl<P: Params> MuiEditor<P> {
                 )
                 .is_err()
             {
-                return None;
+                return Err(());
             }
             ui.release_thread_memos();
             drop(shared);
-            create(self)
+            Ok(create(self))
         });
         match opened {
-            Some(Some(window)) => self.window = Some(window),
-            // A headless adapter intentionally took ownership instead of a window.
-            Some(None) if mui::host::headless::time().is_some() => {}
+            Some(Ok(Some(window))) => self.window = Some(window),
+            // Only a completed factory can hand ownership to a headless adapter.
+            Some(Ok(None)) if mui::host::headless::time().is_some() => {}
             _ => self.close(),
         }
     }
@@ -278,7 +279,7 @@ impl<P: Params> Editor for MuiEditor<P> {
     }
 
     fn open(&mut self, parent: RawWindowHandle, context: PluginContext) {
-        self.open_native(context, |editor| {
+        self.open_native(&context, |editor| {
             window::open(
                 &ParentWindow(parent),
                 "MUI",
