@@ -422,6 +422,46 @@ pub(super) fn surface_config(
 mod tests {
     use super::*;
     #[test]
+    fn closing_drops_a_pending_receiver_without_joining_the_initializer() {
+        // The test executable cannot unload. Model an admitted, pinned worker
+        // stalled in a driver; it owns only a weak session and result sender.
+        let mut init = GpuInit::new(true);
+        init.session = Session::private(true, Vec::new());
+        let weak = Arc::downgrade(&init.session);
+        let (result, receiver) = mpsc::sync_channel(1);
+        let (entered, entered_rx) = mpsc::sync_channel(1);
+        let (release, release_rx) = mpsc::sync_channel(1);
+        let (done, done_rx) = mpsc::sync_channel(1);
+        init.job = Some(receiver);
+        assert!(run(true, move || {
+            entered.send(()).unwrap();
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            assert!(weak.upgrade().is_none());
+            assert!(
+                result
+                    .send(Err(HostError::Unavailable {
+                        message: "cancelled fixture".into(),
+                        class: FailureClass::Transient,
+                    }))
+                    .is_err()
+            );
+            done.send(()).unwrap();
+        }));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let started = Instant::now();
+        drop(init);
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        release.send(()).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+    }
+
+    #[test]
     fn one_rebuild_claim_is_shared_by_all_observers() {
         let session = Session::private(false, Vec::new());
         let observer = session.clone();
