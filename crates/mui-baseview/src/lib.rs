@@ -71,6 +71,8 @@ pub struct Requests {
     size: AtomicU64,
     scale: AtomicU64,
     redraw: AtomicBool,
+    /// Microseconds; 0 is the default model heartbeat.
+    poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
     close: Mutex<Option<CloseHook>>,
     idle: Mutex<Option<CloseHook>>,
@@ -188,6 +190,20 @@ impl Requests {
         if factor.is_finite() && factor > 0.0 {
             self.scale.store(factor.to_bits(), Ordering::Release);
             self.wake();
+        }
+    }
+    /// Poll [`View::changed`] at least this often while `Some` (live meters,
+    /// pitch, scopes); `None` returns to the idle heartbeat. One relaxed
+    /// atomic store, no wake, no lock: safe to call from the audio thread
+    /// when telemetry starts and stops. Takes effect from the next tick.
+    pub fn set_poll_interval(&self, interval: Option<Duration>) {
+        let micros = interval.map_or(0, |d| d.as_micros().clamp(1, u64::MAX.into()) as u64);
+        self.poll.store(micros, Ordering::Relaxed);
+    }
+    fn poll_interval(&self) -> Option<Duration> {
+        match self.poll.load(Ordering::Relaxed) {
+            0 => None,
+            micros => Some(Duration::from_micros(micros)),
         }
     }
     /// Rebuild the tree on the next tick even if nothing it polls moved.
@@ -942,6 +958,9 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
         let recovery_poll = now.checked_add(RECOVERY_POLL_INTERVAL).unwrap_or(now);
         if let Some(wake) = h.driver.next_wake() {
             at = at.min(wake);
+        }
+        if let Some(poll) = h.requests.poll_interval() {
+            at = at.min(now.checked_add(poll).unwrap_or(now));
         }
         if h.requests.redraw.load(Ordering::Acquire) {
             at = now;

@@ -283,35 +283,6 @@ impl Drop for Ui {
     }
 }
 
-#[cfg(test)]
-mod lifetime_tests {
-    use super::*;
-    use std::cell::Cell;
-    use std::rc::Rc;
-
-    #[test]
-    fn releasing_memos_drops_captures_outside_the_thread_local_borrow() {
-        struct Capture(Rc<Cell<bool>>);
-        impl Drop for Capture {
-            fn drop(&mut self) {
-                TREES.with(|trees| assert!(trees.try_borrow_mut().is_ok()));
-                self.0.set(true);
-            }
-        }
-        let ui = Ui::default();
-        let dropped = Rc::new(Cell::new(false));
-        let capture = Capture(dropped.clone());
-        let el = mui_scene::canvas(move |_| {
-            let _ = &capture;
-            Vec::new()
-        });
-        TREES.with(|trees| trees.borrow_mut().insert((ui.me, 0), el));
-        ui.release_thread_memos();
-        assert!(dropped.get());
-        TREES.with(|trees| assert!(!trees.borrow().keys().any(|(owner, _)| *owner == ui.me)));
-    }
-}
-
 /// One [`Ui::memo`] subtree between frames.
 pub(super) struct Kept {
     /// The id it was built under, whose number it holds in `memo_ids`.
@@ -340,4 +311,33 @@ pub(super) fn placeholder(id: u64) -> El {
 /// The node at child-index `path` below `n`.
 pub(super) fn node_at<'a>(n: &'a mut El, path: &[usize]) -> &'a mut El {
     path.iter().fold(n, |n, &j| &mut n.children_mut()[j])
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    #[test]
+    fn releasing_memos_drops_captures_outside_the_thread_local_borrow() {
+        struct Capture(Rc<Cell<bool>>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                TREES.with(|trees| assert!(trees.try_borrow_mut().is_ok()));
+                self.0.set(true);
+            }
+        }
+        let ui = Ui::default();
+        let dropped = Rc::new(Cell::new(false));
+        let capture = Capture(dropped.clone());
+        let el = mui_scene::canvas(move |_| {
+            let _ = &capture;
+            Vec::new()
+        });
+        TREES.with(|trees| trees.borrow_mut().insert((ui.me, 0), el));
+        ui.release_thread_memos();
+        assert!(dropped.get());
+        TREES.with(|trees| assert!(!trees.borrow().keys().any(|(owner, _)| *owner == ui.me)));
+    }
 }

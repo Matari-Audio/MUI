@@ -299,10 +299,12 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
     }
 }
 
+#[cfg(any(test, feature = "software-window"))]
 fn background_only(startup: bool, size: (u32, u32)) -> bool {
     startup || dimensions(size).is_err()
 }
 
+#[cfg(any(test, feature = "software-window"))]
 fn startup_color(scene: &ResolvedScene) -> u32 {
     let Some(paint) = scene
         .paint

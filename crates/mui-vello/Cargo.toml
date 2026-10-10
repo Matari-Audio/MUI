@@ -84,3 +84,9 @@ required-features = ["cpu", "gpu-effects"]
 
 [lints]
 workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Browser wasm is single-threaded: wgpu's handles are Send/Sync there only with
+# this feature. The shared GPU session needs it to compile; spawning its
+# initializer fails on wasm and the caller takes the recorded failure path.
+wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }

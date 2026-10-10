@@ -38,7 +38,10 @@ mod tests {
 
     #[test]
     fn abort_opt_out_is_declared_in_the_manifest_and_guard() {
-        assert!(include_str!("../Cargo.toml").contains("allow-panic-abort = [\"mui-baseview/allow-panic-abort\"]"));
+        assert!(
+            include_str!("../Cargo.toml")
+                .contains("allow-panic-abort = [\"mui-baseview/allow-panic-abort\"]")
+        );
         let source = include_str!("lib.rs");
         assert!(source.contains("panic = \"abort\""));
         assert!(source.contains("not(feature = \"allow-panic-abort\")"));

@@ -1034,3 +1034,15 @@ fn native_destroyed_parent_and_drawable_stop_callbacks() {
         }
     }
 }
+
+#[test]
+fn live_poll_interval_is_set_and_cleared_without_a_wake() {
+    let requests = Requests::default();
+    assert_eq!(requests.poll_interval(), None);
+    requests.set_poll_interval(Some(Duration::from_millis(16)));
+    assert_eq!(requests.poll_interval(), Some(Duration::from_millis(16)));
+    requests.set_poll_interval(Some(Duration::ZERO));
+    assert_eq!(requests.poll_interval(), Some(Duration::from_micros(1)));
+    requests.set_poll_interval(None);
+    assert_eq!(requests.poll_interval(), None);
+}
