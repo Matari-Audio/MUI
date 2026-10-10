@@ -342,29 +342,6 @@ impl AncestorVisibilityState {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test identifiers are fixed nonzero values")]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn reparent_discards_the_old_parent_and_destroyed_ancestry_is_not_visible() {
-        let id = |n| NonZeroU32::new(n).unwrap();
-        let ancestry = AncestryList::new(id(1));
-        ancestry.set_mapped(id(1), true);
-        ancestry.push(Ancestor { id: id(2), mapped: Cell::new(false) });
-        ancestry.push(Ancestor { id: id(3), mapped: Cell::new(true) });
-        assert!(ancestry.remove_after_window(id(1)));
-        assert!(ancestry.parent_id().is_none());
-        ancestry.push(Ancestor { id: id(4), mapped: Cell::new(true) });
-        assert_eq!(ancestry.parent_id(), Some(id(4)));
-        assert!(ancestry.check_all_mapped());
-        assert_eq!(ancestry.pop_id(), Some(id(4)));
-        assert_eq!(ancestry.pop_id(), Some(id(1)));
-        assert!(!ancestry.check_all_mapped());
-    }
-}
-
 /// Returns Ok(None) on BadWindow.
 fn fetch_window_info(
     connection: &X11Connection, window: NonZeroU32,
@@ -393,4 +370,27 @@ fn fetch_window_info(
     };
 
     Ok(Some((mapped, tree)))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test identifiers are fixed nonzero values")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reparent_discards_the_old_parent_and_destroyed_ancestry_is_not_visible() {
+        let id = |n| NonZeroU32::new(n).unwrap();
+        let ancestry = AncestryList::new(id(1));
+        ancestry.set_mapped(id(1), true);
+        ancestry.push(Ancestor { id: id(2), mapped: Cell::new(false) });
+        ancestry.push(Ancestor { id: id(3), mapped: Cell::new(true) });
+        assert!(ancestry.remove_after_window(id(1)));
+        assert!(ancestry.parent_id().is_none());
+        ancestry.push(Ancestor { id: id(4), mapped: Cell::new(true) });
+        assert_eq!(ancestry.parent_id(), Some(id(4)));
+        assert!(ancestry.check_all_mapped());
+        assert_eq!(ancestry.pop_id(), Some(id(4)));
+        assert_eq!(ancestry.pop_id(), Some(id(1)));
+        assert!(!ancestry.check_all_mapped());
+    }
 }

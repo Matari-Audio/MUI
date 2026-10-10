@@ -25,6 +25,8 @@ handler's host access before close. A callback or driver call already running
 cannot be cancelled and may finish native/GPU teardown after close returns.
 Arbitrary registered `HostCallbacks` / `HostMainThreadCaller` must obey that
 lifetime contract too: pinning does not make stale calls into the host safe.
+Code in independently supplied handler/callback images needs its own lifetime
+guarantee; the baseview image pin does not preserve those images.
 This policy avoids a GUI-thread deadlock; it does not promise immediate resource
 release or actual image unmapping on a failed close.
 
@@ -72,7 +74,7 @@ changes cancel the preceding native context composition. XIM forwarding follows
 `WindowHandler::frame_demand()` defaults to `FrameDemand::Continuous`, preserving
 existing callers. X11 implements `Idle` with no frame timer and `At(Instant)`
 with a single paced deadline timer. Input, resize, map restoration, Expose and
-`Window::frame_requester().request_frame()` wake it. The returned optional
+a `FrameRequester::request_frame()` through `Window::frame_requester()` wake it. The returned optional
 `FrameRequester` is cloneable and thread-safe, does not own native resources,
 and is harmless after close. Windows/macOS implementations are integrated
 separately. MUI reports a slow model-polling deadline because external model,
@@ -90,6 +92,8 @@ The optional GLX error scope serializes swaps with a poison-tolerant mutex and
 an advisory `flock` on `/proc/self`, which is shared across plugin images.
 RAII restores the previous handler after XSync even on a Rust panic. Errors on
 foreign connections chain to the old handler; the C callback catches panics.
+A wedged GLX/XSync call can keep its scope active beyond the close timeout;
+restoration happens when it returns, and its code stays pinned meanwhile.
 Only GLX needs this global scope; normal windowing/XIM uses checked XCB without
 installing an Xlib error handler. A host or unrelated library that independently
 changes `XSetErrorHandler` without participating in the lock cannot be made

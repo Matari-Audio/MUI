@@ -565,6 +565,7 @@ impl WindowThread {
         let result =
             result.unwrap_or_else(|_| Err(PlatformError::Run("Panic in X11 event loop".into())));
         if let Err(e) = result {
+            crate::warn!("X11 window thread stopped: {e}");
             // Ignore a poisoned mutex, we just fully override this value anyway.
             let mut guard = self.shared.final_error.lock().unwrap_or_else(|g| g.into_inner());
 
