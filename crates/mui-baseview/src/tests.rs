@@ -17,6 +17,12 @@ fn native_cpu_fallback_presents_and_reopens() {
 #[test]
 #[ignore = "requires a live X11 display and graphics driver"]
 fn native_resize_failure_falls_back_and_presents() {
+    // The shared GPU session uses native backends only; under WGPU_BACKEND=gl
+    // the editor is CPU for good and there is no GPU resize to fail.
+    if (mui::vello::host::instance_descriptor().backends & wgpu::Backends::PRIMARY).is_empty() {
+        eprintln!("SKIPPED: no native GPU backend enabled by WGPU_BACKEND");
+        return;
+    }
     cpu_presentation_fixture(true);
 }
 

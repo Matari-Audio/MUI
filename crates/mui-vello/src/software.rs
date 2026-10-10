@@ -207,10 +207,17 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
 
     /// Permanent CPU fallback returns to full-quality rasterization where its
     /// bounded RGBA target fits; enormous windows keep the safe background frame.
-    pub fn finish_startup(&mut self, size: (u32, u32)) {
+    /// Returns whether pixels must be repainted: a window that was already
+    /// rasterizing in full has nothing new to show, so an idle editor stays idle.
+    pub fn finish_startup(&mut self, size: (u32, u32)) -> bool {
+        let was_background_only = self.background_only();
         self.startup = false;
         self.size = size;
-        self.invalidate();
+        let repaint = was_background_only && !self.background_only();
+        if repaint {
+            self.invalidate();
+        }
+        repaint
     }
 
     /// Zero-sized windows retain their pixels until restored.

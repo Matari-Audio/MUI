@@ -25,6 +25,9 @@ jobs:
         backend: [vulkan, gl]
     env:
       WGPU_BACKEND: ${{ matrix.backend }}
+      # The shared GPU session uses native backends (Vulkan/Metal/DX12) only,
+      # so GL editors are CPU-presented by design.
+      MUI_EXPECT_SOFTWARE: ${{ matrix.backend == 'gl' && '1' || '0' }}
       LIBGL_ALWAYS_SOFTWARE: "1"
       GALLIUM_DRIVER: llvmpipe
       WINIT_UNIX_BACKEND: x11
@@ -67,17 +70,24 @@ jobs:
             /usr/bin/python3 tools/ci/ui.py --output ui-results/embedded --timeout 60 -- \
             target/debug/examples/native_editor
       - name: All gallery scenes, themes, sizes, input and visible pixels
+        if: ${{ matrix.backend == 'vulkan' }}
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/gallery \
             --gallery --renderer gpu --record -- target/debug/mui-preview --test-ui
+      - name: All gallery scenes on the CPU presenter (GL has no shared GPU session)
+        if: ${{ matrix.backend == 'gl' }}
+        run: |
+          xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
+            /usr/bin/python3 tools/ci/ui.py --output ui-results/gallery \
+            --gallery --renderer cpu --record -- target/debug/mui-preview --test-ui
       - name: Embedded editor pixels, accessibility, expose, close and reopen
         if: ${{ !cancelled() }}
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/baseview -- \
             cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1
-          rg -q 'native_resize_failure_falls_back_and_presents .*ok' ui-results/baseview/stdout.log
+          test "$WGPU_BACKEND" = gl || rg -q 'native_resize_failure_falls_back_and_presents .*ok' ui-results/baseview/stdout.log
       - name: Multiwindow resize and close
         if: ${{ !cancelled() }}
         run: |

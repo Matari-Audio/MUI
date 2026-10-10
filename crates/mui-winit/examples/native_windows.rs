@@ -56,15 +56,18 @@ fn window(index: usize, progress: Arc<Mutex<Progress>>) -> WindowSpec<Pad> {
             } => {
                 let forced_cpu =
                     std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
-                if !forced_cpu && rendering_mode == "cpu" {
+                // Backends the shared GPU session cannot use (Linux GL) end in CPU.
+                let expect_cpu =
+                    forced_cpu || std::env::var("MUI_EXPECT_SOFTWARE").as_deref() == Ok("1");
+                if !expect_cpu && rendering_mode == "cpu" {
                     // Startup pixels are required, but are not evidence that
                     // the GPU path survived open/resize/close. Wait for handover.
                     println!("{token:?}: Frame::Startup {size:?}, renderer=cpu");
                     return;
                 }
                 println!("{token:?}: Frame::Presented {size:?}, renderer={rendering_mode}");
-                if forced_cpu {
-                    assert_eq!(rendering_mode, "cpu", "forced CPU run used a GPU");
+                if expect_cpu {
+                    assert_eq!(rendering_mode, "cpu", "CPU-expected run used a GPU");
                 }
                 let mut progress = progress.lock().unwrap();
                 if let Some(first) = progress.first.get(&token) {

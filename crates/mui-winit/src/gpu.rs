@@ -85,8 +85,9 @@ impl Gpu {
                     }
                     if self.gpu_permanent
                         && let Some(software) = &mut self.software
+                        && software.finish_startup(self.size)
                     {
-                        software.finish_startup(self.size);
+                        self.window.request_redraw();
                     }
                     self.gpu_error = Some(error.to_string());
                 }

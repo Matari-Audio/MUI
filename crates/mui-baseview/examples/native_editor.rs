@@ -18,7 +18,14 @@ const INITIAL: (u32, u32) = (240, 200);
 const RESIZED: (u32, u32) = (320, 240);
 type Outcome = Arc<Mutex<Option<Result<(), String>>>>;
 
-struct Green;
+/// How long a round may wait for the background GPU handover (or, when CPU is
+/// expected, for the automatic fallback to be concluded and logged).
+const HANDOVER: Duration = Duration::from_secs(20);
+
+#[derive(Default)]
+struct Green {
+    gpu_unavailable_logged: bool,
+}
 
 impl View for Green {
     fn build(&mut self, _: &mut Ui, _: &Input) -> El {
@@ -34,6 +41,7 @@ impl View for Green {
     }
 
     fn log(&mut self, line: &str) {
+        self.gpu_unavailable_logged |= line.contains("GPU unavailable");
         eprintln!("{line}");
     }
 }
@@ -53,6 +61,7 @@ struct State {
     phase: Phase,
     round: usize,
     first_frame: u64,
+    opened: Instant,
 }
 
 struct Parent {
@@ -92,6 +101,7 @@ impl Parent {
                     )
                     .ok_or("MUI child creation failed")?,
                 );
+                state.opened = Instant::now();
                 state.phase = Phase::Frame;
             }
             Phase::Frame | Phase::Resized => {
@@ -105,6 +115,33 @@ impl Parent {
                 let Some(presented) = state.requests.presentation() else {
                     return Ok(false);
                 };
+                // CPU-first startup: the first frame is software either way.
+                // Wait, bounded, for the expected outcome; any other CPU
+                // reason (fallback after the GPU was up) fails at once.
+                let automatic = std::env::var("MUI_RENDERER").as_deref() != Ok("cpu");
+                let startup = presented.software && presented.reason == "CPU startup";
+                let fallback_logged = state
+                    .shared
+                    .lock()
+                    .map_err(|e| e.to_string())?
+                    .view
+                    .gpu_unavailable_logged;
+                // Expecting CPU: an automatic fallback must be decided and logged.
+                // Expecting GPU: wait unless the editor already gave up on it.
+                let waiting = if self.software {
+                    automatic && !fallback_logged
+                } else {
+                    startup && !fallback_logged
+                };
+                if waiting {
+                    if state.opened.elapsed() > HANDOVER {
+                        return Err(format!(
+                            "no GPU handover (software={}) within {HANDOVER:?}: {presented:?}",
+                            self.software
+                        ));
+                    }
+                    return Ok(false);
+                }
                 if presented.software != self.software {
                     return Err(format!(
                         "expected software={}, observed {presented:?}",
@@ -159,7 +196,8 @@ impl Parent {
     }
 
     fn finish(&self, result: Result<(), String>) {
-        *self.outcome.lock().unwrap() = Some(result);
+        // Keep the first verdict: a later callback must not mask the cause.
+        self.outcome.lock().unwrap().get_or_insert(result);
         let child = self.state.borrow_mut().child.take();
         if let Some(child) = child {
             child.close();
@@ -225,13 +263,14 @@ fn run() -> Result<(), String> {
                     child: None,
                     shared: Arc::new(Mutex::new(Shared {
                         ui: Ui::default(),
-                        view: Green,
+                        view: Green::default(),
                     })),
                     requests: Arc::new(Requests::default()),
                     closes: Arc::new(AtomicUsize::new(0)),
                     phase: Phase::Open,
                     round: 0,
                     first_frame: 0,
+                    opened: Instant::now(),
                 }),
                 cx,
                 outcome: result,

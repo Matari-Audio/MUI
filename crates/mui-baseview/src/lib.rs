@@ -546,15 +546,18 @@ impl<V: View> Handler<V> {
                                 ),
                             );
                         }
+                        let mut repaint = false;
                         if error.failure_class() == FailureClass::Permanent {
                             self.software_only = true;
                             if let Some(software) = &mut self.software {
-                                software.finish_startup(size);
+                                repaint = software.finish_startup(size);
                             }
-                            self.driver.redraw();
                         }
                         self.presenter_reason = "CPU GPU initialization failed";
-                        self.unpainted = true;
+                        if repaint {
+                            self.driver.redraw();
+                            self.unpainted = true;
+                        }
                     }
                 }
             }
@@ -1163,10 +1166,46 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 // Native tests explicitly request the synchronous GPU lane. Production windows
 // use GpuInit only, after a successful CPU frame.
 #[cfg(all(test, target_os = "linux"))]
+mod test_display {
+    use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle};
+
+    /// The window's X connection, retained for a synchronous instance. GL
+    /// (EGL) needs the display at instance creation; Vulkan does not.
+    #[derive(Debug)]
+    pub struct Display {
+        raw: RawDisplayHandle,
+        _owner: baseview::PlatformHandle,
+    }
+    impl Display {
+        pub fn new(window: &baseview::WindowContext) -> Result<Self, HandleError> {
+            Ok(Self {
+                raw: window.display_handle()?.as_raw(),
+                _owner: window.platform_handle(),
+            })
+        }
+    }
+    // SAFETY: PlatformHandle retains the same thread-safe X11 connection.
+    #[expect(unsafe_code, reason = "retained thread-safe X11 connection")]
+    unsafe impl Send for Display {}
+    // SAFETY: as above.
+    #[expect(unsafe_code, reason = "retained thread-safe X11 connection")]
+    unsafe impl Sync for Display {}
+    impl HasDisplayHandle for Display {
+        #[expect(unsafe_code, reason = "borrows the retained display connection")]
+        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
+            // SAFETY: _owner keeps the connection behind raw alive.
+            Ok(unsafe { DisplayHandle::borrow_raw(self.raw) })
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
     Host::open_native(
         |backends| {
-            let mut descriptor = mui::vello::host::instance_descriptor();
+            let display = test_display::Display::new(window).map_err(|e| e.to_string())?;
+            let mut descriptor =
+                mui::vello::host::instance_descriptor().with_display_handle(Box::new(display));
             descriptor.backends = backends;
             let instance = wgpu::Instance::new(descriptor);
             // SAFETY: this test's handler drops the host before its native context.
