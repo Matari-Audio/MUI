@@ -537,6 +537,15 @@ impl<V: View> Handler<V> {
                         self.unpainted = true;
                     }
                     Err(error) => {
+                        // Once per failure streak: backoff retries must not flood the host log.
+                        if self.presenter_reason != "CPU GPU initialization failed" {
+                            log(
+                                &self.shared,
+                                &format!(
+                                    "mui-baseview: GPU unavailable ({error}); using CPU rendering"
+                                ),
+                            );
+                        }
                         if error.failure_class() == FailureClass::Permanent {
                             self.software_only = true;
                             if let Some(software) = &mut self.software {
