@@ -9,6 +9,9 @@ use std::ops::Deref;
 #[derive(Copy, Clone, Default)]
 pub(crate) struct DpiScalingStrategy {
     pub assume_96_dpi: bool,
+    // Ported from RustAudio/baseview #345: v1 children rely on host scale hints.
+    pub should_use_host_suggested_scale_factor: bool,
+    pub should_enable_nc_dpi_scaling_manually: bool,
     pub thread_dpi_awareness_context: Option<DpiAwarenessContext>,
 }
 
@@ -94,6 +97,8 @@ impl DpiScalingStrategy {
             crate::debug!("Parent has DPI Awareness Context with Per-Monitor DPI awareness, falling back to System DPI Awareness.");
             return Self {
                 assume_96_dpi: false,
+                should_use_host_suggested_scale_factor: false,
+                should_enable_nc_dpi_scaling_manually: false,
                 thread_dpi_awareness_context: Some(SystemDpiAware.into()),
             };
         }
@@ -113,7 +118,13 @@ impl DpiScalingStrategy {
         // If type is unknown, assume it's better than System-Aware, and we can at least fetch the actual DPI.
         let assume_96_dpi = matches!(dpi_awareness_type, Some(Unaware | UnawareGDIScaled));
 
-        Self { assume_96_dpi, thread_dpi_awareness_context: Some(dpi_awareness_context) }
+        let per_monitor_v1 = matches!(dpi_awareness_type, Some(PerMonitorDpiAware));
+        Self {
+            assume_96_dpi,
+            should_use_host_suggested_scale_factor: per_monitor_v1,
+            should_enable_nc_dpi_scaling_manually: per_monitor_v1,
+            thread_dpi_awareness_context: Some(dpi_awareness_context),
+        }
     }
 
     fn get_from_process_legacy(shcore: &LazyLibraryModule<ExtendedShCore>) -> Self {
@@ -127,11 +138,17 @@ impl DpiScalingStrategy {
 
         let assume_96_dpi = matches!(awareness, None | Some(Unaware));
 
-        Self { assume_96_dpi, thread_dpi_awareness_context: None }
+        let per_monitor_v1 = matches!(awareness, Some(PerMonitorDpiAware));
+        Self {
+            assume_96_dpi,
+            should_use_host_suggested_scale_factor: per_monitor_v1,
+            should_enable_nc_dpi_scaling_manually: per_monitor_v1,
+            thread_dpi_awareness_context: None,
+        }
     }
 
     fn completely_unaware() -> Self {
-        Self { assume_96_dpi: true, thread_dpi_awareness_context: None }
+        Self { assume_96_dpi: true, ..Self::default() }
     }
 
     fn get_best_supported(

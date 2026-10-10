@@ -94,7 +94,7 @@ impl WindowState {
 
         let ctx = DpiAwarenessGuard::new(&self.user32, self.shared.dpi_scaling_strategy.get())?;
 
-        self.hwnd.resize_and_activate(new_size, dpi, &ctx)?;
+        super::native::resize(self.hwnd, new_size, dpi, &ctx)?;
         Ok(())
     }
 
@@ -128,7 +128,7 @@ impl WindowState {
     }
 
     pub fn window_handle(&self) -> Option<raw_window_handle::WindowHandle<'_>> {
-        let Some(hwnd) = NonZeroIsize::new(self.hwnd.as_raw() as _) else { unreachable!() };
+        let hwnd = NonZeroIsize::new(self.hwnd.as_raw() as _)?;
         let mut handle = Win32WindowHandle::new(hwnd);
         handle.hinstance = Some(HInstance::get_from_dll().addr());
 
@@ -146,6 +146,7 @@ impl WindowState {
 }
 
 pub struct WindowSharedState {
+    pub(super) native_class: Cell<Option<super::native::RegisteredClass>>,
     pub parented: Cell<bool>,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
@@ -163,6 +164,7 @@ pub struct WindowSharedState {
 impl WindowSharedState {
     pub fn new(user32: LibraryModule<ExtendedUser32>, settings: &WindowSettings) -> Rc<Self> {
         Self {
+            native_class: None.into(),
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
             is_alive: true.into(),
             current_dpi: None.into(),
@@ -192,11 +194,15 @@ impl WindowSharedState {
             &init.settings,
         );
 
-        if strategy.assume_96_dpi {
-            self.current_dpi.set(Some(Dpi::default()));
-        }
-
+        let dpi = if strategy.assume_96_dpi {
+            Some(Dpi::default())
+        } else {
+            parent.and_then(|p| p.get_dpi(&self.user32))
+        };
+        self.current_dpi.set(dpi);
+        self.parented.set(init.settings.parent.is_some() || init.settings.wait_for_parent);
         self.dpi_scaling_strategy.set(strategy);
+        self.current_size.set(init.settings.size.to_physical(self.scale_factor()));
     }
 
     pub fn size(&self) -> WindowSize {
@@ -213,11 +219,17 @@ impl WindowSharedState {
 
     /// The scale factor from the OS DPI (or the fallback), ignoring the override.
     pub fn platform_scale_factor(&self) -> f64 {
-        if let Some(dpi) = self.current_dpi.get() {
-            dpi.scale_factor()
-        } else {
-            self.fallback_scale_factor.get().unwrap_or(1.0)
+        let strategy = self.dpi_scaling_strategy.get();
+        if strategy.assume_96_dpi {
+            return 1.0;
         }
+        if strategy.should_use_host_suggested_scale_factor {
+            return self.fallback_scale_factor.get().unwrap_or(1.0);
+        }
+        self.current_dpi
+            .get()
+            .map(|d| d.scale_factor())
+            .unwrap_or_else(|| self.fallback_scale_factor.get().unwrap_or(1.0))
     }
 
     pub fn originate_host_resize(&self) -> impl Drop + use<'_> {
@@ -242,7 +254,9 @@ impl<'a> Drop for Guard<'a> {
 /// Updates the keyboard hook right away and moves focus asynchronously (a synchronous
 /// `SetFocus` would re-enter the window handler from inside its own callback).
 pub(crate) fn set_keyboard_capture(hwnd: HWnd, capture: bool) {
-    super::hook::set_keyboard_capture(hwnd.as_raw(), capture);
+    if !super::hook::set_keyboard_capture(hwnd.as_raw(), capture) {
+        return;
+    }
     unsafe {
         PostMessageW(
             hwnd.as_raw(),

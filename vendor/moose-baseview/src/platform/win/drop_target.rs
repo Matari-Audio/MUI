@@ -1,5 +1,3 @@
-#![expect(clippy::indexing_slicing, reason = "To be refactored later")]
-
 use crate::dpi::PhysicalPosition;
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
@@ -7,7 +5,7 @@ use std::os::windows::prelude::OsStringExt;
 use std::ptr::null_mut;
 use std::rc::Weak;
 use windows::core::implement;
-use windows::Win32::Foundation::{E_UNEXPECTED, POINTL};
+use windows::Win32::Foundation::POINTL;
 use windows::Win32::System::Com::{IDataObject, DVASPECT_CONTENT, FORMATETC, TYMED_HGLOBAL};
 use windows::Win32::System::Ole::*;
 use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
@@ -15,13 +13,14 @@ use windows_core::Ref;
 use windows_sys::Win32::UI::Shell::DragQueryFileW;
 
 use super::window_state::WindowState;
-use crate::platform::BaseviewWindow;
-use crate::wrappers::win32::window::{HWnd, WindowData};
+use super::{callback, native};
+use crate::wrappers::win32::window::HWnd;
 use crate::{DropData, DropEffect, Event, EventStatus, MouseEvent};
 
 #[implement(IDropTarget)]
 pub(crate) struct DropTarget {
     hwnd: HWnd,
+    revoked: Cell<bool>,
     window_state: Weak<WindowState>,
 
     // These are cached since DragOver and DragLeave callbacks don't provide them,
@@ -34,23 +33,23 @@ impl DropTarget {
     pub(crate) fn new(window_state: Weak<WindowState>, hwnd: HWnd) -> Self {
         Self {
             hwnd,
+            revoked: false.into(),
             window_state,
             drag_position: Cell::new(PhysicalPosition::new(0, 0)),
             drop_data: RefCell::new(DropData::None),
         }
     }
 
-    fn on_event(&self, pdw_effect: Option<*mut DROPEFFECT>, event: MouseEvent) {
-        let Some(window_data_ptr) = self.hwnd.get_userdata_ptr() else {
-            return;
-        };
+    pub(crate) fn revoke(&self) {
+        self.revoked.set(true);
+    }
 
-        let event = Event::Mouse(event);
-        let event_status = unsafe {
-            WindowData::<BaseviewWindow>::handle(window_data_ptr, |window| {
-                window.inner().map(|w| w.handle_event(event))
-            })
-        };
+    fn on_event(&self, pdw_effect: Option<*mut DROPEFFECT>, event: MouseEvent) {
+        if self.revoked.get() {
+            return;
+        }
+        let event_status =
+            unsafe { native::with_window(self.hwnd, |w| w.handle_event(Event::Mouse(event))) };
 
         let effect = match event_status {
             Some(EventStatus::AcceptDrop(DropEffect::Copy)) => DROPEFFECT_COPY,
@@ -60,7 +59,7 @@ impl DropTarget {
             _ => DROPEFFECT_NONE,
         };
 
-        if let Some(pdw_effect) = pdw_effect {
+        if let Some(pdw_effect) = pdw_effect.filter(|p| !p.is_null()) {
             unsafe { pdw_effect.write(effect) };
         }
     }
@@ -88,7 +87,18 @@ impl DropTarget {
                 return;
             };
 
-            let hdrop = medium.u.hGlobal.0;
+            // Release the IDataObject-owned allocation on every return, including
+            // panic containment. Hosts repeatedly dragging files must not leak it.
+            struct Medium(windows::Win32::System::Com::STGMEDIUM);
+            impl Drop for Medium {
+                fn drop(&mut self) {
+                    unsafe {
+                        ReleaseStgMedium(&mut self.0);
+                    }
+                }
+            }
+            let medium = Medium(medium);
+            let hdrop = medium.0.u.hGlobal.0;
 
             let item_count = DragQueryFileW(hdrop, 0xFFFFFFFF, null_mut(), 0);
             if item_count == 0 {
@@ -105,7 +115,9 @@ impl DropTarget {
 
                 DragQueryFileW(hdrop, i, buffer.as_mut_ptr().cast(), buffer_size as u32);
 
-                paths.push(OsString::from_wide(&buffer[..characters as usize]).into())
+                if let Some(chars) = buffer.get(..characters as usize) {
+                    paths.push(OsString::from_wide(chars).into());
+                }
             }
 
             self.drop_data.replace(DropData::Files(paths));
@@ -116,77 +128,111 @@ impl DropTarget {
 #[allow(non_snake_case, reason = "To match trait")]
 impl IDropTarget_Impl for DropTarget_Impl {
     fn DragEnter(
-        &self, pdataobj: Ref<IDataObject>, grfkeystate: MODIFIERKEYS_FLAGS, pt: &POINTL,
-        pdweffect: *mut DROPEFFECT,
+        &self, data: Ref<IDataObject>, keys: MODIFIERKEYS_FLAGS, pt: &POINTL,
+        effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        let Some(window_state) = self.window_state.upgrade() else {
-            return Err(E_UNEXPECTED.into());
-        };
-
-        let modifiers =
-            window_state.keyboard_state().get_modifiers_from_mouse_wparam(grfkeystate.0 as usize);
-
-        self.parse_coordinates(*pt);
-        self.parse_drop_data(pdataobj.unwrap());
-
-        let event = MouseEvent::DragEntered {
-            position: self.drag_position.get().cast(),
-            modifiers,
-            data: self.drop_data.borrow().clone(),
-        };
-
-        self.on_event(Some(pdweffect), event);
-        Ok(())
+        self.guarded_drag(effect, || {
+            let Some(state) = self.window_state.upgrade() else {
+                return Ok(());
+            };
+            let Some(data) = data.as_ref() else {
+                return Ok(());
+            };
+            self.parse_coordinates(*pt);
+            self.parse_drop_data(data);
+            self.on_event(
+                Some(effect),
+                MouseEvent::DragEntered {
+                    position: self.drag_position.get().cast(),
+                    modifiers: state
+                        .keyboard_state()
+                        .get_modifiers_from_mouse_wparam(keys.0 as usize),
+                    data: self.drop_data.borrow().clone(),
+                },
+            );
+            Ok(())
+        })
     }
-
     fn DragOver(
-        &self, grfkeystate: MODIFIERKEYS_FLAGS, pt: &POINTL, pdweffect: *mut DROPEFFECT,
+        &self, keys: MODIFIERKEYS_FLAGS, pt: &POINTL, effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        let Some(window_state) = self.window_state.upgrade() else {
-            return Err(E_UNEXPECTED.into());
-        };
-
-        let modifiers =
-            window_state.keyboard_state().get_modifiers_from_mouse_wparam(grfkeystate.0 as usize);
-
-        self.parse_coordinates(*pt);
-
-        let event = MouseEvent::DragMoved {
-            position: self.drag_position.get().cast(),
-            modifiers,
-            data: self.drop_data.borrow().clone(),
-        };
-
-        self.on_event(Some(pdweffect), event);
-        Ok(())
+        self.guarded_drag(effect, || {
+            let Some(state) = self.window_state.upgrade() else {
+                return Ok(());
+            };
+            self.parse_coordinates(*pt);
+            self.on_event(
+                Some(effect),
+                MouseEvent::DragMoved {
+                    position: self.drag_position.get().cast(),
+                    modifiers: state
+                        .keyboard_state()
+                        .get_modifiers_from_mouse_wparam(keys.0 as usize),
+                    data: self.drop_data.borrow().clone(),
+                },
+            );
+            Ok(())
+        })
     }
-
     fn DragLeave(&self) -> windows_core::Result<()> {
-        self.on_event(None, MouseEvent::DragLeft);
-        Ok(())
+        self.guarded_drag(null_mut(), || {
+            self.on_event(None, MouseEvent::DragLeft);
+            Ok(())
+        })
     }
-
     fn Drop(
-        &self, pdataobj: Ref<IDataObject>, grfkeystate: MODIFIERKEYS_FLAGS, pt: &POINTL,
-        pdweffect: *mut DROPEFFECT,
+        &self, data: Ref<IDataObject>, keys: MODIFIERKEYS_FLAGS, pt: &POINTL,
+        effect: *mut DROPEFFECT,
     ) -> windows_core::Result<()> {
-        let Some(window_state) = self.window_state.upgrade() else {
-            return Err(E_UNEXPECTED.into());
-        };
+        self.guarded_drag(effect, || {
+            let Some(state) = self.window_state.upgrade() else {
+                return Ok(());
+            };
+            let Some(data) = data.as_ref() else {
+                return Ok(());
+            };
+            self.parse_coordinates(*pt);
+            self.parse_drop_data(data);
+            self.on_event(
+                Some(effect),
+                MouseEvent::DragDropped {
+                    position: self.drag_position.get().cast(),
+                    modifiers: state
+                        .keyboard_state()
+                        .get_modifiers_from_mouse_wparam(keys.0 as usize),
+                    data: self.drop_data.borrow().clone(),
+                },
+            );
+            Ok(())
+        })
+    }
+}
 
-        let modifiers =
-            window_state.keyboard_state().get_modifiers_from_mouse_wparam(grfkeystate.0 as usize);
-
-        self.parse_coordinates(*pt);
-        self.parse_drop_data(pdataobj.unwrap());
-
-        let event = MouseEvent::DragDropped {
-            position: self.drag_position.get().cast(),
-            modifiers,
-            data: self.drop_data.borrow().clone(),
-        };
-
-        self.on_event(Some(pdweffect), event);
-        Ok(())
+impl DropTarget {
+    fn guarded_drag(
+        &self, effect: *mut DROPEFFECT, body: impl FnOnce() -> windows_core::Result<()>,
+    ) -> windows_core::Result<()> {
+        // S_OK with no accepted effect is safe for late calls, absent data and
+        // contained panics. Null effect pointers are permitted by our boundary.
+        if !effect.is_null() {
+            unsafe {
+                effect.write(DROPEFFECT_NONE);
+            }
+        }
+        if self.revoked.get() {
+            return Ok(());
+        }
+        callback::guard(
+            "IDropTarget",
+            || {
+                if !effect.is_null() {
+                    unsafe {
+                        effect.write(DROPEFFECT_NONE);
+                    }
+                }
+                Ok(())
+            },
+            body,
+        )
     }
 }
