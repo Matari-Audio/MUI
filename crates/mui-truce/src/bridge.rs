@@ -9,6 +9,10 @@ use mui::{Edit, Ui};
 use truce_core::editor::PluginContext;
 use truce_params::{ParamFlags, ParamInfo, ParamRange, Params};
 
+use crate::HostPump;
+use crate::boundary::guard;
+use crate::host::Mutation;
+
 /// The widget id [`Bridge::bind`] gives parameter `param`: `param/<id>`.
 /// Derived, never typed, so the gesture a widget reports is always the one
 /// its parameter listens for.
@@ -22,6 +26,7 @@ pub fn widget_id(param: impl Into<u32>) -> Id {
 pub struct Bridge<P: ?Sized = dyn Params> {
     params: Arc<P>,
     context: Option<PluginContext<P>>,
+    pump: Option<Arc<HostPump>>,
     infos: Box<[ParamInfo]>,
     meters: Box<[u32]>,
     /// Open gestures: the id, the value the control holds, and the value
@@ -46,6 +51,7 @@ impl<P: Params + ?Sized> Bridge<P> {
         Self {
             params,
             context: None,
+            pump: None,
             infos,
             meters,
             open: Vec::new(),
@@ -54,12 +60,28 @@ impl<P: Params + ?Sized> Bridge<P> {
         }
     }
 
+    /// Defer mutations until a framework-provided host-main-thread pump.
+    /// Select before attaching. Direct delivery remains the default because
+    /// truce 6.3 CLAP/VST3 do not drive `Editor::idle`.
+    #[must_use]
+    pub fn with_host_pump(mut self) -> Self {
+        self.pump = Some(Arc::default());
+        self
+    }
+
+    /// The optional delivery queue. Flush outside any model/editor lock.
+    pub fn host_pump(&self) -> Option<Arc<HostPump>> {
+        self.pump.clone()
+    }
+
     /// The typed store, for everything the bridge does not wrap.
     pub fn params(&self) -> &Arc<P> {
         &self.params
     }
 
-    /// The host channel, while the editor is open.
+    /// The raw host channel, while the editor is open. Mutating it directly
+    /// bypasses the optional queue: the caller must obey host thread and
+    /// re-entry rules. Prefer the bridge's bindings and resize method.
     pub fn context(&self) -> Option<&PluginContext<P>> {
         self.context.as_ref()
     }
@@ -68,18 +90,25 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// old one was owed.
     pub fn attach(&mut self, context: PluginContext<P>) {
         self.close();
+        if let Some(pump) = &self.pump
+            && !pump.attach(Arc::clone(context.bridge()))
+        {
+            // Flush the old channel outside the model lock before replacing it.
+            return;
+        }
         self.context = Some(context);
         self.seen.fill(u64::MAX);
     }
 
     /// End every open gesture and let the host go. Safe to call twice.
     pub fn close(&mut self) {
-        if let Some(context) = self.context.take() {
-            for (id, ..) in self.open.drain(..) {
-                context.end_edit(id);
-            }
+        self.end_all();
+        self.context = None;
+        if let Some(pump) = &self.pump {
+            // The adapter flushes after releasing its model lock.
+            pump.close();
         }
-        self.open.clear();
+        self.bound.clear();
     }
 
     /// Drop the host without calling it: for `Drop`, when the host may have
@@ -87,15 +116,40 @@ impl<P: Params + ?Sized> Bridge<P> {
     pub fn detach(&mut self) {
         self.open.clear();
         self.context = None;
+        self.bound.clear();
+        if let Some(pump) = &self.pump {
+            pump.detach();
+        }
     }
 
     /// End every open gesture but stay attached: a state load replaced the
     /// values they were editing.
     pub fn end_all(&mut self) {
-        if let Some(context) = &self.context {
-            for (id, ..) in self.open.drain(..) {
-                context.end_edit(id);
+        let open = std::mem::take(&mut self.open);
+        for (id, ..) in &open {
+            if let Some(pump) = &self.pump {
+                pump.enqueue(Mutation::End(*id));
+            } else if let Some(context) = &self.context {
+                guard("end edit", || context.end_edit(*id));
             }
+        }
+        self.open = open;
+        self.open.clear();
+    }
+
+    /// Ask for a logical-point resize. Direct mode returns host acceptance.
+    /// Queued mode returns false (no immediate acceptance). The framework must
+    /// forward an accepted logical size through `Editor::set_size` later.
+    pub fn request_resize(&self, width: u32, height: u32) -> bool {
+        if let Some(pump) = &self.pump {
+            pump.enqueue(Mutation::Resize(width, height));
+            // The host has not accepted yet. Its authoritative size reply
+            // must come through Editor::set_size; do not resize optimistically.
+            false
+        } else {
+            self.context.as_ref().is_some_and(|context| {
+                guard("request resize", || context.request_resize(width, height)).unwrap_or(false)
+            })
         }
     }
 
@@ -130,7 +184,9 @@ impl<P: Params + ?Sized> Bridge<P> {
 
     /// A meter the audio thread published, `0` while closed.
     pub fn meter(&self, id: impl Into<u32>) -> f32 {
-        self.context.as_ref().map_or(0.0, |c| c.get_meter(id))
+        self.context.as_ref().map_or(0.0, |c| {
+            guard("read meter", || c.get_meter(id)).unwrap_or(0.0)
+        })
     }
 
     /// Whether any parameter or meter moved since the last call: host
@@ -295,8 +351,13 @@ impl<P: Params + ?Sized> Bridge<P> {
         };
         if !self.is_open(id) {
             let value = self.params.get_normalized(id).unwrap_or(0.0);
-            context.begin_edit(id);
-            self.open.push((id, value, value));
+            let accepted = self.pump.as_ref().map_or_else(
+                || guard("begin edit", || context.begin_edit(id)).is_some(),
+                |pump| pump.enqueue(Mutation::Begin(id)),
+            );
+            if accepted {
+                self.open.push((id, value, value));
+            }
         }
     }
 
@@ -311,7 +372,11 @@ impl<P: Params + ?Sized> Bridge<P> {
         let value = quantize(range, *shown);
         if sent.to_bits() != value.to_bits() {
             *sent = value;
-            context.set_param(id, value);
+            if let Some(pump) = &self.pump {
+                pump.enqueue(Mutation::Set(id, value));
+            } else {
+                guard("set parameter", || context.set_param(id, value));
+            }
         }
     }
 
@@ -321,7 +386,11 @@ impl<P: Params + ?Sized> Bridge<P> {
             self.open.iter().position(|(open, ..)| *open == id),
         ) {
             self.open.swap_remove(i);
-            context.end_edit(id);
+            if let Some(pump) = &self.pump {
+                pump.enqueue(Mutation::End(id));
+            } else {
+                guard("end edit", || context.end_edit(id));
+            }
         }
     }
 }

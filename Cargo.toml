@@ -114,12 +114,12 @@ strip = "none"
 opt-level = "s"
 lto = true
 codegen-units = 1
-panic = "abort"
+panic = "unwind"
 strip = "symbols"
 
-# Plugins: release, but panics unwind. Under abort the `catch_unwind` guards at
-# mui-truce's FFI edge are dead code and a UI panic takes the whole DAW down.
-# `cargo build --profile plugin -p <plugin>`.
+# Release also unwinds: the default bundle build must protect its host.
+# Keep the plugin profile as an explicit, compatible shipping command.
+# mui-truce enforces unwind even in downstream workspaces.
 [profile.plugin]
 inherits = "release"
 panic = "unwind"

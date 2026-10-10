@@ -339,9 +339,13 @@ fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
 the build commands and the clap-validator and pluginval results.
 
-Build plugins with `--profile plugin` (release with `panic = "unwind"`), not
-`--release`: release aborts on panic, so a bug in the editor would take the
-DAW down instead of being caught at the FFI edge.
+Both `--release` and `--profile plugin` use `panic = "unwind"` here. The final
+plugin workspace controls the panic strategy: downstream plugins must also
+set `[profile.release] panic = "unwind"`. `mui-truce` rejects abort builds by
+default, because an editor panic would otherwise terminate the DAW.
+The explicit `allow-panic-abort` feature removes that protection; it is not
+for shipping DAW plugins. See the [shipping checklist](crates/mui-truce/README.md#shipping-a-mui-plugin-safely)
+and the remaining Linux host-thread integration limitation there.
 
 ## Hosts
 
