@@ -238,6 +238,7 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
             return;
         };
         driver.min_interval = Some(interval);
+        gpu.update();
         lock(&self.shared)
             .ui
             .set_gpu_welding_available(gpu.rendering_mode() == "gpu");
@@ -293,17 +294,18 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
         if !self.state.visible() || self.gpu.is_none() {
             return None;
         }
-        let wake = self
-            .driver
-            .as_ref()
-            .and_then(Driver::next_wake)
-            .map_or(self.next_poll, |at| at.min(self.next_poll));
+        let model = self.driver.as_ref().and_then(Driver::next_wake);
+        let renderer = self.gpu.as_ref().and_then(|gpu| gpu.next_wake(now));
+        let wake = match (model, renderer) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(at), None) | (None, Some(at)) => at,
+            (None, None) => return None,
+        }
+        .max(self.next_poll);
         if now >= wake {
-            self.gpu
-                .as_ref()
-                .expect("checked above")
-                .window()
-                .request_redraw();
+            if let Some(gpu) = &self.gpu {
+                gpu.window().request_redraw();
+            }
             self.next_poll = now + self.interval();
             // The Driver deadline is consumed on RedrawRequested. Wait for the
             // next poll instead of spinning until winit delivers that redraw.
