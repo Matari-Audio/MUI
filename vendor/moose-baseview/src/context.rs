@@ -6,6 +6,33 @@ use raw_window_handle::{
 };
 use std::fmt::Debug;
 
+/// An X11 drag could not be registered with this window's live event queue.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum MatariX11ScheduleError {
+    /// The primary pointer gesture no longer has live X11 event authority.
+    AuthorityUnavailable,
+    /// Another X11 drag session already owns this window's pointer events.
+    Busy,
+    /// The live window did not expose a usable X11 window handle.
+    MissingWindowHandle,
+}
+
+#[cfg(target_os = "linux")]
+impl std::fmt::Display for MatariX11ScheduleError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::AuthorityUnavailable => "X11 drag requires the current primary pointer gesture",
+            Self::Busy => "an X11 drag is already active for this window",
+            Self::MissingWindowHandle => "the window does not expose a valid X11 window handle",
+        })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl std::error::Error for MatariX11ScheduleError {}
+
 /// A handle to the window given to a [`WindowHandler`](crate::WindowHandler), which it can then
 /// use to perform various operations on the window itself.
 #[derive(Clone)]
@@ -105,6 +132,23 @@ impl WindowContext {
     /// See the [`PlatformHandle`] documentation for more information.
     pub fn platform_handle(&self) -> PlatformHandle {
         PlatformHandle { inner: self.inner.platform_handle() }
+    }
+
+    /// Returns whether the current X11 pointer gesture can start an outbound drag.
+    #[cfg(target_os = "linux")]
+    pub fn can_schedule_matari_x11_drag(&self) -> bool {
+        self.inner.can_schedule_matari_x11_drag()
+    }
+
+    /// Registers an outbound drag with this window's live X11 event loop.
+    #[cfg(target_os = "linux")]
+    pub fn schedule_matari_x11_drag(
+        &self, ticket: matari_audio_drag_and_drop::StartTicket,
+    ) -> Result<(), matari_audio_drag_and_drop::RejectedStart<MatariX11ScheduleError>> {
+        let Ok(origin) = matari_audio_drag_and_drop::DragOrigin::from_window(self) else {
+            return Err(ticket.reject(MatariX11ScheduleError::MissingWindowHandle));
+        };
+        self.inner.schedule_matari_x11_drag(ticket, origin)
     }
 
     /// Returns the [`GlContext`](crate::gl::GlContext) associated to this window.

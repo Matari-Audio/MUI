@@ -15,6 +15,7 @@ use crate::{
     WindowHandler, WindowSize,
 };
 use calloop::generic::Generic;
+use matari_audio_drag_and_drop::{X11PointerEvent, X11SessionStatus};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken};
 use std::rc::Rc;
@@ -444,6 +445,7 @@ impl EventLoop {
             inner.run(None, &mut self, Self::handle_idle)?;
         }
 
+        self.cancel_matari_drag();
         if !self.window.main_thread_shared.callbacks_revoked() {
             if !self.window.xcb_window.is_destroyed() {
                 self.release_forwarded_keys();
@@ -499,6 +501,57 @@ impl EventLoop {
         }
     }
 
+    /// Tracks the primary button and the newest pointer event: an outbound
+    /// drag may only start from a live press.
+    fn update_pointer_authority(&self, event: &XEvent) {
+        let pointer = match event {
+            XEvent::MotionNotify(e) => {
+                self.window
+                    .primary_pointer_down
+                    .set(e.state.contains(x11rb::protocol::xproto::KeyButMask::BUTTON1));
+                X11PointerEvent { root: e.root, root_x: e.root_x, root_y: e.root_y, time: e.time }
+            }
+            XEvent::ButtonPress(e) => {
+                if e.detail == 1 {
+                    self.window.primary_pointer_down.set(true);
+                }
+                X11PointerEvent { root: e.root, root_x: e.root_x, root_y: e.root_y, time: e.time }
+            }
+            XEvent::ButtonRelease(e) => {
+                X11PointerEvent { root: e.root, root_x: e.root_x, root_y: e.root_y, time: e.time }
+            }
+            _ => return,
+        };
+        self.window.last_pointer_event.set(Some(pointer));
+    }
+
+    fn forward_matari_drag_event(&self, event: &XEvent) {
+        let released = matches!(event, XEvent::ButtonRelease(e) if e.detail == 1);
+        let connection = self.window.connection.conn.xcb_connection();
+        let session = self.window.external_drag_session.borrow_mut().take();
+        if let Some(mut session) = session {
+            match session.handle_event(connection, event) {
+                Ok(X11SessionStatus::Active) => {
+                    *self.window.external_drag_session.borrow_mut() = Some(session);
+                }
+                Ok(X11SessionStatus::Finished) => {}
+                Err(_) => {
+                    let _ = session.cancel(connection);
+                }
+            }
+        }
+        if released {
+            self.window.primary_pointer_down.set(false);
+        }
+    }
+
+    fn cancel_matari_drag(&self) {
+        let connection = self.window.connection.conn.xcb_connection();
+        if let Some(session) = self.window.external_drag_session.borrow_mut().take() {
+            let _ = session.cancel(connection);
+        }
+    }
+
     fn handle_xcb_event(&mut self, event: XEvent) -> Result<(), ConnectionError> {
         let filtered = self.window.ime.borrow_mut().as_mut().is_some_and(|ime| ime.filter(&event));
         self.drain_ime();
@@ -537,6 +590,9 @@ impl EventLoop {
         // - `state` will tell you the state of the main three mouse buttons and some of
         //   the keyboard modifier keys at the time of the event.
         //   http://rtbo.github.io/rust-xcb/src/xcb/ffi/xproto.rs.html#445
+
+        self.update_pointer_authority(&event);
+        self.forward_matari_drag_event(&event);
 
         match event {
             ////

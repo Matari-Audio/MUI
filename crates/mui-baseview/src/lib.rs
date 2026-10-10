@@ -80,6 +80,7 @@ pub struct Requests {
     presentation: Mutex<Option<Presentation>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
+    drag: Mutex<Option<Vec<std::path::PathBuf>>>,
 }
 
 impl Requests {
@@ -169,6 +170,18 @@ impl Requests {
     pub fn x11_window(&self) -> Option<u32> {
         let window = self.x11_window.load(Ordering::Acquire);
         (window != 0).then_some(window)
+    }
+    /// Drag these files out of the window, from the press that is held now:
+    /// call it while the primary button is down (past a drag threshold).
+    /// Files must be absolute paths to readable files and should outlive
+    /// the drop, since a host may reference rather than copy them. Linux
+    /// (X11/XWayland) only for now; elsewhere the request is dropped.
+    pub fn drag_out(&self, paths: Vec<std::path::PathBuf>) {
+        *self
+            .drag
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(paths);
+        self.wake();
     }
     /// Hand every key event to `hook` first; see [`KeyHook`].
     pub fn on_key(&self, hook: KeyHook) {
@@ -284,7 +297,7 @@ fn settings(title: &str, size: (u32, u32)) -> WindowSettings {
 fn build<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
-    _parented: bool,
+    parented: bool,
 ) -> impl FnOnce(WindowContext) -> Result<Adapter<V>, HandlerError> + Send + 'static {
     move |cx: WindowContext| {
         let size = cx.size();
@@ -292,6 +305,7 @@ fn build<V: View + Send + 'static>(
         let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
         #[cfg(target_os = "linux")]
         {
+            handler.drag.1 = parented;
             handler.x11_window = cx
                 .window_handle()
                 .ok()
@@ -370,6 +384,9 @@ pub struct Handler<V> {
     pub driver: Driver,
     #[cfg(target_os = "linux")]
     x11_window: u32,
+    /// Outbound drag sessions, and whether the window is a host's child.
+    #[cfg(target_os = "linux")]
+    drag: (matari_audio_drag_and_drop::Controller, bool),
     _reporting: mui::diagnostics::ReportingGuard,
 }
 
@@ -382,6 +399,57 @@ impl<V> Drop for Handler<V> {
 
 #[cfg(target_os = "linux")]
 impl<V> Handler<V> {
+    /// Start a queued [`Requests::drag_out`] from the live press.
+    fn start_drag(&mut self, window: &WindowContext) {
+        use matari_audio_drag_and_drop as dnd;
+        // Session events only retire finished drags; the files stay.
+        let _ = self.drag.0.update();
+        let paths = self
+            .requests
+            .drag
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        let Some(paths) = paths else { return };
+        struct Adapter<'a>(&'a WindowContext, bool);
+        impl dnd::ToolkitAdapter for Adapter<'_> {
+            type Error = baseview::MatariX11ScheduleError;
+            fn outbound_route(&self) -> Option<dnd::SessionRoute> {
+                self.0.can_schedule_matari_x11_drag().then(|| dnd::SessionRoute {
+                    protocol: dnd::x11_outbound_protocol(),
+                    source: if self.1 {
+                        dnd::SourceContext::EmbeddedX11
+                    } else {
+                        dnd::SourceContext::DetachedX11
+                    },
+                })
+            }
+            fn schedule_outbound(
+                &mut self,
+                ticket: dnd::StartTicket,
+            ) -> Result<(), dnd::RejectedStart<Self::Error>> {
+                self.0.schedule_matari_x11_drag(ticket)
+            }
+            fn drive_inbound(
+                &mut self,
+                _: &mut dyn dnd::InboundHandler,
+            ) -> Result<dnd::InboundDisposition, Self::Error> {
+                Ok(dnd::InboundDisposition::Unhandled)
+            }
+        }
+        let started = dnd::FileSet::try_from_paths(paths)
+            .map_err(|e| e.to_string())
+            .and_then(|files| {
+                self.drag
+                    .0
+                    .start_outbound(&mut Adapter(window, self.drag.1), files)
+                    .map_err(|e| e.to_string())
+            });
+        if let Err(e) = started {
+            mui::diagnostics::breadcrumb("mui-baseview", "drag_out_failed", &e);
+        }
+    }
+
     fn clear_x11_window(&self) {
         // A retained old handler must not clear a newly opened window's identifier.
         let _ = self.requests.x11_window.compare_exchange(
@@ -423,6 +491,8 @@ impl<V: View> Handler<V> {
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
             #[cfg(target_os = "linux")]
             x11_window: 0,
+            #[cfg(target_os = "linux")]
+            drag: (matari_audio_drag_and_drop::Controller::new(), true),
             _reporting: mui::diagnostics::retain_reporter(),
         }
     }
@@ -996,6 +1066,8 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
             self.drain(&mut h);
             guard(&mut h, |h| h.tick(&self.cx));
             self.drain(&mut h);
+            #[cfg(target_os = "linux")]
+            guard(&mut h, |h| h.start_drag(&self.cx));
             if let (Some(profiler), Some(start)) = (h.driver.profiler_mut(), wake_start) {
                 profiler.record_since(mui::profiling::Phase::NativeWake, start);
             }
