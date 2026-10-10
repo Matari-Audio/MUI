@@ -515,34 +515,33 @@ impl GpuRenderer {
             Some(shared) => shared.weld.for_window(budget)?,
             None => WeldTextures::new(device, queue, budget).await?,
         };
-        let vello = match shared {
-            Some(shared) => shared,
-            None => {
-                let cache = crate::host::pipeline_cache::load(device);
-                let renderer = vello::Renderer::new(
-                    device,
-                    vello::RendererOptions {
-                        use_cpu: false,
-                        antialiasing_support: vello::AaSupport::area_only(),
-                        // Bound compile parallelism so opening an editor does not
-                        // saturate the DAW's audio cores.
-                        num_init_threads: std::num::NonZeroUsize::new(2),
-                        pipeline_cache: cache.as_ref().map(|c| c.cache.clone()),
-                    },
-                )
-                .map_err(|e| Error::Device(e.to_string()))?;
-                if let Some(cache) = cache {
-                    cache.save();
-                }
-                SharedVello {
-                    weld: Arc::new(effects.for_window(budget)?),
-                    renderer: Arc::new(Mutex::new(renderer)),
-                    pending: Arc::new(Mutex::new(Vec::new())),
-                    passes: Arc::new([
-                        Passes::new(device, wgpu::TextureFormat::Rgba8Unorm),
-                        Passes::new(device, wgpu::TextureFormat::Bgra8Unorm),
-                    ]),
-                }
+        let vello = if let Some(shared) = shared {
+            shared
+        } else {
+            let cache = crate::host::pipeline_cache::load(device);
+            let renderer = vello::Renderer::new(
+                device,
+                vello::RendererOptions {
+                    use_cpu: false,
+                    antialiasing_support: vello::AaSupport::area_only(),
+                    // Bound compile parallelism so opening an editor does not
+                    // saturate the DAW's audio cores.
+                    num_init_threads: std::num::NonZeroUsize::new(2),
+                    pipeline_cache: cache.as_ref().map(|c| c.cache.clone()),
+                },
+            )
+            .map_err(|e| Error::Device(e.to_string()))?;
+            if let Some(cache) = cache {
+                cache.save();
+            }
+            SharedVello {
+                weld: Arc::new(effects.for_window(budget)?),
+                renderer: Arc::new(Mutex::new(renderer)),
+                pending: Arc::new(Mutex::new(Vec::new())),
+                passes: Arc::new([
+                    Passes::new(device, wgpu::TextureFormat::Rgba8Unorm),
+                    Passes::new(device, wgpu::TextureFormat::Bgra8Unorm),
+                ]),
             }
         };
         let passes = vello.passes(device, format);
@@ -1058,7 +1057,9 @@ impl GpuRenderer {
             }
         }
         if part.is_none() {
-            self.backdrops.truncate(k);
+            for backdrop in self.backdrops.drain(k..) {
+                self.vello.override_image(&backdrop.image, None);
+            }
         }
 
         // A part renders its box alone, moved to the origin by whole

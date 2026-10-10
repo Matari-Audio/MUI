@@ -1119,6 +1119,58 @@ mod tests {
     use mui_scene::prelude::*;
 
     #[test]
+    fn transient_retries_double_to_a_cap_and_permanent_failures_require_reset() {
+        let now = Instant::now();
+        let mut retry = Retry::default();
+        for milliseconds in [250, 500, 1000, 2000, 4000, 8000, 8000] {
+            retry.fail(now, FailureClass::Transient);
+            assert_eq!(
+                retry.deadline(),
+                Some(now + Duration::from_millis(milliseconds))
+            );
+            assert!(!retry.ready(now));
+            assert!(retry.ready(now + Duration::from_millis(milliseconds)));
+        }
+        retry.fail(now, FailureClass::Permanent);
+        assert!(!retry.ready(now + Duration::from_secs(3600)));
+        retry.reset();
+        assert!(retry.ready(now));
+    }
+
+    #[test]
+    fn capability_failures_are_sticky_but_configuration_and_loss_are_transient() {
+        assert_eq!(
+            HostError::Initialization(GpuDiagnostics::default()).failure_class(),
+            FailureClass::Permanent
+        );
+        assert_eq!(
+            HostError::Configuration("view not mapped yet".into()).failure_class(),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            HostError::DeviceLost(Box::new(HostError::Validation)).failure_class(),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            HostError::Render(crate::effects::Error::Busy).failure_class(),
+            FailureClass::Transient
+        );
+    }
+
+    #[test]
+    fn requested_storage_limits_use_headroom_without_weakening_compute_requirements() {
+        let supported = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 16,
+            max_storage_buffer_binding_size: 256 * 1024 * 1024,
+            ..wgpu::Limits::default()
+        };
+        let requested = requested_limits(&supported);
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 16);
+        assert_eq!(requested.max_storage_buffer_binding_size, 256 * 1024 * 1024);
+        assert!(requested.check_limits(&supported));
+    }
+
+    #[test]
     fn native_backends_are_lazy_and_preserve_the_allowlist() {
         use wgpu::Backends as B;
         let mut tried = Vec::new();
@@ -1483,6 +1535,12 @@ mod tests {
             host.present(&scene, Affine::IDENTITY),
             Ok(Frame::SurfaceLost)
         ));
+        host.retry.fail(Instant::now(), FailureClass::Transient);
+        assert!(matches!(
+            host.present(&scene, Affine::IDENTITY),
+            Ok(Frame::Skipped)
+        ));
+        host.retry.reset();
         host.gpu.device.destroy();
         assert!(matches!(
             host.present(&scene, Affine::IDENTITY),

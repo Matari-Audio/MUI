@@ -2,6 +2,8 @@
 use crate::{Cache, Canvas, Cpu, kurbo::Affine};
 use mui_scene::{Painted, ResolvedScene};
 use vello_common::pixmap::Pixmap;
+#[cfg(all(target_os = "macos", feature = "software-window"))]
+mod macos;
 
 /// A single-threaded CPU renderer. Unchanged scenes reuse their pixels.
 /// SIMD selection remains Vello's runtime choice; no machine-specific ISA is required.
@@ -130,11 +132,15 @@ impl Renderer {
 /// An opaque native window presenting CPU pixels. No wgpu device or surface is used.
 #[cfg(feature = "software-window")]
 pub struct Window<W> {
+    // Removed before the softbuffer observer and native window are dropped.
+    #[cfg(target_os = "macos")]
+    _cpu_layers: macos::Layers,
     surface: softbuffer::Surface<W, W>,
     renderer: Renderer,
     presented: bool,
     opaque_bits: u32,
     startup: bool,
+    size: (u32, u32),
     startup_color: Option<u32>,
 }
 
@@ -146,9 +152,14 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         Self::open(window, size, false)
     }
     /// Large startup windows submit their scene's background without a costly
-    /// full-size CPU rasterization. GPU handover still resolves the complete scene.
+    /// full-size CPU rasterization (including optional overlays). GPU handover
+    /// resolves the complete scene. Targets above the CPU budget stay background-only.
     pub fn new_startup(window: W, size: (u32, u32)) -> Result<Self, String> {
-        Self::open(window, size, u64::from(size.0) * u64::from(size.1) > 1024 * 1024)
+        Self::open(
+            window,
+            size,
+            u64::from(size.0) * u64::from(size.1) > 1024 * 1024,
+        )
     }
     fn open(window: W, size: (u32, u32), startup: bool) -> Result<Self, String> {
         // Softbuffer's X11 backend also accepts depth-32 ARGB visuals (which
@@ -160,17 +171,33 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             | raw_window_handle::RawWindowHandle::Xcb(_) => 0xff00_0000,
             _ => 0,
         };
-        let renderer = Renderer::new(if startup { (1, 1) } else { size })?;
+        let renderer = Renderer::new(if background_only(startup, size) {
+            (1, 1)
+        } else {
+            size
+        })?;
         let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
-        let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string())?;
+        #[cfg(target_os = "macos")]
+        let before = macos::Snapshot::new(&window);
+        let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string());
+        #[cfg(target_os = "macos")]
+        let cpu_layers = before.finish();
+        let surface = surface?;
         Ok(Self {
+            #[cfg(target_os = "macos")]
+            _cpu_layers: cpu_layers,
             surface,
             renderer,
             presented: false,
             opaque_bits,
             startup,
+            size,
             startup_color: None,
         })
+    }
+
+    pub fn background_only(&self) -> bool {
+        background_only(self.startup, self.size)
     }
 
     /// Re-presents retained pixels after an expose or a failed native present.
@@ -181,15 +208,15 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
     /// Permanent CPU fallback returns to full-quality rasterization where its
     /// bounded RGBA target fits; enormous windows keep the safe background frame.
     pub fn finish_startup(&mut self, size: (u32, u32)) {
-        if dimensions(size).is_ok() {
-            self.startup = false;
-            self.invalidate();
-        }
+        self.startup = false;
+        self.size = size;
+        self.invalidate();
     }
 
     /// Zero-sized windows retain their pixels until restored.
     pub fn resize(&mut self, size: (u32, u32)) -> Result<(), String> {
-        if !self.startup && size.0 != 0 && size.1 != 0 {
+        self.size = size;
+        if !self.background_only() && size.0 != 0 && size.1 != 0 {
             self.renderer.resize(size)?;
         }
         self.invalidate();
@@ -226,10 +253,18 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         let (Some(width), Some(height)) = (NonZeroU32::new(size.0), NonZeroU32::new(size.1)) else {
             return Ok(false);
         };
-        if self.startup && overlay.is_none() {
+        if self.size != size {
+            self.invalidate();
+            self.size = size;
+        }
+        if self.background_only() {
             let rgb = startup_color(scene);
-            if self.presented && self.startup_color == Some(rgb) { return Ok(false); }
-            self.surface.resize(width, height).map_err(|e| e.to_string())?;
+            if self.presented && self.startup_color == Some(rgb) {
+                return Ok(false);
+            }
+            self.surface
+                .resize(width, height)
+                .map_err(|e| e.to_string())?;
             let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
             buffer.fill(self.opaque_bits | rgb);
             buffer.present().map_err(|e| e.to_string())?;
@@ -264,8 +299,18 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
     }
 }
 
+fn background_only(startup: bool, size: (u32, u32)) -> bool {
+    startup || dimensions(size).is_err()
+}
+
 fn startup_color(scene: &ResolvedScene) -> u32 {
-    let Some(paint) = scene.paint.iter().find(|p| p.layer == mui_scene::Layer::Fill) else { return 0x202020 };
+    let Some(paint) = scene
+        .paint
+        .iter()
+        .find(|p| p.layer == mui_scene::Layer::Fill)
+    else {
+        return 0x202020;
+    };
     let rgb = paint.paint.solid().to_srgb().to_rgba8();
     (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
 }
@@ -274,6 +319,23 @@ fn startup_color(scene: &ResolvedScene) -> u32 {
 mod tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn cpu_shrink_returns_to_full_quality_but_gpu_startup_waits_for_handover() {
+        assert!(background_only(false, (8192, 4096)));
+        assert!(!background_only(false, (1920, 1080)));
+        assert!(background_only(true, (1920, 1080)));
+        assert!(!background_only(false, (240, 200)));
+    }
+
+    #[test]
+    fn startup_background_uses_the_scene_colour_without_full_rasterization() {
+        let scene = mui_scene::resolve(&SceneSpec::new(
+            block(3425., 2073.).fill(Color::srgb(0., 1., 0.)),
+        ))
+        .unwrap();
+        assert_eq!(startup_color(&scene), 0x00ff00);
+    }
 
     #[test]
     fn gpu_materials_are_rebuilt_for_cpu_and_can_return_to_gpu() {

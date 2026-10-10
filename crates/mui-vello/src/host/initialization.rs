@@ -19,6 +19,18 @@ struct State {
     failure: Option<(String, FailureClass)>,
     retry: Retry,
 }
+impl State {
+    fn begin_generation(&mut self) -> Result<u64, HostError> {
+        if self.building {
+            return Err(HostError::Unavailable {
+                message: "generation already building".into(),
+                class: FailureClass::Transient,
+            });
+        }
+        self.building = true;
+        Ok(self.generation.wrapping_add(1))
+    }
+}
 struct Context {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
@@ -90,9 +102,8 @@ impl Session {
             }
             return Ok(None);
         }
-        state.building = true;
+        let generation = state.begin_generation()?;
         state.failure = None;
-        let generation = state.generation.wrapping_add(1);
         let excluded = self.excluded.clone();
         let weak = Arc::downgrade(self);
         drop(state);
@@ -185,6 +196,7 @@ pub struct GpuInit {
     retry: Retry,
     excluded: Vec<(String, wgpu::Backend)>,
     last_failure: Option<String>,
+    incompatible: bool,
 }
 impl GpuInit {
     pub fn new(detached: bool) -> Self {
@@ -203,6 +215,7 @@ impl GpuInit {
             retry: Retry::default(),
             excluded: Vec::new(),
             last_failure: None,
+            incompatible: true,
         }
     }
     pub fn pending(&self) -> bool {
@@ -246,15 +259,15 @@ impl GpuInit {
                 Err(error) => {
                     // Exhausting private surface candidates is not proof that
                     // the original view can never configure (mapping/DPI may lag).
-                    let error = if !self.excluded.is_empty() {
+                    let error = if self.excluded.is_empty() || self.incompatible {
+                        error
+                    } else {
                         self.excluded.clear();
                         self.session = Session::acquire(self.session.detached);
                         HostError::Unavailable {
                             message: error.to_string(),
                             class: FailureClass::Transient,
                         }
-                    } else {
-                        error
                     };
                     self.failure(&error);
                     return Some(Err(error));
@@ -349,6 +362,24 @@ impl GpuInit {
                 first_frame: true,
             })
         });
+        let result = result.map_err(|error| {
+            // Capability rejection can try another private adapter; temporary
+            // configure failures can return to the original after backoff.
+            if surface_attempted
+                && matches!(error, HostError::Configuration(_) | HostError::Surface(_))
+            {
+                self.incompatible &= matches!(error, HostError::Surface(_));
+                let info = context.adapter.get_info();
+                self.excluded.push((info.name, info.backend));
+                self.session = Session::private(self.session.detached, self.excluded.clone());
+                HostError::Unavailable {
+                    message: error.to_string(),
+                    class: FailureClass::Transient,
+                }
+            } else {
+                error
+            }
+        });
         match &result {
             Ok(_) => {
                 self.installed = true;
@@ -356,15 +387,6 @@ impl GpuInit {
                 self.last_failure = None;
             }
             Err(error) => {
-                // A shared adapter that cannot configure this window must not
-                // poison the other windows. Try the next candidate privately.
-                if surface_attempted
-                    && matches!(error, HostError::Configuration(_) | HostError::Surface(_))
-                {
-                    let info = context.adapter.get_info();
-                    self.excluded.push((info.name, info.backend));
-                    self.session = Session::private(self.session.detached, self.excluded.clone());
-                }
                 self.failure(error);
             }
         }
@@ -381,14 +403,12 @@ pub(super) fn surface_config(
     let limit = adapter.limits().max_texture_dimension_2d;
     let (width, height) = (size.0.min(limit).max(1), size.1.min(limit).max(1));
     let caps = surface.get_capabilities(adapter);
-    let format = surface_format(&caps.formats).ok_or_else(|| {
-        HostError::Configuration(
-            "adapter cannot present a non-sRGB UNORM frame to this window".into(),
-        )
+    let format = surface_format(&caps.formats).ok_or({
+        HostError::Surface("adapter cannot present a non-sRGB UNORM frame to this window")
     })?;
     let config = surface
         .get_default_config(adapter, width, height)
-        .ok_or_else(|| HostError::Configuration("adapter cannot configure this window".into()))?;
+        .ok_or(HostError::Surface("adapter cannot configure this window"))?;
     Ok(wgpu::SurfaceConfiguration {
         format,
         alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
@@ -401,6 +421,47 @@ pub(super) fn surface_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn one_rebuild_claim_is_shared_by_all_observers() {
+        let session = Session::private(false, Vec::new());
+        let observer = session.clone();
+        assert_eq!(session.state.lock().unwrap().begin_generation().unwrap(), 1);
+        assert!(observer.state.lock().unwrap().begin_generation().is_err());
+        let mut state = session.state.lock().unwrap();
+        state.generation = 1;
+        state.building = false;
+        assert_eq!(state.begin_generation().unwrap(), 2);
+    }
+
+    #[test]
+    #[ignore = "requires native compute adapter"]
+    fn editors_adopt_one_device_and_rebuilt_generation() {
+        let editor = Session::private(false, Vec::new());
+        let second = editor.clone();
+        assert!(editor.context().unwrap().is_none());
+        let context = editor.context().unwrap().unwrap();
+        let adopted = second.context().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&context, &adopted));
+        context.device.destroy();
+        let _ = context.device.poll(wgpu::PollType::Poll);
+        assert!(editor.context().unwrap().is_none());
+        editor.state.lock().unwrap().retry.reset();
+        assert!(second.context().unwrap().is_none());
+        let rebuilt = editor.context().unwrap().unwrap();
+        assert_eq!(rebuilt.generation, context.generation + 1);
+        assert_eq!(second.context().unwrap().unwrap().device, rebuilt.device);
+        // wgpu Device equality compares local IDs, reused by another Instance.
+        // Context identity/generation prove replacement instead.
+        assert!(!Arc::ptr_eq(&rebuilt, &context));
+        let weak = Arc::downgrade(&rebuilt);
+        drop(rebuilt);
+        drop(context);
+        drop(adopted);
+        drop(second);
+        drop(editor);
+        assert!(weak.upgrade().is_none());
+    }
+
     #[test]
     fn weak_registry_does_not_own_the_last_editor() {
         let session = Session::private(false, Vec::new());
