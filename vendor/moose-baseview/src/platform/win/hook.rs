@@ -78,8 +78,7 @@ impl Drop for KeyboardHookHandle {
         let Some(thread) = state.get_mut(&self.thread) else {
             return;
         };
-        thread.windows.remove(&self.hwnd);
-        if thread.windows.is_empty() {
+        if super::frame_state::remove_window(&mut thread.windows, self.hwnd) {
             if thread.hook != 0 && unsafe { UnhookWindowsHookEx(thread.hook as HHOOK) } == 0 {
                 // Keep the handle for a later retry. No windows remain to capture
                 // keys; the pinned image makes the still-installed proc safe.

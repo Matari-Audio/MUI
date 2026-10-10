@@ -140,14 +140,14 @@ impl IDropTarget_Impl for DropTarget_Impl {
             };
             self.parse_coordinates(*pt);
             self.parse_drop_data(data);
+            let modifiers = state.keyboard_state().get_modifiers_from_mouse_wparam(keys.0 as usize);
+            let data = self.drop_data.borrow().clone();
             self.on_event(
                 Some(effect),
                 MouseEvent::DragEntered {
                     position: self.drag_position.get().cast(),
-                    modifiers: state
-                        .keyboard_state()
-                        .get_modifiers_from_mouse_wparam(keys.0 as usize),
-                    data: self.drop_data.borrow().clone(),
+                    modifiers,
+                    data,
                 },
             );
             Ok(())
@@ -161,14 +161,14 @@ impl IDropTarget_Impl for DropTarget_Impl {
                 return Ok(());
             };
             self.parse_coordinates(*pt);
+            let modifiers = state.keyboard_state().get_modifiers_from_mouse_wparam(keys.0 as usize);
+            let data = self.drop_data.borrow().clone();
             self.on_event(
                 Some(effect),
                 MouseEvent::DragMoved {
                     position: self.drag_position.get().cast(),
-                    modifiers: state
-                        .keyboard_state()
-                        .get_modifiers_from_mouse_wparam(keys.0 as usize),
-                    data: self.drop_data.borrow().clone(),
+                    modifiers,
+                    data,
                 },
             );
             Ok(())
@@ -193,14 +193,14 @@ impl IDropTarget_Impl for DropTarget_Impl {
             };
             self.parse_coordinates(*pt);
             self.parse_drop_data(data);
+            let modifiers = state.keyboard_state().get_modifiers_from_mouse_wparam(keys.0 as usize);
+            let data = self.drop_data.borrow().clone();
             self.on_event(
                 Some(effect),
                 MouseEvent::DragDropped {
                     position: self.drag_position.get().cast(),
-                    modifiers: state
-                        .keyboard_state()
-                        .get_modifiers_from_mouse_wparam(keys.0 as usize),
-                    data: self.drop_data.borrow().clone(),
+                    modifiers,
+                    data,
                 },
             );
             Ok(())

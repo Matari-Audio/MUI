@@ -24,15 +24,11 @@ pub(super) struct RegisteredClass {
     instance: HInstance,
 }
 
-fn class_name(image: usize, serial: u64) -> String {
-    format!("MUI-Baseview-{image:x}-{serial:x}")
-}
-
 impl RegisteredClass {
     fn new() -> Result<Self> {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         let instance = HInstance::get_from_dll();
-        let name = HSTRING::from(class_name(
+        let name = HSTRING::from(super::frame_state::class_name(
             instance.as_raw() as usize,
             SERIAL.fetch_add(1, Ordering::Relaxed),
         ));
@@ -70,6 +66,7 @@ struct WindowData {
     initializer: Cell<Option<Box<Initializer>>>,
     inner: OnceCell<BaseviewWindow>,
     attached: Cell<bool>,
+    hwnd: Cell<Option<HWnd>>,
 }
 
 pub(super) fn create_window(
@@ -89,6 +86,7 @@ pub(super) fn create_window(
         initializer: Cell::new(Some(Box::new(initializer))),
         inner: OnceCell::new(),
         attached: false.into(),
+        hwnd: None.into(),
     });
     // CreateWindowEx is synchronous. WM_NCCREATE acquires the window's own Rc;
     // the caller retains this one even on an early failure or reentrant destroy.
@@ -109,6 +107,24 @@ pub(super) fn create_window(
         )
     };
     let Some(hwnd) = NonNull::new(hwnd) else {
+        // Windows normally sends NCDESTROY on create failure. If an early
+        // NCCREATE rejection skips it, recover precisely the attached Rc once.
+        if data.attached.replace(false) {
+            if let Some(window) = data.hwnd.get().filter(|w| {
+                w.get_userdata_ptr::<WindowData>()
+                    .is_some_and(|p| std::ptr::eq(p.as_ptr(), Rc::as_ptr(&data)))
+            }) {
+                let _ = window.set_userdata_ptr(ptr::null::<WindowData>());
+                if let Some(inner) = data.inner.get() {
+                    callback::guard(
+                        "failed window cleanup",
+                        || (),
+                        || inner.before_destroy(window),
+                    );
+                }
+            }
+            drop(unsafe { Rc::from_raw(Rc::as_ptr(&data)) });
+        }
         return Err(Error::from_thread());
     };
     // Retain the class until WindowHandle is dropped, AFTER DestroyWindow returns.
@@ -158,6 +174,7 @@ unsafe fn wnd_proc_inner(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESUL
             return 0;
         };
         let data = unsafe { ptr.as_ref() };
+        data.hwnd.set(Some(window));
         if data.attached.replace(true) {
             return 0;
         }
@@ -234,13 +251,4 @@ pub(super) fn resize(
         return Err(Error::from_thread());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn class_names_separate_images_and_windows() {
-        assert_ne!(super::class_name(0x1000, 0), super::class_name(0x2000, 0));
-        assert_ne!(super::class_name(0x1000, 0), super::class_name(0x1000, 1));
-    }
 }

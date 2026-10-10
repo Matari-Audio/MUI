@@ -5,25 +5,20 @@ use windows_sys::Win32::{
 };
 
 use crate::dpi::{PhysicalPosition, PhysicalSize, Size};
-use crate::platform::frame_rate::frame_interval;
 use crate::{warn, EventStatus, HandlerError, WindowHandler};
 use std::cell::Cell;
 use std::num::NonZeroU32;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
-use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{HWND, POINT};
-use windows_sys::Win32::Graphics::Dwm::DwmFlush;
 
 pub(crate) const BV_WINDOW_MUST_CLOSE: u32 = WM_USER + 1;
 /// MOOSE: posted by `set_keyboard_capture` to move focus outside of handler callbacks.
 pub(crate) const BV_KEYBOARD_CAPTURE_FOCUS: u32 = WM_USER + 2;
 /// MOOSE: posted by the [`FramePacer`] thread once per compositor frame.
-const BV_FRAME: u32 = WM_USER + 3;
+pub(super) const BV_FRAME: u32 = WM_USER + 3;
 pub(crate) const BV_IME_CONFIGURE: u32 = WM_USER + 4;
 
 use super::drop_target::DropTarget;
+use super::frame::FramePacer;
 use super::*;
 use crate::handler::{ClosingHandler, WindowHandlerBuilder};
 use crate::host::Host;
@@ -65,90 +60,6 @@ fn lo_word(lparam: LPARAM) -> u16 {
     (lparam & 0xffff) as u16
 }
 
-/// MOOSE: drives `on_frame` at the display's refresh rate. A helper thread waits on `DwmFlush`
-/// (the next desktop composition) and posts [`BV_FRAME`]; `pending` keeps at most one frame
-/// message queued, and is only cleared once `on_frame` returns so input is never starved.
-/// A minimised window is paced at 20 Hz. Nothing here touches the process timer resolution.
-struct FramePacer {
-    target: Arc<(Mutex<Option<usize>>, Condvar)>,
-    thread: Option<JoinHandle<()>>,
-}
-
-impl FramePacer {
-    fn start(hwnd: HWND, pending: Arc<AtomicBool>) -> std::io::Result<Self> {
-        let target = Arc::new((Mutex::new(Some(hwnd as usize)), Condvar::new()));
-        let thread_target = Arc::clone(&target);
-        let hwnd = hwnd as usize;
-        let thread =
-            std::thread::Builder::new().name("baseview-frame-pacer".into()).spawn(move || {
-                let hwnd = hwnd as HWND;
-                let fallback = frame_interval(None);
-                let mut last_frame = Instant::now();
-                loop {
-                    if thread_target.0.lock().unwrap_or_else(PoisonError::into_inner).is_none() {
-                        break;
-                    }
-                    // Hidden/minimised ancestors must not drive frames. The wait
-                    // is interruptible so ordinary close need not wait for 50 ms.
-                    if unsafe {
-                        IsWindowVisible(hwnd) == 0 || IsIconic(GetAncestor(hwnd, GA_ROOT)) != 0
-                    } {
-                        wait_pacer(&thread_target, Duration::from_millis(50));
-                        continue;
-                    }
-                    // DwmFlush fails without composition and can return at once when the
-                    // desktop is idle; a sleep keeps either case from spinning.
-                    // SAFETY: no arguments.
-                    let flushed = unsafe { DwmFlush() } >= 0;
-                    if !flushed || last_frame.elapsed() < Duration::from_millis(1) {
-                        wait_pacer(&thread_target, fallback);
-                    }
-                    last_frame = Instant::now();
-                    // Serialize revocation with posting. A stale HWND can be
-                    // REUSED by the host; merely testing PostMessage's result is
-                    // not sufficient. No lock is held while DwmFlush blocks.
-                    let target = thread_target.0.lock().unwrap_or_else(PoisonError::into_inner);
-                    let Some(hwnd) = *target else {
-                        break;
-                    };
-                    if !pending.swap(true, Ordering::AcqRel)
-                        && unsafe { PostMessageW(hwnd as HWND, BV_FRAME, 0, 0) } == 0
-                    {
-                        pending.store(false, Ordering::Release);
-                    }
-                }
-            })?;
-        Ok(Self { target, thread: Some(thread) })
-    }
-}
-
-impl Drop for FramePacer {
-    fn drop(&mut self) {
-        *self.target.0.lock().unwrap_or_else(PoisonError::into_inner) = None;
-        self.target.1.notify_all();
-        if let Some(thread) = self.thread.take() {
-            let deadline = Instant::now() + Duration::from_millis(25);
-            while !thread.is_finished() && Instant::now() < deadline {
-                std::thread::sleep(Duration::from_millis(1));
-            }
-            if thread.is_finished() {
-                let _ = thread.join();
-            } else {
-                // Native creation pinned this image before spawning. A stuck
-                // DwmFlush may resume, but cannot post or touch handler/host state.
-                warn!("Frame pacer stop exceeded 25 ms; detached from pinned image");
-            }
-        }
-    }
-}
-
-fn wait_pacer(target: &(Mutex<Option<usize>>, Condvar), duration: Duration) {
-    let guard = target.0.lock().unwrap_or_else(PoisonError::into_inner);
-    if guard.is_some() {
-        drop(target.1.wait_timeout(guard, duration).unwrap_or_else(PoisonError::into_inner));
-    }
-}
-
 pub struct WindowHandle {
     init: Cell<Option<WindowInitializer>>,
     hwnd: Cell<Option<HWnd>>,
@@ -184,11 +95,19 @@ impl WindowHandle {
     }
 
     pub fn resize(&self, new_size: Size) -> Result<()> {
+        if !self.state.is_alive.get() {
+            return Ok(());
+        }
+        let requested_size = new_size;
         let new_size = new_size.to_physical(self.state.scale_factor());
         let hwnd = match self.hwnd.get() {
             Some(hwnd) => hwnd,
             None => {
                 self.state.current_size.set(new_size);
+                if let Some(mut init) = self.init.take() {
+                    init.settings.size = requested_size;
+                    self.init.set(Some(init));
+                }
                 return Ok(());
             }
         };
@@ -206,6 +125,9 @@ impl WindowHandle {
     }
 
     pub fn suggest_scale_factor(&self, scale_factor: f64) -> Result<()> {
+        if !self.state.is_alive.get() {
+            return Ok(());
+        }
         if !scale_factor.is_finite() || scale_factor <= 0.0 {
             return Err(PlatformError::ResizeFailed);
         }
@@ -253,13 +175,23 @@ impl WindowHandle {
         Ok(())
     }
 
+    pub fn frame_requester(&self) -> crate::FrameRequester {
+        self.state.frame_signal.requester()
+    }
+
     pub fn set_keyboard_capture(&self, capture: bool) {
+        if !self.state.is_alive.get() {
+            return;
+        }
         if let Some(hwnd) = self.hwnd.get() {
             super::window_state::set_keyboard_capture(hwnd, capture);
         }
     }
 
     pub fn set_parent(&self, new_parent: ParentWindowHandle) -> Result<()> {
+        if !self.state.is_alive.get() {
+            return Ok(());
+        }
         let hwnd = match self.hwnd.get() {
             Some(hwnd) => hwnd,
             None => {
@@ -288,6 +220,9 @@ impl WindowHandle {
     }
 
     pub fn show(&self) -> Result<()> {
+        if !self.state.is_alive.get() {
+            return Ok(());
+        }
         let hwnd = match self.hwnd.get() {
             Some(hwnd) => hwnd,
             None => {
@@ -312,6 +247,10 @@ impl WindowHandle {
     }
 
     pub fn hide(&self) -> Result<()> {
+        if !self.state.is_alive.get() {
+            return Ok(());
+        }
+        self.state.frame_signal.visible(false);
         let Some(hwnd) = self.hwnd.get() else { return Ok(()) };
         hwnd.hide();
 
@@ -346,8 +285,7 @@ pub struct BaseviewWindow {
     destroy_started: Cell<bool>,
     close_posted: Cell<bool>,
     host: Host,
-    host_size_on_show: Cell<Option<PhysicalSize<u32>>>,
-    shown: Cell<bool>,
+    host_resize: super::frame_state::DeferredResize<PhysicalSize<u32>>,
     background_pending: Cell<bool>,
     cleanup_started: Cell<bool>,
 
@@ -356,7 +294,6 @@ pub struct BaseviewWindow {
     _drop_target: Cell<Option<ComObject<DropTarget>>>,
     ole_initialized: Cell<bool>,
     frame_pacer: Cell<Option<FramePacer>>,
-    frame_pending: Arc<AtomicBool>,
 
     #[cfg(feature = "opengl")]
     pub gl_config: Option<crate::gl::GlConfig>,
@@ -398,15 +335,13 @@ impl BaseviewWindow {
                     close_posted: false.into(),
                     shared_state,
                     host: init.host,
-                    host_size_on_show: None.into(),
-                    shown: false.into(),
+                    host_resize: super::frame_state::DeferredResize::new(),
                     background_pending: true.into(),
                     cleanup_started: false.into(),
 
                     _drop_target: None.into(),
                     ole_initialized: false.into(),
                     frame_pacer: None.into(),
-                    frame_pending: Arc::new(AtomicBool::new(false)),
                     _keyboard_hook: None.into(),
 
                     #[cfg(feature = "opengl")]
@@ -434,6 +369,7 @@ impl BaseviewWindow {
             return;
         }
         // Revoke producers before native destruction; none may target a reused HWND.
+        self.shared_state.frame_signal.revoke();
         drop(self.frame_pacer.take());
         drop(self._keyboard_hook.take());
         self.window_state.ime.close(window.as_raw());
@@ -453,9 +389,22 @@ impl BaseviewWindow {
         if !self.handler.is_closing() || self.destroy_started.replace(true) {
             return;
         }
-        if !self.handler.close(|handler| {
-            handler.on_event(Event::Window(WindowEvent::WillClose));
-        }) {
+        let closed = super::callback::guard(
+            "handler teardown",
+            || true,
+            || {
+                self.handler.close(|handler| {
+                    super::callback::guard(
+                        "WillClose",
+                        || (),
+                        || {
+                            handler.on_event(Event::Window(WindowEvent::WillClose));
+                        },
+                    );
+                })
+            },
+        );
+        if !closed {
             self.destroy_started.set(false);
             return;
         }
@@ -475,6 +424,21 @@ impl BaseviewWindow {
         self.host.notify_destroyed()
     }
 
+    fn restore_previous_size(&self, previous: PhysicalSize<u32>) {
+        let shared = &self.shared_state;
+        let _guard = shared.originate_host_resize();
+        shared.current_size.set(previous);
+        let old_size = WindowSize::from_physical(previous, shared.scale_factor());
+        if let Some(Err(e)) = self.handler.with(|h| h.resized(old_size)) {
+            warn!("Window handler failed to restore previous size: {}", e);
+        }
+        if shared.is_alive.get() {
+            if let Err(e) = self.window_state.resize(previous.into()) {
+                warn!("Failed to restore previous window size: {}", e);
+            }
+        }
+    }
+
     fn request_resize_from_host(
         &self, new_size: WindowSize,
     ) -> core::result::Result<(), HandlerError> {
@@ -483,10 +447,7 @@ impl BaseviewWindow {
         }
         // #351: VST3 hosts can reject a request before show(). Keep the
         // originally advertised 1x extent until the visible show notification.
-        if !self.shown.get() {
-            if self.host_size_on_show.get().is_none() {
-                self.host_size_on_show.set(Some(self.initial_size.to_physical(1.0)));
-            }
+        if self.host_resize.defer(self.initial_size.to_physical(1.0)) {
             return Ok(());
         }
         self.host.request_resize(new_size)
@@ -517,7 +478,18 @@ impl BaseviewWindow {
         {
             self.window_state.request_close();
         }
+        self.shared_state.frame_signal.request();
+        self.update_frame_demand();
         status
+    }
+
+    fn update_frame_demand(&self) {
+        let demand = super::callback::guard(
+            "frame demand",
+            || crate::FrameDemand::Idle,
+            || self.handler.with(|h| h.frame_demand()).unwrap_or(crate::FrameDemand::Idle),
+        );
+        self.shared_state.frame_signal.demand(demand);
     }
 }
 
@@ -572,7 +544,7 @@ impl WindowImpl for BaseviewWindow {
 
         let advertised = self.initial_size.to_physical(1.0);
         if advertised != new_size {
-            self.host_size_on_show.set(Some(advertised));
+            self.host_resize.defer(advertised);
         }
 
         // MOOSE: every successful OleInitialize (S_OK or S_FALSE) is balanced by an
@@ -611,8 +583,11 @@ impl WindowImpl for BaseviewWindow {
         };
         self.handler.set(handler);
 
-        let pacer = FramePacer::start(window.as_raw(), Arc::clone(&self.frame_pending))
-            .map_err(windows_core::Error::from)?;
+        let pacer = FramePacer::start(
+            window.as_raw(),
+            std::sync::Arc::clone(&self.shared_state.frame_signal),
+        )
+        .map_err(windows_core::Error::from)?;
         self.frame_pacer.set(Some(pacer));
 
         Ok(())
@@ -623,9 +598,17 @@ impl WindowImpl for BaseviewWindow {
     ) -> Option<LRESULT> {
         super::callback::guard(
             "window message",
-            || None,
+            || {
+                if msg == BV_FRAME {
+                    self.shared_state.frame_signal.complete();
+                }
+                self.handler.request_close();
+                self.window_state.request_close();
+                None
+            },
             || {
                 let result = unsafe { wnd_proc_inner(window, msg, wparam, lparam, self) };
+                self.update_frame_demand();
                 self.finish_close(window);
                 result
             },
@@ -638,6 +621,7 @@ impl WindowImpl for BaseviewWindow {
         // Forced external destruction during a reentrant callback remains the
         // host's responsibility; cleanup follows as soon as that callback returns.
         self.native_destroying.set(true);
+        self.shared_state.is_alive.set(false);
         self.handler.request_close();
         self.finish_close(window);
         self.cleanup_native(window);
@@ -772,16 +756,25 @@ unsafe fn wnd_proc_inner(
             // Ported from #347. Do NOT ReleaseCapture here: the new owner
             // already holds it, and releasing would steal capture from the DAW.
             if lparam as HWND != window.as_raw() {
-                window_state.mouse_button_counter.set(0);
-                if !window_state.mouse_was_outside_window.replace(true) {
+                let previous = window_state.mouse_button_counter.replace(0);
+                if previous == 0 && !window_state.mouse_was_outside_window.replace(true) {
                     window_bv.handle_event(Event::Mouse(MouseEvent::CursorLeft));
                 }
             }
             Some(0)
         }
         BV_FRAME => {
-            window_bv.handle_on_frame();
-            window_bv.frame_pending.store(false, Ordering::Release);
+            if unsafe {
+                IsWindowVisible(window.as_raw()) != 0
+                    && IsIconic(GetAncestor(window.as_raw(), GA_ROOT)) == 0
+            } {
+                window_bv.handle_on_frame();
+            } else {
+                // A queued frame can race host minimisation. Retain its work so
+                // restoring the host doesn't require another close/reopen.
+                window_bv.shared_state.frame_signal.request();
+            }
+            window_bv.shared_state.frame_signal.complete();
             Some(0)
         }
         WM_ERASEBKGND => Some(1),
@@ -793,18 +786,14 @@ unsafe fn wnd_proc_inner(
             Some(0)
         }
         WM_SHOWWINDOW => {
+            window_bv.shared_state.frame_signal.visible(wparam != 0);
             if wparam != 0 {
-                window_bv.shown.set(true);
-                if let Some(previous) = window_bv.host_size_on_show.take() {
+                if let Some(previous) = window_bv.host_resize.on_show(true) {
                     let shared = &window_state.shared;
                     let size = shared.size();
                     if let Err(e) = window_bv.request_resize_from_host(size) {
                         warn!("Initial host resize after show failed: {}", e);
-                        let old = WindowSize::from_physical(previous, shared.scale_factor());
-                        shared.current_size.set(previous);
-                        let _guard = shared.originate_host_resize();
-                        let _ = window_state.resize(previous.into());
-                        let _ = window_bv.handler.with(|h| h.resized(old));
+                        window_bv.restore_previous_size(previous);
                     }
                 }
             }
@@ -917,14 +906,7 @@ unsafe fn wnd_proc_inner(
             if let Err(e) = window_bv.request_resize_from_host(new_size) {
                 warn!("Resize request from Host failed: {}. Reverting to previous size.", e);
 
-                if let Some(Err(e)) = window_bv.handler.with(|handler| handler.resized(new_size)) {
-                    warn!("Window Handler failed to resize to previous window size: {}", e);
-                }
-
-                window_state.shared.current_size.set(previous);
-                if let Err(e) = window_state.resize(previous.into()) {
-                    warn!("Failed to resize back to previous window size: {}", e);
-                }
+                window_bv.restore_previous_size(previous);
 
                 return Some(-1);
             }
@@ -932,6 +914,9 @@ unsafe fn wnd_proc_inner(
             None
         }
         WM_DPICHANGED => {
+            if lparam == 0 {
+                return None;
+            }
             let suggested_nc_rect = Rect((lparam as *const RECT).read());
             let Some(dpi) = NonZeroU32::new((wparam & 0xFFFF) as u16 as u32) else {
                 return Some(-1);
@@ -981,21 +966,13 @@ unsafe fn wnd_proc_inner(
                     if let Err(e) = window_state.resize(previous_size.into()) {
                         warn!("Failed to resize back to previous window size: {}", e);
                     }
+                    return Some(-1);
                 }
 
                 if let Err(e) = window_bv.request_resize_from_host(new_size) {
                     warn!("Resize request from Host failed: {}. Reverting to previous size.", e);
 
-                    if let Some(Err(e)) =
-                        window_bv.handler.with(|handler| handler.resized(new_size))
-                    {
-                        warn!("Window Handler failed to resize to previous window size: {}", e);
-                    }
-
-                    window_state.shared.current_size.set(previous_size);
-                    if let Err(e) = window_state.resize(previous_size.into()) {
-                        warn!("Failed to resize back to previous window size: {}", e);
-                    }
+                    window_bv.restore_previous_size(previous_size);
 
                     return Some(-1);
                 }
@@ -1060,6 +1037,9 @@ unsafe fn wnd_proc_inner(
                 return None;
             }
 
+            if lparam == 0 {
+                return None;
+            }
             let info = lparam as *mut MINMAXINFO;
 
             let Ok(ctx) = DpiAwarenessGuard::new(
@@ -1141,6 +1121,8 @@ impl WindowHandle {
     }
 }
 
-pub fn copy_to_clipboard(_data: &str) {
-    unimplemented!()
+pub fn copy_to_clipboard(data: &str) {
+    if let Err(e) = super::clipboard::copy(data) {
+        warn!("Could not copy to Windows clipboard: {}", e);
+    }
 }

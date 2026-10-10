@@ -67,6 +67,9 @@ impl WindowState {
     }
 
     pub fn request_close(&self) {
+        if !self.shared.is_alive.get() {
+            return;
+        }
         unsafe {
             PostMessageW(
                 self.hwnd.as_raw(),
@@ -78,15 +81,21 @@ impl WindowState {
     }
 
     pub fn has_focus(&self) -> bool {
-        HWnd::get_focused_window() == self.hwnd.as_raw()
+        self.shared.is_alive.get() && HWnd::get_focused_window() == self.hwnd.as_raw()
     }
 
     pub fn focus(&self) -> Result<(), super::PlatformError> {
+        if !self.shared.is_alive.get() {
+            return Ok(());
+        }
         self.hwnd.set_focus()?;
         Ok(())
     }
 
     pub fn resize(&self, size: Size) -> Result<(), super::PlatformError> {
+        if !self.shared.is_alive.get() {
+            return Ok(());
+        }
         // `self.window_info` will be modified in response to the `WM_SIZE` event that
         // follows the `SetWindowPos()` call
         let dpi = self.shared.current_dpi.get();
@@ -106,11 +115,15 @@ impl WindowState {
     }
 
     pub fn set_ime_configuration(&self, configuration: Option<crate::ImeConfiguration>) {
-        self.ime.configure(self.hwnd.as_raw(), configuration);
+        if self.shared.is_alive.get() {
+            self.ime.configure(self.hwnd.as_raw(), configuration);
+        }
     }
 
     pub fn set_keyboard_capture(&self, capture: bool) {
-        set_keyboard_capture(self.hwnd, capture);
+        if self.shared.is_alive.get() {
+            set_keyboard_capture(self.hwnd, capture);
+        }
     }
 
     pub fn set_mouse_cursor(&self, mouse_cursor: MouseCursor) -> Result<(), super::PlatformError> {
@@ -128,6 +141,9 @@ impl WindowState {
     }
 
     pub fn window_handle(&self) -> Option<raw_window_handle::WindowHandle<'_>> {
+        if !self.shared.is_alive.get() {
+            return None;
+        }
         let hwnd = NonZeroIsize::new(self.hwnd.as_raw() as _)?;
         let mut handle = Win32WindowHandle::new(hwnd);
         handle.hinstance = Some(HInstance::get_from_dll().addr());
@@ -140,13 +156,15 @@ impl WindowState {
     }
 
     pub fn platform_handle(&self) -> PlatformHandle {
-        let Some(hwnd) = NonZeroIsize::new(self.hwnd.as_raw() as _) else { unreachable!() };
+        // SAFETY: HWnd is constructed from NonNull, so this integer is nonzero.
+        let hwnd = unsafe { NonZeroIsize::new_unchecked(self.hwnd.as_raw() as _) };
         PlatformHandle { hwnd }
     }
 }
 
 pub struct WindowSharedState {
     pub(super) native_class: Cell<Option<super::native::RegisteredClass>>,
+    pub(super) frame_signal: std::sync::Arc<super::frame::FrameSignal>,
     pub parented: Cell<bool>,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
@@ -165,6 +183,7 @@ impl WindowSharedState {
     pub fn new(user32: LibraryModule<ExtendedUser32>, settings: &WindowSettings) -> Rc<Self> {
         Self {
             native_class: None.into(),
+            frame_signal: super::frame::FrameSignal::new(),
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
             is_alive: true.into(),
             current_dpi: None.into(),

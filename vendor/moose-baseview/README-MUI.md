@@ -53,6 +53,31 @@ UTF-8 selection events before their associated preedit/commit. Input identity
 changes cancel the preceding native context composition. XIM forwarding follows
 [X.Org XIM protocol event masks](https://xorg.freedesktop.org/archive/current/doc/libX11/XIM/xim.html).
 
+## Ported upstream fixes
+
+This vendored fork is MUI's first-party windowing layer. We retain its `on_frame`
+contract; we do not rebase onto upstream's 0.4 `draw` API.
+
+* [RustAudio/baseview #345](https://github.com/RustAudio/baseview/pull/345):
+  Windows DPI virtualization. Unaware hosts remain at 96 DPI; per-monitor-v1
+  children honour host scale suggestions, and non-client scaling is enabled
+  only for v1. Initial physical sizing uses parent DPI and preserves MUI's scale
+  override. The fork already had the upstream thread-context restore fix.
+* [RustAudio/baseview #347](https://github.com/RustAudio/baseview/pull/347):
+  reset the mouse-button capture counter on `WM_CAPTURECHANGED`. Unlike the
+  original patch, we do not release capture after it has moved to a DAW window.
+* [RustAudio/baseview #351](https://github.com/RustAudio/baseview/pull/351):
+  defer the initial host resize request until the visible `WM_SHOWWINDOW`
+  notification, including parents created at non-100% DPI. Resize rejection
+  restores the previous physical size and notifies the handler of that size.
+
+Windows publishes only guarded callbacks from `src/platform/win/native.rs`.
+It pins the containing image before registering window/hook/COM callbacks:
+retained COM clients and a driver blocked in `DwmFlush` can outlive editor close.
+This deliberately keeps the DLL mapped for the process lifetime, but normal
+close still revokes hooks/drop targets/IME, destroys the HWND, and stops the
+pacer (25 ms bounded join, safe detach after target revocation).
+
 ## Maintaining this patch
 
 When updating baseview, diff against the exact revision above first, retain the
