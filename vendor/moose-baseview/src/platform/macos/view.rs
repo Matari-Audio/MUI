@@ -513,7 +513,6 @@ impl BaseviewView {
         Self::sync_frame_driver(this);
     }
 
-    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
     pub(crate) fn frame_requester(this: ViewRef<Self>) -> FrameRequester {
         let wake = Arc::clone(&this.wake);
         let id = this.view_id;

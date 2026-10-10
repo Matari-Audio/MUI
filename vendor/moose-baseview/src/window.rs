@@ -118,16 +118,10 @@ impl Window {
     }
 
     /// Returns a thread-safe frame wake handle without extending native lifetime.
-    /// Currently implemented on X11; other platforms retain continuous pacing.
+    /// It is inert after close. `Option` is kept for callers written before every
+    /// platform had one; all current platforms return `Some`.
     pub fn frame_requester(&self) -> Option<FrameRequester> {
-        #[cfg(target_os = "linux")]
-        {
-            Some(self.inner.frame_requester())
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            None
-        }
+        Some(self.inner.frame_requester())
     }
 
     /// The current size of the window.

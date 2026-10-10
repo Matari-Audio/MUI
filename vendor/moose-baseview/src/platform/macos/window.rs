@@ -155,7 +155,6 @@ impl WindowHandle {
         callback("keyboard capture", (), || BaseviewView::set_keyboard_capture(view, capture));
     }
 
-    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
     pub fn frame_requester(&self) -> FrameRequester {
         let Some(view) = self.view.load() else {
             return FrameRequester::new(|| {});

@@ -11,11 +11,9 @@ pub(super) struct WakeState {
 }
 
 impl WakeState {
-    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
     pub fn queue(&self) -> bool {
         !self.revoked.load(Ordering::Acquire) && !self.queued.swap(true, Ordering::AcqRel)
     }
-    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
     pub fn drain(&self) -> bool {
         self.queued.store(false, Ordering::Release);
         !self.revoked.load(Ordering::Acquire)
