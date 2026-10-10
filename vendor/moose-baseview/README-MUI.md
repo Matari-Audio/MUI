@@ -75,8 +75,8 @@ changes cancel the preceding native context composition. XIM forwarding follows
 existing callers. X11 implements `Idle` with no frame timer and `At(Instant)`
 with a single paced deadline timer. Input, resize, map restoration, Expose and
 a `FrameRequester::request_frame()` through `Window::frame_requester()` wake it. The returned optional
-`FrameRequester` is cloneable and thread-safe, does not own native resources,
-and is harmless after close. Windows/macOS implementations are integrated
+`FrameRequester` is cloneable and thread-safe, does not retain the native window
+or X connection, and is harmless after close. Windows/macOS implementations are integrated
 separately. MUI reports a slow model-polling deadline because external model,
 plugin meter and accessibility changes are not yet push-notified.
 
