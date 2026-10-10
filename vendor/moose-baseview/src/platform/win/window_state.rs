@@ -67,6 +67,9 @@ impl WindowState {
     }
 
     pub fn request_close(&self) {
+        if !self.shared.is_alive.get() {
+            return;
+        }
         unsafe {
             PostMessageW(
                 self.hwnd.as_raw(),
@@ -78,15 +81,21 @@ impl WindowState {
     }
 
     pub fn has_focus(&self) -> bool {
-        HWnd::get_focused_window() == self.hwnd.as_raw()
+        self.shared.is_alive.get() && HWnd::get_focused_window() == self.hwnd.as_raw()
     }
 
     pub fn focus(&self) -> Result<(), super::PlatformError> {
+        if !self.shared.is_alive.get() {
+            return Ok(());
+        }
         self.hwnd.set_focus()?;
         Ok(())
     }
 
     pub fn resize(&self, size: Size) -> Result<(), super::PlatformError> {
+        if !self.shared.is_alive.get() {
+            return Ok(());
+        }
         // `self.window_info` will be modified in response to the `WM_SIZE` event that
         // follows the `SetWindowPos()` call
         let dpi = self.shared.current_dpi.get();
@@ -94,7 +103,7 @@ impl WindowState {
 
         let ctx = DpiAwarenessGuard::new(&self.user32, self.shared.dpi_scaling_strategy.get())?;
 
-        self.hwnd.resize_and_activate(new_size, dpi, &ctx)?;
+        super::native::resize(self.hwnd, new_size, dpi, &ctx)?;
         Ok(())
     }
 
@@ -106,11 +115,15 @@ impl WindowState {
     }
 
     pub fn set_ime_configuration(&self, configuration: Option<crate::ImeConfiguration>) {
-        self.ime.configure(self.hwnd.as_raw(), configuration);
+        if self.shared.is_alive.get() {
+            self.ime.configure(self.hwnd.as_raw(), configuration);
+        }
     }
 
     pub fn set_keyboard_capture(&self, capture: bool) {
-        set_keyboard_capture(self.hwnd, capture);
+        if self.shared.is_alive.get() {
+            set_keyboard_capture(self.hwnd, capture);
+        }
     }
 
     pub fn set_mouse_cursor(&self, mouse_cursor: MouseCursor) -> Result<(), super::PlatformError> {
@@ -128,7 +141,10 @@ impl WindowState {
     }
 
     pub fn window_handle(&self) -> Option<raw_window_handle::WindowHandle<'_>> {
-        let Some(hwnd) = NonZeroIsize::new(self.hwnd.as_raw() as _) else { unreachable!() };
+        if !self.shared.is_alive.get() {
+            return None;
+        }
+        let hwnd = NonZeroIsize::new(self.hwnd.as_raw() as _)?;
         let mut handle = Win32WindowHandle::new(hwnd);
         handle.hinstance = Some(HInstance::get_from_dll().addr());
 
@@ -140,12 +156,15 @@ impl WindowState {
     }
 
     pub fn platform_handle(&self) -> PlatformHandle {
-        let Some(hwnd) = NonZeroIsize::new(self.hwnd.as_raw() as _) else { unreachable!() };
+        // SAFETY: HWnd is constructed from NonNull, so this integer is nonzero.
+        let hwnd = unsafe { NonZeroIsize::new_unchecked(self.hwnd.as_raw() as _) };
         PlatformHandle { hwnd }
     }
 }
 
 pub struct WindowSharedState {
+    pub(super) native_class: Cell<Option<super::native::RegisteredClass>>,
+    pub(super) frame_signal: std::sync::Arc<super::frame::FrameSignal>,
     pub parented: Cell<bool>,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
@@ -163,6 +182,8 @@ pub struct WindowSharedState {
 impl WindowSharedState {
     pub fn new(user32: LibraryModule<ExtendedUser32>, settings: &WindowSettings) -> Rc<Self> {
         Self {
+            native_class: None.into(),
+            frame_signal: super::frame::FrameSignal::new(),
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
             is_alive: true.into(),
             current_dpi: None.into(),
@@ -192,11 +213,15 @@ impl WindowSharedState {
             &init.settings,
         );
 
-        if strategy.assume_96_dpi {
-            self.current_dpi.set(Some(Dpi::default()));
-        }
-
+        let dpi = if strategy.assume_96_dpi {
+            Some(Dpi::default())
+        } else {
+            parent.and_then(|p| p.get_dpi(&self.user32))
+        };
+        self.current_dpi.set(dpi);
+        self.parented.set(init.settings.parent.is_some() || init.settings.wait_for_parent);
         self.dpi_scaling_strategy.set(strategy);
+        self.current_size.set(init.settings.size.to_physical(self.scale_factor()));
     }
 
     pub fn size(&self) -> WindowSize {
@@ -213,11 +238,17 @@ impl WindowSharedState {
 
     /// The scale factor from the OS DPI (or the fallback), ignoring the override.
     pub fn platform_scale_factor(&self) -> f64 {
-        if let Some(dpi) = self.current_dpi.get() {
-            dpi.scale_factor()
-        } else {
-            self.fallback_scale_factor.get().unwrap_or(1.0)
+        let strategy = self.dpi_scaling_strategy.get();
+        if strategy.assume_96_dpi {
+            return 1.0;
         }
+        if strategy.should_use_host_suggested_scale_factor {
+            return self.fallback_scale_factor.get().unwrap_or(1.0);
+        }
+        self.current_dpi
+            .get()
+            .map(|d| d.scale_factor())
+            .unwrap_or_else(|| self.fallback_scale_factor.get().unwrap_or(1.0))
     }
 
     pub fn originate_host_resize(&self) -> impl Drop + use<'_> {
@@ -242,7 +273,9 @@ impl<'a> Drop for Guard<'a> {
 /// Updates the keyboard hook right away and moves focus asynchronously (a synchronous
 /// `SetFocus` would re-enter the window handler from inside its own callback).
 pub(crate) fn set_keyboard_capture(hwnd: HWnd, capture: bool) {
-    super::hook::set_keyboard_capture(hwnd.as_raw(), capture);
+    if !super::hook::set_keyboard_capture(hwnd.as_raw(), capture) {
+        return;
+    }
     unsafe {
         PostMessageW(
             hwnd.as_raw(),
