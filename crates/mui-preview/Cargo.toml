@@ -26,6 +26,7 @@ pollster.workspace = true
 epaint_default_fonts.workspace = true
 mui-access.workspace = true
 accesskit_winit = { path = "../../vendor/accesskit_winit" }
+serde_json = "1"
 
 [lints]
 workspace = true

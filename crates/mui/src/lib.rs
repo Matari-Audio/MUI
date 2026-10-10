@@ -38,6 +38,7 @@ pub mod profiling;
 mod ui;
 pub mod widgets;
 pub use actions::SemanticAction;
+pub use mui_vello::diagnostics;
 pub use widgets::presets;
 
 pub use ui::{Clipboard, Edit, Frame, Interaction, MotionPolicy, TextInputState, TextRuns, Ui};

@@ -4,6 +4,7 @@ use std::fmt::Display;
 #[derive(Debug)]
 pub enum PlatformError {
     Handler(HandlerError),
+    CreationFailed(&'static str),
     #[cfg(feature = "opengl")]
     GlError(super::gl::GlError),
 }
@@ -14,6 +15,7 @@ impl Display for PlatformError {
             #[cfg(feature = "opengl")]
             PlatformError::GlError(e) => e.fmt(fmt),
             PlatformError::Handler(e) => e.fmt(fmt),
+            PlatformError::CreationFailed(message) => fmt.write_str(message),
         }
     }
 }
@@ -22,7 +24,6 @@ impl std::error::Error for PlatformError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             PlatformError::Handler(e) => Some(e.source()),
-            #[cfg(feature = "opengl")]
             _ => None,
         }
     }

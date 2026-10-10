@@ -11,7 +11,7 @@ use std::sync::Arc;
 use mui_geometry::Path;
 
 mod pool;
-mod retained;
+pub(crate) mod retained;
 #[cfg(test)]
 mod tests;
 
@@ -21,6 +21,8 @@ pub const WELD_SHADER: &str = include_str!("weld.wgsl");
 
 #[derive(Debug)]
 pub enum Error {
+    /// Another editor is submitting on the shared renderer; retry a paced frame.
+    Busy,
     Parameters(mui_weld::Error),
     Geometry(mui_geometry::Error),
     Budget(&'static str),
@@ -32,6 +34,7 @@ pub enum Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Busy => f.write_str("shared GPU renderer busy"),
             Self::Parameters(e) => write!(f, "GPU weld: {e}"),
             Self::Geometry(e) => write!(f, "GPU scene: {e}"),
             Self::Budget(s) => write!(f, "GPU effect budget: {s}"),

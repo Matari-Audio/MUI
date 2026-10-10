@@ -698,6 +698,11 @@ impl Driver {
             Err(e) => {
                 self.count(Counter::LayoutFailures, 1);
                 if !self.failing {
+                    crate::diagnostics::error(
+                        "mui",
+                        "layout_failed",
+                        &format!("layout refused at {offered:?}: {e}"),
+                    );
                     s.view
                         .log(&format!("mui: layout refused at {offered:?}: {e}"));
                 }

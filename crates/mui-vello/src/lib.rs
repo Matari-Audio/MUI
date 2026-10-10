@@ -10,7 +10,7 @@
 //! Arcs stay arcs until this point. MUI's tessellation path flattens them to
 //! line segments; here they become cubics instead, which is what Vello wants
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
@@ -30,10 +30,13 @@ use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::Pixmap;
 pub use vello_common::{kurbo, peniko};
+pub mod diagnostics;
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
 #[cfg(feature = "gpu-effects")]
 mod classic;
+#[cfg(feature = "cpu")]
+pub mod software;
 #[cfg(feature = "gpu-effects")]
 pub use classic::Classic;
 #[cfg(feature = "gpu-effects")]

@@ -1,0 +1,32 @@
+# When main moves, tell every plugin's follow-mui workflow
+# (media/tools/mui-sync/follow-mui.yml) to update now instead of at its next
+# 6-hourly run. Needs a PLUGIN_DISPATCH_TOKEN secret (fine-grained PAT with
+# Contents: read & write on the plugin repos); without it this job is skipped
+# and plugins still follow main on schedule.
+name: Notify plugins
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.PLUGIN_DISPATCH_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        repo:
+          - Matari-Audio/drop-recorder
+          - Matari-Audio/KORREKT
+          - Matari-Audio/KURV
+          - Matari-Audio/pitch-tracker
+          - Matari-Audio/relay
+          - DerpcatMusic/KONTRA
+          - DerpcatMusic/DIFFUSE
+    steps:
+      - if: env.TOKEN != ''
+        run: gh api "repos/${{ matrix.repo }}/dispatches" -f event_type=mui-main
+        env:
+          GH_TOKEN: ${{ env.TOKEN }}

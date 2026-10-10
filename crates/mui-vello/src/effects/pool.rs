@@ -190,6 +190,29 @@ impl WeldTextures {
             in_frame: false,
         })
     }
+    /// New per-window slots over the same immutable material pipeline.
+    pub(crate) fn for_window(&self, budget: Budget) -> Result<Self, Error> {
+        if budget.max_surfaces == 0
+            || budget.max_texture_bytes == 0
+            || budget.max_surface_pixels == 0
+        {
+            return Err(Error::Budget("zero limit"));
+        }
+        Ok(Self {
+            device: self.device.clone(),
+            queue: self.queue.clone(),
+            pipeline: self.pipeline.clone(),
+            layout: self.layout.clone(),
+            slots: BTreeMap::new(),
+            budget,
+            epoch: 0,
+            next_id: 1,
+            mapping_revision: 0,
+            peak: 0,
+            in_frame: false,
+        })
+    }
+
     pub fn mapping_revision(&self) -> u64 {
         self.mapping_revision
     }

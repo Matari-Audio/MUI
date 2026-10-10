@@ -7,6 +7,10 @@
 //! host supports native Wayland, but does not embed a plugin in a Wayland DAW.
 #![forbid(unsafe_code)]
 
+// View::changed is polled; external parameter/model changes have no generic
+// wake hook yet. Push-based change notification can replace this heartbeat.
+const MODEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
 mod gpu;
 mod windows;
 pub use gpu::Gpu;
@@ -65,7 +69,8 @@ pub fn run<V: View>(view: V, ui: mui::Ui, options: Options) -> Result<(), String
 }
 
 /// Run shared state, allowing another application thread to update the model.
-/// `View::changed` is polled at the current monitor cadence. Zero-sized initial
+/// `View::changed` is polled on active frames and at least every 250 ms while
+/// idle, until a push-based model-change wake is available. Zero-sized initial
 /// windows and zero poll intervals are rejected before creating an event loop.
 pub fn run_shared<V: View>(shared: Arc<Mutex<Shared<V>>>, options: Options) -> Result<(), String> {
     validate_options(&options)?;
@@ -137,6 +142,7 @@ struct App<V, T: 'static = AccessEvent> {
     composing: bool,
     native_cursor: Option<Cursor>,
     next_poll: Instant,
+    next_model_poll: Instant,
     error: Option<String>,
     presentations: u64,
 }
@@ -161,6 +167,7 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
             composing: false,
             native_cursor: None,
             next_poll: Instant::now(),
+            next_model_poll: Instant::now(),
             error: None,
             presentations: 0,
         }
@@ -234,10 +241,15 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
             return;
         }
         let interval = self.interval();
+        self.next_model_poll = Instant::now() + MODEL_POLL_INTERVAL;
         let (Some(driver), Some(gpu)) = (&mut self.driver, &mut self.gpu) else {
             return;
         };
         driver.min_interval = Some(interval);
+        gpu.update();
+        lock(&self.shared)
+            .ui
+            .set_gpu_welding_available(gpu.rendering_mode() == "gpu");
         let (changed, scene) = prepare_frame(driver, &self.shared, Instant::now());
         let window = gpu.window();
         let current_cursor = driver.cursor();
@@ -280,6 +292,7 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
         }
         if let Some(Err(error)) = presented {
             lock(&self.shared).view.log(&format!("mui-winit: {error}"));
+            driver.redraw();
         }
         if changed {
             self.publish();
@@ -289,18 +302,25 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
         if !self.state.visible() || self.gpu.is_none() {
             return None;
         }
-        let wake = self
-            .driver
-            .as_ref()
-            .and_then(Driver::next_wake)
-            .map_or(self.next_poll, |at| at.min(self.next_poll));
+        let model = self.driver.as_ref().and_then(Driver::next_wake);
+        let renderer = self.gpu.as_ref().and_then(|gpu| gpu.next_wake(now));
+        let interval = if model.is_none() && renderer.is_none() {
+            MODEL_POLL_INTERVAL
+        } else {
+            self.interval()
+        };
+        let wake = match (model, renderer) {
+            (Some(a), Some(b)) => a.min(b),
+            (Some(at), None) | (None, Some(at)) => at,
+            (None, None) => self.next_poll,
+        }
+        .min(self.next_model_poll)
+        .max(self.next_poll);
         if now >= wake {
-            self.gpu
-                .as_ref()
-                .expect("checked above")
-                .window()
-                .request_redraw();
-            self.next_poll = now + self.interval();
+            if let Some(gpu) = &self.gpu {
+                gpu.window().request_redraw();
+            }
+            self.next_poll = now + interval;
             // The Driver deadline is consumed on RedrawRequested. Wait for the
             // next poll instead of spinning until winit delivers that redraw.
             Some(self.next_poll)
@@ -486,6 +506,9 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
                 return;
             }
             WindowEvent::RedrawRequested => {
+                if let Some(gpu) = &mut self.gpu {
+                    gpu.invalidate();
+                }
                 self.draw();
                 return;
             }

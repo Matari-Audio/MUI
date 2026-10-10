@@ -8,9 +8,27 @@ Only this crate is vendored; it has no workspace-inherited manifest values.
 The Linux `Window::close_bounded` API, bounded join, callback revocation and
 regressions are ported from Matari-Audio/moose revision
 **bffa4677d0b82119d38566ce7e932dc5c463d497**, under the same original licenses.
-MUI also checks revocation while draining its added XIM callback queue. Detach
-requires a pinned plug-in image and no registered host callbacks; callers must
-revoke their handler's host state first. Ordinary close remains synchronous.
+MUI also checks revocation while draining its added XIM callback queue. X11
+now verifies image pinning **before** spawning the editor thread. An unpinnable
+shared library logs a diagnostic and refuses editor window open; this does not
+fail plugin instance creation. The main executable cannot unload and needs no
+pin. Host requests use a nonblocking bounded queue and a 50 ms reply timeout;
+a timeout means the request may still execute, but its reply cannot acknowledge
+a different request. First open has an explicit 250 ms handshake budget.
+
+Both ordinary X11 close and `close_bounded` now wait only within their budget
+(250 ms by default), including embedded windows. Normal completion sends
+`WillClose` and drops the handler before native teardown. A timed-out worker
+revokes further callbacks and detaches; pinning keeps its **code** mapped until
+process exit, not its host state or parent drawable. Callers must revoke the
+handler's host access before close. A callback or driver call already running
+cannot be cancelled and may finish native/GPU teardown after close returns.
+Arbitrary registered `HostCallbacks` / `HostMainThreadCaller` must obey that
+lifetime contract too: pinning does not make stale calls into the host safe.
+Code in independently supplied handler/callback images needs its own lifetime
+guarantee; the baseview image pin does not preserve those images.
+This policy avoids a GUI-thread deadlock; it does not promise immediate resource
+release or actual image unmapping on a failed close.
 
 MUI additions expose `Event::Ime` and `WindowContext::set_ime_configuration`.
 Configuration includes physical client-relative candidate geometry, surrounding
@@ -50,6 +68,61 @@ text-input-v3 support. Cocoa explicit replacement ranges are translated to order
 UTF-8 selection events before their associated preedit/commit. Input identity
 changes cancel the preceding native context composition. XIM forwarding follows
 [X.Org XIM protocol event masks](https://xorg.freedesktop.org/archive/current/doc/libX11/XIM/xim.html).
+
+## Frame demand and X11 creation
+
+`WindowHandler::frame_demand()` defaults to `FrameDemand::Continuous`, preserving
+existing callers. X11 implements `Idle` with no frame timer and `At(Instant)`
+with a single paced deadline timer. Input, resize, map restoration, Expose and
+a `FrameRequester::request_frame()` through `Window::frame_requester()` wake it. The returned optional
+`FrameRequester` is cloneable and thread-safe, does not retain the native window
+or X connection, and is harmless after close. Windows/macOS implementations are integrated
+separately. MUI reports a slow model-polling deadline because external model,
+plugin meter and accessibility changes are not yet push-notified.
+
+Opaque non-GL X11 windows now use the explicit root visual/depth and their own
+checked colormap, not arbitrary ARGB32. Creation and reparent are checked XCB
+requests. Zero initial extents become 1x1 (X11 cannot create zero-sized windows).
+Children may map before their parent; frames wait for the whole ancestry to
+become mapped. XEmbed reparent discards the old ancestor chain and recomputes
+visibility even when the new parent is the root. Destroyed drawables stop
+callbacks. XWayland remains X11, not a native Wayland/text-input backend.
+
+The optional GLX error scope serializes swaps with a poison-tolerant mutex and
+an advisory `flock` on `/proc/self`, which is shared across plugin images.
+RAII restores the previous handler after XSync even on a Rust panic. Errors on
+foreign connections chain to the old handler; the C callback catches panics.
+A wedged GLX/XSync call can keep its scope active beyond the close timeout;
+restoration happens when it returns, and its code stays pinned meanwhile.
+Only GLX needs this global scope; normal windowing/XIM uses checked XCB without
+installing an Xlib error handler. A host or unrelated library that independently
+changes `XSetErrorHandler` without participating in the lock cannot be made
+race-free by this fork. Use of this mutex is not a claim of host cooperation.
+
+## Ported upstream fixes
+
+This vendored fork is MUI's first-party windowing layer. We retain its `on_frame`
+contract; we do not rebase onto upstream's 0.4 `draw` API.
+
+* [RustAudio/baseview #345](https://github.com/RustAudio/baseview/pull/345):
+  Windows DPI virtualization. Unaware hosts remain at 96 DPI; per-monitor-v1
+  children honour host scale suggestions, and non-client scaling is enabled
+  only for v1. Initial physical sizing uses parent DPI and preserves MUI's scale
+  override. The fork already had the upstream thread-context restore fix.
+* [RustAudio/baseview #347](https://github.com/RustAudio/baseview/pull/347):
+  reset the mouse-button capture counter on `WM_CAPTURECHANGED`. Unlike the
+  original patch, we do not release capture after it has moved to a DAW window.
+* [RustAudio/baseview #351](https://github.com/RustAudio/baseview/pull/351):
+  defer the initial host resize request until the visible `WM_SHOWWINDOW`
+  notification, including parents created at non-100% DPI. Resize rejection
+  restores the previous physical size and notifies the handler of that size.
+
+Windows publishes only guarded callbacks from `src/platform/win/native.rs`.
+It pins the containing image before registering window/hook/COM callbacks:
+retained COM clients and a driver blocked in `DwmFlush` can outlive editor close.
+This deliberately keeps the DLL mapped for the process lifetime, but normal
+close still revokes hooks/drop targets/IME, destroys the HWND, and stops the
+pacer (25 ms bounded join, safe detach after target revocation).
 
 ## Maintaining this patch
 

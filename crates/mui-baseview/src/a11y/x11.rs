@@ -171,8 +171,12 @@ mod tests {
         );
     }
 
+    /// Absolute coordinates require an isolated X server without a window manager.
+    /// A desktop XWayland WM may redirect ConfigureWindow and choose another position.
+    /// Run: `xvfb-run -a flock /tmp/mui-cargo.lock cargo test -p mui-baseview
+    /// borrowed_connection_tracks_child_move_reparent_resize_and_close -- --ignored`.
     #[test]
-    #[ignore = "requires X11; run under xvfb-run with --ignored"]
+    #[ignore = "requires isolated X11 without a WM; use xvfb-run, not desktop XWayland"]
     #[expect(unsafe_code, reason = "test borrows its own live XCB connection")]
     fn borrowed_connection_tracks_child_move_reparent_resize_and_close() {
         let (connection, screen) = XCBConnection::connect(None).unwrap();

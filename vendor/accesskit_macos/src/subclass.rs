@@ -152,9 +152,9 @@ impl SubclassingAdapter {
             panic!("subclassing adapter already instantiated on view {view:?}");
         }
         let adapter = unsafe { Adapter::new(view as *mut c_void, false, action_handler) };
-        // Cast to a pointer and back to force the lifetime to 'static
-        // SAFETY: We know the class will live as long as the instance,
-        // and we only use this reference while the instance is alive.
+        // Cast to a pointer and back to force the lifetime to 'static.
+        // SAFETY: Registered view classes must remain alive for the process
+        // lifetime: SUBCLASSES retains both the original class and its subclass.
         let prev_class = unsafe { &*((*view).class() as *const AnyClass) };
         let associated = AssociatedObject::new(adapter, activation_handler, prev_class);
         unsafe {

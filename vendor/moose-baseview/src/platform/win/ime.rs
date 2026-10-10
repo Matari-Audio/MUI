@@ -53,6 +53,18 @@ impl Drop for Context {
 }
 
 impl NativeIme {
+    pub fn close(&self, hwnd: HWND) {
+        // Disassociate only this HWND. IMM32's default context belongs to the
+        // host GUI thread; never destroy it or cancel another editor's context.
+        self.configuration.borrow_mut().take();
+        self.cancel_pending.set(false);
+        self.composing.set(false);
+        self.enabled.set(Some(false));
+        unsafe {
+            ImmAssociateContextEx(hwnd, ptr::null_mut(), 0);
+        }
+    }
+
     pub fn configure(&self, hwnd: HWND, config: Option<ImeConfiguration>) {
         let config = config.filter(ImeConfiguration::valid);
         if self.configured.replace(true) && *self.configuration.borrow() == config {

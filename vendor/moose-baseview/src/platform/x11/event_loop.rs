@@ -7,18 +7,16 @@ use crate::dpi::{PhysicalPosition, PhysicalSize};
 use crate::host::HostMainThreadCaller;
 use crate::platform::frame_rate::frame_interval;
 use crate::platform::x11::error::FatalError;
-use crate::platform::x11::window_thread::{
-    HostCallback, WindowThreadRequest, WindowThreadResponseMessage,
-};
+use crate::platform::x11::window_thread::{HostCallback, WindowThreadMessage, WindowThreadRequest};
 use crate::warn;
 use crate::wrappers::xkbcommon::XkbcommonState;
 use crate::{
-    Event, EventStatus, MouseButton, MouseEvent, ScrollDelta, WindowEvent, WindowHandler,
-    WindowSize,
+    Event, EventStatus, FrameDemand, MouseButton, MouseEvent, ScrollDelta, WindowEvent,
+    WindowHandler, WindowSize,
 };
 use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
-use calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction};
+use calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
@@ -69,13 +67,16 @@ pub(crate) struct EventLoop {
     refresh_rate_queried_at: Instant,
 
     loop_signal: LoopSignal,
+    loop_handle: LoopHandle<'static, Self>,
+    frame_timer: Option<RegistrationToken>,
+    frame_deadline: Option<Instant>,
+    last_frame: Instant,
 
     drag_n_drop: DragNDropState,
     xkb_state: Option<XkbcommonState>,
 
     run_error: Option<PlatformError>,
 
-    response_sender: mpsc::Sender<WindowThreadResponseMessage>,
     main_thread: Option<MainThreadCaller>,
 
     /// Keys currently held down in this window, by X keycode. Used to flag
@@ -89,14 +90,12 @@ pub(crate) struct EventLoop {
 impl EventLoop {
     pub fn new(
         window: Rc<WindowInner>, handler: Box<dyn WindowHandler>,
-        request_receiver: calloop::channel::Channel<WindowThreadRequest>,
-        response_sender: mpsc::Sender<WindowThreadResponseMessage>,
+        request_receiver: calloop::channel::Channel<WindowThreadMessage>,
         main_thread: Option<MainThreadCaller>, inner: &mut calloop::EventLoop<'static, Self>,
     ) -> Result<Self, PlatformError> {
         let loop_handle = inner.handle();
 
         let frame_interval = frame_interval(query_refresh_hz(&window));
-        Self::setup_frame_timer(&loop_handle, frame_interval)?;
 
         loop_handle
             .insert_source(
@@ -115,6 +114,10 @@ impl EventLoop {
 
         Ok(Self {
             loop_signal: inner.get_signal(),
+            loop_handle,
+            frame_timer: None,
+            frame_deadline: None,
+            last_frame: Instant::now(),
             handler,
             new_size: None,
             new_parent_size: None,
@@ -130,13 +133,14 @@ impl EventLoop {
             forwarded_keys: [None; 256],
 
             window,
-            response_sender,
         })
     }
 
     #[inline]
     fn drain_xcb_events(&mut self) -> Result<bool, ConnectionError> {
-        if self.window.main_thread_shared.callbacks_revoked() {
+        if self.window.xcb_window.is_destroyed()
+            || self.window.main_thread_shared.callbacks_revoked()
+        {
             return Ok(false);
         }
         let mut event_received = false;
@@ -145,7 +149,9 @@ impl EventLoop {
         // handlers see one repeated key-down instead of release + fresh press.
         let mut pending_release: Option<KeyReleaseEvent> = None;
         while let Some(event) = self.window.connection.conn.poll_for_event()? {
-            if self.window.main_thread_shared.callbacks_revoked() {
+            if self.window.xcb_window.is_destroyed()
+                || self.window.main_thread_shared.callbacks_revoked()
+            {
                 break;
             }
             event_received = true;
@@ -179,39 +185,52 @@ impl EventLoop {
         Ok(event_received)
     }
 
-    fn setup_frame_timer(
-        loop_handle: &LoopHandle<'_, Self>, interval: Duration,
-    ) -> Result<(), calloop::Error> {
-        fn handle_frame(evloop: &mut EventLoop, previous_deadline: Instant) -> TimeoutAction {
-            evloop.exposed = true;
-
-            // A window drag sends a ConfigureNotify per step: re-query a few times a second at most.
-            if evloop.refresh_rate_stale
-                && evloop.refresh_rate_queried_at.elapsed() >= Duration::from_millis(250)
-            {
-                evloop.refresh_rate_stale = false;
-                evloop.refresh_rate_queried_at = Instant::now();
-                evloop.frame_interval = frame_interval(query_refresh_hz(&evloop.window));
-            }
-
-            // Keep a steady cadence. If a frame overran its slot, restart the cadence from now
-            // instead of queueing catch-up frames.
-            let interval = evloop.frame_interval;
-            match previous_deadline.checked_add(interval) {
-                Some(next) if next > Instant::now() => TimeoutAction::ToInstant(next),
-                _ => TimeoutAction::ToDuration(interval),
-            }
+    fn schedule_frame(&mut self) -> Result<(), calloop::Error> {
+        let visible = !self.window.xcb_window.is_destroyed()
+            && !self.window.main_thread_shared.is_stop_host_requested()
+            && !self.window.main_thread_shared.callbacks_revoked()
+            && self.window.visibility_state.own_window_is_viewable();
+        let now = Instant::now();
+        if visible
+            && self.refresh_rate_stale
+            && self.refresh_rate_queried_at.elapsed() >= Duration::from_millis(250)
+        {
+            self.refresh_rate_stale = false;
+            self.refresh_rate_queried_at = now;
+            self.frame_interval = frame_interval(query_refresh_hz(&self.window));
         }
-
-        loop_handle
-            .insert_source(Timer::from_duration(interval), |i, _, e| handle_frame(e, i))
-            .map_err(|e| e.error)?;
-
+        let deadline = if visible {
+            frame_deadline(self.handler.frame_demand(), now, self.last_frame, self.frame_interval)
+        } else {
+            None
+        };
+        if deadline == self.frame_deadline {
+            return Ok(());
+        }
+        if let Some(timer) = self.frame_timer.take() {
+            self.loop_handle.remove(timer);
+        }
+        self.frame_deadline = deadline;
+        if let Some(deadline) = deadline {
+            self.frame_timer = Some(
+                self.loop_handle
+                    .insert_source(Timer::from_deadline(deadline), |_, _, e| {
+                        e.frame_timer = None;
+                        e.frame_deadline = None;
+                        e.exposed = true;
+                        TimeoutAction::Drop
+                    })
+                    .map_err(|e| e.error)?,
+            );
+        }
         Ok(())
     }
 
     fn handle_redraw(&mut self) {
-        if self.window.main_thread_shared.callbacks_revoked() {
+        if self.window.xcb_window.is_destroyed()
+            || self.window.main_thread_shared.is_stop_host_requested()
+            || self.window.main_thread_shared.callbacks_revoked()
+        {
             return;
         }
         if !self.exposed {
@@ -223,6 +242,7 @@ impl EventLoop {
             return;
         }
 
+        self.last_frame = Instant::now();
         if let Err(e) = self.handler.on_frame() {
             self.trigger_fatal_error(e.into());
             return;
@@ -234,7 +254,10 @@ impl EventLoop {
     }
 
     fn handle_coalesced_resize_events(&mut self) -> Result<(), FatalError> {
-        if self.window.main_thread_shared.callbacks_revoked() {
+        if self.window.xcb_window.is_destroyed()
+            || self.window.main_thread_shared.is_stop_host_requested()
+            || self.window.main_thread_shared.callbacks_revoked()
+        {
             return Ok(());
         }
         let mut comes_from_parent = false;
@@ -287,28 +310,24 @@ impl EventLoop {
         Ok(())
     }
 
-    fn handle_main_thread_request(&mut self, event: calloop::channel::Event<WindowThreadRequest>) {
+    fn handle_main_thread_request(&mut self, event: calloop::channel::Event<WindowThreadMessage>) {
         match event {
             calloop::channel::Event::Closed => {
                 // Closed channel means the sender, i.e. the Window Handle has been dropped.
                 // It should already stop this event loop on drop, but we'll take the hint.
                 self.stop_now();
             }
-            calloop::channel::Event::Msg(req) => match self.handle_request(req) {
-                Ok(()) => self.send_response(Ok(())),
-                Err(e) => self.send_response(Err(e.to_string())),
-            },
-        }
-    }
-
-    fn send_response(&mut self, response: WindowThreadResponseMessage) {
-        if let Err(e) = self.response_sender.send(response) {
-            warn!("Failed to send response back to main thread: {}", &e);
-            if let Err(e) = e.0 {
-                crate::error!("Request failed: {}", e)
+            calloop::channel::Event::Msg(message) => {
+                let result = if self.window.main_thread_shared.callbacks_revoked()
+                    || self.window.main_thread_shared.is_stop_host_requested()
+                {
+                    Err("X11 window is closing".into())
+                } else {
+                    self.handle_request(message.request).map_err(|e| e.to_string())
+                };
+                // Late replies belong to this RPC alone, never the next one.
+                let _ = message.response.send(result);
             }
-
-            self.stop_now();
         }
     }
 
@@ -325,6 +344,7 @@ impl EventLoop {
     }
 
     fn handle_request(&mut self, req: WindowThreadRequest) -> Result<(), PlatformError> {
+        self.exposed = true;
         match req {
             WindowThreadRequest::Resize(new_size) => {
                 let scale_factor = self.window.scaling_factor.get();
@@ -351,13 +371,16 @@ impl EventLoop {
                 self.window.set_scale_factor_override(scale_factor)
             }
             WindowThreadRequest::SetParent(new_parent) => {
-                self.window.xcb_window.reparent(Some(new_parent.window_id))?;
+                self.window.xcb_window.reparent(Some(new_parent.window_id))?.check()?;
 
                 Ok(())
             }
             WindowThreadRequest::Show => {
                 self.window.xcb_window.map_window()?.check()?;
-                self.window.visibility_state.window_mapped(self.window.xcb_window.id());
+                // A top-level MapWindow can be redirected to the WM. A
+                // checked reply is not proof of visibility: wait for the real
+                // MapNotify/Expose before calling the first renderer frame.
+                self.exposed = true;
                 Ok(())
             }
             WindowThreadRequest::Hide => {
@@ -376,15 +399,18 @@ impl EventLoop {
 
     fn handle_idle(&mut self) {
         if let Err(e) = self.try_handle_idle() {
-            self.trigger_fatal_error(e.into());
+            self.trigger_fatal_error(e);
         }
     }
 
-    fn try_handle_idle(&mut self) -> Result<(), FatalError> {
-        if self.window.main_thread_shared.callbacks_revoked() {
+    fn try_handle_idle(&mut self) -> Result<(), PlatformError> {
+        if self.window.main_thread_shared.callbacks_revoked()
+            || self.window.main_thread_shared.is_stop_host_requested()
+        {
             self.stop_now();
             return Ok(());
         }
+        self.exposed |= self.window.main_thread_shared.take_frame_request();
         // Check for any events in the internal buffers before going to sleep:
         self.drain_xcb_events()?;
 
@@ -397,17 +423,31 @@ impl EventLoop {
             }
         }
 
+        self.schedule_frame()?;
         self.window.connection.conn.flush()?;
+        // Only take_frame_request at the beginning of an idle pass clears the
+        // latch. A producer racing demand query/timer re-arm keeps its request
+        // pending. Re-notify here; a later producer sends its own notification.
+        if self.window.main_thread_shared.has_frame_request() {
+            self.loop_signal.wakeup();
+        }
 
         Ok(())
     }
 
     pub fn run(mut self, mut inner: calloop::EventLoop<Self>) -> Result<(), PlatformError> {
         self.drain_xcb_events()?;
-        inner.run(None, &mut self, Self::handle_idle)?;
+        if !self.window.xcb_window.is_destroyed()
+            && !self.window.main_thread_shared.callbacks_revoked()
+            && !self.window.main_thread_shared.is_stop_host_requested()
+        {
+            inner.run(None, &mut self, Self::handle_idle)?;
+        }
 
         if !self.window.main_thread_shared.callbacks_revoked() {
-            self.release_forwarded_keys();
+            if !self.window.xcb_window.is_destroyed() {
+                self.release_forwarded_keys();
+            }
             self.handle_event(Event::Window(WindowEvent::WillClose));
         }
 
@@ -451,7 +491,7 @@ impl EventLoop {
                         key.repeat = is_down && *pressed;
                         *pressed = is_down;
                     }
-                    if self.handler.on_event(Event::Keyboard(key)) == EventStatus::Ignored {
+                    if self.handle_event(Event::Keyboard(key)) == EventStatus::Ignored {
                         self.forward_key_event(event);
                     }
                 }
@@ -555,7 +595,10 @@ impl EventLoop {
                 }
             }
 
-            XEvent::Expose(e) if e.window == self.window.raw_id() => self.exposed = true,
+            XEvent::Expose(e) if e.window == self.window.raw_id() => {
+                self.exposed = true;
+                self.handle_event(Event::Window(WindowEvent::RedrawRequested));
+            }
 
             ////
             // mouse
@@ -625,7 +668,7 @@ impl EventLoop {
                 if let Some(pressed) = self.pressed_keys.get_mut(usize::from(event.detail)) {
                     key.repeat = std::mem::replace(pressed, true);
                 }
-                if self.handler.on_event(Event::Keyboard(key)) == EventStatus::Ignored {
+                if self.handle_event(Event::Keyboard(key)) == EventStatus::Ignored {
                     self.forward_key_event(event);
                 }
             }
@@ -635,7 +678,7 @@ impl EventLoop {
                     *pressed = false;
                 }
                 let key = convert_key_release_event(&event, &mut self.xkb_state);
-                if self.handler.on_event(Event::Keyboard(key)) == EventStatus::Ignored {
+                if self.handle_event(Event::Keyboard(key)) == EventStatus::Ignored {
                     self.forward_key_event(event);
                 }
             }
@@ -688,7 +731,8 @@ impl EventLoop {
                         window_id,
                         NonZero::new(e.parent),
                         &self.window.connection,
-                    )
+                    );
+                    self.exposed = self.window.visibility_state.own_window_is_viewable();
                 }
             }
 
@@ -696,7 +740,15 @@ impl EventLoop {
                 if let Some(window_id) = NonZero::new(e.window) {
                     self.window
                         .visibility_state
-                        .window_destroyed(window_id, &self.window.connection)
+                        .window_destroyed(window_id, &self.window.connection);
+                    if window_id == self.window.xcb_window.id() {
+                        // The host may destroy its parent without first closing
+                        // the editor. Stop callbacks before any pending resize or
+                        // frame can use the deleted drawable; run() still closes
+                        // the handler normally.
+                        self.window.xcb_window.mark_destroyed();
+                        self.stop_now();
+                    }
                 }
             }
 
@@ -706,10 +758,15 @@ impl EventLoop {
         Ok(())
     }
 
-    fn handle_event(&mut self, event: Event) {
-        if !self.window.main_thread_shared.callbacks_revoked() {
-            self.handler.on_event(event);
+    fn handle_event(&mut self, event: Event) -> EventStatus {
+        if self.window.main_thread_shared.callbacks_revoked()
+            || (self.window.main_thread_shared.is_stop_host_requested()
+                && !matches!(event, Event::Window(WindowEvent::WillClose)))
+        {
+            return EventStatus::Ignored;
         }
+        self.exposed = true;
+        self.handler.on_event(event)
     }
 
     /// Hands a key event the handler ignored to the embed parent, so host
@@ -745,6 +802,17 @@ impl EventLoop {
             event.time = CURRENT_TIME;
             self.forward_key_event(event);
         }
+    }
+}
+
+fn frame_deadline(
+    demand: FrameDemand, now: Instant, last_frame: Instant, interval: Duration,
+) -> Option<Instant> {
+    let paced = last_frame.checked_add(interval).unwrap_or(now).max(now);
+    match demand {
+        FrameDemand::Idle => None,
+        FrameDemand::Continuous => Some(paced),
+        FrameDemand::At(at) => Some(at.max(paced)),
     }
 }
 
@@ -801,6 +869,7 @@ fn mouse_id(id: u8) -> MouseButton {
 }
 
 #[cfg(test)]
+#[allow(clippy::arithmetic_side_effects, reason = "test clocks use fixed small durations")]
 mod tests {
     use super::mode_refresh_hz;
     use x11rb::protocol::randr::{ModeFlag, ModeInfo};
@@ -821,6 +890,23 @@ mod tests {
             name_len: 0,
             mode_flags: flags,
         }
+    }
+
+    #[test]
+    fn idle_has_no_deadline_and_demand_never_schedules_catchup_frames() {
+        use super::frame_deadline;
+        use crate::FrameDemand;
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let interval = Duration::from_millis(16);
+        assert_eq!(frame_deadline(FrameDemand::Idle, now, now, interval), None);
+        assert_eq!(
+            frame_deadline(FrameDemand::Continuous, now, now, interval),
+            Some(now + interval)
+        );
+        let later = now + Duration::from_secs(1);
+        assert_eq!(frame_deadline(FrameDemand::At(later), now, now, interval), Some(later));
+        assert_eq!(frame_deadline(FrameDemand::Continuous, later, now, interval), Some(later));
     }
 
     #[test]

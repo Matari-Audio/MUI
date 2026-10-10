@@ -6,7 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-mui = { workspace = true, features = ["gpu-effects"] }
+# Reuse the plugin-image pin rather than duplicating loader FFI.
+baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview", default-features = false }
+mui = { workspace = true, features = ["gpu-effects", "software-window"] }
 mui-access.workspace = true
 wgpu = { workspace = true, features = ["default"] }
 winit = "0.30"

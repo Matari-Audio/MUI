@@ -22,7 +22,7 @@ pub use clipboard::*;
 pub use context::{PlatformHandle, WindowContext};
 pub use error::*;
 pub use event::*;
-pub use handler::WindowHandler;
+pub use handler::{FrameDemand, WindowHandler};
 pub use mouse_cursor::MouseCursor;
 pub use settings::*;
 pub use window::*;

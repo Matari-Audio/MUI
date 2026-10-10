@@ -15,12 +15,6 @@
 // Baseview modifications to druid code:
 // - update imports, paths etc
 
-#![expect(
-    clippy::indexing_slicing,
-    clippy::arithmetic_side_effects,
-    reason = "Let's not touch this for now"
-)]
-
 //! Key event handling.
 
 use std::cmp::Ordering;
@@ -88,7 +82,7 @@ unsafe fn is_last_message(hwnd: HWND, msg: u32, lparam: LPARAM) -> bool {
     let expected_msg = match msg {
         WM_KEYDOWN | WM_CHAR => WM_CHAR,
         WM_SYSKEYDOWN | WM_SYSCHAR => WM_SYSCHAR,
-        _ => unreachable!(),
+        _ => return false,
     };
     let mut msg = mem::zeroed();
     let avail = PeekMessageW(&mut msg, hwnd, expected_msg, expected_msg, PM_NOREMOVE);
@@ -599,11 +593,17 @@ impl KeyboardState {
             for shift_state in 0..N_SHIFT_STATE {
                 let has_shift = shift_state & SHIFT_STATE_SHIFT != 0;
                 let has_altgr = shift_state & SHIFT_STATE_ALTGR != 0;
-                key_state[VK_SHIFT as usize] = if has_shift { 0x80 } else { 0 };
-                key_state[VK_CONTROL as usize] = if has_altgr { 0x80 } else { 0 };
-                key_state[VK_LCONTROL as usize] = if has_altgr { 0x80 } else { 0 };
-                key_state[VK_MENU as usize] = if has_altgr { 0x80 } else { 0 };
-                key_state[VK_RMENU as usize] = if has_altgr { 0x80 } else { 0 };
+                for (key, active) in [
+                    (VK_SHIFT, has_shift),
+                    (VK_CONTROL, has_altgr),
+                    (VK_LCONTROL, has_altgr),
+                    (VK_MENU, has_altgr),
+                    (VK_RMENU, has_altgr),
+                ] {
+                    if let Some(slot) = key_state.get_mut(key as usize) {
+                        *slot = if active { 0x80 } else { 0 };
+                    }
+                }
 
                 for vk in PRINTABLE_VKS.iter().cloned().flatten() {
                     let ret = ToUnicodeEx(
@@ -617,7 +617,9 @@ impl KeyboardState {
                     );
                     match ret.cmp(&0) {
                         Ordering::Greater => {
-                            let utf16_slice = &uni_chars[..ret as usize];
+                            let Some(utf16_slice) = uni_chars.get(..ret as usize) else {
+                                continue;
+                            };
                             if let Ok(strval) = String::from_utf16(utf16_slice) {
                                 self.key_vals.insert((vk, shift_state), strval);
                             }
@@ -687,7 +689,7 @@ impl KeyboardState {
         match vk.into() {
             0 | VK_SHIFT | VK_CONTROL | VK_MENU => {
                 if scan_code >= 0x100 {
-                    scan_code += 0xE000 - 0x100;
+                    scan_code = scan_code.saturating_add(0xDF00);
                 }
                 unsafe { MapVirtualKeyExW(scan_code, MAPVK_VSC_TO_VK_EX, self.hkl) as u8 }
             }

@@ -37,7 +37,27 @@ with tempfile.TemporaryDirectory() as directory:
         return [json.loads(line) for line in log.read_text().splitlines()]
 
     workflow = (ROOT / ".github/workflows/verify.yml").read_text()
-    assert "cargo test -p mui-baseview --lib --locked --offline -- --ignored" in workflow
+    ui_workflow = (ROOT / ".github/workflows/ui.yml").read_text()
+    assert "CARGO_TARGET_DIR=" not in (ROOT / "tools/verify.sh").read_text()
+    assert "RUSTC_WRAPPER=" not in (ROOT / "tools/verify.sh").read_text()
+    assert "uses: ./.github/workflows/ui.yml" in workflow
+    assert "needs: [gate, platforms, ui]" in workflow
+    assert 'test "$UI_RESULT" = success' in workflow
+    assert "cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1" in ui_workflow
+    assert "--gallery --renderer gpu --record" in ui_workflow
+    assert "backend: [vulkan, gl]" in ui_workflow
+    embedded = ui_workflow.split("\n  embedded:\n", 1)[1].split("\n  native-probe:\n", 1)[0]
+    assert "--gallery --renderer cpu" in embedded
+    assert "target/debug/examples/native_windows" in embedded
+    assert "continue-on-error" not in embedded, "embedded CPU lifecycle must be required"
+    assert "windows-2025" in embedded and "macos-15" in embedded
+    assert "MUI_RENDERER: cpu" in embedded and "WGPU_BACKEND: ${{ matrix.unavailable }}" in embedded
+    assert "WARP compute shader compilation can crash" in embedded
+    assert "target/debug/examples/native_editor" in embedded and "--timeout 60" in embedded
+    assert "weston --backend=headless-backend.so" in ui_workflow and "WINIT_UNIX_BACKEND=wayland" in ui_workflow
+    browser = (ROOT / ".github/workflows/playground.yml").read_text()
+    assert "browser: [chromium, firefox, webkit]" in browser and "needs: [build, browser]" in browser
+    assert "python3 tools/ci/playground.py" in browser
     sections = re.search(r"section: \[([^]]+)\]", workflow).group(1).replace(" ", "").split(",")
     recorded = {section: commands(section) for section in sections}
     vendor_manifests = {"vendor/moose-baseview/Cargo.toml", "vendor/xim-rs/Cargo.toml"}
@@ -74,22 +94,19 @@ with tempfile.TemporaryDirectory() as directory:
 
 # Execute the actual aggregate shell body against every success/skip/failure/
 # cancellation combination. A skipped matrix must never satisfy required work.
-aggregate = workflow.split("\n  linux:\n", 1)[1].split("\n  platforms:\n", 1)[0]
-assert "needs: [gate, platforms]" in aggregate and "if: always()" in aggregate
-# Scheduling and the aggregate's expectation must stay identical.
-required = re.search(r"PLATFORMS_REQUIRED: \$\{\{ (.+) \}\}", aggregate).group(1)
+aggregate = workflow.split("\n  linux:\n", 1)[1].split("\n  ui:\n", 1)[0]
+assert "needs: [gate, platforms, ui]" in aggregate and "if: always()" in aggregate
 platforms = workflow.split("\n  platforms:\n", 1)[1]
 assert "cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked" in platforms
 assert "cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline" in platforms
 assert "if: runner.os == 'macOS'\n        name: Accessibility providers in two native libraries\n        run: python3 tools/ci/check-macos-accesskit-images.py" in platforms
 assert (ROOT / "tools/ci/fixtures/accesskit-images/Cargo.lock").is_file()
 assert "vendor/xim-rs" not in platforms
-scheduled = platforms.split("    if: >-\n", 1)[1].split("    strategy:", 1)[0]
-assert " ".join(scheduled.split()) == required
+assert "    if:" not in platforms.split("    strategy:", 1)[0], "platform jobs must run on every update"
 body = textwrap.dedent(aggregate.split("        run: |\n", 1)[1])
 results = ("success", "skipped", "failure", "cancelled")
-for gate, platform, required in itertools.product(results, results, (True, False)):
-    env = {**os.environ, "GATE_RESULT": gate, "PLATFORM_RESULT": platform, "PLATFORMS_REQUIRED": str(required).lower()}
+for gate, platform, ui in itertools.product(results, results, results):
+    env = {**os.environ, "GATE_RESULT": gate, "UI_RESULT": ui, "PLATFORM_RESULT": platform}
     passed = subprocess.run(["bash", "-e", "-c", body], env=env).returncode == 0
-    assert passed == (gate == "success" and platform == ("success" if required else "skipped")), (gate, platform, required)
+    assert passed == (gate == "success" and ui == "success" and platform == "success"), (gate, platform, ui)
 print("verify: complete disjoint media coverage, locked/offline commands, aggregate truth table OK")

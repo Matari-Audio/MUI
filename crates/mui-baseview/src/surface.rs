@@ -1,55 +1,17 @@
-//! baseview's window as a wgpu surface. Both speak raw-window-handle 0.6;
-//! moose-baseview fills the Win32 HINSTANCE Vulkan needs.
-
-use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle};
-
-/// Keep the native connection alive with the same representation as the surface.
-/// On X11, `WindowContext` exposes Xlib but `PlatformHandle` exposes XCB.
-#[derive(Debug)]
-pub struct Display {
-    raw: RawDisplayHandle,
-    _owner: baseview::PlatformHandle,
-}
-
-impl Display {
-    pub fn new(window: &baseview::WindowContext) -> Result<Self, HandleError> {
-        Ok(Self {
-            raw: window.display_handle()?.as_raw(),
-            _owner: window.platform_handle(),
-        })
-    }
-}
-
-// SAFETY: baseview's Send + Sync PlatformHandle retains the same X11
-// connection, opened with XInitThreads. AppKit and Windows display handles
-// contain no pointers. No thread-bound window operations are exposed here.
-#[expect(unsafe_code, reason = "owned native display connection is thread-safe")]
-unsafe impl Send for Display {}
-// SAFETY: the connection is retained and thread-safe as described above.
-#[expect(unsafe_code, reason = "owned native display connection is thread-safe")]
-unsafe impl Sync for Display {}
-
-impl HasDisplayHandle for Display {
-    #[expect(unsafe_code, reason = "borrows the retained native display connection")]
-    fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-        // SAFETY: _owner keeps the connection backing raw alive for this borrow.
-        Ok(unsafe { DisplayHandle::borrow_raw(self.raw) })
-    }
-}
+//! Surface creation stays on the native window's thread. Vulkan accepts that
+//! window's own X11 connection; the shared native instance needs no display.
 
 /// # Safety
-/// The window must outlive the returned surface.
-#[expect(
-    unsafe_code,
-    reason = "wgpu takes raw native handles only through an unsafe constructor"
-)]
+/// The window must outlive the returned surface. Call only on its window thread,
+/// after it is viewable and has nonzero physical dimensions (AppKit layer work
+/// must never run on the background initializer).
+#[expect(unsafe_code, reason = "wgpu raw native surface constructor")]
 pub unsafe fn create(
     instance: &wgpu::Instance,
     window: &baseview::WindowContext,
 ) -> Option<wgpu::Surface<'static>> {
-    // SAFETY: both handles are read from the live `window`, and this
-    // function's own contract makes the caller keep that window alive for as
-    // long as the returned surface.
+    // SAFETY: both handles are borrowed from the live window. The caller owns
+    // its surface-before-window teardown and native-thread obligations.
     unsafe {
         let target = wgpu::SurfaceTargetUnsafe::from_display_and_window(window, window).ok()?;
         instance.create_surface_unsafe(target).ok()

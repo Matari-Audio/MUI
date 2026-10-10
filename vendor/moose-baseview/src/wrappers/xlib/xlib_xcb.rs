@@ -23,6 +23,7 @@ pub struct XlibXcbConnection {
     // borrows the Xlib/XCB connection
     xcb_connection: XCBConnection,
     xlib_connection: XlibConnection,
+    default_screen: Screen,
 }
 
 impl XlibXcbConnection {
@@ -40,7 +41,9 @@ impl XlibXcbConnection {
 
         // The XGetXCBConnection function is not documented to ever be able to return NULL.
         // Still, this is cheap to check, just in case.
-        assert!(!xcb_connection.is_null());
+        if xcb_connection.is_null() {
+            return Err(PlatformError::CreationFailed("XGetXCBConnection returned null".into()));
+        }
 
         // Wrap the XCB connection object in a x11rb connection object
         // SAFETY: The xcb_connection pointer should be valid. We also enforce the drop order in this
@@ -48,11 +51,18 @@ impl XlibXcbConnection {
             unsafe { XCBConnection::from_raw_xcb_connection(xcb_connection, false)? };
 
         let default_screen_index: usize = xlib_connection.default_screen_index().into();
-        if xcb_connection.setup().roots.get(default_screen_index).is_none() {
-            panic!("No screen found for default_screen index {default_screen_index}");
-        }
+        let default_screen = xcb_connection
+            .setup()
+            .roots
+            .get(default_screen_index)
+            .ok_or_else(|| {
+                PlatformError::CreationFailed(format!(
+                    "No default screen at index {default_screen_index}"
+                ))
+            })?
+            .clone();
 
-        Ok(Self { xcb_connection, xlib_connection })
+        Ok(Self { xcb_connection, xlib_connection, default_screen })
     }
 
     pub fn default_screen_index(&self) -> ScreenIndex {
@@ -60,10 +70,7 @@ impl XlibXcbConnection {
     }
 
     pub fn default_screen(&self) -> &Screen {
-        let screen_index: usize = self.default_screen_index().into();
-        let Some(screen) = self.setup().roots.get(screen_index) else { unreachable!() };
-
-        screen
+        &self.default_screen
     }
 
     pub fn xcb_connection(&self) -> &XCBConnection {
@@ -75,19 +82,15 @@ impl XlibXcbConnection {
     }
 
     pub fn xlib_display_handle(&self) -> DisplayHandle<'_> {
-        let raw_connection = self.xlib_connection.as_raw().cast();
-        let Some(raw_connection) = NonNull::new(raw_connection) else { unreachable!() };
-        let handle =
-            XlibDisplayHandle::new(Some(raw_connection), self.default_screen_index().into());
+        let raw_connection = NonNull::new(self.xlib_connection.as_raw().cast());
+        let handle = XlibDisplayHandle::new(raw_connection, self.default_screen_index().into());
 
         unsafe { DisplayHandle::borrow_raw(handle.into()) }
     }
 
     pub fn xcb_display_handle(&self) -> DisplayHandle<'_> {
-        let raw_connection = self.xcb_connection.get_raw_xcb_connection();
-        let Some(raw_connection) = NonNull::new(raw_connection) else { unreachable!() };
-        let handle =
-            XcbDisplayHandle::new(Some(raw_connection), self.default_screen_index().into());
+        let raw_connection = NonNull::new(self.xcb_connection.get_raw_xcb_connection());
+        let handle = XcbDisplayHandle::new(raw_connection, self.default_screen_index().into());
 
         unsafe { DisplayHandle::borrow_raw(handle.into()) }
     }

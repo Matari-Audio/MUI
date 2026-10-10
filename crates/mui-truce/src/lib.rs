@@ -6,8 +6,19 @@
 //! host automation is the value the next tree reads. [`window`] is the half
 //! that knows no plugin framework: the `mui-baseview` crate, re-exported.
 #![deny(unsafe_code)]
+
+#[cfg(all(panic = "abort", not(feature = "allow-panic-abort")))]
+compile_error!(
+    "mui-truce requires panic = \"unwind\" to protect the plugin host. Set \
+     [profile.release] panic = \"unwind\" in the FINAL plugin workspace. \
+     The allow-panic-abort feature opts out of host protection; do not use it in DAW plugins."
+);
+
+mod boundary;
 pub mod bridge;
+mod host;
 pub use bridge::{Bridge, widget_id};
+pub use host::HostPump;
 
 #[cfg(not(target_arch = "wasm32"))]
 mod editor;
