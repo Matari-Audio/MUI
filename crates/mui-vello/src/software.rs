@@ -134,6 +134,8 @@ pub struct Window<W> {
     renderer: Renderer,
     presented: bool,
     opaque_bits: u32,
+    startup: bool,
+    startup_color: Option<u32>,
 }
 
 #[cfg(feature = "software-window")]
@@ -141,6 +143,14 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
     Window<W>
 {
     pub fn new(window: W, size: (u32, u32)) -> Result<Self, String> {
+        Self::open(window, size, false)
+    }
+    /// Large startup windows submit their scene's background without a costly
+    /// full-size CPU rasterization. GPU handover still resolves the complete scene.
+    pub fn new_startup(window: W, size: (u32, u32)) -> Result<Self, String> {
+        Self::open(window, size, u64::from(size.0) * u64::from(size.1) > 1024 * 1024)
+    }
+    fn open(window: W, size: (u32, u32), startup: bool) -> Result<Self, String> {
         // Softbuffer's X11 backend also accepts depth-32 ARGB visuals (which
         // baseview prefers). Their high byte is alpha, not padding; zero would
         // make an otherwise correct CPU frame invisible under a compositor.
@@ -150,7 +160,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             | raw_window_handle::RawWindowHandle::Xcb(_) => 0xff00_0000,
             _ => 0,
         };
-        let renderer = Renderer::new(size)?;
+        let renderer = Renderer::new(if startup { (1, 1) } else { size })?;
         let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
         let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string())?;
         Ok(Self {
@@ -158,6 +168,8 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             renderer,
             presented: false,
             opaque_bits,
+            startup,
+            startup_color: None,
         })
     }
 
@@ -166,9 +178,18 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         self.presented = false;
     }
 
+    /// Permanent CPU fallback returns to full-quality rasterization where its
+    /// bounded RGBA target fits; enormous windows keep the safe background frame.
+    pub fn finish_startup(&mut self, size: (u32, u32)) {
+        if dimensions(size).is_ok() {
+            self.startup = false;
+            self.invalidate();
+        }
+    }
+
     /// Zero-sized windows retain their pixels until restored.
     pub fn resize(&mut self, size: (u32, u32)) -> Result<(), String> {
-        if size.0 != 0 && size.1 != 0 {
+        if !self.startup && size.0 != 0 && size.1 != 0 {
             self.renderer.resize(size)?;
         }
         self.invalidate();
@@ -205,6 +226,17 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         let (Some(width), Some(height)) = (NonZeroU32::new(size.0), NonZeroU32::new(size.1)) else {
             return Ok(false);
         };
+        if self.startup && overlay.is_none() {
+            let rgb = startup_color(scene);
+            if self.presented && self.startup_color == Some(rgb) { return Ok(false); }
+            self.surface.resize(width, height).map_err(|e| e.to_string())?;
+            let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
+            buffer.fill(self.opaque_bits | rgb);
+            buffer.present().map_err(|e| e.to_string())?;
+            self.startup_color = Some(rgb);
+            self.presented = true;
+            return Ok(true);
+        }
         self.renderer.resize(size)?;
         if self.renderer.render_inner(scene, transform, overlay)? {
             self.presented = false;
@@ -230,6 +262,12 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         self.presented = true;
         Ok(true)
     }
+}
+
+fn startup_color(scene: &ResolvedScene) -> u32 {
+    let Some(paint) = scene.paint.iter().find(|p| p.layer == mui_scene::Layer::Fill) else { return 0x202020 };
+    let rgb = paint.paint.solid().to_srgb().to_rgba8();
+    (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
 }
 
 #[cfg(test)]
