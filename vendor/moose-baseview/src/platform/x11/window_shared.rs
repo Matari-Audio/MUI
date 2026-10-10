@@ -97,7 +97,9 @@ impl WindowInner {
         let initial_scale_factor = scaling_factor.get();
         shared.set_scaling_factor(initial_scale_factor);
 
-        let physical_size = options.size.to_physical(initial_scale_factor);
+        let physical_size: PhysicalSize<u16> = options.size.to_physical(initial_scale_factor);
+        let physical_size =
+            PhysicalSize::new(physical_size.width.max(1), physical_size.height.max(1));
 
         let sizing_strategy = SizingStrategy::from_settings(&options);
 

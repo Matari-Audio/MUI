@@ -63,7 +63,9 @@ impl AncestryList {
             return false;
         };
 
-        inner.truncate(index.saturating_add(2));
+        // Keep the reparented node, not its old parent. Keeping one extra node
+        // made XEmbed moves append the new parent after a stale unmapped one.
+        inner.truncate(index.saturating_add(1));
 
         true
     }
@@ -201,15 +203,12 @@ impl AncestorVisibilityState {
             return;
         }
 
-        if let Some(new_parent) = new_parent {
-            if Some(new_parent) == root_id.get() {
-                return;
-            }
-
+        if let Some(new_parent) = new_parent.filter(|p| Some(*p) != root_id.get()) {
             ancestry.push(Ancestor { id: new_parent, mapped: Cell::new(false) });
-
-            self.regenerate_from_last_window(connection);
         }
+        // Also refresh when moved back to the root; visibility must not depend
+        // on getting another MapNotify (XWayland may already consider it mapped).
+        self.regenerate_from_last_window(connection);
     }
 
     pub fn regenerate_from_last_window(&self, connection: &X11Connection) {
@@ -225,12 +224,16 @@ impl AncestorVisibilityState {
             return Ok(());
         };
 
+        own_window_viewable.set(false);
         let Some(mut current_window) = ancestry.pop_id() else { return Ok(()) };
 
         let mut shitlist = Vec::new();
         let mut rechecked_children = Vec::new();
+        let mut complete = false;
 
-        loop {
+        // A host/XEmbed can keep moving ancestors between server queries.
+        // Never turn rediscovery into an unbounded busy loop on the X thread.
+        for _ in 0..128 {
             let Some((mut mapped, tree)) = fetch_window_info(connection, current_window)? else {
                 // We got a BadWindow while trying to get a window's info, it must have been destroyed.
                 // Try to go back a layer and fetch the window's state and parent again
@@ -281,11 +284,14 @@ impl AncestorVisibilityState {
                             child_id,
                             &tree.children
                         );
+                        break;
                     } else {
                         rechecked_children.push(child_id);
                     }
 
-                    let Some(_) = ancestry.pop_id() else { unreachable!() };
+                    if ancestry.pop_id().is_none() {
+                        break;
+                    }
                     current_window = child_id;
                     continue;
                 }
@@ -311,6 +317,7 @@ impl AncestorVisibilityState {
 
             if tree.parent == tree.root {
                 // No need to get info for the root, we assume it's always there. We can just stop here.
+                complete = true;
                 break;
             }
 
@@ -318,6 +325,7 @@ impl AncestorVisibilityState {
             if let Some(parent) = NonZeroU32::new(tree.parent) {
                 current_window = parent;
             } else {
+                complete = true;
                 break;
             }
 
@@ -328,7 +336,7 @@ impl AncestorVisibilityState {
             }
         }
 
-        own_window_viewable.set(ancestry.check_all_mapped());
+        own_window_viewable.set(complete && ancestry.check_all_mapped());
 
         Ok(())
     }
@@ -362,4 +370,27 @@ fn fetch_window_info(
     };
 
     Ok(Some((mapped, tree)))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test identifiers are fixed nonzero values")]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reparent_discards_the_old_parent_and_destroyed_ancestry_is_not_visible() {
+        let id = |n| NonZeroU32::new(n).unwrap();
+        let ancestry = AncestryList::new(id(1));
+        ancestry.set_mapped(id(1), true);
+        ancestry.push(Ancestor { id: id(2), mapped: Cell::new(false) });
+        ancestry.push(Ancestor { id: id(3), mapped: Cell::new(true) });
+        assert!(ancestry.remove_after_window(id(1)));
+        assert!(ancestry.parent_id().is_none());
+        ancestry.push(Ancestor { id: id(4), mapped: Cell::new(true) });
+        assert_eq!(ancestry.parent_id(), Some(id(4)));
+        assert!(ancestry.check_all_mapped());
+        assert_eq!(ancestry.pop_id(), Some(id(4)));
+        assert_eq!(ancestry.pop_id(), Some(id(1)));
+        assert!(!ancestry.check_all_mapped());
+    }
 }

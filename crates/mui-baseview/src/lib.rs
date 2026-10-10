@@ -806,6 +806,32 @@ fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -
 }
 
 impl<V: View + 'static> WindowHandler for Adapter<V> {
+    fn frame_demand(&self) -> baseview::FrameDemand {
+        // ponytail: View::changed, plugin meters and a11y requests are polled.
+        // Push-based change notifications would remove this idle heartbeat.
+        const MODEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+        const RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(25);
+        let Ok(h) = self.handler.try_borrow() else {
+            return baseview::FrameDemand::Continuous;
+        };
+        let now = Instant::now();
+        let mut at = now.checked_add(MODEL_POLL_INTERVAL).unwrap_or(now);
+        let recovery_poll = now.checked_add(RECOVERY_POLL_INTERVAL).unwrap_or(now);
+        if let Some(wake) = h.driver.next_wake() {
+            at = at.min(wake);
+        }
+        if h.requests.redraw.load(Ordering::Acquire) {
+            at = now;
+        }
+        if h.unpainted || (h.gpu.is_none() && h.gpu_retry_at > now) {
+            at = at.min(h.gpu_retry_at.max(recovery_poll));
+        }
+        // GPU-INIT-DEMAND: at merge, if h.gpu_init.as_ref().is_some_and(|init|
+        // init.pending()), set at = at.min(recovery_poll).
+        // CPU presentation does not mean asynchronous GPU recovery is idle.
+        baseview::FrameDemand::At(at)
+    }
+
     fn on_frame(&self) -> Result<(), HandlerError> {
         if let Ok(mut h) = self.handler.try_borrow_mut() {
             let wake_start = h.driver.profiler().map(|_| Instant::now());
