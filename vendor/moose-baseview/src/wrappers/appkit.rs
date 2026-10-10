@@ -1,8 +1,10 @@
+mod callback;
 mod notification_center;
 mod timer;
 mod view;
 mod window;
 
+pub(crate) use callback::callback;
 pub use notification_center::*;
 use objc2::rc::Retained;
 use objc2_app_kit::NSView;
@@ -15,16 +17,10 @@ pub use window::*;
 
 use raw_window_handle::{HandleError, RawWindowHandle, WindowHandle};
 
-fn new_class_name(prefix: &str) -> CString {
-    // PANIC: CFUUIDCreate is not documented to return NULL.
-    let Some(uuid) = CFUUID::new(None) else { unreachable!() };
-    // PANIC: CFUUIDCreateString is not documented to return NULL.
-    let Some(uuid_str) = CFUUID::new_string(None, Some(&uuid)) else { unreachable!() };
-
-    let class_name = format!("{prefix}{uuid_str}");
-    // PANIC: This cannot have any NULL bytes
-    let Ok(class_name) = CString::new(class_name) else { unreachable!() };
-    class_name
+fn new_class_name(prefix: &str) -> Option<CString> {
+    let uuid = CFUUID::new(None)?;
+    let uuid_str = CFUUID::new_string(None, Some(&uuid))?;
+    CString::new(format!("{prefix}{uuid_str}")).ok()
 }
 
 pub fn extract_raw_window_handle(
