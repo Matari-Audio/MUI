@@ -441,14 +441,15 @@ fn set_size_holds_the_floor_and_a_fixed_editor_refuses() {
     assert_eq!(sized.size(), (200, 100));
 }
 
-/// truce's CLAP wrapper builds a fresh editor per `gui.create` and a host
-/// may set the scale only once: the next editor still opens at it.
 #[test]
-fn a_reopened_editor_keeps_the_host_scale() {
+fn host_scale_is_per_editor_and_survives_reopening_that_editor() {
     let params = Arc::new(Synth::new());
-    editor(&params).set_scale_factor(1.5);
-    let reopened = editor(&params);
-    assert_eq!(reopened.scale.get(), Some(1.5));
+    let mut first = editor(&params);
+    first.set_scale_factor(1.5);
+    first.close();
+    assert_eq!(first.scale.get(), Some(1.5));
+    let second = editor(&params);
+    assert_eq!(second.scale.get(), None);
 }
 
 #[test]
