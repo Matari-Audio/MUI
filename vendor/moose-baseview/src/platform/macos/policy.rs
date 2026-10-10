@@ -1,7 +1,35 @@
 //! AppKit-independent lifecycle/pacing policy; also runnable with a tiny rustc test harness.
 use crate::FrameDemand;
 use std::cell::{Cell, RefCell};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+#[derive(Default)]
+pub(super) struct WakeState {
+    revoked: AtomicBool,
+    queued: AtomicBool,
+}
+
+impl WakeState {
+    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
+    pub fn queue(&self) -> bool {
+        !self.revoked.load(Ordering::Acquire) && !self.queued.swap(true, Ordering::AcqRel)
+    }
+    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
+    pub fn drain(&self) -> bool {
+        self.queued.store(false, Ordering::Release);
+        !self.revoked.load(Ordering::Acquire)
+    }
+    pub fn revoke(&self) {
+        self.revoked.store(true, Ordering::Release);
+    }
+}
+
+pub(super) fn deadline_can_fire(
+    closed: bool, armed: Option<Instant>, callback_deadline: Instant,
+) -> bool {
+    !closed && armed == Some(callback_deadline)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Pace {
@@ -168,6 +196,41 @@ mod tests {
             })
         }));
         assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    fn queued_wakes_are_coalesced_and_revoked_before_main_queue_delivery() {
+        let wake = WakeState::default();
+        assert!(wake.queue());
+        assert!(!wake.queue());
+        assert!(wake.drain());
+        assert!(wake.queue());
+        wake.revoke();
+        assert!(!wake.drain());
+        assert!(!wake.queue());
+    }
+
+    #[test]
+    fn background_wake_after_close_is_rejected() {
+        let wake = std::sync::Arc::new(WakeState::default());
+        assert!(wake.queue());
+        wake.revoke();
+        let worker = std::sync::Arc::clone(&wake);
+        let Ok(queued) = std::thread::spawn(move || worker.queue()).join() else {
+            panic!("wake worker unexpectedly panicked");
+        };
+        assert!(!queued);
+        assert!(!wake.drain());
+    }
+
+    #[test]
+    fn replaced_deadline_or_close_rejects_late_timer() {
+        let old = Instant::now();
+        let new = old + Duration::from_secs(1);
+        assert!(deadline_can_fire(false, Some(old), old));
+        assert!(!deadline_can_fire(false, Some(new), old));
+        assert!(!deadline_can_fire(false, None, old));
+        assert!(!deadline_can_fire(true, Some(old), old));
     }
 
     #[test]

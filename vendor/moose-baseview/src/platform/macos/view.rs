@@ -1,7 +1,7 @@
 #![expect(deprecated, reason = "Allow use of NSFilenamesPboardType for now")]
 
 use super::keyboard::{make_modifiers, KeyboardState};
-use super::policy::{pacing, top_origin, HandlerSlot, Pace};
+use super::policy::{deadline_can_fire, pacing, top_origin, HandlerSlot, Pace, WakeState};
 use super::window::WindowSharedState;
 use crate::dpi::{LogicalPosition, LogicalSize, Size};
 use crate::host::Host;
@@ -36,7 +36,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
     Arc,
 };
 use std::time::Instant;
@@ -49,13 +49,6 @@ thread_local! {
 static NEXT_VIEW_ID: AtomicU64 = AtomicU64::new(1);
 #[cfg(debug_assertions)]
 static LIVE_VIEWS: AtomicU64 = AtomicU64::new(0);
-
-#[derive(Default)]
-struct WakeState {
-    revoked: AtomicBool,
-    #[allow(dead_code, reason = "coordinator wires common macOS requester dispatch at merge")]
-    queued: AtomicBool,
-}
 
 pub enum ViewParentingType {
     Parented { parent_view: Weak<NSView> },
@@ -267,7 +260,7 @@ impl BaseviewView {
             return;
         }
         // Revocation happens before any Objective-C call that can reenter us.
-        this.wake.revoked.store(true, Ordering::Release);
+        this.wake.revoke();
         let _ = VIEWS.try_with(|views| views.borrow_mut().remove(&this.view_id));
         let _keep_alive = this.view.retain();
         Self::detach_callbacks(this);
@@ -495,9 +488,11 @@ impl BaseviewView {
                         if let Some(view) = timer_view.load() {
                             if let Some(inner) = view.inner_ref() {
                                 // Reject an already queued callback from a replaced/invalidated timer.
-                                if !inner.state.closed.get()
-                                    && inner.armed_deadline.get() == Some(deadline)
-                                {
+                                if deadline_can_fire(
+                                    inner.state.closed.get(),
+                                    inner.armed_deadline.get(),
+                                    deadline,
+                                ) {
                                     inner.deadline_timer.take();
                                     inner.armed_deadline.set(None);
                                     Self::request_frame(inner);
@@ -523,14 +518,13 @@ impl BaseviewView {
         let wake = Arc::clone(&this.wake);
         let id = this.view_id;
         FrameRequester::new(move || {
-            if wake.revoked.load(Ordering::Acquire) || wake.queued.swap(true, Ordering::AcqRel) {
+            if !wake.queue() {
                 return;
             }
             let wake = Arc::clone(&wake);
             dispatch2::DispatchQueue::main().exec_async(move || {
                 callback("frame request on main queue", (), || {
-                    wake.queued.store(false, Ordering::Release);
-                    if wake.revoked.load(Ordering::Acquire) {
+                    if !wake.drain() {
                         return;
                     }
                     let view = VIEWS
@@ -696,7 +690,7 @@ impl BaseviewView {
 impl Drop for BaseviewView {
     fn drop(&mut self) {
         self.state.closed.set(true);
-        self.wake.revoked.store(true, Ordering::Release);
+        self.wake.revoke();
         let _ = VIEWS.try_with(|views| views.borrow_mut().remove(&self.view_id));
         if let Some(link) = self.display_link.take() {
             link.invalidate();

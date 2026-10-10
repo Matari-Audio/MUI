@@ -51,9 +51,6 @@ mod tests {
                 panic!("payload destructor");
             }
         }
-        assert_eq!(
-            super::callback("test payload", false, || std::panic::panic_any(Payload)),
-            false
-        );
+        assert!(!super::callback("test payload", false, || std::panic::panic_any(Payload)));
     }
 }

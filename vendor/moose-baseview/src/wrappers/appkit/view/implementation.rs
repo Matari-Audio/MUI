@@ -47,6 +47,9 @@ pub fn create_view_class<V: ViewImpl>() -> crate::platform::Result<&'static AnyC
         class.add_method(sel!(wantsUpdateLayer), property_yes as extern "C" fn(_, _) -> _);
         class.add_method(sel!(updateLayer), update_layer::<V> as extern "C" fn(_, _));
         class.add_method(sel!(setFrameSize:), set_frame_size::<V> as extern "C" fn(_, _, _));
+        class.add_method(sel!(setFrame:), set_frame::<V> as extern "C" fn(_, _, _));
+        class.add_method(sel!(setBounds:), set_bounds::<V> as extern "C" fn(_, _, _));
+        class.add_method(sel!(setBoundsSize:), set_bounds_size::<V> as extern "C" fn(_, _, _));
         class.add_method(
             sel!(resizeWithOldSuperviewSize:),
             resize_with_old_superview_size::<V> as extern "C" fn(_, _, _),
@@ -54,6 +57,7 @@ pub fn create_view_class<V: ViewImpl>() -> crate::platform::Result<&'static AnyC
         class.add_method(sel!(viewDidHide), visibility_changed::<V> as extern "C" fn(_, _));
         class.add_method(sel!(viewDidUnhide), visibility_changed::<V> as extern "C" fn(_, _));
         class.add_method(sel!(isFlipped), property_yes as extern "C" fn(_, _) -> _);
+        class.add_method(sel!(isOpaque), property_yes as extern "C" fn(_, _) -> _);
         class.add_method(
             sel!(preservesContentInLiveResize),
             property_no as extern "C" fn(_, _) -> _,
@@ -240,6 +244,44 @@ extern "C" fn set_frame_size<V: ViewImpl>(this: &View<V>, _: Sel, size: objc2_fo
         let _keep_alive = this.retain();
         unsafe {
             let () = msg_send![super(this, NSView::class()), setFrameSize: size];
+        }
+        if let Some(inner) = this.callback_inner() {
+            V::resized_by_appkit(inner);
+        }
+    });
+}
+
+// Hosts may set the whole frame/bounds instead of using setFrameSize:. In
+// particular, a zero-size child must not stay asleep after such a first layout.
+extern "C" fn set_frame<V: ViewImpl>(this: &View<V>, _: Sel, rect: NSRect) {
+    callback("setFrame", (), || {
+        let _keep_alive = this.retain();
+        unsafe {
+            let () = msg_send![super(this, NSView::class()), setFrame: rect];
+        }
+        if let Some(inner) = this.callback_inner() {
+            V::resized_by_appkit(inner);
+        }
+    });
+}
+
+extern "C" fn set_bounds<V: ViewImpl>(this: &View<V>, _: Sel, rect: NSRect) {
+    callback("setBounds", (), || {
+        let _keep_alive = this.retain();
+        unsafe {
+            let () = msg_send![super(this, NSView::class()), setBounds: rect];
+        }
+        if let Some(inner) = this.callback_inner() {
+            V::resized_by_appkit(inner);
+        }
+    });
+}
+
+extern "C" fn set_bounds_size<V: ViewImpl>(this: &View<V>, _: Sel, size: objc2_foundation::NSSize) {
+    callback("setBoundsSize", (), || {
+        let _keep_alive = this.retain();
+        unsafe {
+            let () = msg_send![super(this, NSView::class()), setBoundsSize: size];
         }
         if let Some(inner) = this.callback_inner() {
             V::resized_by_appkit(inner);

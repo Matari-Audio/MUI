@@ -12,8 +12,8 @@ were cherry-picked with coordinator approval; there are no additional common-fil
   callback-local autorelease pool. Timer/notification/main-queue blocks have
   the same guard. A single containment diagnostic is emitted per image
   (tracing, or stderr when tracing is disabled); the host's panic hook is not
-  replaced. Panic payloads and panicking logger/destructors cannot cause a
-  second Rust unwind. Panicking window handlers are quarantined/closed instead
+  replaced. Panic payloads, the containment logger and handler teardown are
+  guarded against a second Rust unwind. Panicking window handlers are quarantined/closed instead
   of being retried every refresh. PR #341's missing Rust-entry autorelease pools
   were ported to context/window/GL operations. Autoreleased selector return
   values leave our pool as retained objects, then autorelease into the caller's
@@ -22,7 +22,18 @@ were cherry-picked with coordinator approval; there are no additional common-fil
   first NSView class. A failed pin is an editor-creation error, not an unsafe
   fallback. CFUUID suffixes and one cached class per Rust view type per image
   remain; classes are NEVER disposed. This deliberately retains code/class
-  metadata for the process lifetime, not editors/renderers. Close revokes wakes
+  metadata for the process lifetime, not editors/renderers. Apple dyld source
+  `dyld/DyldAPIs.cpp:1405-1419,1444-1453` confirms RTLD_NODELETE's leaveMapped
+  policy (and currently allows dlopen of the macOS main executable); the pin
+  also intentionally retains its dlopen handle. This is source confirmation,
+  not a native unload test. Hot replacement at the same library path is NOT
+  promised: use a host restart or distinct versioned image paths. This pins the
+  image containing baseview, normally the statically linked plugin bundle; it
+  does not prove safety for callbacks in separate dynamically loaded libraries.
+  MUI std TLS destructors first registered BEFORE any view creation are outside
+  this guarantee; memo cleanup alone cannot unregister those destructors. The
+  coordinator must establish a plugin-load-time policy for that earlier phase.
+  Close revokes wakes
   first, invalidates display links and both timer types, unregisters every
   window observer, removes our tracking area, cancels IME focus and restores
   the previous responder BEFORE handler teardown. Late callbacks check closed,
@@ -45,11 +56,12 @@ were cherry-picked with coordinator approval; there are no additional common-fil
 - **Bugs 1, 3, 4 (first open, invisible/blurry editor, black flash):** override
   `makeBackingLayer` with CAMetalLayer and `wantsUpdateLayer`, set `wantsLayer`
   BEFORE insertion/handler construction, and fail creation if the backing layer
-  could not be established. Layer opacity is YES; scale tracks AppKit backing
+  could not be established. Layer/view opacity is YES; scale tracks AppKit backing
   changes/window moves; initial colour is AppKit's resolved window background,
   not transparent/black. Frame geometry belongs to AppKit; drawable geometry
   belongs to the renderer. Positive-size gating defers rendering a zero-size
-  editor; `setFrameSize:`/autoresizing wakes it when the host supplies size.
+  editor; whole-frame/bounds setters, `setFrameSize:` and autoresizing wake it
+  when the host supplies size.
   The flipped child is top-anchored using its superview's BOUNDS and isFlipped,
   including non-zero bounds origins. Standalone content views are NOT reanchored
   into their window's titlebar. Programmatic resize suppresses the native resize
@@ -110,26 +122,59 @@ wrap it in Some, just as Linux. The platform function routes through
 `BaseviewView::frame_requester(ViewRef)` and `BaseviewView::request_frame(ViewRef)`.
 No common files were changed beyond the approved shared-API cherry-picks.
 Until that cfg dispatch is merged, public Window::frame_requester still returns
-None on macOS. Three reasoned dead-code allowances cover that temporary seam.
+None on macOS. Reasoned dead-code allowances cover that temporary seam.
 
-## Verification (updated after final checks)
+## Verification
 
-Passed so far:
+All commands below passed from the worktree root. Every Cargo command used
+`flock /tmp/mui-cargo.lock`. Baseview uses its standalone manifest so its own
+minimal feature set and native test cfg are checked, rather than relying on
+workspace feature unification.
 
-- aarch64 Apple standalone baseview all-target check (default AND all features).
-- `cargo check -p mui-baseview --target aarch64-apple-darwin`.
-- Seven pure policy/lifecycle tests on Linux via a rustc harness importing the
-  real macOS policy module (only the shared FrameDemand enum is supplied by the
-  harness). They cover Idle/wake, At, visibility/revocation gating, top anchoring,
-  deferred close ordering/panic cleanup and independent editor slots.
-- `git diff --check` and scoped rustfmt.
+```sh
+flock /tmp/mui-cargo.lock cargo check -p moose-baseview --manifest-path vendor/moose-baseview/Cargo.toml --target aarch64-apple-darwin --all-targets
+flock /tmp/mui-cargo.lock cargo check -p moose-baseview --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-apple-darwin --all-targets
+flock /tmp/mui-cargo.lock cargo check -p moose-baseview --manifest-path vendor/moose-baseview/Cargo.toml --target aarch64-apple-darwin --all-targets --all-features
+flock /tmp/mui-cargo.lock cargo check -p mui-baseview --target aarch64-apple-darwin
+flock /tmp/mui-cargo.lock cargo clippy -p moose-baseview --manifest-path vendor/moose-baseview/Cargo.toml --target aarch64-apple-darwin --all-targets --all-features
+flock /tmp/mui-cargo.lock cargo clippy -p mui-baseview --target aarch64-apple-darwin --all-targets
+flock /tmp/mui-cargo.lock cargo test -p moose-baseview --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
+rustc --edition=2021 --test /tmp/mui-audit/mac-policy-test.rs -o /tmp/mui-audit/mac-policy-test
+/tmp/mui-audit/mac-policy-test
+git diff --check
+```
+
+- Ten pure policy/lifecycle tests passed on Linux via the rustc harness importing
+  the REAL macOS `policy.rs`. Only the three-case shared FrameDemand enum is
+  supplied by the harness. Coverage: Idle/wake, deadlines/stale timers,
+  visibility/revocation gating, top anchoring, deferred-close/panic cleanup,
+  independent editor slots, coalesced wakes and a background wake after close.
+- The native Linux baseview library suite passed 22 tests; it does NOT execute
+  any AppKit code. Two AppKit callback-guard tests are cross-compiled, not run.
+- macOS baseview Clippy has no findings in files changed by this work package.
+  It still reports inherited `ime.rs`/test warnings and the shared FrameDemand
+  exhaustive-enum warning; common files are owned by other workers. mui-baseview
+  Clippy passed without warnings. Linux tests have inherited xim lifetime warnings.
+- Scoped rustfmt and `git diff --check` passed. Vendor graft graph refreshed.
+
+To reproduce the Linux-only harness, put the shared enum in a temporary Rust
+file and import policy.rs by its absolute path:
+
+```rust
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameDemand { Continuous, Idle, At(std::time::Instant) }
+#[path = "/absolute/worktree/vendor/moose-baseview/src/platform/macos/policy.rs"]
+mod policy;
+fn main() {}
+```
 
 ## NOT verified
 
 - No macOS code was executed. Cross-compilation is not native/DAW validation.
 - Native macos-15 CI, Objective-C autorelease/retain/dealloc ordering under
   AccessKit/KVO, actual LIVE_VIEWS decrements, Instruments/Metal memory release,
-  and callbacks after dlclose/plugin unload.
+  and callbacks after dlclose/plugin unload. The two AppKit panic/payload
+  regression tests are type-checked only; run the native library suite in CI.
 - Real DAW open/close/unload/reopen, two instances of one plugin, and two
   independently linked plugins closed in every order; focused text/host shortcut
   behavior, IME, tracking under host sheets and inactive windows.
@@ -138,8 +183,11 @@ Passed so far:
 - macOS <14 timer pacing, macOS 14+ display link invalidation/occlusion,
   deadline accuracy, main-queue coalescing and cross-thread close/wake races.
 - End-to-end frame requester through the COMMON cfg seam (coordinator pending).
+- Pre-view MUI TLS destructors, callback images in separately loaded dylibs,
+  hot library replacement at the same path, and complete plugin-load policy.
 - Native faults, foreign Objective-C exceptions, OOM, driver faults and
-  panic=abort cannot be recovered with Rust catch_unwind.
+  panic=abort cannot be recovered with Rust catch_unwind. A double panic
+  inside caller code before control reaches our guard also aborts.
 
 Sources: RustAudio/baseview PR #341 diff; issue #124 and its #262 resolution;
 local objc2/AppKit bindings (0.3.2) and Context7 API references;
