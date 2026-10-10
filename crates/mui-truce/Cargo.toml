@@ -8,7 +8,7 @@ license.workspace = true
 # Only for applications that deliberately accept process termination on panic.
 # Never enable this in a plugin loaded by a DAW.
 [features]
-allow-panic-abort = []
+allow-panic-abort = ["mui-baseview/allow-panic-abort"]
 
 [dependencies]
 mui = { workspace = true, features = ["gpu-effects"] }

@@ -949,9 +949,11 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
         if h.unpainted || (h.gpu.is_none() && h.gpu_retry_at > now) {
             at = at.min(h.gpu_retry_at.max(recovery_poll));
         }
-        // GPU-INIT-DEMAND: at merge, if h.gpu_init.as_ref().is_some_and(|init|
-        // init.pending()), set at = at.min(recovery_poll).
-        // CPU presentation does not mean asynchronous GPU recovery is idle.
+        // CPU presentation does not mean asynchronous GPU recovery is idle:
+        // a pending background init is polled, its backoff lives in gpu_retry_at.
+        if h.gpu_init.as_ref().is_some_and(GpuInit::pending) {
+            at = at.min(recovery_poll);
+        }
         baseview::FrameDemand::At(at)
     }
 
