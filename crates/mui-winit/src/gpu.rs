@@ -14,11 +14,14 @@ pub struct Gpu {
     host: Option<Host>,
     init: Option<GpuInit>,
     retry: Retry,
+    cpu_retry: Retry,
+    gpu_permanent: bool,
     next_check: Instant,
     software: Option<mui::vello::software::Window<Arc<Window>>>,
     size: (u32, u32),
     gpu_error: Option<String>,
     current: bool,
+    _display: Box<winit::event_loop::OwnedDisplayHandle>,
     _reporting: mui::diagnostics::ReportingGuard,
 }
 
@@ -34,18 +37,21 @@ impl Gpu {
     ) -> Result<Self, String> {
         Ok(Self::create(window, display))
     }
-    fn create(window: Arc<Window>, _display: Box<winit::event_loop::OwnedDisplayHandle>) -> Self {
+    fn create(window: Arc<Window>, display: Box<winit::event_loop::OwnedDisplayHandle>) -> Self {
         let size = window.inner_size();
         Self {
             window,
             host: None,
             init: None,
             retry: Retry::default(),
+            cpu_retry: Retry::default(),
+            gpu_permanent: false,
             next_check: Instant::now(),
             software: None,
             size: (size.width, size.height),
             gpu_error: None,
             current: false,
+            _display: display,
             _reporting: mui::diagnostics::retain_reporter(),
         }
     }
@@ -67,23 +73,39 @@ impl Gpu {
                     self.host = Some(host);
                     self.gpu_error = None;
                     self.retry.reset();
+                    self.cpu_retry.reset();
+                    // Direct present() callers may install after scene resolve.
+                    // One redraw rebuilds the now GPU-capable material scene.
+                    self.window.request_redraw();
                 }
                 Err(error) => {
-                    if error.failure_class() == FailureClass::Permanent && let Some(software) = &mut self.software { software.finish_startup(self.size); }
+                    self.gpu_permanent = error.failure_class() == FailureClass::Permanent;
+                    if self.gpu_permanent {
+                        self.retry.reset();
+                    }
+                    if self.gpu_permanent
+                        && let Some(software) = &mut self.software
+                    {
+                        software.finish_startup(self.size);
+                    }
                     self.gpu_error = Some(error.to_string());
                 }
             }
         }
     }
     pub fn next_wake(&self, _now: Instant) -> Option<Instant> {
-        if self.init.as_ref().is_some_and(GpuInit::pending) {
-            Some(self.next_check)
-        } else {
+        [
             self.init
                 .as_ref()
-                .and_then(GpuInit::deadline)
-                .or_else(|| self.retry.deadline())
-        }
+                .filter(|i| i.pending())
+                .map(|_| self.next_check),
+            self.init.as_ref().and_then(GpuInit::deadline),
+            self.retry.deadline(),
+            self.cpu_retry.deadline(),
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
     pub fn window(&self) -> &Window {
         &self.window
@@ -128,8 +150,15 @@ impl Gpu {
         }
     }
     fn open_software(&mut self) -> Result<(), String> {
+        let open = if self.gpu_permanent
+            || std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"))
+        {
+            mui::vello::software::Window::new
+        } else {
+            mui::vello::software::Window::new_startup
+        };
         self.software = Some(
-            mui::vello::software::Window::new_startup(
+            open(
                 self.window.clone(),
                 (self.size.0.max(1), self.size.1.max(1)),
             )
@@ -144,6 +173,7 @@ impl Gpu {
         self.gpu_error = Some(error);
         // Drop the GPU surface before another presenter takes ownership of the window.
         self.host = None;
+        self.gpu_permanent = class == FailureClass::Permanent;
         if let Some(init) = &mut self.init {
             init.recover(class);
         }
@@ -175,11 +205,16 @@ impl Gpu {
         transform: Affine,
         overlay: Option<impl FnOnce(&mut dyn mui::vello::Canvas)>,
     ) -> Result<Option<EffectStats>, String> {
+        // Direct callers also make progress. Main App polls before resolving
+        // its material scene, so handover immediately switches GPU welding.
+        self.update();
         self.current = false;
         if self.size.0 == 0 || self.size.1 == 0 {
             return Ok(None);
         }
-        if !self.retry.ready(Instant::now()) && self.software.is_none() {
+        if (!self.retry.ready(Instant::now()) && self.software.is_none())
+            || (self.host.is_none() && !self.cpu_retry.ready(Instant::now()))
+        {
             return Ok(None);
         }
         self.window.pre_present_notify();
@@ -190,10 +225,10 @@ impl Gpu {
                 }
                 None => host.present(scene, transform),
             };
-            let class = frame
-                .as_ref()
-                .err()
-                .map_or(FailureClass::Transient, |e| e.failure_class());
+            let class = frame.as_ref().err().map_or(
+                FailureClass::Transient,
+                mui::vello::host::HostError::failure_class,
+            );
             let result = frame
                 .map_err(|e| e.to_string())
                 .and_then(|frame| self.after(&frame));
@@ -206,8 +241,11 @@ impl Gpu {
                 }
             };
         }
-        if self.software.is_none() {
-            self.open_software()?;
+        if self.software.is_none()
+            && let Err(error) = self.open_software()
+        {
+            self.cpu_retry.fail(Instant::now(), FailureClass::Transient);
+            return Err(error);
         }
         let Some(software) = &mut self.software else {
             return Err("CPU presenter unavailable".into());
@@ -215,7 +253,17 @@ impl Gpu {
         let presented = match overlay {
             Some(overlay) => software.present_with_overlay(scene, transform, self.size, overlay),
             None => software.present(scene, transform, self.size),
-        }?;
+        };
+        let presented = match presented {
+            Ok(presented) => {
+                self.cpu_retry.reset();
+                presented
+            }
+            Err(error) => {
+                self.cpu_retry.fail(Instant::now(), FailureClass::Transient);
+                return Err(error);
+            }
+        };
         self.current = !presented;
         if presented
             && self.init.is_none()
@@ -246,6 +294,7 @@ impl Gpu {
                 self.retry.fail(Instant::now(), FailureClass::Transient);
             }
             Frame::SurfaceLost => {
+                self.retry.fail(Instant::now(), FailureClass::Transient);
                 let Some(host) = &mut self.host else {
                     return Err("GPU presenter unavailable".into());
                 };
@@ -271,8 +320,8 @@ fn surface(
         None,
     );
     instance
-        .create_surface(wgpu::SurfaceTarget::from_window_without_display(
-            window.clone(),
-        ))
+        // Shared instances intentionally have no borrowed display. This safe
+        // target retains the window AND supplies its explicit display handle.
+        .create_surface(window.clone())
         .map_err(|e| e.to_string())
 }
