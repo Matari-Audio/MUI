@@ -43,12 +43,21 @@ fn cpu_presentation_fixture(resize_failure: bool) {
         handler: RefCell<Handler<Green>>,
         cx: WindowContext,
         phase: std::cell::Cell<u8>,
+        traced: std::cell::Cell<u8>,
         exposed: std::cell::Cell<bool>,
         resize_failure: bool,
+        recovered_size: std::cell::Cell<(u32, u32)>,
         result: RefCell<Option<Sender<Result<(), String>>>>,
     }
     impl WindowHandler for Probe {
         fn on_frame(&self) -> Result<(), HandlerError> {
+            if self.traced.replace(self.phase.get()) != self.phase.get() {
+                eprintln!(
+                    "native CPU recovery phase {}: {:?}",
+                    self.phase.get(),
+                    self.handler.borrow().requests.presentation()
+                );
+            }
             if self.phase.get() == 0 {
                 let result = (|| {
                     let mut handler = self.handler.borrow_mut();
@@ -58,20 +67,37 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                             .requests
                             .presentation()
                             .ok_or("missing initial GPU presentation")?;
-                        if presented.software || presented.size != (240, 200) {
-                            return Err("fixture did not establish a GPU frame".into());
+                        // CPU pixels come first; wait for staged GPU handover
+                        // instead of assuming driver initialization on first tick.
+                        if presented.software {
+                            if handler.software_only {
+                                return Err("GPU initialization permanently disabled".into());
+                            }
+                            return Ok(false);
+                        }
+                        if presented.size != (240, 200) {
+                            return Err("fixture did not establish the correct GPU extent".into());
                         }
                         handler.requests.resize(200, 160);
                         handler.tick(&self.cx);
                         let gpu = handler.gpu.as_ref().ok_or("missing initial GPU")?;
                         // Lose the device before X11 acknowledges the requested resize.
                         gpu.device().0.destroy();
+                        let deadline = Instant::now() + Duration::from_secs(2);
+                        while !gpu.device_lost() && Instant::now() < deadline {
+                            let _ = gpu.device().0.poll(wgpu::PollType::Poll);
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
                         if !gpu.device_lost() {
                             return Err("destroyed GPU device loss was not observed".into());
                         }
                     }
-                    Ok(())
+                    Ok(true)
                 })();
+                if matches!(result, Ok(false)) {
+                    return Ok(());
+                }
+                let result = result.map(|_| ());
                 if result.is_err() {
                     if let Some(send) = self.result.borrow_mut().take() {
                         let _ = send.send(result);
@@ -84,25 +110,55 @@ fn cpu_presentation_fixture(resize_failure: bool) {
             }
             if self.phase.get() == 4 {
                 let mut handler = self.handler.borrow_mut();
-                if handler.driver.size() != (200, 160) {
+                // A WM can constrain the request (XWayland here uses 200x161).
+                // Verify the acknowledged native extent, not our requested one.
+                if handler.driver.size() == (240, 200) {
                     return Ok(());
                 }
+                self.recovered_size.set(handler.driver.size());
                 handler.tick(&self.cx);
                 if (handler.gpu.is_some()
                     || handler.software.is_some()
-                    || !handler.software_only
+                    || handler.software_only
                     || !handler.unpainted)
                     && let Some(send) = self.result.borrow_mut().take()
                 {
                     let _ = send.send(Err(format!(
-                        "resize failure did not detach GPU: gpu={}, cpu={}, software_only={}, unpainted={}",
+                        "resize failure did not detach GPU for transient CPU recovery: gpu={}, cpu={}, software_only={}, unpainted={}",
                         handler.gpu.is_some(),
                         handler.software.is_some(),
                         handler.software_only,
                         handler.unpainted,
                     )));
                 }
-                self.phase.set(1);
+                self.phase.set(6);
+                return Ok(());
+            }
+            if self.phase.get() == 6 {
+                let mut handler = self.handler.borrow_mut();
+                handler.tick(&self.cx);
+                if let Some(presented) = handler.requests.presentation()
+                    && presented.software
+                    && presented.size == handler.driver.size()
+                {
+                    self.recovered_size.set(presented.size);
+                    self.phase.set(1);
+                }
+                // The present writes to baseview's borrowed X connection.
+                // Return so its post-callback flush runs before native readback.
+                return Ok(());
+            }
+            if self.phase.get() == 5 {
+                let mut handler = self.handler.borrow_mut();
+                handler.tick(&self.cx);
+                if let Some(presented) = handler.requests.presentation()
+                    && !presented.software
+                    && presented.size == self.recovered_size.get()
+                    && handler.gpu.as_ref().is_some_and(|gpu| gpu.generation() > 1)
+                    && let Some(send) = self.result.borrow_mut().take()
+                {
+                    let _ = send.send(Ok(()));
+                }
                 return Ok(());
             }
             if self.phase.get() == 2 {
@@ -122,7 +178,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                     return Err("expected a successfully presented CPU fallback".into());
                 }
                 let expected = if self.resize_failure {
-                    (200, 160)
+                    self.recovered_size.get()
                 } else {
                     (240, 200)
                 };
@@ -201,14 +257,21 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                         break;
                     }
                     if Instant::now() >= deadline {
-                        return Err(format!("CPU pixel was {:?}", pixels.data));
+                        return Err(format!(
+                            "CPU pixel phase {} was {:?}; status {:?}",
+                            self.phase.get(),
+                            pixels.data,
+                            handler.requests.presentation()
+                        ));
                     }
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 // A settled tick must not ask for another UI resolve/presentation.
                 let frame = handler.driver.last_frame();
                 handler.tick(&self.cx);
-                if handler.driver.last_frame() != frame || handler.unpainted {
+                if !self.resize_failure
+                    && (handler.driver.last_frame() != frame || handler.unpainted)
+                {
                     return Err("idle CPU editor did work".into());
                 }
                 if self.phase.get() == 1 {
@@ -223,6 +286,11 @@ fn cpu_presentation_fixture(resize_failure: bool) {
             })();
             if result.is_ok() && self.phase.get() == 1 {
                 self.phase.set(2);
+                *self.result.borrow_mut() = Some(send);
+                return Ok(());
+            }
+            if result.is_ok() && self.resize_failure {
+                self.phase.set(5);
                 *self.result.borrow_mut() = Some(send);
                 return Ok(());
             }
@@ -272,8 +340,10 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                     handler: RefCell::new(handler),
                     cx,
                     phase: std::cell::Cell::new(0),
+                    traced: std::cell::Cell::new(255),
                     exposed: std::cell::Cell::new(false),
                     resize_failure,
+                    recovered_size: std::cell::Cell::new((240, 200)),
                     result: RefCell::new(Some(send)),
                 })
             },
