@@ -563,6 +563,18 @@ impl BaseviewView {
     }
 
     fn sync_layer(this: ViewRef<Self>) {
+        /// `CGColorRef`, typed so objc2's message verification (debug builds)
+        /// matches AppKit's `^{CGColor=}` instead of rejecting `^v`.
+        #[repr(C)]
+        struct CGColor {
+            _opaque: [u8; 0],
+        }
+        // SAFETY: an opaque CoreGraphics struct only ever used behind a pointer.
+        unsafe impl objc2::encode::RefEncode for CGColor {
+            const ENCODING_REF: objc2::encode::Encoding =
+                objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGColor", &[]));
+        }
+
         if let Some(layer) = this.view.layer() {
             // AppKit owns backing-layer geometry; wgpu owns drawableSize and device.
             // CGFloat setters are gated on a bindings feature we don't need
@@ -578,7 +590,7 @@ impl BaseviewView {
                     unsafe { msg_send![class, windowBackgroundColor] };
                 if let Some(colour) = colour {
                     unsafe {
-                        let cg: *const std::ffi::c_void = msg_send![&*colour, CGColor];
+                        let cg: *const CGColor = msg_send![&*colour, CGColor];
                         let () = msg_send![&*layer, setBackgroundColor: cg];
                     }
                 }
