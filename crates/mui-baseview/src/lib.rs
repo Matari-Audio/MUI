@@ -754,10 +754,10 @@ impl<V: View> Handler<V> {
                         profiler.discard_pending_presentation();
                     }
                 }
-                Ok(Frame::Skipped) => {
-                    self.gpu_retry.fail(now, FailureClass::Transient);
-                    self.gpu_retry_at = self.gpu_retry.deadline().unwrap_or(now);
-                }
+                // Outdated/timed-out acquires are routine mid-resize; the host
+                // already reconfigured, so retry next tick instead of backing
+                // off (a backoff left the window black and at the old size).
+                Ok(Frame::Skipped) => {}
                 Ok(Frame::SurfaceLost) => {
                     self.gpu_retry.fail(now, FailureClass::Transient);
                     self.gpu_retry_at = self.gpu_retry.deadline().unwrap_or(now);
