@@ -763,6 +763,21 @@ fn a_redraw_request_from_the_host_thread_is_a_frame() {
 }
 
 #[test]
+fn focus_request_wakes_the_native_thread_and_coalesces_until_taken() {
+    let requests = Requests::default();
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    requests.bind_requester(Some(baseview::FrameRequester::new(move || {
+        counter.fetch_add(1, Ordering::Relaxed);
+    })));
+    requests.focus();
+    requests.focus();
+    assert_eq!(wakes.load(Ordering::Relaxed), 2);
+    assert!(requests.focus.swap(false, Ordering::AcqRel));
+    assert!(!requests.focus.swap(false, Ordering::AcqRel));
+}
+
+#[test]
 fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
     let mut h = handler((400, 300), 1.0);
     let heard = Arc::new(Mutex::new(Vec::new()));
