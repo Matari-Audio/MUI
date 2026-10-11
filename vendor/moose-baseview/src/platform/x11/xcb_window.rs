@@ -60,7 +60,12 @@ impl XcbWindow {
                     // As mentioned above, these two values are needed to be able to create a window
                     // with a depth of 32-bits when the parent window has a different depth
                     .colormap(visual_info.color_map)
-                    .border_pixel(0),
+                    .background_pixel(0)
+                    .border_pixel(0)
+                    // Keep the last frame in place on resize: the default
+                    // ForgetGravity clears the whole window to the background
+                    // (black) until the next frame lands.
+                    .bit_gravity(x11rb::protocol::xproto::Gravity::NORTH_WEST),
             )?
             .check()?;
 
