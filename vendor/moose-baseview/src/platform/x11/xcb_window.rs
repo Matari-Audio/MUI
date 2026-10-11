@@ -101,9 +101,10 @@ impl XcbWindow {
             requested.push_back((width, height));
         }
         drop(requested);
-        self.connection
-            .conn
-            .configure_window(self.id().get(), &ConfigureWindowAux::new().width(width).height(height))
+        self.connection.conn.configure_window(
+            self.id().get(),
+            &ConfigureWindowAux::new().width(width).height(height),
+        )
     }
 
     /// Whether a ConfigureNotify of `size` only echoes one of our own resizes
