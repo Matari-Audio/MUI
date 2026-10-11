@@ -2,7 +2,8 @@ use crate::dpi::PhysicalSize;
 use crate::platform::x11::error::CookieExt;
 use crate::platform::x11::visual_info::WindowVisualConfig;
 use crate::platform::X11Connection;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::num::{NonZero, NonZeroU32};
 use std::rc::Rc;
 use x11rb::connection::Connection;
@@ -21,6 +22,8 @@ pub struct XcbWindow {
     window_id: NonZeroU32,
     destroyed: Cell<bool>,
     color_map: Option<x11rb::protocol::xproto::Colormap>,
+    /// Sizes asked of the server, oldest first, whose ConfigureNotify has not arrived.
+    requested: RefCell<VecDeque<(u32, u32)>>,
 }
 
 impl XcbWindow {
@@ -74,6 +77,7 @@ impl XcbWindow {
             connection,
             destroyed: Cell::new(false),
             color_map: visual_info.color_map,
+            requested: RefCell::default(),
         })
     }
 
@@ -88,10 +92,25 @@ impl XcbWindow {
     pub fn resize(
         &self, size: PhysicalSize<u32>,
     ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
-        self.connection.conn.configure_window(
-            self.id().get(),
-            &ConfigureWindowAux::new().width(size.width.max(1)).height(size.height.max(1)),
-        )
+        let (width, height) = (size.width.max(1), size.height.max(1));
+        let mut requested = self.requested.borrow_mut();
+        if requested.back() != Some(&(width, height)) {
+            if requested.len() == 16 {
+                requested.pop_front();
+            }
+            requested.push_back((width, height));
+        }
+        drop(requested);
+        self.connection
+            .conn
+            .configure_window(self.id().get(), &ConfigureWindowAux::new().width(width).height(height))
+    }
+
+    /// Whether a ConfigureNotify of `size` only echoes one of our own resizes
+    /// that a later one has superseded. Forwarding it would hand the host a
+    /// stale size, and the host would snap the editor back to it.
+    pub fn is_stale_echo(&self, size: (u32, u32)) -> bool {
+        stale_echo(&mut self.requested.borrow_mut(), size)
     }
 
     pub fn reparent(
@@ -169,5 +188,25 @@ impl Drop for XcbWindow {
                 cookie.check_warn();
             }
         }
+    }
+}
+
+fn stale_echo(requested: &mut VecDeque<(u32, u32)>, size: (u32, u32)) -> bool {
+    let Some(i) = requested.iter().position(|r| *r == size) else { return false };
+    requested.drain(..=i);
+    !requested.is_empty()
+}
+
+#[cfg(test)]
+mod echo_tests {
+    use super::*;
+
+    #[test]
+    fn only_superseded_echoes_are_stale() {
+        let mut q = VecDeque::from([(800, 500), (900, 600)]);
+        assert!(stale_echo(&mut q, (800, 500)), "older request, newer pending");
+        assert!(!stale_echo(&mut q, (900, 600)), "latest request applies");
+        assert!(!stale_echo(&mut q, (1000, 700)), "a size we never asked for applies");
+        assert!(q.is_empty());
     }
 }

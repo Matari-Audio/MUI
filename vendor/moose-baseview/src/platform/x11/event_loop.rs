@@ -674,7 +674,10 @@ impl EventLoop {
                 self.refresh_rate_stale = true;
                 // These are coalesced and then handled asynchronously at the end of the event loop
                 if event.window == self.window.raw_id() {
-                    self.new_size = Some(PhysicalSize::new(event.width, event.height));
+                    let size = (u32::from(event.width), u32::from(event.height));
+                    if !self.window.xcb_window.is_stale_echo(size) {
+                        self.new_size = Some(PhysicalSize::new(event.width, event.height));
+                    }
                 } else if Some(event.window)
                     == self.window.visibility_state.parent_id().map(|i| i.get())
                 {
