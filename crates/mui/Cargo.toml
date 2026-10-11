@@ -7,9 +7,11 @@ license.workspace = true
 
 [features]
 default = []
+reporting = ["mui-vello/reporting"]
 gpu-effects = ["mui-vello/gpu-effects"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
+software-window = ["mui-vello/software-window"]
 
 [dependencies]
 color.workspace = true
@@ -40,6 +42,10 @@ required-features = ["cpu"]
 # The scale contract is asserted where it is demonstrated, so the example and
 # the test cannot drift apart.
 test = true
+
+[[example]]
+name = "large_lists"
+required-features = ["cpu"]
 
 [lints]
 workspace = true

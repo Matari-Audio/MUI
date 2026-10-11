@@ -145,6 +145,7 @@ impl<C, E: IntoEl> Response<C, E> {
 }
 
 mod bins;
+mod collections;
 mod color_picker;
 mod composition;
 mod controls;
@@ -164,3 +165,7 @@ pub use curve::{CurveEdit, curve};
 pub use pick::{ColorOpts, color_picker};
 pub use presets::{card, chip, glass, meter, panel, tile};
 pub use text::{Newline, TextEdit, TextOpts, text_edit, text_input};
+
+pub use collections::{
+    ListEvent, ListItem, ListOptions, ListRow, ListState, ScrollTo, uniform_list, variable_list,
+};

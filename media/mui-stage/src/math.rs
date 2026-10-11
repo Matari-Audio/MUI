@@ -103,6 +103,32 @@ impl Mul for Mat4 {
     }
 }
 
+/// The radical inverse of `i` in `base`: the Halton sequence's value.
+pub fn halton(mut i: u32, base: u32) -> f32 {
+    let (mut f, mut r) = (1f32, 0f32);
+    while i > 0 {
+        f /= base as f32;
+        r += f * (i % base) as f32;
+        i /= base;
+    }
+    r
+}
+
+/// Beauty sample `i`: eight 0..1 numbers from a Halton sequence, one prime
+/// base each, the same on every run. In pairs: the pixel offset, the lens,
+/// the area lights and the occlusion's turn.
+pub fn sample(i: u32) -> [f32; 8] {
+    const BASES: [u32; 8] = [2, 3, 5, 7, 11, 13, 17, 19];
+    // Index 0 is 0 in every base: start at 1.
+    BASES.map(|b| halton(i + 1, b))
+}
+
+/// A 0..1 square onto the unit disc, uniformly.
+pub fn disc(u: f32, v: f32) -> [f32; 2] {
+    let (r, a) = (u.sqrt(), v * std::f32::consts::TAU);
+    [r * a.cos(), r * a.sin()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -140,6 +166,30 @@ mod tests {
         assert_eq!(m.project([100., -50., -10.]), [1., -1., 0.]);
         let far = m.project([0., 0., -110.]);
         assert!((far[2] - 1.).abs() < 1e-6, "{far:?}");
+    }
+
+    #[test]
+    fn beauty_samples_are_a_fixed_low_discrepancy_sequence() {
+        // The same numbers every call: a render is reproducible.
+        assert_eq!(sample(5), sample(5));
+        assert_eq!(halton(1, 2), 0.5);
+        assert_eq!(halton(6, 2), 0.375);
+        assert!((halton(4, 3) - 4. / 9.).abs() < 1e-6);
+        // Stratified, unlike a random pick: sixteen samples put one pixel
+        // offset in each sixteenth across, nine one in each ninth down.
+        let mut across = [0; 16];
+        let mut down = [0; 9];
+        for i in 0..16 {
+            across[(sample(i)[0] * 16.) as usize] += 1;
+        }
+        for i in 0..9 {
+            down[(sample(i)[1] * 9.) as usize] += 1;
+        }
+        assert!(across.iter().all(|&c| c == 1), "{across:?}");
+        assert!(down.iter().all(|&c| c == 1), "{down:?}");
+        for i in 0..256 {
+            assert!(sample(i).iter().all(|v| (0. ..1.).contains(v)));
+        }
     }
 
     #[test]

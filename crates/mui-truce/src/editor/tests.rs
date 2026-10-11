@@ -6,7 +6,7 @@ use crate::window::Handler;
 use crate::window::baseview::{self, Event, MouseEvent};
 use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers, NamedKey};
 use mui::prelude::{Point, knob, toggle};
-use mui::scene::prelude::row;
+use mui::scene::prelude::{block, col, row};
 use std::sync::Mutex;
 use truce::prelude::*;
 use truce_core::editor::ClosureBridge;
@@ -441,14 +441,165 @@ fn set_size_holds_the_floor_and_a_fixed_editor_refuses() {
     assert_eq!(sized.size(), (200, 100));
 }
 
-/// truce's CLAP wrapper builds a fresh editor per `gui.create` and a host
-/// may set the scale only once: the next editor still opens at it.
 #[test]
-fn a_reopened_editor_keeps_the_host_scale() {
+fn host_scale_is_per_editor_and_survives_reopening_that_editor() {
     let params = Arc::new(Synth::new());
-    editor(&params).set_scale_factor(1.5);
-    let reopened = editor(&params);
-    assert_eq!(reopened.scale.get(), Some(1.5));
+    let mut first = editor(&params);
+    first.set_scale_factor(1.5);
+    first.close();
+    assert_eq!(first.scale.get(), Some(1.5));
+    let second = editor(&params);
+    assert_eq!(second.scale.get(), None);
+}
+
+#[test]
+fn scale_open_resize_orderings_keep_the_last_committed_logical_geometry() {
+    // A failed native factory makes this deterministic without an X server.
+    // It observes exactly the size/scale passed to native creation.
+    for order in [
+        [0, 1, 2],
+        [0, 2, 1],
+        [1, 0, 2],
+        [1, 2, 0],
+        [2, 0, 1],
+        [2, 1, 0],
+    ] {
+        let params = Arc::new(Synth::default());
+        let mut editor = editor(&params).resizable((200, 150));
+        for operation in order {
+            match operation {
+                0 => editor.set_scale_factor(1.5),
+                1 => {
+                    let (context, _) = context(&params);
+                    let expected = (editor.size(), editor.scale.policy());
+                    editor.open_native(&context, |opening| {
+                        assert_eq!((opening.size(), opening.scale.policy()), expected);
+                        None
+                    });
+                }
+                2 => assert!(editor.set_size(600, 450)),
+                _ => unreachable!(),
+            }
+        }
+        assert_eq!(editor.size(), (600, 450));
+        assert_eq!(editor.scale.get(), Some(1.5));
+        assert!(!editor.set_size(0, 0));
+        assert_eq!(editor.size(), (600, 450));
+    }
+}
+
+#[test]
+fn a_panicking_open_view_never_creates_a_native_window_or_retains_a_host() {
+    let params = Arc::new(Synth::default());
+    let mut editor = MuiEditor::new(params.clone(), Ui::default(), (400, 300), |_, _| {
+        panic!("author view during open");
+    });
+    let (context, _) = context(&params);
+    let mut created = false;
+    editor.open_native(&context, |_| {
+        created = true;
+        None
+    });
+    assert!(!created);
+    assert!(editor.window.is_none());
+    assert!(lock(&editor.shared).view.bridge.context().is_none());
+    editor.close(); // Failure cleanup is idempotent.
+}
+
+#[test]
+fn an_invalid_open_tree_is_not_a_successful_headless_handoff() {
+    let params = Arc::new(Synth::default());
+    let mut editor = MuiEditor::new(params.clone(), Ui::default(), (400, 300), |_, _| {
+        col([
+            block(10., 10.).id("duplicate"),
+            block(10., 10.).id("duplicate"),
+        ])
+    });
+    let (context, _) = context(&params);
+    let mut created = false;
+    editor.open_native(&context, |_| {
+        created = true;
+        None
+    });
+    assert!(!created);
+    assert!(editor.window.is_none());
+    assert!(lock(&editor.shared).view.bridge.context().is_none());
+}
+
+#[test]
+fn an_idle_view_panic_releases_editor_state_and_a_poisoned_model() {
+    let params = Arc::new(Synth::default());
+    let editor = editor(&params).changed(|| panic!("idle model"));
+    let (context, _) = context(&params);
+    lock(&editor.shared)
+        .view
+        .bridge
+        .attach(context.with_params(params.clone()));
+    let mut handler = Handler::new(
+        editor.shared.clone(),
+        editor.requests.clone(),
+        (400, 300),
+        1.0,
+    );
+    let mut editor = editor;
+    editor.idle_with(|_| {
+        handler.step();
+    });
+    assert!(editor.shared.is_poisoned());
+    assert!(editor.window.is_none());
+    assert!(lock(&editor.shared).view.bridge.context().is_none());
+}
+
+#[test]
+fn deferred_resize_waits_for_an_authoritative_host_size_notification() {
+    let params = Arc::new(Synth::default());
+    let mut editor = editor(&params).resizable((200, 150)).with_host_pump();
+    let (context, _) = context(&params);
+    lock(&editor.shared)
+        .view
+        .bridge
+        .attach(context.with_params(params));
+    assert!(!lock(&editor.shared).view.bridge.request_resize(600, 450));
+    assert_eq!(editor.size(), (400, 300));
+    assert!(editor.host_pump().unwrap().flush());
+    assert_eq!(editor.size(), (400, 300)); // The recording host rejects resize.
+    assert!(editor.set_size(600, 450));
+    assert_eq!(editor.size(), (600, 450));
+}
+
+#[test]
+fn queued_close_delivers_ends_after_releasing_the_model_lock() {
+    let params = Arc::new(Synth::default());
+    let mut editor = editor(&params).with_host_pump();
+    let shared = editor.shared.clone();
+    let (context, log) = context(&params);
+    let raw = context.bridge().clone();
+    let probe = Arc::new(truce_core::editor::ClosureBridge {
+        begin_edit: Box::new(|_| {}),
+        set_param: Box::new(|_, _| {}),
+        end_edit: Box::new(move |id| {
+            assert!(shared.try_lock().is_ok(), "model lock must be released");
+            raw.end_edit(id);
+        }),
+        get_param: Box::new(|_| 0.0),
+        get_param_plain: Box::new(|_| 0.0),
+        format_param: Box::new(|_| String::new()),
+        request_resize: Box::new(|_, _| false),
+        get_meter: Box::new(|_| 0.0),
+        get_state: Box::new(Vec::new),
+        set_state: Box::new(|_| {}),
+        transport: Box::new(|| None),
+    });
+    lock(&editor.shared)
+        .view
+        .bridge
+        .attach(PluginContext::new(probe, params));
+    let pump = editor.host_pump().unwrap();
+    pump.enqueue(crate::host::Mutation::Begin(10));
+    editor.idle();
+    editor.close();
+    assert_eq!(*log.lock().unwrap(), vec![Call::End(10)]);
+    assert!(!pump.flush());
 }
 
 #[test]

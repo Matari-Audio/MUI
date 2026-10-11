@@ -277,6 +277,35 @@ fn a_backdrop_blurs_the_edge_under_it() {
     assert_eq!(outside, [255, 0, 0, 255], "the blur leaked past the panel");
 }
 
+/// The in-app Blur knob reaches MUI as a numeric Gaussian sigma: ten points
+/// should spread an edge farther than one, rather than acting as on/off.
+#[test]
+fn backdrop_blur_strength_tracks_one_and_ten_points() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let out = readable(&device);
+    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut r = pollster::block_on(hybrid(&device, &queue));
+    let scene = |sigma| {
+        let half = |c: Color| block(160., 200.).fill(Fill::Color(c));
+        let root = stack![
+            row![half(Color::srgb(1., 0., 0.)), half(Color::srgb(0., 0., 1.))],
+            block(320., 100.).backdrop_blur(sigma).id("glass"),
+        ]
+        .id("root");
+        resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
+    };
+    let mut bleed = |sigma| {
+        let scene = scene(sigma);
+        r.render(&scene, Affine::IDENTITY, &view).unwrap();
+        let p = pixels(&device, &queue, &out);
+        (140..160).map(|x| u64::from(at(&p, x, 75)[2])).sum::<u64>()
+    };
+    let (one, ten) = (bleed(1.), bleed(10.));
+    assert!(ten > one + 100, "1pt={one}, 10pt={ten}");
+}
+
 /// A custom outline's drop shadow is its path blurred through the backdrop
 /// pass: shade just past the tip, falling off, none far away.
 #[test]
@@ -418,16 +447,28 @@ fn damaged_at(
 }
 
 fn same_pixels(part: &[u8], whole: &[u8]) {
-    let off = part.iter().zip(whole).filter(|(a, b)| a != b).count();
-    let worst = part
-        .iter()
-        .zip(whole)
-        .map(|(a, b)| a.abs_diff(*b))
-        .max()
-        .unwrap_or(0);
-    assert_eq!(
-        off, 0,
-        "{off} channels differ from a whole render, by up to {worst}"
+    near_pixels(part, whole, 0, "");
+}
+
+/// No channel of `part` more than `within` levels from `whole`; a failure
+/// says where the differing pixels are.
+fn near_pixels(part: &[u8], whole: &[u8], within: u8, what: &str) {
+    let mut off = 0;
+    let mut worst = 0;
+    let [mut x0, mut y0, mut x1, mut y1] = [u32::MAX, u32::MAX, 0, 0];
+    for (i, (a, b)) in part.iter().zip(whole).enumerate() {
+        if a != b {
+            let px = (i / 4) as u32;
+            let (x, y) = (px % SIZE[0], px / SIZE[0]);
+            [x0, y0, x1, y1] = [x0.min(x), y0.min(y), x1.max(x), y1.max(y)];
+            off += 1;
+            worst = worst.max(a.abs_diff(*b));
+        }
+    }
+    assert!(
+        worst <= within,
+        "{what}{off} channels differ from a whole render, by up to {worst}, \
+         in pixels {x0}..={x1} x {y0}..={y1}"
     );
 }
 
@@ -452,7 +493,19 @@ fn a_hover_renders_only_its_box_and_matches_a_whole_render() {
             "{}",
             stats.rendered_pixels
         );
-        same_pixels(&part, &whole);
+        // A part is drawn moved by whole tiles. At a fractional scale its
+        // f32 coordinates round apart from the whole frame's by an ulp, and
+        // the device's rasterizer turns that into a level or a few: Metal
+        // lands 96 channels 1 off, llvmpipe 106 channels up to 9 off, on
+        // the buttons' straight edges. At identity the move is exact. A box
+        // that misses what changed shows the change itself, Primary against
+        // Danger, far past this.
+        near_pixels(
+            &part,
+            &whole,
+            if xf == Affine::IDENTITY { 0 } else { 16 },
+            &format!("at {xf:?}: "),
+        );
     }
 }
 
@@ -624,6 +677,45 @@ fn a_change_under_a_backdrop_renders_everything() {
         return;
     };
     assert_eq!(stats.rendered_pixels, AREA);
+    same_pixels(&part, &whole);
+}
+
+/// A hover above an unchanged backdrop reuses its cached blur and paints only
+/// the row's damage; the patch must still match a fresh whole-frame render.
+#[test]
+fn a_hover_above_a_backdrop_reuses_blur_and_renders_only_its_box() {
+    let glass = |hot: bool| {
+        let popup = stack![
+            block(40., 30.)
+                .fill(if hot { Role::Danger } else { Role::Primary })
+                .offset(20., 20.)
+                .id("item")
+        ]
+        .size(100., 80.)
+        .fill(Fill::Color(Color::srgba(0.1, 0.1, 0.1, 0.65)))
+        .backdrop_blur(10.)
+        .offset(200., 20.)
+        .float()
+        .id("popup");
+        let root = stack![
+            row![
+                block(160., 200.).fill(Fill::Color(Color::srgb(1., 0., 0.))),
+                block(160., 200.).fill(Fill::Color(Color::srgb(0., 0., 1.))),
+            ],
+            popup,
+        ]
+        .id("root");
+        resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(&glass(false), &glass(true)) else {
+        return;
+    };
+    assert!(stats.rendered_pixels > 0, "the popup row did not change");
+    assert!(
+        stats.rendered_pixels < AREA / 4,
+        "rendered {} of {AREA} target pixels",
+        stats.rendered_pixels
+    );
     same_pixels(&part, &whole);
 }
 

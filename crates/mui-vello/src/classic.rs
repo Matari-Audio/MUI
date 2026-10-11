@@ -169,6 +169,11 @@ impl Canvas for Classic<'_> {
             p,
         );
     }
+    fn fill_path_with_rule(&mut self, p: &BezPath, rule: Fill) -> bool {
+        self.scene
+            .fill(rule, self.transform, &self.brush, self.brush_transform, p);
+        true
+    }
     fn stroke_path(&mut self, p: &BezPath) {
         self.scene.stroke(
             &self.stroke,

@@ -1,0 +1,16 @@
+# A moose plugin mui-cut's adapter builds and plays (tests/sound.rs): a
+# sine at its Pitch while a note is held, its Level loud. Its Cargo.lock
+# must never change.
+[package]
+name = "fixture-moose-tone"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+moose = { git = "https://github.com/Matari-Audio/moose", rev = "bffa4677d0b82119d38566ce7e932dc5c463d497", default-features = false, features = ["mui"] }
+
+[workspace]

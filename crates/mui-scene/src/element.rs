@@ -348,6 +348,10 @@ pub struct Element {
 /// The rarely set half of an [`Element`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
+    /// Editing layers resolved against the final text frame.
+    pub editable_text: Option<crate::EditableText>,
+    /// Paint-only clockwise radians about the final frame's centre.
+    pub rotation: Option<f64>,
     /// A string this text node is at least as wide as, whatever it currently
     /// says. See [`Styled::reserve`].
     pub reserve: Option<String>,
@@ -393,6 +397,13 @@ pub struct Extras {
     pub border_join: Option<Id>,
     /// Set by the runtime on the root of a memoised subtree (`Ui::memo`).
     pub memo: Option<Memo>,
+    /// Validated logical scroll-content extent declared by a virtual list.
+    /// Allows content descendants to exceed the ordinary layout extent while
+    /// the viewport and unrelated nodes keep their normal cap. The Ui runtime
+    /// accepts finite positive logical and scaled values up to `f32::MAX / 1024`.
+    /// Retained with memoized subtrees; never changes native surface sizes or
+    /// tree budgets.
+    pub virtual_scroll_extent: Option<f64>,
 }
 
 /// The root of a memoised subtree. A resolve records where each memo's
@@ -405,6 +416,8 @@ pub struct Memo {
 }
 impl Extras {
     const NONE: Self = Self {
+        editable_text: None,
+        rotation: None,
         reserve: None,
         reserve_all: None,
         description: None,
@@ -424,6 +437,7 @@ impl Extras {
         inset_surface: None,
         border_join: None,
         memo: None,
+        virtual_scroll_extent: None,
     };
 }
 impl Default for Extras {
@@ -867,6 +881,18 @@ impl Paints for Style {
 /// ```
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
+
+    /// Rotate this node and its subtree clockwise by `radians` about its
+    /// solved frame's centre. Layout frames and sibling placement stay the
+    /// same; paint, clipping, hit geometry and local pointer coordinates
+    /// rotate together. Angles must be finite; full turns are equivalent.
+    ///
+    /// A wrapper preserves modifier order: rotate an offset child by putting
+    /// the rotation on its parent, rather than rotating the child's image.
+    fn rotation(mut self, radians: f64) -> Self {
+        self.element_mut().extras_mut().rotation = Some(radians);
+        self
+    }
 
     /// Material-weld immediate non-floating, non-excluded plate children:
     /// their fills and borders blend into one image across the seams.

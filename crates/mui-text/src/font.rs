@@ -152,6 +152,7 @@ pub struct Font(pub(crate) Arc<FontData>);
 pub(crate) struct FontData {
     pub(crate) id: u64,
     pub(crate) bytes: Arc<[u8]>,
+    pub(crate) index: u32,
     /// harfrust's lookup accelerators for the face: the expensive part of
     /// setting a shaper up, and the same at every size and axis position.
     pub(crate) shaper: OnceLock<ShaperData>,
@@ -165,12 +166,19 @@ impl Font {
     /// Parse `bytes` as one font face. Bytes no parser accepts are an error
     /// here, once, rather than on every run shaped with them.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Result<Self, Error> {
+        Self::from_index(bytes, 0)
+    }
+    /// Parse a face in a TrueType/OpenType collection, or index 0 in a single font.
+    /// The index is retained for shaping and rendering; each opened face has its
+    /// own cache identity even when several faces share the same bytes.
+    pub fn from_index(bytes: impl Into<Arc<[u8]>>, index: u32) -> Result<Self, Error> {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let bytes = bytes.into();
-        FontRef::new(&bytes).map_err(Error::Font)?;
+        FontRef::from_index(&bytes, index).map_err(Error::Font)?;
         Ok(Self(Arc::new(FontData {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
             bytes,
+            index,
             shaper: OnceLock::new(),
             plans: Mutex::new(Vec::new()),
         })))
@@ -180,9 +188,13 @@ impl Font {
     pub fn id(&self) -> u64 {
         self.0.id
     }
+    /// Face index within [`AsRef::as_ref`]'s font bytes.
+    pub fn index(&self) -> u32 {
+        self.0.index
+    }
     pub(crate) fn font_ref(&self) -> Result<FontRef<'_>, Error> {
         // Validated in `new`; the table directory is all this re-reads.
-        FontRef::new(&self.0.bytes).map_err(Error::Font)
+        FontRef::from_index(&self.0.bytes, self.0.index).map_err(Error::Font)
     }
 }
 impl AsRef<[u8]> for Font {
@@ -206,6 +218,7 @@ impl std::fmt::Debug for Font {
         f.debug_struct("Font")
             .field("id", &self.0.id)
             .field("len", &self.0.bytes.len())
+            .field("index", &self.0.index)
             .finish()
     }
 }
@@ -327,6 +340,22 @@ mod tests {
             normalized_coords(&symbols(), 24., &[("wght", 100.)]).unwrap()[3],
             -16384
         );
+    }
+
+    #[test]
+    fn collection_faces_keep_their_index_for_shaping_and_outlines() {
+        let bytes: Arc<[u8]> = crate::test_fonts::collection().into();
+        let first = Font::from_index(bytes.clone(), 0).unwrap();
+        let second = Font::from_index(bytes.clone(), 1).unwrap();
+        assert_eq!(first.index(), 0);
+        assert_eq!(second.index(), 1);
+        assert_ne!(first.id(), second.id());
+        assert!(Font::from_index(bytes, 2).is_err());
+        assert!(Font::from_index(epaint_default_fonts::HACK_REGULAR, 1).is_err());
+        let collected = crate::text_run(&[second], "AV", 24., &[], 0.05).unwrap();
+        let plain = crate::text_run(&[crate::test_fonts::inter()], "AV", 24., &[], 0.05).unwrap();
+        assert_eq!(collected.advance, plain.advance);
+        assert_eq!(collected.path, plain.path);
     }
 
     #[test]

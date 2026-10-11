@@ -1,0 +1,89 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "sunrise",
+      "duration": 10.0,
+      "background": "#0e0f14",
+      "mode": "3d",
+      "sky": {
+        "model": "physical",
+        "elevation": [
+          { "t": 0.0, "v": -4.0, "interp": "bezier" },
+          { "t": 3.0, "v": 4.0, "interp": "bezier" },
+          { "t": 10.0, "v": 80.0, "interp": "bezier" }
+        ],
+        "azimuth": -28.0,
+        "cover": 0.3,
+        "wind": 0.03,
+        "turbidity": 2.4,
+        "ground_albedo": 0.2
+      },
+      "ground": { "y": 560.0, "color": "#5d6066", "reflect": 0.25, "radius": 9000.0 },
+      "bloom": { "strength": 0.4, "threshold": 1.2 },
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 400.0,
+          "rx": [
+            { "t": 0.0, "v": -4.0, "interp": "bezier" },
+            { "t": 10.0, "v": 2.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": -10.0, "interp": "bezier" },
+            { "t": 10.0, "v": 8.0, "interp": "bezier" }
+          ],
+          "distance": 1500.0,
+          "fov": 42.0
+        },
+        {
+          "id": "pane",
+          "kind": "rect",
+          "x": 440.0,
+          "y": 390.0,
+          "z": 60.0,
+          "width": 340.0,
+          "height": 300.0,
+          "radius": 32.0,
+          "fill": "#e8f1ff",
+          "ry": 28.0,
+          "extrude": 26.0,
+          "edge": "#c9d6e6",
+          "material": { "transmission": 1.0, "roughness": 0.02, "ior": 1.5, "bevel": 16.0, "thickness": 26.0 }
+        },
+        {
+          "id": "disc",
+          "kind": "ellipse",
+          "x": 860.0,
+          "y": 400.0,
+          "z": 120.0,
+          "width": 280.0,
+          "height": 280.0,
+          "fill": "#d9dce3",
+          "ry": -32.0,
+          "extrude": 22.0,
+          "edge": "#9a9ea8",
+          "material": { "metallic": 1.0, "roughness": 0.14 }
+        },
+        {
+          "id": "knot",
+          "kind": "model",
+          "path": "knot.glb",
+          "x": 650.0,
+          "y": 470.0,
+          "z": 300.0,
+          "height": 170.0,
+          "fill": "#e9c27a",
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "linear" },
+            { "t": 10.0, "v": 120.0, "interp": "linear" }
+          ],
+          "material": { "metallic": 1.0, "roughness": 0.22 }
+        }
+      ]
+    }
+  ]
+}

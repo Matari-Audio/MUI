@@ -217,7 +217,7 @@ cannot be typed twice. `bind_bool` exists for toggles.
 
 - Edition 2024, `rust-version`, `[workspace.lints]`, `[workspace.dependencies]`
   (every internal crate + shared external versions).
-- `mui-stage`, `mui-reel`, `mui-motion-bridge` and `tools/kurv-*` move to
+- `mui-stage`, `mui-reel`, `mui-motion-bridge` and the plugin adapter tools move to
   `media/`, a separate workspace depending on `../crates/*` by path.
 - New crates: `mui-material` (split from mui-scene), `mui-symbols`.
 - Spacing tokens move from mui-geometry to mui-layout.

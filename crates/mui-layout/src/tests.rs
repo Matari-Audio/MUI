@@ -291,6 +291,69 @@ fn aspect_derives_the_missing_axis() {
 }
 
 #[test]
+fn aspect_fit_respects_both_axes_intrinsic_flex_and_ratio_validation() {
+    let item = |ratio| Node::content().aspect_fit(ratio).id("fit");
+    for (offered, ratio, expected) in [
+        (Size::new(80., 40.), 1., Size::new(40., 40.)),
+        (Size::new(40., 80.), 1., Size::new(40., 40.)),
+        (Size::new(80., 30.), 2., Size::new(60., 30.)),
+        (Size::new(30., 80.), 0.5, Size::new(30., 60.)),
+    ] {
+        let tree = stack([item(ratio).full()]);
+        let layout = resolve(&tree, Some(offered), Limits::default()).unwrap();
+        assert_eq!(layout.frame("fit").unwrap().size, expected);
+    }
+    let intrinsic = resolve_with(
+        &item(2.),
+        None,
+        Limits::default(),
+        SpacingScale::DEFAULT,
+        |_, _| Size::new(80., 30.),
+    )
+    .unwrap();
+    assert_eq!(intrinsic.size, Size::new(60., 30.));
+    for vertical in [false, true] {
+        let fitted = item(1.).flex(1.);
+        let sibling = block(20., 20.).shrink(0.).id("sibling");
+        let (tree, offered) = if vertical {
+            (col([fitted, sibling]), Size::new(40., 100.))
+        } else {
+            (row([fitted, sibling]), Size::new(100., 40.))
+        };
+        let layout = resolve(&tree, Some(offered), Limits::default()).unwrap();
+        let frame = layout.frame("fit").unwrap();
+        assert_eq!(
+            frame.size,
+            Size::new(40., 40.),
+            "flex allocation preserves aspect within its cross-axis room"
+        );
+        let sibling = layout.frame("sibling").unwrap();
+        assert!(if vertical {
+            sibling.y >= frame.bottom()
+        } else {
+            sibling.x >= frame.right()
+        });
+    }
+    let old = resolve(
+        &stack([Node::content().w(Len::Pct(100.)).aspect(1.).id("old")]),
+        Some(Size::new(80., 40.)),
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        old.frame("old").unwrap().size,
+        Size::new(80., 80.),
+        "existing aspect remains width-first"
+    );
+    for ratio in [0., -1., f64::NAN, f64::INFINITY] {
+        assert_eq!(
+            resolve(&item(ratio), Some(Size::new(80., 40.)), Limits::default()).unwrap_err(),
+            Error::InvalidValue
+        );
+    }
+}
+
+#[test]
 fn grid_flows_equal_columns_and_shares_vertical_surplus() {
     let cells = (0..5).map(|i| block(10., 10.).id(format!("c{i}")));
     let g = grid(2, cells).id("g").gap(4.);
@@ -1024,7 +1087,7 @@ fn min_size_is_the_intrinsic_floor_and_a_scroll_gives_up_its_axis() {
 
 #[test]
 fn min_col_widens_a_hugging_grid_instead_of_squeezing_its_columns() {
-    // A KURV modal: nothing offers it a width, so the grid used to keep its
+    // A synth editor's modal: nothing offers it a width, so the grid used to keep its
     // declared columns at the width of their narrowest content and ignore the
     // minimum entirely. Hugging is not a licence to go under a declared floor.
     let modal = |min: f64| {
@@ -1096,7 +1159,7 @@ fn a_row_shrinks_content_only_down_to_its_min_content() {
     .unwrap();
     assert_eq!(w(&l, "a"), 100.);
 }
-/// KURV's parameter well: a wrapping row, width 100% through padded
+/// A synth's parameter well: a wrapping row, width 100% through padded
 /// columns, in a hugging column beside a fixed port. Measure used to break
 /// the lines at one width and arrange at a narrower one, so a third line
 /// hung below the row's two-line height.
@@ -1162,7 +1225,7 @@ fn a_wrap_row_under_a_flex_share_arranges_the_lines_it_measured() {
         assert!(port.size.width > 23., "{}", port.size.width);
     }
 }
-/// KURV's unison panel: a `min_col` grid and a wrapping row in a flex item.
+/// A synth's unison panel: a `min_col` grid and a wrapping row in a flex item.
 /// The grid can drop columns down to one, so that is its floor: held at its
 /// hugging (all-columns) floor the item overflowed its row, and each
 /// re-measure at a new share moved the floor and the share again, so the
@@ -1244,5 +1307,187 @@ fn a_squeezed_column_of_wrapped_texts_overflows_rather_than_overlapping() {
         );
         assert!(f.y >= below, "n{i} starts below n{}: {f:?}", i.max(1) - 1);
         below = f.y + f.size.height;
+    }
+}
+
+#[test]
+fn vertical_flex_share_settles_nested_grid_rows_and_cached_layout() {
+    let pane = |id: &str| {
+        col((0..100).map(|_| block(260., 30.).shrink(0.)))
+            .h(Len::Pct(100.))
+            .min_h(0.)
+            .scroll()
+            .id(id)
+    };
+    let browser = grid(
+        1,
+        [
+            pane("sources"),
+            block(276., 10.).id("split"),
+            pane("presets"),
+        ],
+    )
+    .grid_tracks([GridTrack::MinFr { min: 0., fr: 1. }])
+    .grid_rows([
+        GridTrack::MinFr { min: 29., fr: 70. },
+        GridTrack::Px(10.),
+        GridTrack::MinFr { min: 80., fr: 30. },
+    ])
+    .w(276.)
+    .h(Len::Pct(100.))
+    .anchor(Align::End, Align::Start)
+    .id("browser");
+    for basis in [Len::Auto, Len::Px(0.), Len::Px(1000.), Len::Px(442.)] {
+        let middle = row([stack([browser.clone()]).w(276.).h(Len::Pct(100.))])
+            .h(basis)
+            .grow(1.)
+            .min_h(0.)
+            .max_size((900., 500.))
+            .id("middle");
+        let tree = col([
+            block(900., 40.).shrink(0.),
+            middle,
+            block(900., 118.).shrink(0.),
+        ])
+        .w(Len::Pct(100.))
+        .h(Len::Pct(100.));
+        let mut cache = LayoutCache::default();
+        for height in [300., 600., 600.2, 720., 600.] {
+            let offer = Some(Size::new(900., height));
+            let fresh = resolve(&tree, offer, Limits::default()).unwrap();
+            let viewport = (height - 158.).min(500.);
+            let presets = ((viewport - 10.) * 0.3).max(80.);
+            let sources = viewport - 10. - presets;
+            let expected = [
+                ("middle", 40., viewport),
+                ("browser", 40., viewport),
+                ("sources", 40., sources),
+                ("split", 40. + sources, 10.),
+                ("presets", 50. + sources, presets),
+            ];
+            for (id, y, h) in expected {
+                let frame = fresh.frame(id).unwrap();
+                assert!((frame.y - y).abs() < 1e-8, "{id}: {frame:?}");
+                assert!((frame.size.height - h).abs() < 1e-8, "{id}: {frame:?}");
+            }
+            for _ in 0..3 {
+                let cached = resolve_cached_with(
+                    &tree,
+                    offer,
+                    Limits::default(),
+                    SpacingScale::DEFAULT,
+                    &mut cache,
+                    |_, _| {},
+                    |_, _| Size::ZERO,
+                )
+                .unwrap();
+                assert_eq!(cached, fresh);
+            }
+            assert_eq!(
+                cache.stats().measured_nodes,
+                0,
+                "a warm grid keeps cached measures"
+            );
+        }
+    }
+}
+
+#[test]
+fn vertical_remeasurement_keeps_horizontal_room_without_cross_stretch() {
+    let body = col([Node::content().id("text")])
+        .h(Len::Pct(100.))
+        .grow(1.)
+        .min_h(0.)
+        .align(Align::Start)
+        .id("body");
+    let tree = col([block(100., 20.).shrink(0.), body])
+        .size(100., 100.)
+        .align(Align::Start);
+    let metric = |_: &(), room: Option<f64>| {
+        if room.is_some_and(|width| width <= 100.) {
+            Size::new(100., 40.)
+        } else {
+            Size::new(120., 20.)
+        }
+    };
+    let fresh = resolve_with(
+        &tree,
+        None,
+        Limits::default(),
+        SpacingScale::DEFAULT,
+        metric,
+    )
+    .unwrap();
+    assert_eq!(fresh.frame("text").unwrap().size, Size::new(100., 40.));
+    assert_eq!(fresh.frame("body").unwrap().size, Size::new(100., 80.));
+    let mut cache = LayoutCache::default();
+    for _ in 0..3 {
+        let cached = resolve_cached_with(
+            &tree,
+            None,
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            &mut cache,
+            |_, _| {},
+            metric,
+        )
+        .unwrap();
+        assert_eq!(cached, fresh);
+    }
+}
+
+#[test]
+fn vertical_wrapping_flex_item_settles_cross_width_at_final_height() {
+    let controls = col((0..3).map(|i| block(20., 20.).id(format!("control-{i}"))))
+        .wrap()
+        .h(0.)
+        .grow(1.)
+        .id("controls");
+    let tree = col([controls]).size(120., 50.).align(Align::Start);
+    let fresh = resolve(&tree, None, Limits::default()).unwrap();
+    assert_eq!(fresh.frame("controls").unwrap().size, Size::new(40., 50.));
+    assert_eq!(fresh.frame("control-0").unwrap().x, 0.);
+    assert_eq!(fresh.frame("control-1").unwrap().x, 0.);
+    assert_eq!(fresh.frame("control-2").unwrap().x, 20.);
+    let mut cache = LayoutCache::default();
+    for _ in 0..3 {
+        let cached = resolve_cached_with(
+            &tree,
+            None,
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            &mut cache,
+            |_, _| {},
+            |_, _| Size::ZERO,
+        )
+        .unwrap();
+        assert_eq!(cached, fresh);
+    }
+}
+
+#[test]
+fn equal_intrinsic_vertical_share_still_settles_percentage_grid_height() {
+    let grid = grid(1, [stack([block(100., 100.)]).h(Len::Pct(100.)).id("cell")])
+        .grid_rows([GridTrack::MinFr { min: 0., fr: 1. }])
+        .h(Len::Pct(50.))
+        .id("grid");
+    let body = col([grid]).grow(1.).min_h(0.);
+    let tree = col([block(100., 100.).shrink(0.), body]).size(100., 200.);
+    let fresh = resolve(&tree, None, Limits::default()).unwrap();
+    assert_eq!(fresh.frame("grid").unwrap().size.height, 50.);
+    assert_eq!(fresh.frame("cell").unwrap().size.height, 50.);
+    let mut cache = LayoutCache::default();
+    for _ in 0..3 {
+        let cached = resolve_cached_with(
+            &tree,
+            None,
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            &mut cache,
+            |_, _| {},
+            |_, _| Size::ZERO,
+        )
+        .unwrap();
+        assert_eq!(cached, fresh);
     }
 }

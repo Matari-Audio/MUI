@@ -8,6 +8,7 @@ members = [
   "mui-reel",
   "mui-motion-bridge",
   "mui-cut",
+  "mui-stage-rt",
 ]
 resolver = "2"
 

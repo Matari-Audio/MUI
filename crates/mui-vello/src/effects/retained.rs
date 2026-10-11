@@ -7,7 +7,46 @@ use crate::{
 use mui_geometry::PathCommand;
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Vello's compute pipelines and atlas are device-wide; retained encodings and
+/// targets stay per window. The short queue-submit critical section is serialized.
+#[derive(Clone)]
+pub(crate) struct SharedVello {
+    renderer: Arc<Mutex<vello::Renderer>>,
+    pending: Arc<Mutex<Vec<ImageUpdate>>>,
+    passes: Arc<[Passes; 2]>,
+    weld: Arc<WeldTextures>,
+}
+enum ImageUpdate {
+    Override(
+        ImageData,
+        Option<wgpu::TexelCopyTextureInfoBase<wgpu::Texture>>,
+    ),
+    Dirty(ImageData),
+}
+impl SharedVello {
+    fn override_image(
+        &self,
+        image: &ImageData,
+        texture: Option<wgpu::TexelCopyTextureInfoBase<wgpu::Texture>>,
+    ) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(ImageUpdate::Override(image.clone(), texture));
+    }
+    fn mark_override_image_dirty(&self, image: &ImageData) {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(ImageUpdate::Dirty(image.clone()));
+    }
+    fn passes(&self, device: &wgpu::Device, format: wgpu::TextureFormat) -> Passes {
+        let index = usize::from(format == wgpu::TextureFormat::Bgra8Unorm);
+        self.passes[index].for_window(device)
+    }
+}
 use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
 
 /// Classic Vello on the host's device, retained: the frame is encoded once
@@ -23,7 +62,7 @@ use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
 pub struct GpuRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
-    vello: vello::Renderer,
+    vello: SharedVello,
     scene: vello::Scene,
     /// A backdrop's prefix, encoded apart so it can be rendered first.
     prefix: vello::Scene,
@@ -59,6 +98,7 @@ pub struct GpuRenderer {
     presented: Option<wgpu::TextureView>,
     /// The present writes straight alpha: see [`GpuRenderer::set_straight_alpha`].
     straight: bool,
+    format: wgpu::TextureFormat,
 }
 
 /// Vello's output: compute shaders write only a storage texture, so the
@@ -237,6 +277,16 @@ impl Passes {
         }
     }
 
+    fn for_window(&self, device: &wgpu::Device) -> Self {
+        Self {
+            layout: self.layout.clone(),
+            blur: self.blur.clone(),
+            present: self.present.clone(),
+            present_straight: self.present_straight.clone(),
+            frame: uniform(device),
+        }
+    }
+
     fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -274,21 +324,61 @@ fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
     Ok(())
 }
 
+fn retained_target_size(have: [u32; 2], wanted: [u32; 2]) -> [u32; 2] {
+    let grown = [have[0].max(wanted[0]), have[1].max(wanted[1])];
+    let pixels = |size: [u32; 2]| u64::from(size[0]) * u64::from(size[1]);
+    // Retain small resize slack, but reclaim crossed-aspect or oversized targets.
+    if pixels(grown) > pixels(wanted).saturating_mul(2) {
+        wanted
+    } else {
+        grown
+    }
+}
+
 fn visible(e: &ExternalWeld, xf: Affine, size: [u32; 2]) -> bool {
     let b = e.bounds();
     let r = xf.transform_rect_bbox(b);
     r.x1 > 0. && r.y1 > 0. && r.x0 < f64::from(size[0]) && r.y0 < f64::from(size[1])
 }
 
+fn external_visible(
+    scene: &ResolvedScene,
+    key: &str,
+    e: &ExternalWeld,
+    xf: Affine,
+    size: [u32; 2],
+) -> bool {
+    let pose = scene.surface(key).map_or(Affine::IDENTITY, |s| s.transform);
+    visible(e, xf * pose, size)
+}
+
 fn render(
-    vello: &mut vello::Renderer,
+    vello: &mut SharedVello,
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     scene: &vello::Scene,
     view: &wgpu::TextureView,
     [width, height]: [u32; 2],
 ) -> Result<(), Error> {
-    vello
+    let mut renderer = match vello.renderer.try_lock() {
+        Ok(renderer) => renderer,
+        Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Err(Error::Busy),
+    };
+    for update in vello
+        .pending
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .drain(..)
+    {
+        match update {
+            ImageUpdate::Override(image, texture) => {
+                renderer.override_image(&image, texture);
+            }
+            ImageUpdate::Dirty(image) => renderer.mark_override_image_dirty(&image),
+        }
+    }
+    renderer
         .render_to_texture(
             device,
             queue,
@@ -369,7 +459,26 @@ fn reach(p: &Painted) -> Option<Rect> {
         None if r == NOTHING => r,
         None => r + crate::kurbo::Vec2::new(p.offset.x, p.offset.y),
     };
+    let r = if r == NOTHING {
+        r
+    } else {
+        p.transform.transform_rect_bbox(r)
+    };
     (r == NOTHING || [r.x0, r.y0, r.x1, r.y1].iter().all(|v| v.is_finite())).then_some(r)
+}
+
+impl Drop for GpuRenderer {
+    fn drop(&mut self) {
+        // Queue removals instead of waiting for another editor's driver call.
+        for image in self
+            .welds
+            .values()
+            .chain(self.textures.values())
+            .chain(self.backdrops.iter().map(|b| &b.image))
+        {
+            self.vello.override_image(image, None);
+        }
+    }
 }
 
 impl GpuRenderer {
@@ -380,6 +489,21 @@ impl GpuRenderer {
         size: [u32; 2],
         budget: Budget,
     ) -> Result<Self, Error> {
+        Self::new_shared(device, queue, format, size, budget, None).await
+    }
+
+    pub(crate) fn shared_vello(&self) -> SharedVello {
+        self.vello.clone()
+    }
+
+    pub(crate) async fn new_shared(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        size: [u32; 2],
+        budget: Budget,
+        shared: Option<SharedVello>,
+    ) -> Result<Self, Error> {
         checked_size(device, size)?;
         // What leaves the present pass is sRGB-encoded (and premultiplied,
         // unless `set_straight_alpha`); an
@@ -387,19 +511,40 @@ impl GpuRenderer {
         if format.is_srgb() {
             return Err(Error::Unsupported("target must be a non-sRGB format"));
         }
-        let effects = WeldTextures::new(device, queue, budget).await?;
-        let vello = vello::Renderer::new(
-            device,
-            vello::RendererOptions {
-                use_cpu: false,
-                // Area coverage: analytic, and the only mode MUI's snapshots
-                // were drawn against.
-                antialiasing_support: vello::AaSupport::area_only(),
-                ..Default::default()
-            },
-        )
-        .map_err(|e| Error::Device(e.to_string()))?;
-        let passes = Passes::new(device, format);
+        let effects = match &shared {
+            Some(shared) => shared.weld.for_window(budget)?,
+            None => WeldTextures::new(device, queue, budget).await?,
+        };
+        let vello = if let Some(shared) = shared {
+            shared
+        } else {
+            let cache = crate::host::pipeline_cache::load(device);
+            let renderer = vello::Renderer::new(
+                device,
+                vello::RendererOptions {
+                    use_cpu: false,
+                    antialiasing_support: vello::AaSupport::area_only(),
+                    // Bound compile parallelism so opening an editor does not
+                    // saturate the DAW's audio cores.
+                    num_init_threads: std::num::NonZeroUsize::new(2),
+                    pipeline_cache: cache.as_ref().map(|c| c.cache.clone()),
+                },
+            )
+            .map_err(|e| Error::Device(e.to_string()))?;
+            if let Some(cache) = cache {
+                cache.save();
+            }
+            SharedVello {
+                weld: Arc::new(effects.for_window(budget)?),
+                renderer: Arc::new(Mutex::new(renderer)),
+                pending: Arc::new(Mutex::new(Vec::new())),
+                passes: Arc::new([
+                    Passes::new(device, wgpu::TextureFormat::Rgba8Unorm),
+                    Passes::new(device, wgpu::TextureFormat::Bgra8Unorm),
+                ]),
+            }
+        };
+        let passes = vello.passes(device, format);
         let target = Self::target(device, &passes, size);
         let renderer = Self {
             device: device.clone(),
@@ -427,9 +572,21 @@ impl GpuRenderer {
             stale: false,
             presented: None,
             straight: false,
+            format,
         };
         renderer.write_frame();
         Ok(renderer)
+    }
+
+    pub(crate) fn set_surface_format(&mut self, format: wgpu::TextureFormat) {
+        if self.format == format {
+            return;
+        }
+        self.format = format;
+        self.passes = self.vello.passes(&self.device, format);
+        self.target = Self::target(&self.device, &self.passes, self.size);
+        self.write_frame();
+        self.invalidate();
     }
 
     /// Tell the present pass the frame's size: past it, it writes clear.
@@ -470,12 +627,14 @@ impl GpuRenderer {
     pub fn resize(&mut self, size: [u32; 2]) -> Result<(), Error> {
         checked_size(&self.device, size)?;
         if size != self.size {
-            self.size = size;
             let have = self.target.size;
-            if size[0] > have[0] || size[1] > have[1] {
-                let grown = [size[0].max(have[0]), size[1].max(have[1])];
-                self.target = Self::target(&self.device, &self.passes, grown);
+            let capacity = retained_target_size(have, size);
+            if capacity != have {
+                self.target = Self::target(&self.device, &self.passes, capacity);
             }
+            // An allocation panic must leave the old size intact so a caught
+            // failure cannot make the next resize skip the required allocation.
+            self.size = size;
             self.write_frame();
             self.invalidate();
         }
@@ -566,7 +725,7 @@ impl GpuRenderer {
         let size = self.size;
         let wanted = resolved
             .external_welds()
-            .filter(move |(_, e)| visible(e, xf, size))
+            .filter(move |(k, e)| external_visible(resolved, k, e, xf, size))
             .map(|(k, e)| (k, &*e.material));
         let mut stats = self.effects.begin(wanted)?;
         self.effects
@@ -601,7 +760,7 @@ impl GpuRenderer {
         let mut drawn = Vec::new();
         for (key, e) in resolved
             .external_welds()
-            .filter(|(_, e)| visible(e, xf, size))
+            .filter(|(k, e)| external_visible(resolved, k, e, xf, size))
         {
             let before = stats.effect_draws;
             let encoder = encoder.get_or_insert_with(|| {
@@ -787,10 +946,12 @@ impl GpuRenderer {
         if head == old.len() && head == paint.len() {
             return Change::None;
         }
-        // Any backdrop may blur what changed, and a part renders none (nor
-        // a path shadow, which is rendered the same way).
-        if paint
+        // A changed backdrop (or anything below one) needs a fresh whole
+        // frame. Unchanged backdrops and path shadows can be reused in a
+        // partial render.
+        if old[head..]
             .iter()
+            .chain(&paint[head..])
             .any(|p| p.layer == Layer::Backdrop || crate::path_shadow(p))
         {
             return Change::Full;
@@ -867,32 +1028,45 @@ impl GpuRenderer {
         self.paths.tick();
         // Backdrops first: each is a render of its own that the frame samples.
         let mut blurred = Vec::new();
-        if part.is_none() {
-            let mut k = 0;
-            for (i, p) in resolved.paint.iter().enumerate() {
-                if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
-                    let outline = self.paths.get(&p.path)?.clone();
-                    blurred.push(self.backdrop(k, &resolved.paint[..i], p, &outline, xf)?);
-                    k += 1;
-                } else if crate::path_shadow(p) {
-                    // The same offscreen blur, over the path alone, sharp:
-                    // what fills its reach is the shadow.
-                    let path = self.paths.get(&p.path)?.clone();
-                    let sharp = Painted {
-                        layer: Layer::Fill,
-                        blur: 0.,
-                        ..p.clone()
-                    };
-                    blurred.push(self.backdrop(k, std::slice::from_ref(&sharp), p, &path, xf)?);
-                    k += 1;
-                }
+        let mut k = 0;
+        for (i, p) in resolved.paint.iter().enumerate() {
+            if p.layer == Layer::Backdrop && p.blur.is_finite() && p.blur > 0.0 {
+                let outline = self.paths.get(&p.path)?.clone();
+                let reuse = self.backdrop_unchanged(&resolved.paint, i, p, xf);
+                blurred.push(self.backdrop(k, &resolved.paint[..i], p, &outline, xf, reuse)?);
+                k += 1;
+            } else if crate::path_shadow(p) {
+                // The same offscreen blur, over the path alone, sharp:
+                // what fills its reach is the shadow.
+                let path = self.paths.get(&p.path)?.clone();
+                let sharp = Painted {
+                    layer: Layer::Fill,
+                    blur: 0.,
+                    ..p.clone()
+                };
+                let reuse = self.backdrop_unchanged(&resolved.paint, i, p, xf);
+                blurred.push(self.backdrop(
+                    k,
+                    std::slice::from_ref(&sharp),
+                    p,
+                    &path,
+                    xf,
+                    reuse,
+                )?);
+                k += 1;
             }
-            self.backdrops.truncate(k);
+        }
+        if part.is_none() {
+            for backdrop in self.backdrops.drain(k..) {
+                self.vello.override_image(&backdrop.image, None);
+            }
         }
 
         // A part renders its box alone, moved to the origin by whole
         // pixels (and whole 16 px tiles): Vello's cost follows the target's
         // extent, so a box near the far corner must not render the frame.
+        // At a fractional scale, moved f32 coordinates round apart from the
+        // frame's by an ulp: an edge may land a level or a few off.
         let (size, cull, draw) = match part.map(|r| r.map(f64::from)) {
             Some([x, y, w, h]) => (
                 [w as u32, h as u32],
@@ -918,7 +1092,7 @@ impl GpuRenderer {
                     let e = resolved
                         .external_weld(&p.key)
                         .ok_or_else(|| Error::Missing(p.key.to_string()))?;
-                    if !visible(e, xf, self.size) {
+                    if !visible(e, xf * p.transform, self.size) {
                         continue;
                     }
                     let image = self
@@ -998,7 +1172,12 @@ impl GpuRenderer {
                             continue;
                         }
                     }
-                    crate::one(&mut canvas, p, self.paths.get(&p.path)?)?;
+                    crate::one(
+                        &mut canvas,
+                        p,
+                        self.paths.get(&p.path)?,
+                        crate::placed(xf, p),
+                    )?;
                 }
             }
         }
@@ -1022,6 +1201,14 @@ impl GpuRenderer {
     /// The prefix renders at a power-of-two fraction of the device -- a
     /// Gaussian that wide has nothing left at full resolution -- so the two
     /// passes after it never take more than 25 taps.
+    fn backdrop_unchanged(&self, paint: &[Painted], i: usize, p: &Painted, xf: Affine) -> bool {
+        self.transform == Some(xf)
+            && !self.stale
+            && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
+            && self.retained.get(..i).is_some_and(|old| old == &paint[..i])
+            && self.retained.get(i).is_some_and(|old| old == p)
+    }
+
     fn backdrop(
         &mut self,
         k: usize,
@@ -1029,6 +1216,7 @@ impl GpuRenderer {
         p: &Painted,
         outline: &crate::kurbo::BezPath,
         xf: Affine,
+        reuse: bool,
     ) -> Result<Option<(ImageData, Affine)>, Error> {
         let sigma = p.blur;
         let sigma_device = sigma * xf.determinant().abs().sqrt();
@@ -1050,6 +1238,12 @@ impl GpuRenderer {
             ((device.y1 - origin.1) / scale).ceil().max(1.) as u32,
         ];
         let to_prefix = Affine::scale(1. / scale) * Affine::translate((-origin.0, -origin.1)) * xf;
+        let brush =
+            crate::placed(xf, p).inverse() * Affine::translate(origin) * Affine::scale(scale);
+
+        if reuse && let Some(b) = self.backdrops.get(k).filter(|b| b.size == size) {
+            return Ok(Some((b.image.clone(), brush)));
+        }
 
         self.prefix.reset();
         let mut canvas = Classic::new(&mut self.prefix, &mut self.cache, &self.textures, size);
@@ -1096,8 +1290,6 @@ impl GpuRenderer {
             .draw(&mut encoder, &self.passes.blur, &b.binds[1], &b.out);
         self.queue.submit([encoder.finish()]);
         self.vello.mark_override_image_dirty(&b.image);
-        let brush =
-            crate::placed(xf, p).inverse() * Affine::translate(origin) * Affine::scale(scale);
         Ok(Some((b.image.clone(), brush)))
     }
 
@@ -1135,5 +1327,118 @@ impl GpuRenderer {
             uniforms,
             binds,
         }
+    }
+}
+
+#[cfg(test)]
+mod rotation_tests {
+    use super::*;
+    use mui_scene::prelude::*;
+
+    #[test]
+    fn resizing_does_not_retain_the_product_of_previous_axis_maxima() {
+        assert_eq!(retained_target_size([8192, 512], [512, 8192]), [512, 8192]);
+        assert_eq!(retained_target_size([8192, 8192], [512, 512]), [512, 512]);
+        assert_eq!(retained_target_size([1024, 768], [1000, 750]), [1024, 768]);
+        assert_eq!(retained_target_size([1024, 768], [1200, 800]), [1200, 800]);
+        assert_eq!(
+            retained_target_size([u32::MAX, u32::MAX], [u32::MAX, u32::MAX]),
+            [u32::MAX, u32::MAX]
+        );
+    }
+
+    #[test]
+    fn rotation_damage_reaches_both_original_and_rotated_footprints() {
+        let spec = |angle| {
+            SceneSpec::new(
+                stack([stack([block(10., 4.)
+                    .offset(6., 2.)
+                    .anchor(Align::Start, Align::Start)
+                    .fill(Role::Primary)
+                    .id("damage.leaf")])
+                .size(20., 10.)
+                .offset(10., 10.)
+                .anchor(Align::Start, Align::Start)
+                .rotation(angle)])
+                .size(40., 40.),
+            )
+        };
+        let first = resolve(&spec(0.)).unwrap();
+        let changed = resolve(&spec(std::f64::consts::FRAC_PI_2)).unwrap();
+        let paint = |scene: &mui_scene::ResolvedScene| {
+            scene
+                .paint
+                .iter()
+                .find(|p| p.key.as_str() == "damage.leaf" && p.layer == Layer::Fill)
+                .unwrap()
+                .clone()
+        };
+        let before = paint(&first);
+        let after = paint(&changed);
+        assert_ne!(
+            before, after,
+            "retained equality must notice the paint transform"
+        );
+        let before = reach(&before).unwrap();
+        let after = reach(&after).unwrap();
+        assert!((before.width() - 10.).abs() < 1e-8 && (before.height() - 4.).abs() < 1e-8);
+        assert!((after.width() - 4.).abs() < 1e-8 && (after.height() - 10.).abs() < 1e-8);
+        let dirty = before.union(after);
+        assert!(
+            dirty.contains(Point::new(16.5, 12.5)) && dirty.contains(Point::new(22.5, 20.5)),
+            "partial damage must cover pixels cleared and pixels newly drawn"
+        );
+        // An external member above the viewport rotates into it; preparation
+        // and compositing must use exactly the same effective visibility.
+        let external = resolve(
+            &SceneSpec::new(
+                stack([stack([block(10., 10.)
+                    .fill(Role::Primary)
+                    .anchor(Align::Start, Align::Start)])
+                .size(10., 10.)
+                .offset(0., -100.)
+                .anchor(Align::Start, Align::Start)
+                .weld(Weld::shape())
+                .id("external")])
+                .size(100., 100.)
+                .rotation(std::f64::consts::PI),
+            )
+            .weld_backend(WeldBackend::AnalyticGpu),
+        )
+        .unwrap();
+        let material = external.external_weld("external").unwrap();
+        assert!(
+            !visible(material, Affine::IDENTITY, [300, 300]),
+            "unrotated material domain {:?}",
+            material.bounds()
+        );
+        assert!(external_visible(
+            &external,
+            "external",
+            material,
+            Affine::IDENTITY,
+            [300, 300]
+        ));
+        let fill = external
+            .paint
+            .iter()
+            .find(|p| p.layer == Layer::External)
+            .unwrap();
+        assert!(visible(material, fill.transform, [300, 300]));
+
+        let member = |angle| {
+            stack([block(10., 10.).fill(Role::Primary).rotation(angle)]).weld(Weld::shape())
+        };
+        assert!(
+            matches!(
+                resolve(&SceneSpec::new(member(0.1))),
+                Err(mui_scene::SceneError::UnsupportedWeld(_))
+            ),
+            "member rotation cannot silently disappear into the welded material"
+        );
+        assert!(
+            resolve(&SceneSpec::new(member(0.).rotation(0.1))).is_ok(),
+            "whole welded group rotation preserves local material geometry"
+        );
     }
 }

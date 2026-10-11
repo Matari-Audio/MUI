@@ -1,0 +1,100 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "toy",
+      "duration": 4.0,
+      "background": "#101118",
+      "mode": "3d",
+      "ground": { "y": 560.0, "color": "#262733", "radius": 2400.0, "contact": 0.6 },
+      "effects": [{ "type": "levels", "saturation": 1.15 }],
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": [
+            { "t": 0.0, "v": 380.0, "interp": "bezier" },
+            { "t": 4.0, "v": 820.0, "interp": "bezier" }
+          ],
+          "y": 220.0,
+          "z": -900.0,
+          "look_at": "toy",
+          "fov": 34.0
+        },
+        {
+          "id": "bulb",
+          "kind": "light",
+          "type": "point",
+          "x": 380.0,
+          "y": 120.0,
+          "z": -160.0,
+          "fill": "#ffe2b8",
+          "intensity": 1.6,
+          "range": 1800.0,
+          "softness": 2.0
+        },
+        {
+          "id": "sky",
+          "kind": "light",
+          "type": "ambient",
+          "fill": "#9aa4ff",
+          "intensity": 0.35
+        },
+        {
+          "id": "wall",
+          "kind": "rect",
+          "x": 640.0,
+          "y": 330.0,
+          "z": 260.0,
+          "width": 1100.0,
+          "height": 460.0,
+          "radius": 28.0,
+          "fill": "#2b2d3c"
+        },
+        {
+          "id": "glow",
+          "kind": "text",
+          "text": "glTF",
+          "x": 640.0,
+          "y": 250.0,
+          "z": 250.0,
+          "font_size": 150.0,
+          "weight": 800.0,
+          "fill": "#7c6cff",
+          "effects": [{ "type": "blur", "radius": 10.0 }]
+        },
+        {
+          "id": "toy",
+          "kind": "model",
+          "path": "toy.glb",
+          "x": 640.0,
+          "y": 420.0,
+          "height": 260.0
+        },
+        {
+          "id": "plate",
+          "kind": "rect",
+          "x": 640.0,
+          "y": 650.0,
+          "width": 620.0,
+          "height": 64.0,
+          "radius": 32.0,
+          "fill": "#000000",
+          "opacity": 0.55,
+          "overlay": true
+        },
+        {
+          "id": "caption",
+          "kind": "text",
+          "text": "toy.glb: textured, animated, skinned",
+          "x": 640.0,
+          "y": 650.0,
+          "font_size": 28.0,
+          "fill": "#ffffff",
+          "overlay": true
+        }
+      ]
+    }
+  ]
+}

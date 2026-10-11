@@ -385,6 +385,61 @@ fn exact_rounded_and_nested_clips_reject_corners() {
 }
 
 #[test]
+fn prepared_clip_lists_reuse_contours_and_reject_changed_offsets_and_sources() {
+    let mut hit = Hit::default();
+    let list = vec![(Arc::new(path(square(0., 0., 10., 10.))), Point::ORIGIN)];
+    hit.prepare_clips([list.as_slice()]).unwrap();
+    let first = hit.clip_cache.values().next().unwrap().clone();
+    let mut fresh = list.clone();
+    hit.prepare_clips([fresh.as_slice()]).unwrap();
+    assert!(Arc::ptr_eq(&first, hit.clip_cache.values().next().unwrap()));
+    assert_eq!(hit.clip_cache.len(), 1);
+
+    fresh[0].1 = Point::new(20., 0.);
+    hit.prepare_clips([fresh.as_slice()]).unwrap();
+    assert!(!hit.inside_clips(Point::new(5., 5.), None, Some(&fresh)));
+    assert!(hit.inside_clips(Point::new(25., 5.), None, Some(&fresh)));
+
+    // The same list allocation can hold a new contour on the next frame.
+    fresh[0].0 = Arc::new(path(square(50., 0., 10., 10.)));
+    hit.prepare_clips([fresh.as_slice()]).unwrap();
+    assert!(!hit.inside_clips(Point::new(25., 5.), None, Some(&fresh)));
+    assert!(hit.inside_clips(Point::new(75., 5.), None, Some(&fresh)));
+    assert_eq!(hit.clip_cache.len(), 1);
+}
+
+#[test]
+fn large_clip_sets_bound_reuse_work_and_release_prior_lists_on_transitions() {
+    let shape = Arc::new(path(square(0., 0., 10., 10.)));
+    let lists = |count| {
+        (0..count)
+            .map(|i| vec![(shape.clone(), Point::new(i as f64 * 20., 0.))])
+            .collect::<Vec<_>>()
+    };
+    let small = lists(64);
+    let large = lists(1_000);
+    let mut hit = Hit::default();
+    hit.prepare_clips(small.iter().map(Vec::as_slice)).unwrap();
+    hit.prepare_clips(large.iter().map(Vec::as_slice)).unwrap();
+    assert!(
+        hit.clip_spares.is_empty(),
+        "small-to-large drops prior lists"
+    );
+    assert_eq!(hit.clip_cache.len(), 1_000);
+    assert!(hit.inside_clips(Point::new(19_985., 5.), None, Some(&large[999])));
+    assert!(!hit.inside_clips(Point::new(5., 5.), None, Some(&large[999])));
+
+    hit.prepare_clips(small.iter().map(Vec::as_slice)).unwrap();
+    assert!(
+        hit.clip_spares.is_empty(),
+        "large-to-small drops prior lists"
+    );
+    assert_eq!(hit.clip_cache.len(), 64);
+    assert!(hit.inside_clips(Point::new(1_265., 5.), None, Some(&small[63])));
+    assert!(!hit.inside_clips(Point::new(5., 5.), None, Some(&small[63])));
+}
+
+#[test]
 fn a_drag_released_over_another_target_is_a_drop() {
     let mut hit = Hit::default();
     hit.push("a", &path(square(0., 0., 40., 40.))).unwrap();

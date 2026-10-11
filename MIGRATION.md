@@ -626,7 +626,7 @@ let (field, edited) = text_input(&mut ui, "name", &mut name);
 ## mui-truce
 
 The crate was a state-document and gesture contract with no editor. It is
-now the editor: the document went back to Kurv, and a `Bridge` replaces the
+now the editor: the document went back to the plugin, and a `Bridge` replaces the
 per-parameter wrapper.
 
 - edition 2024 -> 2021, the workspace edition
@@ -634,7 +634,7 @@ per-parameter wrapper.
   blocks (the wgpu surface on the host's window and `Send` for the window
   handle)
 - `Document`, `EditorState`, `Module`, `Route`, `Target`, `Error` -> deleted.
-  The editor document was Kurv's schema; keep it in the plugin as a
+  The editor document was one plugin's schema; keep it in the plugin as a
   `#[persist]` field of its own type.
 - `Parameter` -> `Bridge`. `Parameter::new(params, id, modulatable, edits)`
   / `new_many(params, ids, edits)` -> `Bridge::new(params)`, one per editor,

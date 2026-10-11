@@ -1,19 +1,17 @@
-//! baseview's window as a wgpu surface. Both speak raw-window-handle 0.6;
-//! moose-baseview fills the Win32 HINSTANCE Vulkan needs.
+//! Surface creation stays on the native window's thread. Vulkan accepts that
+//! window's own X11 connection; the shared native instance needs no display.
 
 /// # Safety
-/// The window must outlive the returned surface.
-#[expect(
-    unsafe_code,
-    reason = "wgpu takes raw native handles only through an unsafe constructor"
-)]
+/// The window must outlive the returned surface. Call only on its window thread,
+/// after it is viewable and has nonzero physical dimensions (AppKit layer work
+/// must never run on the background initializer).
+#[expect(unsafe_code, reason = "wgpu raw native surface constructor")]
 pub unsafe fn create(
     instance: &wgpu::Instance,
     window: &baseview::WindowContext,
 ) -> Option<wgpu::Surface<'static>> {
-    // SAFETY: both handles are read from the live `window`, and this
-    // function's own contract makes the caller keep that window alive for as
-    // long as the returned surface.
+    // SAFETY: both handles are borrowed from the live window. The caller owns
+    // its surface-before-window teardown and native-thread obligations.
     unsafe {
         let target = wgpu::SurfaceTargetUnsafe::from_display_and_window(window, window).ok()?;
         instance.create_surface_unsafe(target).ok()

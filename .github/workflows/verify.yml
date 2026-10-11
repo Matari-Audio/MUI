@@ -1,28 +1,36 @@
 name: Verify
-# PRs get the full gate on Linux. Windows and macOS (wgpu backends, baseview
-# embedding, truce wrappers) build and test only after a merge to main, from
-# the merge queue, on demand, or on a PR labelled `ci:all-platforms`.
+# Every update checks Linux, Windows and macOS; platform cfgs are part of the gate.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, labeled]
+    types: [opened, synchronize, reopened]
   push:
     branches: [main]
   merge_group:
+  # `gh workflow run verify.yml --ref <branch>`
   workflow_dispatch:
 permissions:
   contents: read
 concurrency:
-  # A label run gets its own group so it never cancels the code run it rides beside.
-  group: verify-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action == 'labeled' && github.event.label.name || 'code' }}
+  # A dispatch cannot supersede a push or merge queue run.
+  group: verify-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
 jobs:
-  linux:
-    if: github.event.action != 'labeled'
+  # Media tests split into disjoint package groups: measured cached runs spent
+  # ~21 min in CUT test binaries and ~16 min in native media binaries. Keep
+  # every test, and give each runner its own section cache and target directory.
+  gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        section: [root-lint, root-test, media-lint, media-cut-test, media-native-test]
+    name: ${{ matrix.section }}
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # CUT includes expensive plugin adapter, shader, CLI and media tests.
+    # Retain the uncached-run budget; sharding should shorten the cached path.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -35,23 +43,74 @@ jobs:
             libxcb1-dev libxcb-icccm4-dev libxcb-dri2-0-dev libxcb-xkb-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev libzstd-dev
+            libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev libzstd-dev \
+            $GPU
+        env:
+          # Test sections get lavapipe, a software Vulkan device, so the wgpu
+          # tests run instead of skipping for want of an adapter.
+          GPU: ${{ endsWith(matrix.section, '-test') && 'mesa-vulkan-drivers vulkan-tools libegl1 libegl-mesa0 libgl1-mesa-dri xvfb xauth dbus-daemon' || '' }}
+      - if: endsWith(matrix.section, '-test')
+        name: Vulkan device
+        run: |
+          vulkaninfo --summary
+          vulkaninfo 2>/dev/null | grep -E 'VK_KHR_(ray_query|acceleration_structure)' || echo 'no VK_KHR_ray_query on this lavapipe'
       # rust-toolchain.toml pins the toolchain, rustfmt, clippy and the wasm target.
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
+          key: ${{ matrix.section }}
+          # media/ is its own workspace with its own target dir.
+          workspaces: ${{ startsWith(matrix.section, 'media') && 'media -> target' || '. -> target' }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo fetch --locked
-      # media/ is its own workspace with its own lock; verify.sh runs it offline too.
-      - run: cargo fetch --manifest-path media/Cargo.toml
-      # fmt, test, clippy and the wasm library check: the same gate as local.
-      - run: ./tools/verify.sh
+      # mui-cut's sound tests build plugin adapters (moose, truce, nice-plug)
+      # into their own target dir, which rust-cache prunes: kept here.
+      - if: matrix.section == 'media-cut-test'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: media/target/tmp/adapters/target
+          key: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
+          restore-keys: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
+      - if: startsWith(matrix.section, 'root')
+        run: cargo fetch --locked
+      - if: matrix.section == 'root-test'
+        name: Fetch standalone native regression dependencies
+        run: |
+          cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked
+          cargo fetch --manifest-path vendor/xim-rs/Cargo.toml --locked
+      # verify.sh runs media/ offline too, against its own lock.
+      - if: startsWith(matrix.section, 'media')
+        run: cargo fetch --manifest-path media/Cargo.toml --locked
+      # The same gate as local, one section of it.
+      - run: ./tools/verify.sh ${{ matrix.section }}
+      - if: matrix.section == 'root-test'
+        name: Desktop portal dialogs and owned worker teardown
+        run: cargo test -p mui-native-dialog --features xdg-portal --locked --offline
+      # A failing test leaves the adapter builds good.
+      - if: "!cancelled() && matrix.section == 'media-cut-test' && github.ref == 'refs/heads/main'"
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: media/target/tmp/adapters/target
+          key: mui-cut-adapters-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock', 'media/Cargo.lock', 'media/mui-cut/tests/fixtures/**') }}
+
+  # Keep the existing required check name; every platform must pass.
+  linux:
+    if: always()
+    needs: [gate, platforms, ui]
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GATE_RESULT: ${{ needs.gate.result }}
+          UI_RESULT: ${{ needs.ui.result }}
+          PLATFORM_RESULT: ${{ needs.platforms.result }}
+        run: |
+          test "$GATE_RESULT" = success
+          test "$UI_RESULT" = success
+          test "$PLATFORM_RESULT" = success
+
+  ui:
+    uses: ./.github/workflows/ui.yml
 
   platforms:
-    if: >-
-      github.event_name != 'pull_request' ||
-      (github.event.action == 'labeled' && github.event.label.name == 'ci:all-platforms') ||
-      (github.event.action != 'labeled' && contains(github.event.pull_request.labels.*.name, 'ci:all-platforms'))
     strategy:
       fail-fast: false
       matrix:
@@ -66,13 +125,27 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      # fmt, clippy and wasm are platform-independent and already gated on Linux.
+      # Linux cannot lint the Windows/macOS cfgs (IME, accessibility and window
+      # adapters). Keep native lint and tests in one job to reuse its Cargo cache.
+      - run: cargo fetch --locked
+      - name: Fetch standalone baseview regression dependencies
+        run: cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked
+      - name: Native baseview regressions
+        run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      - if: runner.os == 'macOS'
+        name: Accessibility providers in two native libraries
+        run: python3 tools/ci/check-macos-accesskit-images.py
+      - name: Native platform lint
+        run: cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
+      # fmt and wasm are already gated on Linux.
       # Windows runners have only WARP, and wgpu's DX12 backend faults on it
       # (Device::destroy, the effects smoke test). GPU tests read WGPU_BACKEND:
       # `metal` has no adapter on Windows, so they skip; macOS keeps Metal.
       - if: runner.os == 'Windows'
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked --offline
         env:
           WGPU_BACKEND: metal
       - if: runner.os != 'Windows'
-        run: cargo test --workspace --all-features --locked
+        run: cargo test --workspace --all-features --locked --offline

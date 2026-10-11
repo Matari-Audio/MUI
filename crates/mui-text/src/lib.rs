@@ -14,16 +14,22 @@
 #![forbid(unsafe_code)]
 
 mod caret;
+#[cfg(feature = "system-fonts")]
+mod discovery;
 mod error;
 mod font;
 mod lines;
+mod offsets;
 mod outline;
 mod shape;
 
-pub use caret::{caret_positions, caret_x, hit_index};
+pub use caret::{CaretCluster, CaretMap, caret_positions, caret_x, hit_index};
+#[cfg(feature = "system-fonts")]
+pub use discovery::{Family, FontDatabase, FontQuery, FontSelection, FontStretch, FontStyle};
 pub use error::Error;
 pub use font::{Axes, Axis, AxisInfo, Font, Weight, axes, normalized_coords};
 pub use lines::{Line, break_lines, break_lines_from_advances, char_advances, min_content_width};
+pub use offsets::{byte_to_utf16, utf16_range_to_bytes, utf16_to_byte};
 pub use outline::glyph_path;
 pub use shape::{Glyph, TextRun, shape_run, text_run};
 
@@ -42,6 +48,31 @@ mod test_fonts {
     }
     pub(crate) fn symbols() -> Font {
         Font::new(MATERIAL_SYMBOLS).unwrap()
+    }
+
+    /// Wrap two supplied test fonts as a TTC, relocating table-directory
+    /// offsets to the shared file. Checksums aren't consumed by either parser.
+    pub(crate) fn collection() -> Vec<u8> {
+        let mut bytes = b"ttcf\0\x01\0\0\0\0\0\x02".to_vec();
+        bytes.extend_from_slice(&[0; 8]);
+        for (index, source) in [epaint_default_fonts::HACK_REGULAR, ttf_inter::REGULAR]
+            .into_iter()
+            .enumerate()
+        {
+            while !bytes.len().is_multiple_of(4) {
+                bytes.push(0);
+            }
+            let start = bytes.len();
+            bytes[12 + index * 4..16 + index * 4].copy_from_slice(&(start as u32).to_be_bytes());
+            bytes.extend_from_slice(source);
+            let count = u16::from_be_bytes([source[4], source[5]]) as usize;
+            for table in 0..count {
+                let at = start + 12 + table * 16 + 8;
+                let offset = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
+                bytes[at..at + 4].copy_from_slice(&(offset + start as u32).to_be_bytes());
+            }
+        }
+        bytes
     }
 
     /// Three Material Symbols glyphs (home, favorite, settings), fvar/avar/

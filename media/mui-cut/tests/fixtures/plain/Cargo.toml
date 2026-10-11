@@ -1,0 +1,14 @@
+# A plain MUI plugin editor that depends on MUI by git, as a plugin repo
+# does: mui-cut's generic adapter builds it against the local MUI tree
+# (tests/cli.rs), and this Cargo.lock must never change.
+[package]
+name = "fixture-plain"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+mui = { git = "https://github.com/Matari-Audio/MUI" }
+ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
+
+[workspace]

@@ -96,15 +96,12 @@ impl CpuPool {
         }
     }
 
-    /// Every frame still in flight, oldest first; the workers stop.
+    /// Every frame still in flight, oldest first. The pool stays open, so
+    /// a render can drain it between segments; the workers stop on drop.
     pub fn finish(&mut self) -> Result<Vec<Vec<u8>>, String> {
         let mut out = Vec::new();
         while self.next < self.sent {
             out.push(self.take()?);
-        }
-        self.jobs = None;
-        for w in self.workers.drain(..) {
-            w.join().map_err(|_| "a CPU worker panicked")?;
         }
         Ok(out)
     }
@@ -120,6 +117,15 @@ impl CpuPool {
                 .recv()
                 .map_err(|_| "a CPU worker panicked".to_owned())?;
             self.parked.insert(i, px);
+        }
+    }
+}
+
+impl Drop for CpuPool {
+    fn drop(&mut self) {
+        self.jobs = None;
+        for w in self.workers.drain(..) {
+            let _ = w.join();
         }
     }
 }

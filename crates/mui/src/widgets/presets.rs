@@ -11,7 +11,7 @@ use mui_scene::{Px, Style};
 ///
 /// ```
 /// use mui::prelude::*;
-/// let editor = col!["Kurv"].pad(M).full().preset(panel()).clip().id("editor");
+/// let editor = col!["Synth"].pad(M).full().preset(panel()).clip().id("editor");
 /// assert_eq!(editor.children().len(), 1);
 /// ```
 pub fn panel() -> Style {

@@ -124,7 +124,7 @@ cargo run -p mui-vello --profile perf --features cpu-threads,gpu-effects --examp
 cargo test -p mui-preview --profile perf --test frame_cost -- --nocapture
 ```
 
-`bench` is a Kurv-sized editor: 40 knobs, 8 sliders, 200 labels, a clipped
+`bench` is a synth-sized editor: 40 knobs, 8 sliders, 200 labels, a clipped
 60-row list, two 50-cubic curves, three floats, 20 wrapped paragraphs, 4 image
 pills and 6 animated cards. At 1280x800 it resolves to 717 surfaces, 632 paint
 ops and 472 glyph runs, the same scene before and after. Each row is the median

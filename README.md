@@ -41,6 +41,11 @@ alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
+Plugin windows also have an automatic software fallback: Vello CPU rasterizes
+into native pixel buffers without opening a wgpu device. `MUI_RENDERER=cpu`
+forces that path for diagnostics. It retains unchanged frames and uses one CPU
+thread; changed frames repaint fully. See the [plugin host contract](crates/mui-truce/README.md).
+
 The classic-versus-Hybrid measurements that led here (history: MUI shipped on
 `vello_hybrid` first) live in the
 [rendering investigation](docs/rendering-investigation.md), including their
@@ -195,7 +200,7 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `stepped(&ui, id, &mut v, &range)` | the arrow, Page and Home/End keys of a slider, for a control of your own |
 | `curve(&mut ui, "env", &mut env)` | an envelope over `mui::scene::curve::Curve`: the model's own cubics as one stroked path, a knot per point and two tension handles per segment, each its own hit shape. Edits `env` in place; `changed` is a `CurveEdit` saying what the drag moved -- Shift drags fine, Alt at the press locks an axis, `ui.tag("env")` names the shape under the pointer |
 | `bins(&mut ui, "spectrum", &mut Bins { authored: &mut levels, .. })` | an additive spectrum: a bar per partial in the accent, the engine's live levels as a cap line over them, and a faint level grid. Edits the levels and the selection in place, as `curve` does; `changed` is a `BinEdit` saying what. One canvas and one hit shape -- pointer x becomes a bin index, so a drag paints every bin it crossed with no gaps, Shift refines from the press level, a secondary click resets one, and the arrows select and nudge. Over ~one bar a pixel the bins coalesce per column at their maximum, so 1024 partials still draw 200 bars. `bins_hover` is the index under the pointer, for a readout in your own units |
-| `.a11y(A11y::Button)`, `.named("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.a11y(A11y::Image).named("BUFFR logo")` is a picture with alt text; unlabelled, it is decoration |
+| `.a11y(A11y::Button)`, `.named("OK")` | what a screen reader hears: `mui-access` reads both off the surface. `.a11y(A11y::Image).named("Company logo")` is a picture with alt text; unlabelled, it is decoration |
 | `.reserve("-88.8 dB")`, `ui.set_text("gain", v)` | measure a readout for the widest value it can show, then swap what it says without resolving the tree again: the frame stands, one glyph run re-shapes |
 | `.text_weight(Weight::BOLD)` | the run's `wght` axis. A variable face moves; a static one has one weight and draws it |
 | `Palette::from_seed(accent, Mode::Dark)` | a whole palette from one colour: brand roles around the seed's hue, greys tinted by it, signal hues left alone. Every role clears 3:1 on the background and the surface |
@@ -217,8 +222,7 @@ a row of controls fills its column unless told otherwise.
 
 ## A plugin editor shell
 
-Kurv, Matari's synth, is not ported to MUI yet (see [ROADMAP.md](ROADMAP.md));
-this is the shape its editor is heading for. A header, a scrolling parameter
+This is the shape of a synth plugin's editor. A header, a scrolling parameter
 list, a response curve and a status bar are forty-six lines, twenty-one of
 them the tree itself, and not one coordinate:
 
@@ -246,7 +250,7 @@ let curve = canvas(|size| {
 
 let root = col![
     row![
-        title("Kurv"),
+        title("Synth"),
         text_input(&mut ui, "preset", &mut preset).el.w(140),
         spacer(),
         toggle(&mut ui, "bypass", "Bypass", &mut bypass).into_el().tip("Bypass"),
@@ -283,7 +287,7 @@ use mui::prelude::*;
 
 let editor = || {
     col![
-        row![title("Kurv"), spacer(), caption("v1.0")].baseline(),
+        row![title("Synth"), spacer(), caption("v1.0")].baseline(),
         // Three tabs, fluid between 64 and 120 px, wrapping when they run out.
         row(["Osc", "Filter", "Env"].map(|n| {
             row![caption(n)].w(clamp(64.0, 18.0, 120.0)).pad((0.0, 8.0))
@@ -339,9 +343,13 @@ fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
 an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
 the build commands and the clap-validator and pluginval results.
 
-Build plugins with `--profile plugin` (release with `panic = "unwind"`), not
-`--release`: release aborts on panic, so a bug in the editor would take the
-DAW down instead of being caught at the FFI edge.
+Both `--release` and `--profile plugin` use `panic = "unwind"` here. The final
+plugin workspace controls the panic strategy: downstream plugins must also
+set `[profile.release] panic = "unwind"`. `mui-truce` rejects abort builds by
+default, because an editor panic would otherwise terminate the DAW.
+The explicit `allow-panic-abort` feature removes that protection; it is not
+for shipping DAW plugins. See the [shipping checklist](crates/mui-truce/README.md#shipping-a-mui-plugin-safely)
+and the remaining Linux host-thread integration limitation there.
 
 ## Hosts
 
@@ -356,6 +364,59 @@ DAW down instead of being caught at the FFI edge.
   composites with alpha where the surface offers it (`Host::translucent` says
   whether it did): paint a faded root, `Role::Surface.alpha(0.7)`, over an OS
   blur for frosted glass.
+
+### Native graphics diagnostics and automatic MUI issues
+
+Native hosts persist adapter attempts, startup stages, device errors and caught
+window panics automatically. `mui::diagnostics::log_path()` finds the current
+session; `MUI_DIAGNOSTICS_DIR` overrides its directory. Session files rotate at
+1 MiB with one previous file, and startup retains the newest 64 session files.
+Browser hosts use no-op native diagnostics.
+
+Enable `mui`'s optional `reporting` feature, then retain one reporter in the
+app/plugin's owned state **before opening windows**. Registration failure can
+leave reporting disabled while the editor continues to work:
+
+```rust,ignore
+let mut config = mui::diagnostics::Config::new("my-plugin", env!("CARGO_PKG_VERSION"));
+config.build = option_env!("APP_GIT_REVISION").unwrap_or("unknown").into();
+config.mui_revision = "your-MUI-git-pin".into();
+let reporter = mui::diagnostics::Reporter::start(config)
+    .inspect_err(|error| eprintln!("MUI reporting unavailable: {error}"))
+    .ok();
+// Store `reporter` on owned app/plugin state until all MUI windows are closed.
+```
+
+The reporter queues bounded, sanitized diagnostics locally and delivers them
+on a managed background thread to `https://matari-audio.com/api/support/mui`.
+Failed submissions retain their original bytes and retry after a minute or on
+the next load. A report is deleted only after support acknowledges its exact
+SHA-256 and a verified issue URL in `Matari-Audio/MUI`. Apps contain no GitHub
+credentials. The server groups matching failures across apps, publishes only
+bounded environment metadata, and retains detailed evidence privately for
+30 days. The endpoint must be deployed and configured before delivery works.
+Set `MUI_REPORTING_DISABLED=1` in CI or an offline diagnostic session to retain
+local evidence while preventing network delivery and live issue creation.
+
+Startup, surface configuration and the first draw also use locked operation
+markers. Normal completion and Rust unwind clear them; abrupt termination
+leaves an **unconfirmed operation interruption** for recovery on the next
+reporter load. Live operations in another process are skipped. This is not a
+native stack dump and does not prove that MUI or a particular GPU caused the
+host to terminate. Steady-frame native crashes and unrelated DAW crashes still
+need OS postmortem evidence; no process-wide signal or panic hook is installed.
+Custom hosts can use `mui::diagnostics::operation(..)` around their own risky
+MUI startup calls and `error(..)` for MUI-owned failures.
+
+Start and drop the reporter off the audio thread. Close/drop all windows first,
+then drop the last reporter (put its field after window fields if relying on
+struct field drop order). Shutdown joins its worker. HTTP has a five-second
+deadline; the OS DNS resolver can take longer, so reporting shutdown can wait
+for it. No timeout helper thread is detached from a plugin being unloaded.
+The default queue holds 32 reports and 32 live or
+interrupted operation markers per app directory. Export local diagnostics if
+these limits are reached. Multiple instances of the same app/build share the
+worker within one loaded MUI image.
 
 ## Motion
 
@@ -518,11 +579,96 @@ global allocator, which the library itself forbids.
 
 ## Verify
 
+### MUI tester and UI evidence
+
+`cargo run -p mui-preview -- --test-ui` runs the existing gallery as a small
+MUI tester. It traverses every registered scene at three window sizes in both
+themes, sends pointer, drag, wheel, keyboard and text input, and exercises the
+overlay path. New gallery scenes join the traversal automatically. Each case
+requires a submitted native frame; completion is recorded after window teardown.
+This covers the gallery and existing native regressions, rather than every MUI
+API or every DAW host.
+
+[`.github/workflows/ui.yml`](.github/workflows/ui.yml) runs on every Verify
+event, independently of the library test jobs. Linux Vulkan/lavapipe and
+OpenGL/llvmpipe presentation are required checks. Xvfb provides a real X11
+display: the collector requires a nonuniform specimen in every native window
+screenshot. Separate regressions check embedded editor pixels, expose, resize,
+multiple windows, close/reopen, device loss and CPU fallback without a GPU.
+
+Windows DX12 and macOS Metal are **informational native probes** on standard
+VMs. An unavailable adapter or native fault fails the probe and saves evidence;
+it is not converted into a skipped graphics test. They do not block the Linux
+gate until the hosted adapter behavior is established. Neither those probes
+nor software Linux rendering certify consumer NVIDIA/Intel driver support.
+
+`tools/ci/ui.py --output ui-results --gallery -- COMMAND` supervises the tester
+as a child process. On Linux, add `--record` and run inside a 1600×1200 Xvfb
+display. Artifacts include adapter inventory, durable JSONL stages, stdout,
+stderr, exit code/signal, screenshots, a video and per-scene cost summaries.
+Measurements cover CPU resolve/submission time and retained texture memory;
+they do not measure GPU completion or display latency. Interrupted journals
+retain their last complete stage. CI disables network reporting to keep test
+failures from creating production issues.
+
+The [GPUI comparison](research/gpui-graphics-comparison.md) explains the device
+requirements and recovery differences observed in upstream source.
+
+### Plugin editor CI on GitHub runners
+
+[`.github/workflows/plugin-ui.yml`](.github/workflows/plugin-ui.yml) is a reusable
+workflow for already-built Linux x86_64 VST3 plugins. It runs pluginval 1.0.4
+under Xvfb on Mesa software Vulkan and GL, with GUI tests enabled. Strictness 6
+and three repeats exercise editor creation, close/reopen, automation and opening
+while processing audio. Every job saves validator output, graphics environment,
+MUI journals and a display recording, including on failure. A missing editor
+test fails the job. CI disables automatic MUI issue submission.
+
+Upload an **unpacked** bundle in the caller's build job, keeping the `.vst3`
+directory in the artifact. Use a distinct artifact name for each plugin / call:
+
+```yaml
+# In the Linux build job, after producing target/bundled/MyPlugin.vst3:
+- uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+  with:
+    name: my-plugin-linux-vst3
+    path: target/bundled/
+
+# Under the caller workflow's jobs:, alongside its build job:
+ui:
+  needs: build-linux
+  uses: Matari-Audio/MUI/.github/workflows/plugin-ui.yml@FULL_MUI_COMMIT
+  with:
+    artifact-name: my-plugin-linux-vst3
+    plugin-path: MyPlugin.vst3
+    require-mui-diagnostics: true
+```
+
+Replace `FULL_MUI_COMMIT` with the reviewed workflow commit. The caller's build
+must also pin instrumented MUI for `require-mui-diagnostics: true`; that option
+requires a first-frame submission record and rejects MUI error records. It is
+false by default for older plugin builds. The record proves submission to the
+surface, not visible pixels. Pluginval does not assert screenshots or editor
+resizing; MUI's native presentation tests assert displayed pixels, resize and
+close/reopen separately, on both software backends.
+
+[Standard runners are free for public repositories](https://docs.github.com/en/actions/concepts/billing-and-usage).
+Software graphics catch lifecycle / rendering regressions but cannot reproduce
+NVIDIA or Intel driver bugs. [GitHub's paid larger runners](https://docs.github.com/en/actions/reference/runners/larger-runners)
+offer NVIDIA Tesla T4 on Linux / Windows and M2 GPU acceleration on macOS.
+Use dedicated hardware runners for affected Intel / consumer NVIDIA models and
+DAW-specific tests; the documented hosted GPU list does not offer Intel GPUs.
+This workflow covers VST3: CLAP requires a host that exercises its GUI extension.
+MUI's existing Windows verification deliberately skips GPU tests due to a WARP
+fault, so a green Windows check currently does not certify Windows rendering.
+
+### Library checks
+
 ```bash
 ./tools/verify.sh
 ```
 
 Formatting, tests, clippy with warnings denied, and a wasm check of the
-library crates. `BENCHMARKS.md` is the frame budget of a Kurv-sized scene
+library crates. `BENCHMARKS.md` is the frame budget of a synth-sized scene
 on `vello_cpu` and `GpuRenderer`, reproduced by
 `cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.

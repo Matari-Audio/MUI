@@ -1,0 +1,100 @@
+{
+  "size": [1920, 1080],
+  "fps": 30.0,
+  "variables": {
+    "theme": {
+      "type": "enum",
+      "options": ["dark", "light"],
+      "value": "dark"
+    },
+    "accent": {
+      "type": "color",
+      "value": "#7c6cff"
+    },
+    "headline": {
+      "type": "string",
+      "value": "Ship it"
+    },
+    "badge": {
+      "type": "bool",
+      "value": true
+    },
+    "corner": {
+      "type": "number",
+      "value": 32.0
+    }
+  },
+  "variants": [
+    {
+      "name": "dark-wide"
+    },
+    {
+      "name": "light-wide",
+      "vars": {
+        "theme": "light",
+        "accent": "#e4572e"
+      }
+    },
+    {
+      "name": "dark-tall",
+      "size": [1080, 1920]
+    },
+    {
+      "name": "light-tall",
+      "size": [1080, 1920],
+      "vars": {
+        "theme": "light",
+        "accent": "#e4572e",
+        "badge": false,
+        "headline": "Ship it, tall"
+      },
+      "overrides": {
+        "promo/title": {
+          "font_size": 96.0
+        }
+      }
+    }
+  ],
+  "scenes": [
+    {
+      "name": "promo",
+      "duration": 2.0,
+      "background": { "var": "theme", "map": { "dark": "#0e0f14", "light": "#f4f1ea" } },
+      "layers": [
+        {
+          "id": "card",
+          "kind": "rect",
+          "x": [
+            { "t": 0.0, "v": { "var": "W", "mul": -0.3 }, "interp": "bezier", "out": [0.5, 0.0] },
+            { "t": 1.0, "v": { "var": "W", "mul": 0.5 }, "interp": "hold" }
+          ],
+          "y": { "var": "H", "mul": 0.5 },
+          "width": { "var": "W", "mul": 0.6 },
+          "height": { "var": "H", "mul": 0.35 },
+          "radius": { "var": "corner" },
+          "fill": { "var": "accent" }
+        },
+        {
+          "id": "title",
+          "kind": "text",
+          "text": "{headline}",
+          "x": { "var": "W", "mul": 0.5 },
+          "y": { "var": "H", "mul": 0.5 },
+          "font_size": { "var": "W", "mul": 0.07 },
+          "weight": 800.0,
+          "fill": { "var": "theme", "map": { "dark": "#ffffff", "light": "#16161a" } }
+        },
+        {
+          "id": "badge",
+          "kind": "ellipse",
+          "x": { "var": "W", "add": -140.0 },
+          "y": 140.0,
+          "width": 120.0,
+          "height": 120.0,
+          "opacity": { "var": "badge", "mul": 1.0 },
+          "fill": "#ffd23f"
+        }
+      ]
+    }
+  ]
+}

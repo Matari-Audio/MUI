@@ -1,0 +1,12 @@
+GPUI adaptation
+
+Copyright 2022 - 2025 Zed Industries, Inc.
+Licensed under the Apache License, Version 2.0; see LICENSE-APACHE.
+
+MUI adapts adapter ranking from crates/gpui_wgpu/src/wgpu_context.rs
+at Zed revision a84689073d296dfd39987bc7dd478e43ef76d83a.
+The original source and adaptation notice are recorded beside adapter_rank
+in crates/mui-vello/src/host.rs.
+
+Other MUI integrations reuse independently licensed dependencies, including
+winit, AccessKit, fontdb and zed-xim; their licenses remain with those packages.

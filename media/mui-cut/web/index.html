@@ -11,23 +11,34 @@
   <header>
     <span class="brand"><span class="mark">c</span>mui-cut</span>
     <span id="file" class="muted"></span>
+    <span id="tools" role="toolbar" aria-label="Align and snap"><button data-align="left" title="Align left edges (Alt+A)" aria-label="Align left edges (Alt+A)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1.5 1v12"/><rect x="3.5" y="3" width="8" height="3"/><rect x="3.5" y="8" width="5" height="3"/></svg></button><button data-align="hcenter" title="Align centres horizontally (Alt+H)" aria-label="Align centres horizontally (Alt+H)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1v12"/><rect x="2.5" y="3" width="9" height="3"/><rect x="4" y="8" width="6" height="3"/></svg></button><button data-align="right" title="Align right edges (Alt+D)" aria-label="Align right edges (Alt+D)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M12.5 1v12"/><rect x="2.5" y="3" width="8" height="3"/><rect x="5.5" y="8" width="5" height="3"/></svg></button><button data-align="top" title="Align top edges (Alt+W)" aria-label="Align top edges (Alt+W)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1.5h12"/><rect x="3" y="3.5" width="3" height="8"/><rect x="8" y="3.5" width="3" height="5"/></svg></button><button data-align="vmiddle" title="Align middles vertically (Alt+V)" aria-label="Align middles vertically (Alt+V)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 7h12"/><rect x="3" y="2.5" width="3" height="9"/><rect x="8" y="4" width="3" height="6"/></svg></button><button data-align="bottom" title="Align bottom edges (Alt+S)" aria-label="Align bottom edges (Alt+S)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 12.5h12"/><rect x="3" y="2.5" width="3" height="8"/><rect x="8" y="5.5" width="3" height="5"/></svg></button><button data-align="hspace" title="Distribute horizontally: even gaps (Alt+Shift+H)" aria-label="Distribute horizontally: even gaps (Alt+Shift+H)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1v12M13 1v12"/><rect x="5" y="4" width="4" height="6"/></svg></button><button data-align="vspace" title="Distribute vertically: even gaps (Alt+Shift+V)" aria-label="Distribute vertically: even gaps (Alt+Shift+V)"><svg viewBox="0 0 14 14" aria-hidden="true"><path d="M1 1h12M1 13h12"/><rect x="4" y="5" width="6" height="4"/></svg></button><button id="snap" aria-pressed="true" title="Snap to other layers' edges and middles and the canvas while moving or scaling (hold Ctrl to drag freely)">Snap</button><button id="align-canvas" aria-pressed="false" title="Align to the canvas instead of the selection (one layer always aligns to the canvas)">Canvas</button></span>
     <span class="grow"></span>
     <span id="status" role="status" aria-live="polite">loading engine</span>
+    <span id="merge" role="status" aria-live="polite" hidden></span>
     <span id="notice" class="muted" hidden></span>
+    <button id="interact" title="Interact: clicks and drags in the viewport work the plugin's own controls, keyed at the playhead as its pointer (off: they select and move layers and parts)" aria-pressed="false">Interact</button>
     <button id="orbit" title="Orbit preview: drag to swing the camera, wheel to zoom; not saved" aria-pressed="false" hidden>Orbit</button>
+    <button id="beauty" title="Beauty preview: while paused, a 3D frame refines sample by sample (antialiasing, soft shadows, depth of field), as mui-cut render --quality beauty draws it; normal while playing" aria-pressed="false" hidden>Beauty</button>
     <span id="backend" class="muted mono" title="Viewport renderer"></span>
+    <select id="variant" aria-label="Variant to preview" title="Variant to preview" hidden></select>
+    <button id="export" title="Render the project to an MP4 in the browser">Export</button>
     <button id="undo" title="Undo (Ctrl+Z)">Undo</button>
     <button id="redo" title="Redo (Ctrl+Shift+Z)">Redo</button>
   </header>
   <aside id="left">
+    <h2><button id="sources-fold" class="twist" aria-expanded="true" title="Show or hide the sources">▾</button><span class="grow">Sources</span>
+      <span><button id="import" title="Import PNG, SVG, Lottie or glTF files (or drop them on this panel)">Import</button><button id="add-plugin" title="Add a MUI plugin as a source">+ Plugin</button></span>
+    </h2>
+    <div id="sources" class="list tree" aria-label="Sources: drag one, or any part of a plugin, onto the viewport or the layers"></div>
+    <input id="import-file" type="file" multiple hidden accept=".png,.svg,.json,.glb,.ttf,.otf,.wav,.mp3,.ogg,.flac,.m4a">
     <h2>Scenes <button id="add-scene" title="Add a scene">+</button></h2>
     <div id="scenes" class="list"></div>
     <h2>Layers
       <span>
-        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button>
+        <button data-add="rect" title="Add a rectangle">▭</button><button data-add="ellipse" title="Add an ellipse">◯</button><button data-add="text" title="Add text">T</button><button data-add="path" title="Add a path">〰</button><button data-add="duplicator" title="Add a duplicator">⁂</button><button data-add="camera" title="Add a camera (3D scenes)">⌖</button><button data-add="light" title="Add a light (3D scenes)">☀</button><button data-add="model" title="Add a glTF model (3D scenes)">◈</button><button data-add="shader" title="Add a shader layer (a plasma generator)">✦</button><button data-add="patch" title="Add a patch view: a plugin layer's parameters and modulation as it plays">☰</button><button data-add="group" title="Add an empty group (Ctrl+G groups the selection)">▤</button><select id="add-comp" aria-label="Add a comp of another scene" title="Add a comp: another scene as one layer (Ctrl+Shift+C precomposes the selection)"></select>
       </span>
     </h2>
-    <div id="layers" class="list"></div>
+    <div id="layers" class="list" title="Drag a layer onto another's middle to parent it, onto its top or bottom edge to put it above or below, onto the empty space below to unparent it"></div>
     <div class="row">
       <button id="layer-up" title="Move the layer up (paints later)">▲</button>
       <button id="layer-down" title="Move the layer down">▼</button>
@@ -48,19 +59,59 @@
       <span id="time" class="mono">0.00 s</span>
       <button id="lock" aria-pressed="false" title="Play only on the project's frame grid">fps lock</button>
       <button id="hud-toggle" aria-pressed="false" title="Show playback pacing: frames/s, dropped frames, frame time">HUD</button>
-      <span class="muted">◆ key at playhead · K toggle key · Del delete key · ←/→ frame · double-click graph to add a key · Alt breaks tangents</span>
+      <button id="keys-toggle" aria-pressed="false" title="Play the plugin layer: on-screen keys, the computer keyboard (A W S E D F T G Y H U J K, Z/X octave) and MIDI input; while playing, what you play is recorded into its notes">Keys</button>
+      <span id="keys" hidden></span>
+      <span id="audio-state" class="muted mono" title="The live sound: device and latency"></span>
+      <span id="hint" class="muted" title="Ctrl+wheel zoom · Shift+wheel or middle-drag pan · F fit · M marker · drag a bar to slide, its ends to trim · Alt+[ / Alt+] trim to playhead · box-drag picks keys · Alt-drag scales key timing about the playhead · Ctrl+C / Ctrl+V copy / paste keys · F9 easy ease · Ctrl+G group · Ctrl+Shift+G ungroup · Ctrl+Shift+C precompose · double-click a comp to open it · ◆ key at playhead · K toggle key · Del delete keys, marker, else the selected layers · ←/→ frame · double-click graph to add a key · Alt breaks tangents · Shift/Ctrl-click or a marquee adds to the selection · gizmo: Shift keeps proportions (15° turns), Alt from the middle · hold Ctrl while dragging to skip snapping · Ctrl+A select all · Ctrl+D duplicate · Esc deselect · Alt+A/H/D align left/centre/right, Alt+W/V/S top/middle/bottom, Alt+Shift+H/V distribute">Ctrl+wheel zoom · Shift+wheel or middle-drag pan · F fit · M marker · drag a bar to slide, its ends to trim · Alt+[ / Alt+] trim to playhead · box-drag picks keys · Alt-drag scales key timing about the playhead · Ctrl+C / Ctrl+V copy / paste keys · F9 easy ease · Ctrl+G group · Ctrl+Shift+G ungroup · Ctrl+Shift+C precompose · double-click a comp to open it · ◆ key at playhead · K toggle key · Del delete keys, marker, else the selected layers · ←/→ frame · double-click graph to add a key · Alt breaks tangents · Shift/Ctrl-click or a marquee adds to the selection · gizmo: Shift keeps proportions (15° turns), Alt from the middle · hold Ctrl while dragging to skip snapping · Ctrl+A select all · Ctrl+D duplicate · Esc deselect · Alt+A/H/D align left/centre/right, Alt+W/V/S top/middle/bottom, Alt+Shift+H/V distribute</span>
     </div>
     <div id="tl-wrap"><canvas id="timeline"></canvas></div>
     <div class="graph-bar">
       <span>Graph</span>
       <select id="graph-prop" aria-label="Graph property"></select>
       <span class="grow"></span>
-      <span class="muted">selected key:</span>
+      <span class="muted">selected keys:</span>
       <button data-interp="hold">Hold</button><button data-interp="linear">Linear</button><button data-interp="bezier">Bezier</button>
       <button id="reset-handles" title="Back to default ease handles">Reset handles</button>
     </div>
     <canvas id="graph"></canvas>
   </section>
+  <div class="gutter" data-gutter="left" title="Drag to resize; double-click for the default"></div>
+  <div class="gutter" data-gutter="right" title="Drag to resize; double-click for the default"></div>
+  <div class="gutter" data-gutter="bottom" title="Drag to resize; double-click for the default"></div>
+  <dialog id="export-dialog">
+    <form method="dialog" id="export-form">
+      <h2>Export MP4</h2>
+      <label>Codec <select id="ex-codec"></select></label>
+      <label>Bitrate (Mbit/s) <input id="ex-bitrate" type="number" min="0.5" max="200" step="0.5"></label>
+      <label>Motion blur samples <input id="ex-mb" type="number" min="1" max="64" step="1" value="1"></label>
+      <p id="ex-note" class="muted"></p>
+      <progress id="ex-progress" max="1" value="0" hidden></progress>
+      <p id="ex-status" role="status" aria-live="polite"></p>
+      <div class="row">
+        <button id="ex-start" value="" type="button">Render</button>
+        <button id="ex-cancel" type="button">Close</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="plugin-dialog">
+    <form method="dialog" id="plugin-form">
+      <h2>Add a plugin</h2>
+      <label>Folder or git URL <input id="pl-from" placeholder="../my-plugin or https://github.com/…"></label>
+      <label>Name <input id="pl-id" placeholder="its package name"></label>
+      <p class="muted">A MUI plugin crate (moose, truce, nice-plug or plain MUI): mui-cut finds its editor and builds it against this MUI. Folders are relative to the project.</p>
+      <details id="pl-advanced">
+        <summary>A Cargo target or an adapter instead</summary>
+        <label>Cargo.toml <input id="pl-cargo" placeholder="../Cargo.toml"></label>
+        <label>Example <input id="pl-example" placeholder="synth"></label>
+        <label>Binary <input id="pl-bin" placeholder="bin name, or an adapter path"></label>
+      </details>
+      <p id="pl-error" role="status"></p>
+      <div class="row">
+        <button id="pl-add" type="button">Add</button>
+        <button id="pl-cancel" type="button">Cancel</button>
+      </div>
+    </form>
+  </dialog>
   <script type="module" src="app.js"></script>
 </body>
 </html>

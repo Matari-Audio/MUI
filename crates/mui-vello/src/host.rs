@@ -7,8 +7,8 @@
 //! eGPU unplugged) is rebuilt on the next [`Host::present`], and a lost
 //! surface is reported as [`Frame::SurfaceLost`] so the caller can hand a
 //! fresh one to [`Host::replace_surface`].
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use mui_scene::ResolvedScene;
@@ -17,9 +17,116 @@ use crate::Classic;
 use crate::effects::{Budget, EffectStats, GpuRenderer};
 use crate::kurbo::Affine;
 
+mod initialization;
+pub use initialization::GpuInit;
+pub(crate) mod pipeline_cache;
+
 /// A failed device rebuild waits this long before the next attempt, so a
 /// GPU that keeps failing does not cost a device creation every frame.
-const RETRY: Duration = Duration::from_millis(500);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureClass {
+    Permanent,
+    Transient,
+}
+
+/// Shared recovery policy: 250 ms doubling to 8 s. Permanent failures require reset.
+#[derive(Debug, Default)]
+pub struct Retry {
+    failures: u32,
+    deadline: Option<Instant>,
+    disabled: bool,
+}
+impl Retry {
+    pub fn ready(&self, now: Instant) -> bool {
+        !self.disabled && self.deadline.is_none_or(|at| now >= at)
+    }
+    pub fn deadline(&self) -> Option<Instant> {
+        (!self.disabled).then_some(self.deadline).flatten()
+    }
+    pub fn fail(&mut self, now: Instant, class: FailureClass) {
+        self.disabled |= class == FailureClass::Permanent;
+        let delay = Duration::from_millis(250 * (1u64 << self.failures.min(5)));
+        self.failures = self.failures.saturating_add(1);
+        self.deadline = Some(now + delay);
+    }
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// Native instance policy: backend allowlist from WGPU_BACKEND, opt-in validation,
+/// static DXC where wgpu links it (x86-64 MSVC), and opaque HWND presentation
+/// without an acquisition wait.
+pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
+    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+    descriptor.flags = if std::env::var("MUI_GPU_DEBUG").is_ok_and(|v| v == "1") {
+        wgpu::InstanceFlags::DEBUG | wgpu::InstanceFlags::VALIDATION
+    } else {
+        wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
+    };
+    // wgpu-hal only links static DXC on x86-64 MSVC and *panics* if asked for it
+    // elsewhere. Windows GNU/ARM64 take Auto (dxcompiler.dll if present, else FXC):
+    // FXC can TDR on very large scenes (Vello #1991), but it never takes down init.
+    descriptor.backend_options.dx12.shader_compiler =
+        if cfg!(all(target_env = "msvc", not(target_arch = "aarch64"))) {
+            wgpu::Dx12Compiler::StaticDxc
+        } else {
+            wgpu::Dx12Compiler::Auto
+        };
+    descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromHwnd;
+    descriptor.backend_options.dx12.latency_waitable_object =
+        wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
+    descriptor
+}
+
+fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
+    let mut requested = wgpu::Limits::default()
+        .using_resolution(supported.clone())
+        .using_alignment(supported.clone());
+    requested.max_storage_buffers_per_shader_stage = supported
+        .max_storage_buffers_per_shader_stage
+        .max(requested.max_storage_buffers_per_shader_stage);
+    requested.max_storage_buffer_binding_size = supported
+        .max_storage_buffer_binding_size
+        .max(requested.max_storage_buffer_binding_size);
+    requested.max_buffer_size = supported.max_buffer_size.max(requested.max_buffer_size);
+    requested
+}
+
+// Opening every API eagerly loads GL/EGL even when Vulkan/Metal/DX12 succeeds.
+// Keep the caller's enabled backends, but pay for the secondary APIs only on failure.
+fn try_backends<T>(
+    enabled: wgpu::Backends,
+    mut open: impl FnMut(wgpu::Backends) -> Result<T, String>,
+) -> Result<T, String> {
+    let primary = enabled & wgpu::Backends::PRIMARY;
+    let mut errors = Vec::new();
+    for backends in [primary, enabled - primary]
+        .into_iter()
+        .filter(|b| !b.is_empty())
+    {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open(backends)));
+        match result {
+            Ok(Ok(host)) => return Ok(host),
+            Ok(Err(error)) => errors.push(format!("{backends:?}: {error}")),
+            Err(payload) => {
+                let message = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic payload");
+                errors.push(format!(
+                    "{backends:?}: GPU initialization panicked: {message}"
+                ));
+            }
+        }
+    }
+    if errors.is_empty() {
+        Err("no GPU backends enabled".into())
+    } else {
+        Err(errors.join("; "))
+    }
+}
 
 /// The surface size clamped to what a vello `Scene` holds (`u16`), or
 /// `None` when there is nothing to draw into: a minimised window reports
@@ -48,24 +155,10 @@ fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
     if cfg!(windows) {
         return P::AutoNoVsync;
     }
-    [P::Mailbox, P::FifoRelaxed]
+    [P::Mailbox, P::Immediate, P::FifoRelaxed]
         .into_iter()
         .find(|m| modes.contains(m))
         .unwrap_or(P::Fifo)
-}
-
-/// The swapchain extent for a `v`-pixel side. Linux steps it up to a
-/// multiple of 256 so a live resize reconfigures every 256 px, not every
-/// pixel; the renderer keeps the exact size and the present writes only
-/// its corner. Elsewhere the exact size.
-// ponytail: X11 crops the oversized buffer to the window; a Wayland
-// surface takes its size from the buffer, so gate on X11 if one shows it.
-fn surface_extent(v: u32, limit: u32) -> u32 {
-    if cfg!(target_os = "linux") {
-        v.next_multiple_of(256).min(limit)
-    } else {
-        v
-    }
 }
 
 /// Whether a window shows what is behind it where the scene is not opaque.
@@ -93,6 +186,7 @@ pub fn alpha_mode(
         .find(|m| offered.contains(m));
     match want {
         Transparency::Translucent => translucent.unwrap_or(A::Auto),
+        Transparency::Opaque if offered.contains(&A::Opaque) => A::Opaque,
         Transparency::Opaque => A::Auto,
     }
 }
@@ -119,9 +213,209 @@ pub enum Frame {
     SurfaceLost,
 }
 
+/// The initialization operation a candidate reached.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GpuStage {
+    /// Surface formats, alpha modes, usages, or compute limits are unsuitable.
+    Capabilities,
+    /// The driver refused the requested device.
+    Device,
+    /// The retained renderer could not create its resources.
+    Renderer,
+    /// Configuring the real window surface failed.
+    Surface,
+    /// The complete candidate was installed.
+    Ready,
+}
+
+/// One attempted adapter, including enough context to report driver failures.
+#[derive(Clone, Debug)]
+pub struct AdapterDiagnostic {
+    pub adapter: wgpu::AdapterInfo,
+    pub supported_limits: wgpu::Limits,
+    pub requested_limits: wgpu::Limits,
+    pub stage: GpuStage,
+    pub format: Option<wgpu::TextureFormat>,
+    pub alpha_mode: Option<wgpu::CompositeAlphaMode>,
+    pub failure: Option<String>,
+}
+
+/// Candidates in preference order: discrete, integrated, other, virtual, then
+/// CPU; native Vulkan/Metal/DX12 precede GL within each type. Equal ranks keep
+/// enumeration order. Every adapter is attempted at most once, including CPU.
+/// Backends are constrained by the supplied instance's configuration.
+#[derive(Clone, Debug, Default)]
+pub struct GpuDiagnostics {
+    pub candidates: Vec<AdapterDiagnostic>,
+}
+
+impl std::fmt::Display for GpuDiagnostics {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.candidates.is_empty() {
+            return f.write_str("no adapters enumerated by the configured instance");
+        }
+        for (i, candidate) in self.candidates.iter().enumerate() {
+            if i != 0 {
+                f.write_str("; ")?;
+            }
+            write!(
+                f,
+                "{} ({:?}, {:?}, vendor={:#06x}, device={:#06x}): {:?}",
+                candidate.adapter.name,
+                candidate.adapter.backend,
+                candidate.adapter.device_type,
+                candidate.adapter.vendor,
+                candidate.adapter.device,
+                candidate.stage
+            )?;
+            if let Some(error) = &candidate.failure {
+                write!(f, ": {error}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
+// Adapter type/backend preference adapted from Zed's Apache-2.0
+// crates/gpui_wgpu/src/wgpu_context.rs at
+// a84689073d296dfd39987bc7dd478e43ef76d83a (sort_adapters).
+// Copyright 2022 - 2025 Zed Industries, Inc.
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+// http://www.apache.org/licenses/LICENSE-2.0
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+// Adaptation: stable high-performance ranking without Zed-specific overrides;
+// retain CPU fallback and MUI's full compute renderer requirements.
+fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
+    let device = match info.device_type {
+        wgpu::DeviceType::DiscreteGpu => 0,
+        wgpu::DeviceType::IntegratedGpu => 1,
+        wgpu::DeviceType::Other => 2,
+        wgpu::DeviceType::VirtualGpu => 3,
+        wgpu::DeviceType::Cpu => 4,
+    };
+    let backend = match info.backend {
+        wgpu::Backend::Vulkan | wgpu::Backend::Metal | wgpu::Backend::Dx12 => 0,
+        _ => 1,
+    };
+    (device, backend)
+}
+
+fn validate_renderer_requirements(
+    info: &wgpu::AdapterInfo,
+    flags: wgpu::DownlevelFlags,
+    requested: &wgpu::Limits,
+    supported: &wgpu::Limits,
+) -> Result<(), String> {
+    // WARP's compute JIT faults outside Rust error handling; see the captured
+    // stack in research/platform-validation-2026-10-08.md.
+    if info.backend == wgpu::Backend::Dx12
+        && info.device_type == wgpu::DeviceType::Cpu
+        && info.vendor == 0x1414
+    {
+        return Err("WARP compute shader compilation can crash; use CPU rendering".into());
+    }
+    if !flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
+        return Err("Vello requires compute shaders; downlevel GL is unsupported".into());
+    }
+    let mut missing = Vec::new();
+    requested.check_limits_with_fail_fn(supported, false, |name, requested, supported| {
+        missing.push(format!(
+            "{name}: requested {requested}, supported {supported}"
+        ));
+    });
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("renderer limits: {}", missing.join(", ")))
+    }
+}
+
+/// Run the finite candidate list once. The same policy is exercised without a
+/// driver in tests; a failed preferred device must not hide working software.
+fn select_candidate<A, T>(
+    candidates: impl IntoIterator<Item = (A, AdapterDiagnostic)>,
+    mut attempt: impl FnMut(A, &mut AdapterDiagnostic) -> Result<T, String>,
+) -> Result<(T, GpuDiagnostics), HostError> {
+    let mut diagnostics = GpuDiagnostics::default();
+    for (adapter, mut candidate) in candidates {
+        crate::diagnostics::breadcrumb(
+            "mui-vello",
+            "adapter_capabilities",
+            &format!("{candidate:?}"),
+        );
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            attempt(adapter, &mut candidate)
+        }));
+        match result {
+            Ok(Ok(selected)) => {
+                candidate.stage = GpuStage::Ready;
+                diagnostics.candidates.push(candidate);
+                crate::diagnostics::breadcrumb("mui-vello", "gpu_ready", &diagnostics.to_string());
+                return Ok((selected, diagnostics));
+            }
+            Ok(Err(error)) => candidate.failure = Some(error),
+            Err(payload) => {
+                let message = crate::diagnostics::panic_message(&*payload);
+                candidate.failure = Some(format!("panic: {message}"));
+                crate::diagnostics::gpu_error("initialization_panic", message, &candidate.adapter);
+            }
+        }
+        crate::diagnostics::breadcrumb("mui-vello", "candidate_failed", &format!("{candidate:?}"));
+        diagnostics.candidates.push(candidate);
+    }
+    crate::diagnostics::error(
+        "mui-vello",
+        "initialization_failed",
+        &diagnostics.to_string(),
+    );
+    Err(HostError::Initialization(diagnostics))
+}
+
+/// Device-wide callbacks outlive the host's old generation while callers
+/// retain resources from it. Errors coalesce; each observer has its own cursor.
+#[derive(Default)]
+struct DeviceErrors {
+    lost: AtomicBool,
+    latest: Mutex<(u64, Option<String>)>,
+}
+impl DeviceErrors {
+    fn record(&self, message: String) {
+        let mut latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        latest.0 = latest.0.wrapping_add(1);
+        latest.1 = Some(message);
+    }
+    fn observe(&self, cursor: &mut u64) -> Option<String> {
+        let latest = self
+            .latest
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *cursor == latest.0 {
+            return None;
+        }
+        *cursor = latest.0;
+        latest.1.clone()
+    }
+}
+
 /// Why a [`Host`] could not paint.
 #[derive(Debug)]
 pub enum HostError {
+    /// Initialization failed before an adapter report was available.
+    Unavailable {
+        message: String,
+        class: FailureClass,
+    },
+    /// Every candidate failed. Inspect the complete adapter/stage report.
+    Initialization(GpuDiagnostics),
     /// No adapter can present to the surface.
     Adapter(wgpu::RequestAdapterError),
     /// The adapter refused a device.
@@ -133,6 +427,8 @@ pub enum HostError {
     /// Acquiring the surface texture failed validation. Acquiring again
     /// would fail the same way, so this is not a lost surface.
     Validation,
+    /// Configuring or reconfiguring a surface failed without installing it.
+    Configuration(String),
     /// The device was lost, and opening a new one failed with this. The
     /// next [`Host::present`] after a short wait tries again.
     DeviceLost(Box<HostError>),
@@ -140,28 +436,69 @@ pub enum HostError {
 impl std::fmt::Display for HostError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Unavailable { message, .. } => f.write_str(message),
+            Self::Initialization(report) => write!(f, "GPU initialization: {report}"),
             Self::Adapter(e) => write!(f, "GPU adapter: {e}"),
             Self::Device(e) => write!(f, "GPU device: {e}"),
             Self::Surface(s) => write!(f, "GPU surface: {s}"),
             Self::Render(e) => write!(f, "{e}"),
             Self::Validation => f.write_str("GPU surface texture failed validation"),
+            Self::Configuration(error) => write!(f, "GPU surface configuration: {error}"),
             Self::DeviceLost(e) => write!(f, "rebuilding a lost device: {e}"),
         }
     }
 }
-impl std::error::Error for HostError {}
+impl std::error::Error for HostError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Adapter(error) => Some(error),
+            Self::Device(error) => Some(error),
+            Self::Render(error) => Some(error),
+            Self::DeviceLost(error) => Some(&**error),
+            _ => None,
+        }
+    }
+}
+impl HostError {
+    pub fn failure_class(&self) -> FailureClass {
+        match self {
+            Self::Unavailable { class, .. } => *class,
+            Self::Initialization(report)
+                if report
+                    .candidates
+                    .iter()
+                    .all(|c| matches!(c.stage, GpuStage::Capabilities | GpuStage::Renderer)) =>
+            {
+                FailureClass::Permanent
+            }
+            Self::Render(crate::effects::Error::Busy) => FailureClass::Transient,
+            Self::Surface(_) | Self::Validation | Self::Render(_) => FailureClass::Permanent,
+            _ => FailureClass::Transient,
+        }
+    }
+    /// Candidate failures, also when this error wraps a device-loss rebuild.
+    pub fn diagnostics(&self) -> Option<&GpuDiagnostics> {
+        match self {
+            Self::Initialization(report) => Some(report),
+            Self::DeviceLost(error) => error.diagnostics(),
+            _ => None,
+        }
+    }
+}
 
 /// Everything that lives on one device, rebuilt whole when it is lost:
 /// pipelines, atlases, weld textures and retained encodings die with it.
 struct OnDevice {
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    /// The renderer's exact size; the surface may be larger (Linux steps).
+    /// The renderer's exact physical size, matching the native surface.
     size: (u32, u32),
     renderer: GpuRenderer,
     /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
-    lost: Arc<AtomicBool>,
+    errors: Arc<DeviceErrors>,
+    diagnostics: GpuDiagnostics,
 }
 
 impl OnDevice {
@@ -173,46 +510,98 @@ impl OnDevice {
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, HostError> {
-        // A desktop with an iGPU enumerates it first; paint on the card.
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-            compatible_surface: surface,
-            power_preference: wgpu::PowerPreference::HighPerformance,
-            ..Default::default()
-        }))
-        .map_err(HostError::Adapter)?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
-                .map_err(HostError::Device)?;
-        let lost = Arc::new(AtomicBool::new(false));
-        let flag = Arc::clone(&lost);
-        device.set_device_lost_callback(move |_, _| flag.store(true, Ordering::Release));
-        // wgpu's default panics, which in a plugin is the host's crash. An
-        // error no scope caught is logged; a loss is still seen above.
-        device.on_uncaptured_error(Arc::new(|e| {
-            eprintln!("mui-vello: uncaptured GPU error: {e}");
-        }));
-        let limit = device.limits().max_texture_dimension_2d;
+        Self::open_filtered(instance, surface, size, transparency, &[])
+    }
+
+    fn open_filtered(
+        instance: &wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        size: (u32, u32),
+        transparency: Transparency,
+        excluded: &[(String, wgpu::Backend)],
+    ) -> Result<Self, HostError> {
+        // Enumeration remains constrained by the instance's enabled backends
+        // (including WGPU_BACKEND when its descriptor was built from env).
+        let operation = crate::diagnostics::operation(
+            "mui-vello",
+            "enumerate_adapters",
+            &format!(
+                "size={size:?}; MUI {}; os={}; arch={}; panic_unwind={}",
+                env!("CARGO_PKG_VERSION"),
+                std::env::consts::OS,
+                std::env::consts::ARCH,
+                cfg!(panic = "unwind")
+            ),
+            None,
+        );
+        let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        drop(operation);
+        adapters.retain(|a| {
+            let info = a.get_info();
+            !excluded.contains(&(info.name, info.backend))
+        });
+        adapters.sort_by_key(|adapter| adapter_rank(&adapter.get_info()));
+        let candidates = adapters.into_iter().map(|adapter| {
+            let supported_limits = adapter.limits();
+            // Do not use GPUI's downlevel/GL limits: Vello needs compute,
+            // storage buffers, and the full default workgroup limits.
+            let requested_limits = requested_limits(&supported_limits);
+            let candidate = AdapterDiagnostic {
+                adapter: adapter.get_info(),
+                supported_limits,
+                requested_limits,
+                stage: GpuStage::Capabilities,
+                format: None,
+                alpha_mode: None,
+                failure: None,
+            };
+            (adapter, candidate)
+        });
+        let (mut gpu, diagnostics) = select_candidate(candidates, |adapter, candidate| {
+            Self::try_adapter(&adapter, surface, size, transparency, candidate)
+        })?;
+        gpu.diagnostics = diagnostics;
+        Ok(gpu)
+    }
+
+    fn try_adapter(
+        adapter: &wgpu::Adapter,
+        surface: Option<&wgpu::Surface<'_>>,
+        size: (u32, u32),
+        transparency: Transparency,
+        candidate: &mut AdapterDiagnostic,
+    ) -> Result<Self, String> {
+        validate_renderer_requirements(
+            &candidate.adapter,
+            adapter.get_downlevel_capabilities().flags,
+            &candidate.requested_limits,
+            &candidate.supported_limits,
+        )?;
+        let limit = candidate.requested_limits.max_texture_dimension_2d;
         let (width, height) = target_size(size.0.min(limit), size.1.min(limit)).unwrap_or((1, 1));
-        let config = match surface {
-            Some(surface) => {
-                let caps = surface.get_capabilities(&adapter);
-                let format = surface_format(&caps.formats)
-                    .ok_or(HostError::Surface("no non-sRGB UNORM surface format"))?;
-                let (sw, sh) = (surface_extent(width, limit), surface_extent(height, limit));
-                let config = wgpu::SurfaceConfiguration {
-                    format,
-                    present_mode: present_mode(&caps.present_modes),
-                    alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
-                    desired_maximum_frame_latency: 1,
-                    ..surface
-                        .get_default_config(&adapter, sw, sh)
-                        .ok_or(HostError::Surface("no default configuration"))?
-                };
-                surface.configure(&device, &config);
-                config
+        let config = if let Some(surface) = surface {
+            candidate.stage = GpuStage::Surface;
+            let caps = surface.get_capabilities(adapter);
+            if caps.alpha_modes.is_empty()
+                || caps.present_modes.is_empty()
+                || !caps.usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+            {
+                return Err(
+                    "surface has no usable alpha/present modes or render attachment usage".into(),
+                );
             }
-            // Headless: a stand-in nothing is configured with.
-            None => wgpu::SurfaceConfiguration {
+            let format = surface_format(&caps.formats).ok_or("no non-sRGB UNORM surface format")?;
+            wgpu::SurfaceConfiguration {
+                format,
+                present_mode: present_mode(&caps.present_modes),
+                alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
+                desired_maximum_frame_latency: 1,
+                ..surface
+                    .get_default_config(adapter, width, height)
+                    .ok_or("no default surface configuration")?
+            }
+        } else {
+            wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
                 format: wgpu::TextureFormat::Rgba8Unorm,
                 width,
@@ -222,29 +611,99 @@ impl OnDevice {
                 alpha_mode: wgpu::CompositeAlphaMode::Auto,
                 view_formats: Vec::new(),
                 color_space: wgpu::SurfaceColorSpace::Auto,
-            },
+            }
         };
-        let mut renderer = pollster::block_on(GpuRenderer::new(
+        candidate.format = Some(config.format);
+        candidate.alpha_mode = Some(config.alpha_mode);
+        candidate.stage = GpuStage::Device;
+        let operation = crate::diagnostics::operation(
+            "mui-vello",
+            "request_device",
+            &format!("{candidate:?}"),
+            Some(&candidate.adapter),
+        );
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("MUI retained renderer"),
+            required_limits: candidate.requested_limits.clone(),
+            required_features: adapter.features() & wgpu::Features::PIPELINE_CACHE,
+            ..Default::default()
+        }))
+        .map_err(|e| e.to_string())?;
+        drop(operation);
+        let errors = Arc::new(DeviceErrors::default());
+        let state = Arc::clone(&errors);
+        let info = candidate.adapter.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            // Destroyed is also delivered during orderly window teardown.
+            if reason != wgpu::DeviceLostReason::Destroyed {
+                crate::diagnostics::gpu_error(
+                    "device_lost",
+                    &format!("{reason:?}: {message}"),
+                    &info,
+                );
+            }
+            state.record(format!("device lost ({reason:?}): {message}"));
+            state.lost.store(true, Ordering::Release);
+        });
+        let state = Arc::clone(&errors);
+        let info = candidate.adapter.clone();
+        device.on_uncaptured_error(Arc::new(move |error| {
+            eprintln!("mui-vello: uncaptured GPU error: {error}");
+            crate::diagnostics::gpu_error("uncaptured_error", &error.to_string(), &info);
+            state.record(error.to_string());
+        }));
+        candidate.stage = GpuStage::Renderer;
+        let operation = crate::diagnostics::operation(
+            "mui-vello",
+            "create_renderer",
+            &format!("format={:?}; size=({width},{height})", config.format),
+            Some(&candidate.adapter),
+        );
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let renderer = pollster::block_on(GpuRenderer::new(
             &device,
             &queue,
             config.format,
             [width, height],
             Budget::default(),
-        ))
-        .map_err(HostError::Render)?;
+        ));
+        let scoped = [internal, memory, validation]
+            .into_iter()
+            .filter_map(|scope| pollster::block_on(scope.pop()))
+            .map(|error| error.to_string())
+            .collect::<Vec<_>>();
+        drop(operation);
+        if !scoped.is_empty() {
+            return Err(scoped.join("; "));
+        }
+        let mut renderer = renderer.map_err(|e| e.to_string())?;
         renderer.set_straight_alpha(config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied);
+        // Surface configuration is the last fallible initialization operation.
+        // Failed candidates drop all pipelines/caches before trying the next.
+        candidate.stage = GpuStage::Surface;
+        if let Some(surface) = surface {
+            configure(surface, &device, &config)?;
+        }
+        let _ = device.poll(wgpu::PollType::Poll);
+        if let Some(error) = errors.observe(&mut 0) {
+            return Err(format!("device error during initialization: {error}"));
+        }
         Ok(Self {
+            adapter: adapter.clone(),
             device,
             queue,
             config,
             size: (width, height),
             renderer,
-            lost,
+            errors,
+            diagnostics: GpuDiagnostics::default(),
         })
     }
 
     fn lost(&self) -> bool {
-        self.lost.load(Ordering::Acquire)
+        self.errors.lost.load(Ordering::Acquire)
     }
 
     /// [`OnDevice::lost`] after polling the device, which is where wgpu
@@ -256,22 +715,87 @@ impl OnDevice {
     }
 }
 
+/// Validation failures belong to this attempt, not the process-wide callback.
+fn configure(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> Result<(), String> {
+    let _operation = crate::diagnostics::operation(
+        "mui-vello",
+        "configure_surface",
+        &format!("{config:?}"),
+        None,
+    );
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let configured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        surface.configure(device, config);
+    }));
+    let errors = [internal, memory, validation]
+        .into_iter()
+        .filter_map(|scope| pollster::block_on(scope.pop()))
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    if let Err(payload) = configured {
+        let message = crate::diagnostics::panic_message(&*payload);
+        return Err(format!("panic configuring surface: {message}"));
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
 /// A window's surface, the device painting it and the renderer.
 pub struct Host {
     instance: wgpu::Instance,
-    surface: wgpu::Surface<'static>,
+    // A weak static registry owns no GPU objects. The editor is the strong owner.
+    shared: Option<Arc<initialization::Session>>,
+    // None after a failed replacement; acquisition must wait for a new surface.
+    surface: Option<wgpu::Surface<'static>>,
     gpu: OnDevice,
     /// The size last asked for, in physical pixels: what a rebuilt device
     /// configures. `None` while there is nothing to draw into.
     wanted: Option<(u32, u32)>,
-    retry_at: Option<Instant>,
+    retry: Retry,
     /// Bumped on every device rebuild: what lives on the old device is gone.
     generation: u64,
     /// What the caller asked for; a rebuilt device asks again.
     transparency: Transparency,
+    /// Persist the first draw only; never do file I/O on steady animation frames.
+    first_frame: bool,
 }
 
 impl Host {
+    /// Open native APIs first, then secondary APIs if needed. `WGPU_BACKEND`
+    /// remains an allowlist. The factory must drop each failed surface before
+    /// creating another and keep its native window alive for the returned host.
+    pub fn open_native(
+        create: impl FnMut(wgpu::Backends) -> Result<(wgpu::Instance, wgpu::Surface<'static>), String>,
+        size: (u32, u32),
+    ) -> Result<Self, String> {
+        Self::open_native_with_transparency(create, size, Transparency::Opaque)
+    }
+
+    /// [`Self::open_native`] preserving a native window's transparency policy.
+    pub fn open_native_with_transparency(
+        mut create: impl FnMut(
+            wgpu::Backends,
+        ) -> Result<(wgpu::Instance, wgpu::Surface<'static>), String>,
+        size: (u32, u32),
+        transparency: Transparency,
+    ) -> Result<Self, String> {
+        let enabled = wgpu::InstanceDescriptor::new_without_display_handle_from_env().backends;
+        try_backends(enabled, |backends| {
+            let (instance, surface) = create(backends)?;
+            Self::with_transparency(instance, surface, size, transparency)
+                .map_err(|e| e.to_string())
+        })
+    }
+
     /// A device for `surface` and a renderer at `size` physical pixels.
     /// `surface` must come from `instance`.
     pub fn new(
@@ -295,12 +819,14 @@ impl Host {
         let gpu = OnDevice::open(&instance, Some(&surface), size, transparency)?;
         Ok(Self {
             instance,
-            surface,
+            shared: None,
+            surface: Some(surface),
             gpu,
             wanted: target_size(size.0, size.1),
-            retry_at: None,
+            retry: Retry::default(),
             generation: 0,
             transparency,
+            first_frame: true,
         })
     }
 
@@ -315,8 +841,7 @@ impl Host {
         &self.instance
     }
 
-    /// The rendered size, physical pixels. The configured surface can be
-    /// larger (Linux steps it to 256 px).
+    /// The rendered size in physical pixels, matching the native surface.
     pub fn size(&self) -> (u32, u32) {
         self.gpu.size
     }
@@ -331,6 +856,18 @@ impl Host {
     /// [`Host::device`] must be made again.
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Adapter attempts for the currently installed device generation.
+    pub fn diagnostics(&self) -> &GpuDiagnostics {
+        &self.gpu.diagnostics
+    }
+
+    /// Observe the latest uncaptured error or loss once per observer. Reset
+    /// `cursor` to zero after [`Host::generation`] changes. Several errors
+    /// between observations coalesce; callbacks never invoke application code.
+    pub fn observe_gpu_error(&self, cursor: &mut u64) -> Option<String> {
+        self.gpu.errors.observe(cursor)
     }
 
     /// Paint `texture` where the scene has an image texture `key`; see
@@ -360,6 +897,14 @@ impl Host {
         if (width, height) == self.size() {
             return Ok(());
         }
+        // Some backends accept surface configuration on a destroyed device.
+        // Its renderer resources are still invalid; let the host detach this
+        // GPU before any resize or presentation uses them.
+        if self.gpu.poll_lost() {
+            let error = "device lost before resize".to_owned();
+            crate::diagnostics::error("mui-vello", "resize_failed", &error);
+            return Err(HostError::Configuration(error));
+        }
         let OnDevice {
             device,
             config,
@@ -367,24 +912,85 @@ impl Host {
             renderer,
             ..
         } = &mut self.gpu;
+        // Commit dimensions only after configuration succeeds. A failed resize
+        // must retry, rather than comparing equal to a size never installed.
+        let mut next = config.clone();
+        (next.width, next.height) = (width, height);
+        if let Some(surface) = &self.surface {
+            configure(surface, device, &next).map_err(|error| {
+                crate::diagnostics::error("mui-vello", "resize_failed", &error);
+                HostError::Configuration(error)
+            })?;
+        }
         renderer
             .resize([width, height])
             .map_err(HostError::Render)?;
         *size = (width, height);
-        let extent = (surface_extent(width, limit), surface_extent(height, limit));
-        if extent != (config.width, config.height) {
-            (config.width, config.height) = extent;
-            self.surface.configure(device, config);
-        }
+        // The drawable and renderer must have the same physical extent. An
+        // oversized GL framebuffer shifts its top-left image upward, while
+        // Wayland surfaces take their dimensions from the submitted buffer.
+        *config = next;
         Ok(())
     }
 
-    /// Swap in a new surface for the same window after
-    /// [`Frame::SurfaceLost`]. It must come from [`Host::instance`].
+    /// Swap in a new surface for the same window after [`Frame::SurfaceLost`].
+    /// It must come from [`Host::instance`]. Revalidates the adapter and changes
+    /// [`Host::generation`] on success; re-upload external textures. Failures
+    /// are logged and observable through [`Host::observe_gpu_error`]. Use
+    /// [`Host::try_replace_surface`] to receive the full failure report.
     pub fn replace_surface(&mut self, surface: wgpu::Surface<'static>) {
-        self.surface = surface;
-        self.surface.configure(&self.gpu.device, &self.gpu.config);
-        self.gpu.renderer.invalidate();
+        if let Err(error) = self.try_replace_surface(surface) {
+            self.gpu.errors.record(error.to_string());
+            eprintln!("mui-vello: replacing GPU surface failed: {error}");
+        }
+    }
+
+    /// Release the previous surface, then validate a replacement against every candidate.
+    /// Success changes the device generation; re-upload external textures.
+    /// Failure preserves the device and generation, but leaves no surface;
+    /// presents return [`Frame::SurfaceLost`] until replacement succeeds.
+    pub fn try_replace_surface(
+        &mut self,
+        surface: wgpu::Surface<'static>,
+    ) -> Result<(), HostError> {
+        // EGL permits one configured window surface per native window. Wgpu
+        // creates it during configure, so release the old swapchain first.
+        self.surface = None;
+        if self.shared.is_some() {
+            let config = initialization::surface_config(
+                &surface,
+                &self.gpu.adapter,
+                self.wanted.unwrap_or((1, 1)),
+                self.transparency,
+            )?;
+            if let Err(error) = configure(&surface, &self.gpu.device, &config) {
+                self.retry.fail(Instant::now(), FailureClass::Transient);
+                return Err(HostError::Configuration(error));
+            }
+            self.gpu.renderer.set_surface_format(config.format);
+            self.gpu
+                .renderer
+                .resize([config.width, config.height])
+                .map_err(HostError::Render)?;
+            self.gpu.renderer.invalidate();
+            self.gpu.config = config;
+            self.gpu.size = (self.gpu.config.width, self.gpu.config.height);
+            self.surface = Some(surface);
+            self.retry.reset();
+            return Ok(());
+        }
+        let gpu = OnDevice::open(
+            &self.instance,
+            Some(&surface),
+            self.wanted.unwrap_or((1, 1)),
+            self.transparency,
+        )
+        .inspect_err(|error| self.retry.fail(Instant::now(), error.failure_class()))?;
+        self.surface = Some(surface);
+        self.gpu = gpu;
+        self.generation = self.generation.wrapping_add(1);
+        self.retry.reset();
+        Ok(())
     }
 
     /// Paint `scene` under `xf` and present it. `Err` is a render or
@@ -392,6 +998,9 @@ impl Host {
     /// again would fail the same way.
     pub fn present(&mut self, scene: &ResolvedScene, xf: Affine) -> Result<Frame, HostError> {
         self.present_inner::<fn(&mut Classic<'_>)>(scene, xf, None)
+            .inspect_err(|error| {
+                crate::diagnostics::error("mui-vello", "present_failed", &error.to_string());
+            })
     }
 
     /// [`Host::present`] with `overlay` drawn on top, never retained.
@@ -402,6 +1011,9 @@ impl Host {
         overlay: F,
     ) -> Result<Frame, HostError> {
         self.present_inner(scene, xf, Some(overlay))
+            .inspect_err(|error| {
+                crate::diagnostics::error("mui-vello", "present_failed", &error.to_string());
+            })
     }
 
     fn present_inner<F: FnOnce(&mut Classic<'_>)>(
@@ -414,24 +1026,53 @@ impl Host {
         let Some(size) = self.wanted else {
             return Ok(Frame::Skipped);
         };
-        if self.gpu.lost() {
-            let now = Instant::now();
-            if self.retry_at.is_some_and(|at| now < at) {
-                return Ok(Frame::Skipped);
+        if !self.retry.ready(Instant::now()) {
+            return Ok(Frame::Skipped);
+        }
+        let Some(surface) = &self.surface else {
+            return Ok(Frame::SurfaceLost);
+        };
+        if self.gpu.poll_lost() {
+            if self.shared.is_some() {
+                return Err(HostError::Unavailable {
+                    message: "shared device lost; rebuilding off the window thread".into(),
+                    class: FailureClass::Transient,
+                });
             }
-            match OnDevice::open(&self.instance, Some(&self.surface), size, self.transparency) {
+            let now = Instant::now();
+            match OnDevice::open(&self.instance, Some(surface), size, self.transparency) {
                 Ok(gpu) => {
                     self.gpu = gpu;
-                    self.generation += 1;
-                    self.retry_at = None;
+                    self.generation = self.generation.wrapping_add(1);
+                    self.first_frame = true;
+                    self.retry.reset();
                     return Ok(Frame::Skipped);
                 }
                 Err(e) => {
-                    self.retry_at = Some(now + RETRY);
+                    self.retry.fail(now, e.failure_class());
                     return Err(HostError::DeviceLost(Box::new(e)));
                 }
             }
         }
+        // Callers may have logged a failed resize. Retry it before acquiring a
+        // surface configured to a different extent than the retained renderer.
+        self.resize(size.0, size.1)?;
+        let Some(surface) = &self.surface else {
+            return Ok(Frame::SurfaceLost);
+        };
+        let operation = self.first_frame.then(|| {
+            crate::diagnostics::operation(
+                "mui-vello",
+                "first_frame",
+                "first GPU frame completion was not confirmed",
+                self.gpu
+                    .diagnostics
+                    .candidates
+                    .iter()
+                    .find(|c| c.stage == GpuStage::Ready)
+                    .map(|c| &c.adapter),
+            )
+        });
         let OnDevice {
             device,
             queue,
@@ -442,10 +1083,10 @@ impl Host {
         if overlay.is_none() && renderer.is_current(scene, xf) {
             return Ok(Frame::Current);
         }
-        let frame = match self.surface.get_current_texture() {
+        let frame = match surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
-                self.surface.configure(device, config);
+                configure(surface, device, config).map_err(HostError::Configuration)?;
                 renderer.invalidate();
                 return Ok(Frame::Skipped);
             }
@@ -456,12 +1097,27 @@ impl Host {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let stats = match overlay {
+        let stats = match match overlay {
             Some(draw) => renderer.render_with_overlay(scene, xf, &view, draw),
             None => renderer.render(scene, xf, &view),
-        }
-        .map_err(HostError::Render)?;
+        } {
+            Ok(stats) => stats,
+            Err(crate::effects::Error::Busy) => return Ok(Frame::Skipped),
+            Err(error) => return Err(HostError::Render(error)),
+        };
         queue.present(frame);
+        // Driver compilation can fault after submit returns, before work completes.
+        if let Some(operation) = operation {
+            queue.on_submitted_work_done(move || drop(operation));
+        }
+        if self.first_frame {
+            crate::diagnostics::breadcrumb(
+                "mui-vello",
+                "frame_presented",
+                "first frame submitted to the window surface",
+            );
+            self.first_frame = false;
+        }
         Ok(Frame::Presented(stats))
     }
 }
@@ -470,6 +1126,102 @@ impl Host {
 mod tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn transient_retries_double_to_a_cap_and_permanent_failures_require_reset() {
+        let now = Instant::now();
+        let mut retry = Retry::default();
+        for milliseconds in [250, 500, 1000, 2000, 4000, 8000, 8000] {
+            retry.fail(now, FailureClass::Transient);
+            assert_eq!(
+                retry.deadline(),
+                Some(now + Duration::from_millis(milliseconds))
+            );
+            assert!(!retry.ready(now));
+            assert!(retry.ready(now + Duration::from_millis(milliseconds)));
+        }
+        retry.fail(now, FailureClass::Permanent);
+        assert!(!retry.ready(now + Duration::from_secs(3600)));
+        retry.reset();
+        assert!(retry.ready(now));
+    }
+
+    #[test]
+    fn capability_failures_are_sticky_but_configuration_and_loss_are_transient() {
+        assert_eq!(
+            HostError::Initialization(GpuDiagnostics::default()).failure_class(),
+            FailureClass::Permanent
+        );
+        assert_eq!(
+            HostError::Configuration("view not mapped yet".into()).failure_class(),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            HostError::DeviceLost(Box::new(HostError::Validation)).failure_class(),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            HostError::Render(crate::effects::Error::Busy).failure_class(),
+            FailureClass::Transient
+        );
+    }
+
+    #[test]
+    fn requested_storage_limits_use_headroom_without_weakening_compute_requirements() {
+        let supported = wgpu::Limits {
+            max_storage_buffers_per_shader_stage: 16,
+            max_storage_buffer_binding_size: 256 * 1024 * 1024,
+            ..wgpu::Limits::default()
+        };
+        let requested = requested_limits(&supported);
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 16);
+        assert_eq!(requested.max_storage_buffer_binding_size, 256 * 1024 * 1024);
+        assert!(requested.check_limits(&supported));
+    }
+
+    #[test]
+    fn native_backends_are_lazy_and_preserve_the_allowlist() {
+        use wgpu::Backends as B;
+        let mut tried = Vec::new();
+        assert_eq!(
+            try_backends(B::VULKAN | B::GL, |b| {
+                tried.push(b);
+                Ok(42)
+            }),
+            Ok(42)
+        );
+        assert_eq!(tried, [B::VULKAN]);
+        tried.clear();
+        assert_eq!(
+            try_backends(B::VULKAN | B::GL, |b| {
+                tried.push(b);
+                if b == B::GL {
+                    Ok(42)
+                } else {
+                    Err("no surface".into())
+                }
+            }),
+            Ok(42)
+        );
+        assert_eq!(tried, [B::VULKAN, B::GL]);
+        let error = try_backends::<()>(B::VULKAN, |_| Err("no surface".into())).unwrap_err();
+        assert!(error.contains("no surface"));
+        assert!(try_backends::<()>(B::empty(), |_| panic!("must not run")).is_err());
+        assert!(
+            try_backends::<()>(B::VULKAN, |_| panic!("shader diagnostic"))
+                .unwrap_err()
+                .contains("shader diagnostic")
+        );
+        assert_eq!(
+            try_backends(B::VULKAN | B::GL, |b| {
+                if b == B::VULKAN {
+                    panic!("bad driver")
+                }
+                Ok(42)
+            }),
+            Ok(42)
+        );
+    }
 
     #[test]
     fn sizes_clamp_and_zero_is_nothing_to_draw_into() {
@@ -501,44 +1253,243 @@ mod tests {
         assert_eq!(alpha_mode(&vulkan_x11, Translucent), A::PreMultiplied);
         assert_eq!(alpha_mode(&metal, Translucent), A::PostMultiplied);
         assert_eq!(alpha_mode(&dx12_hwnd, Translucent), A::Auto);
-        for offered in [&vulkan_x11[..], &metal, &dx12_hwnd] {
-            assert_eq!(alpha_mode(offered, Opaque), A::Auto, "{offered:?}");
-        }
+        assert_eq!(alpha_mode(&vulkan_x11, Opaque), A::Auto);
+        assert_eq!(alpha_mode(&metal, Opaque), A::Opaque);
+        assert_eq!(alpha_mode(&dx12_hwnd, Opaque), A::Opaque);
         assert!(is_translucent(A::PreMultiplied) && is_translucent(A::PostMultiplied));
         assert!(!is_translucent(A::Auto) && !is_translucent(A::Inherit));
         assert_eq!(Transparency::default(), Opaque);
     }
 
     #[test]
-    fn present_mode_and_swapchain_steps_follow_the_platform() {
+    fn present_mode_follows_the_platform() {
         use wgpu::PresentMode as P;
         let mode = present_mode(&[P::Fifo, P::FifoRelaxed]);
         if cfg!(windows) {
             assert_eq!(mode, P::AutoNoVsync);
-            assert_eq!(surface_extent(300, 8192), 300);
         } else {
             assert_eq!(mode, P::FifoRelaxed);
             assert_eq!(present_mode(&[P::Fifo]), P::Fifo);
         }
-        if cfg!(target_os = "linux") {
-            assert_eq!(surface_extent(300, 8192), 512);
-            assert_eq!(surface_extent(8000, 8192), 8192);
+    }
+
+    fn adapter_info(
+        name: &str,
+        device_type: wgpu::DeviceType,
+        backend: wgpu::Backend,
+    ) -> wgpu::AdapterInfo {
+        let mut info = wgpu::AdapterInfo::new(device_type, backend);
+        info.name = name.into();
+        info.vendor = 0x1002;
+        info.device = 1;
+        info
+    }
+
+    #[test]
+    fn downlevel_gl_is_rejected_without_weakening_vello_requirements() {
+        let info = adapter_info("GL", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Gl);
+        let requested = wgpu::Limits::default();
+        let downlevel = wgpu::Limits::downlevel_webgl2_defaults();
+        assert!(
+            validate_renderer_requirements(
+                &info,
+                wgpu::DownlevelFlags::empty(),
+                &requested,
+                &downlevel
+            )
+            .unwrap_err()
+            .contains("compute shaders")
+        );
+        assert!(
+            validate_renderer_requirements(
+                &info,
+                wgpu::DownlevelFlags::COMPUTE_SHADERS,
+                &requested,
+                &downlevel
+            )
+            .unwrap_err()
+            .contains("renderer limits")
+        );
+        assert!(
+            validate_renderer_requirements(
+                &info,
+                wgpu::DownlevelFlags::COMPUTE_SHADERS,
+                &requested,
+                &requested
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
+        let limits = wgpu::Limits::default();
+        let validate = |info: &wgpu::AdapterInfo| {
+            validate_renderer_requirements(
+                info,
+                wgpu::DownlevelFlags::COMPUTE_SHADERS,
+                &limits,
+                &limits,
+            )
+        };
+        let mut info = adapter_info(
+            "Microsoft Basic Render Driver",
+            wgpu::DeviceType::Cpu,
+            wgpu::Backend::Dx12,
+        );
+        info.vendor = 0x1414;
+        info.device = 0x008c;
+        info.driver = "10.0.26100.33438".into();
+        assert!(validate(&info).unwrap_err().contains("WARP"));
+        info.backend = wgpu::Backend::Vulkan;
+        assert!(validate(&info).is_ok());
+        info.backend = wgpu::Backend::Dx12;
+        info.device_type = wgpu::DeviceType::DiscreteGpu;
+        for vendor in [0x10de, 0x8086, 0x1002, 0x1414] {
+            info.vendor = vendor;
+            assert!(validate(&info).is_ok());
         }
+        info.device_type = wgpu::DeviceType::IntegratedGpu;
+        info.vendor = 0x8086;
+        assert!(validate(&info).is_ok());
+    }
+
+    #[test]
+    fn stable_candidate_priority_keeps_software_fallback_and_prefers_native_backends() {
+        use wgpu::{Backend as B, DeviceType as D};
+        let mut candidates = [
+            adapter_info("software", D::Cpu, B::Vulkan),
+            adapter_info("integrated", D::IntegratedGpu, B::Vulkan),
+            adapter_info("discrete GL", D::DiscreteGpu, B::Gl),
+            adapter_info("first discrete", D::DiscreteGpu, B::Vulkan),
+            adapter_info("second discrete", D::DiscreteGpu, B::Vulkan),
+        ];
+        candidates.sort_by_key(adapter_rank);
+        assert_eq!(
+            candidates.map(|info| info.name),
+            [
+                "first discrete",
+                "second discrete",
+                "discrete GL",
+                "integrated",
+                "software"
+            ]
+        );
+    }
+
+    #[test]
+    fn failures_and_driver_panics_try_each_candidate_once_until_software_works() {
+        let candidates = [
+            wgpu::DeviceType::DiscreteGpu,
+            wgpu::DeviceType::IntegratedGpu,
+            wgpu::DeviceType::Cpu,
+        ];
+        let candidates = candidates.into_iter().enumerate().map(|(i, device_type)| {
+            (
+                i,
+                AdapterDiagnostic {
+                    adapter: adapter_info("candidate", device_type, wgpu::Backend::Vulkan),
+                    supported_limits: wgpu::Limits::default(),
+                    requested_limits: wgpu::Limits::default(),
+                    stage: GpuStage::Capabilities,
+                    format: None,
+                    alpha_mode: None,
+                    failure: None,
+                },
+            )
+        });
+        let mut attempts = Vec::new();
+        let (chosen, report) = select_candidate(candidates, |i, candidate| {
+            attempts.push(i);
+            candidate.stage = GpuStage::Device;
+            match i {
+                0 => Err("preferred device refused".into()),
+                1 => panic!("driver failed"),
+                _ => Ok(i),
+            }
+        })
+        .unwrap();
+        assert_eq!(chosen, 2);
+        assert_eq!(attempts, [0, 1, 2]);
+        assert_eq!(
+            report.candidates[0].failure.as_deref(),
+            Some("preferred device refused")
+        );
+        assert_eq!(
+            report.candidates[1].failure.as_deref(),
+            Some("panic: driver failed")
+        );
+        assert_eq!(report.candidates[2].stage, GpuStage::Ready);
+        assert!(report.candidates[2].failure.is_none());
+    }
+
+    #[test]
+    fn initialization_reports_keep_failed_adapter_stages_through_device_loss() {
+        let report = GpuDiagnostics {
+            candidates: vec![AdapterDiagnostic {
+                adapter: adapter_info(
+                    "preferred",
+                    wgpu::DeviceType::DiscreteGpu,
+                    wgpu::Backend::Vulkan,
+                ),
+                supported_limits: wgpu::Limits::default(),
+                requested_limits: wgpu::Limits::default(),
+                stage: GpuStage::Device,
+                format: Some(wgpu::TextureFormat::Bgra8Unorm),
+                alpha_mode: Some(wgpu::CompositeAlphaMode::Auto),
+                failure: Some("driver refused device".into()),
+            }],
+        };
+        let error = HostError::DeviceLost(Box::new(HostError::Initialization(report)));
+        let message = error.to_string();
+        assert!(
+            message.contains("preferred")
+                && message.contains("Vulkan")
+                && message.contains("driver refused device")
+        );
+        assert_eq!(
+            error.diagnostics().unwrap().candidates[0].stage,
+            GpuStage::Device
+        );
+        assert!(
+            HostError::Initialization(GpuDiagnostics::default())
+                .to_string()
+                .contains("no adapters")
+        );
+    }
+
+    #[test]
+    fn callback_errors_are_observed_independently_and_coalesce_without_consuming() {
+        let errors = DeviceErrors::default();
+        let (mut a, mut b) = (0, 0);
+        assert_eq!(errors.observe(&mut a), None);
+        errors.record("first".into());
+        assert_eq!(errors.observe(&mut a).as_deref(), Some("first"));
+        assert_eq!(errors.observe(&mut a), None);
+        errors.record("second".into());
+        errors.record("last".into());
+        assert_eq!(errors.observe(&mut a).as_deref(), Some("last"));
+        assert_eq!(errors.observe(&mut b).as_deref(), Some("last"));
     }
 
     /// A real loss, not a flag flipped by hand: `Device::destroy` fires the
     /// lost callback, and a device opened again renders.
     #[test]
+    #[ignore = "requires a native adapter with Vello compute support"]
     fn a_destroyed_device_is_seen_and_a_new_one_renders() {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let gpu = match OnDevice::open(&instance, None, (16, 16), Transparency::Opaque) {
-            Ok(gpu) => gpu,
-            Err(e) => return eprintln!("SKIPPED: no wgpu device ({e})"),
-        };
+        let gpu = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque)
+            .expect("native adapter");
+        eprintln!("{}", gpu.diagnostics);
+        assert_eq!(
+            gpu.diagnostics.candidates.last().unwrap().stage,
+            GpuStage::Ready
+        );
         assert!(!gpu.lost());
         gpu.device.destroy();
         assert!(gpu.poll_lost(), "loss unseen");
+        assert!(gpu.errors.observe(&mut 0).unwrap().contains("device lost"));
         let mut gpu2 = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque).unwrap();
         assert_ne!(gpu2.device, gpu.device);
         let target = gpu2.device.create_texture(&wgpu::TextureDescriptor {
@@ -564,5 +1515,50 @@ mod tests {
             .unwrap();
         assert!(pollster::block_on(scope.pop()).is_none());
         assert!(!gpu2.lost());
+    }
+
+    #[test]
+    #[ignore = "requires a native adapter with Vello compute support"]
+    fn a_failed_replacement_state_requires_a_surface_before_presenting() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let gpu = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque)
+            .expect("native adapter");
+        // A replacement failure retains the existing device and generation,
+        // but has released the previous surface. Do not acquire or rebuild a
+        // device until the caller supplies a new surface.
+        let mut host = Host {
+            instance,
+            shared: None,
+            surface: None,
+            gpu,
+            wanted: Some((16, 16)),
+            retry: Retry::default(),
+            generation: 4,
+            transparency: Transparency::Opaque,
+            first_frame: true,
+        };
+        let root = block(16., 16.).fill(Role::Primary);
+        let scene = resolve(&SceneSpec::new(root).offered(Size::new(16., 16.))).unwrap();
+        assert!(matches!(
+            host.present(&scene, Affine::IDENTITY),
+            Ok(Frame::SurfaceLost)
+        ));
+        host.retry.fail(Instant::now(), FailureClass::Transient);
+        assert!(matches!(
+            host.present(&scene, Affine::IDENTITY),
+            Ok(Frame::Skipped)
+        ));
+        host.retry.reset();
+        host.gpu.device.destroy();
+        assert!(matches!(
+            host.present(&scene, Affine::IDENTITY),
+            Ok(Frame::SurfaceLost)
+        ));
+        assert_eq!(
+            host.generation(),
+            4,
+            "missing surface cannot trigger a device rebuild"
+        );
     }
 }

@@ -1575,11 +1575,11 @@ pub fn editor() -> El {
     // No spacer in a candidate: a flex base of 0 measures small, so a row
     // holding one always "fits" and the widest would always win.
     let head = fits![
-        row![title("Kurv"), caption("v1.0 -- four operators")]
+        row![title("Synth"), caption("v1.0 -- four operators")]
             .gap(M)
             .baseline(),
-        row![title("Kurv"), caption("v1.0")].gap(S).baseline(),
-        title("Kurv"),
+        row![title("Synth"), caption("v1.0")].gap(S).baseline(),
+        title("Synth"),
     ]
     .id("head");
     col![

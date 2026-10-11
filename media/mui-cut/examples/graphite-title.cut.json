@@ -1,0 +1,128 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "title",
+      "duration": 7.0,
+      "background": "#2b2d31",
+      "layers": [
+        {
+          "id": "word",
+          "kind": "text",
+          "text": "GRAPHITE",
+          "x": 640.0,
+          "y": 340.0,
+          "fill": "#e8e6e1",
+          "font_size": 132.0,
+          "weight": 800.0,
+          "tracking": [
+            { "t": 2.2, "v": 6.0, "interp": "bezier" },
+            { "t": 5.6, "v": 22.0, "interp": "bezier" }
+          ],
+          "animators": [
+            {
+              "amount": [
+                { "t": 0.2, "v": 1.0, "interp": "bezier" },
+                { "t": 0.8999999999999999, "v": 0.0, "interp": "hold" }
+              ],
+              "stagger": 0.06,
+              "y": 40.0,
+              "opacity": 0.0
+            },
+            {
+              "amount": [
+                { "t": 6.0, "v": 0.0, "interp": "bezier" },
+                { "t": 6.5, "v": 1.0, "interp": "hold" }
+              ],
+              "stagger": 0.03,
+              "y": -40.0,
+              "opacity": 0.0
+            }
+          ]
+        },
+        {
+          "id": "rule",
+          "kind": "rect",
+          "x": 640.0,
+          "y": 430.0,
+          "width": [
+            { "t": 0.8, "v": 0.0, "interp": "bezier" },
+            { "t": 1.6, "v": 520.0, "interp": "bezier" },
+            { "t": 5.8, "v": 520.0, "interp": "bezier" },
+            { "t": 6.4, "v": 0.0, "interp": "bezier" }
+          ],
+          "height": 4.0,
+          "fill": "#8a8d93"
+        },
+        {
+          "id": "sub",
+          "kind": "text",
+          "text": "PENCILS FOR PEOPLE WHO SHIP",
+          "x": 640.0,
+          "y": [
+            { "t": 1.4, "v": 496.0, "interp": "bezier", "out": [0.096, -20.0] },
+            { "t": 2.0, "v": 476.0, "interp": "bezier", "in": [-0.42, 0.0] }
+          ],
+          "opacity": [
+            { "t": 1.4, "v": 0.0, "interp": "bezier", "out": [0.096, 1.0] },
+            { "t": 2.0, "v": 1.0, "interp": "bezier", "in": [-0.42, 0.0] },
+            { "t": 5.9, "v": 1.0, "interp": "bezier", "out": [0.27999999999999997, 0.0] },
+            { "t": 6.300000000000001, "v": 0.0, "interp": "bezier", "in": [-0.064, 1.0] }
+          ],
+          "fill": "#a9acb2",
+          "font_size": 26.0,
+          "weight": 500.0,
+          "tracking": 8.0
+        },
+        {
+          "id": "scribble",
+          "kind": "path",
+          "d": "M -260 0 C -170 -26 -90 24 0 0 S 170 -22 260 4",
+          "x": 640.0,
+          "y": 560.0,
+          "fill": "#00000000",
+          "stroke": "#c9c6bf",
+          "stroke_width": 5.0,
+          "trim_start": [
+            { "t": 5.6, "v": 0.0, "interp": "bezier" },
+            { "t": 6.2, "v": 1.0, "interp": "bezier" }
+          ],
+          "trim_end": [
+            { "t": 2.4, "v": 0.0, "interp": "bezier" },
+            { "t": 3.4, "v": 1.0, "interp": "bezier" }
+          ]
+        },
+        {
+          "id": "badge",
+          "kind": "rect",
+          "x": 1080.0,
+          "y": 232.0,
+          "scale": [
+            { "t": 3.2, "v": 0.0, "interp": "bezier", "out": [0.06, 0.9] },
+            { "t": 3.5250000000000004, "v": 1.08, "interp": "bezier" },
+            { "t": 3.7, "v": 1.0, "interp": "bezier" },
+            { "t": 5.9, "v": 1.0, "interp": "bezier" },
+            { "t": 6.0225, "v": 1.08, "interp": "bezier" },
+            { "t": 6.25, "v": 0.0, "interp": "bezier", "in": [-0.042, 0.9] }
+          ],
+          "rotation": -8.0,
+          "width": 112.0,
+          "height": 48.0,
+          "radius": 24.0,
+          "fill": "#e8e6e1"
+        },
+        {
+          "id": "badge.label",
+          "parent": "badge",
+          "kind": "text",
+          "text": "NEW",
+          "fill": "#2b2d31",
+          "font_size": 24.0,
+          "weight": 800.0,
+          "tracking": 4.0
+        }
+      ]
+    }
+  ]
+}

@@ -6,9 +6,14 @@ rust-version.workspace = true
 license.workspace = true
 
 # A native window: nothing here builds for wasm.
+[features]
+# Explicitly accepts that a plugin panic can terminate its DAW.
+allow-panic-abort = []
+
 [dependencies]
-mui = { workspace = true, features = ["gpu-effects"] }
-baseview = { package = "moose-baseview", git = "https://github.com/Matari-Audio/moose" }
+mui = { workspace = true, features = ["gpu-effects", "software-window"] }
+baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
+mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }
 # baseview's handles; the same 0.6 wgpu takes.
 raw-window-handle = "0.6"
@@ -19,13 +24,20 @@ wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"
 # already pulls it in there.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
+accesskit_macos = { path = "../../vendor/accesskit_macos" }
 
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.6", default-features = false }
-# The window's accessibility tree over AT-SPI; needs no window handle.
-accesskit_unix = "0.22"
-mui-access.workspace = true
+# AT-SPI; screen bounds borrow baseview's original X11 connection below.
+accesskit_unix = { path = "../../vendor/accesskit_unix" }
+x11-dl = "2.21"
+x11rb = { version = "0.13.2", default-features = false, features = ["allow-unsafe-code", "dl-libxcb"] }
+# Drag-out (XDND / the Hyprland bridge) from the window's own press.
+matari-audio-drag-and-drop = { git = "https://github.com/DerpcatMusic/matari-audio-drag-and-drop", rev = "cfbb7c17af5fe443ac1c1a46bc0e8c5b15270dbe" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+accesskit_windows = "0.34"
 
 [lints]
 workspace = true

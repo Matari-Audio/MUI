@@ -55,7 +55,7 @@ pub struct Bins<'a> {
     /// length is the bin count; everything else here is measured against it.
     pub authored: &'a mut [f32],
     /// The level the engine is producing right now -- `Plan::magnitudes` in
-    /// Kurv's additive oscillator -- drawn as a cap line over the bars, so
+    /// A synth's additive oscillator -- drawn as a cap line over the bars, so
     /// the operator chain's effect is visible over what was authored.
     /// Ignored unless it is the same length as `authored`.
     pub live: Option<&'a [f32]>,

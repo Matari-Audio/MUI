@@ -2,7 +2,7 @@
 //!
 //! This is the part of an immediate-mode toolkit that is genuinely load-bearing
 //! and is not drawing: deciding *what is under the pointer* and *what that
-//! means*. In KURV's editor, `ui.painter()` is called 204 times and
+//! means*. In a synth plugin's editor, `ui.painter()` is called 204 times and
 //! `ui.interact()` 19 -- the painter is replaceable by Vello, this is not.
 //!
 //! Two pieces, deliberately separate:
@@ -119,6 +119,9 @@ pub struct Hit {
     /// Cache its Bézier conversion by slice identity so tagged draws on one
     /// surface do not repeat validation or curve conversion.
     clip_cache: HashMap<(usize, usize), Clips>,
+    /// Previous frame's lists, reused when slice identity changes but contours
+    /// and offsets do not. The buffer retains capacity, never old frame keys.
+    clip_spares: Vec<Clips>,
     /// Placed paths' conversions by their `Arc`, which the entry holds so
     /// the address stays its own, and whether this build used it: kept
     /// across [`Hit::clear`], so a rebuilt map converts only new shapes.
@@ -233,6 +236,33 @@ impl Hit {
         clip: Option<Rect>,
         clips: Option<&[(Arc<Path>, Point)]>,
     ) -> Result<(), Error> {
+        let clips = self.cache_placed_clips(clips)?;
+        let path = self.converted(path)?;
+        self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
+    }
+
+    /// Cache this frame's exact ancestor clips for frame-based wheel queries.
+    /// Old list identities are discarded; path conversions remain reusable.
+    pub fn prepare_clips<'a>(
+        &mut self,
+        lists: impl IntoIterator<Item = &'a [(Arc<Path>, Point)]>,
+    ) -> Result<(), Error> {
+        self.clip_spares.clear();
+        if self.clip_cache.len() <= 64 {
+            self.clip_spares
+                .extend(self.clip_cache.drain().map(|(_, clips)| clips));
+        } else {
+            self.clip_cache.clear();
+        }
+        for clips in lists {
+            self.cache_placed_clips(Some(clips))?;
+        }
+        Ok(())
+    }
+
+    /// Prepare exact ancestor clip contours once for frame-based queries,
+    /// including unnamed scrollers that are not gesture targets.
+    fn cache_placed_clips(&mut self, clips: Option<&[(Arc<Path>, Point)]>) -> Result<Clips, Error> {
         let clips = match clips.filter(|c| !c.is_empty()) {
             None => Arc::from([]),
             Some(list) => {
@@ -240,18 +270,51 @@ impl Hit {
                 if let Some(c) = self.clip_cache.get(&key) {
                     c.clone()
                 } else {
-                    let c: Arc<[_]> = list
-                        .iter()
-                        .map(|(p, o)| Ok((self.converted(p)?, o.to_vec2())))
-                        .collect::<Result<Vec<_>, Error>>()?
-                        .into();
+                    // ponytail: search at most 64 prior lists; index contours
+                    // if large scenes need allocation-free clip registration.
+                    if self.clip_cache.len() >= 64 {
+                        self.clip_spares.clear();
+                    }
+                    let c: Clips = if let Some(c) = self.clip_spares.iter().find(|clips| {
+                        clips.len() == list.len()
+                            && clips.iter().zip(list).all(|((c, at), (p, offset))| {
+                                *at == offset.to_vec2()
+                                    && c.source
+                                        .as_ref()
+                                        .is_some_and(|source| Arc::ptr_eq(source, p) || source == p)
+                            })
+                    }) {
+                        c.clone()
+                    } else {
+                        list.iter()
+                            .map(|(p, o)| Ok((self.converted(p)?, o.to_vec2())))
+                            .collect::<Result<Vec<_>, Error>>()?
+                            .into()
+                    };
                     self.clip_cache.insert(key, c.clone());
                     c
                 }
             }
         };
-        let path = self.converted(path)?;
-        self.add(id.into(), tag, path, at.to_vec2(), clip, clips)
+        Ok(clips)
+    }
+
+    /// Test only a registered clip stack, without requiring this node to be
+    /// the topmost hit target. Parents can receive wheel over their children.
+    pub fn inside_clips(
+        &self,
+        p: Point,
+        clip: Option<Rect>,
+        clips: Option<&[(Arc<Path>, Point)]>,
+    ) -> bool {
+        p.x.is_finite()
+            && p.y.is_finite()
+            && clip.is_none_or(|b| b.contains(p))
+            && clips.filter(|c| !c.is_empty()).is_none_or(|list| {
+                self.clip_cache
+                    .get(&(list.as_ptr() as usize, list.len()))
+                    .is_some_and(|clips| clips.iter().all(|(c, at)| c.winds(p - *at)))
+            })
     }
 
     /// Empty the map for a rebuild, keeping the conversions the last build
@@ -369,7 +432,7 @@ impl Hit {
 }
 
 /// How much of a drag a gesture keeps while the fine modifier is held.
-/// KURV's `FINE_DRAG_SCALE`: a tenth, which is the difference between
+/// A synth editor's fine-drag scale: a tenth, which is the difference between
 /// "somewhere near 3 kHz" and "3 kHz".
 pub const FINE_DRAG: f64 = 0.1;
 
@@ -605,6 +668,9 @@ pub enum Ime {
         text: String,
         cursor: Option<(usize, usize)>,
     },
+    /// A native replacement selection in UTF-8 bytes of the displayed edit
+    /// buffer. Ordered with Commit/Preedit events in the same input batch.
+    Selection(std::ops::Range<usize>),
     Commit(String),
     Disabled,
 }

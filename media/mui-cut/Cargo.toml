@@ -49,11 +49,11 @@ velato = { version = "0.12", default-features = false }
 # 3D scenes: layers on lit slabs with shadows, models, on the same device
 # (the GPU engines pick wgpu's backends).
 mui-stage = { path = "../mui-stage", default-features = false }
-# Model layers: glTF binaries, meshes and their base-colour materials only.
-gltf = { version = "1.4", default-features = false, features = ["utils"] }
+# Model layers: glTF binaries, meshes and their PBR and glass materials.
+gltf = { version = "1.4", default-features = false, features = ["utils", "extensions", "KHR_materials_transmission", "KHR_materials_ior", "KHR_materials_volume"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-wasm-bindgen = "0.2.128"
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys = { version = "0.3", features = ["OffscreenCanvas"] }
 # WebGL2 for browsers without WebGPU, drawn by vello_gpu.
@@ -62,17 +62,33 @@ wgpu = { workspace = true, features = ["webgpu", "webgl", "wgsl"] }
 # Sub-frame shutter averaging comes from mui-reel.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 mui-reel = { path = "../mui-reel" }
+# `render.glass: rt`: 3D glass path traced on hardware ray queries.
+mui-stage-rt = { path = "../mui-stage-rt", default-features = false }
 # A still or a preview frame rasterises on several threads; export runs
 # several frames at once instead (src/pool.rs).
 vello_cpu = { version = "0.2", default-features = false, features = ["multithreading"] }
 # `mui-cut gen`: sandboxed, deterministic scripts that write projects. No
 # clock, no modules: a script's output depends on its text alone.
+# Plugin captures arrive as base64 PNGs over the bridge's wire.
+base64 = "0.22"
 rhai = { version = "1.26", features = ["serde", "no_time", "no_module"] }
 wgpu = { workspace = true, features = ["default"] }
+# `mui-cut midi`: Standard MIDI Files into a plugin layer's notes.
+midly = { version = "0.5", default-features = false, features = ["std"] }
+# `serve` plays the project's sound live (a null clock when there is no device).
+cpal = "0.17"
+# `serve` removes its discovery file when Ctrl+C or SIGTERM ends it.
+ctrlc = { version = "3.4", features = ["termination"] }
 
 [dev-dependencies]
+# `examples/synth.rs`: a small plugin editor behind the bridge's live
+# protocol, for the plugin layer's example and tests.
+mui.workspace = true
+mui-motion-bridge = { path = "../mui-motion-bridge" }
 # Checks the generated schema accepts the examples (no network resolving).
 jsonschema = { version = "0.58", default-features = false }
+# The effects' WGSL, checked for WebGL2's uniform layout rules.
+naga = { version = "30", features = ["wgsl-in"] }
 serde_json.workspace = true
 png.workspace = true
 

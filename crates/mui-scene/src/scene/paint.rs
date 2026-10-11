@@ -22,7 +22,24 @@ pub(super) type LateStroke = (Arc<Path>, Option<RoundedRect>, Fill, f64, bool);
 
 /// The colour a painted entry leaves for what paints on it.
 fn solid(p: Option<&mut Painted>, or: Color) -> Color {
-    p.map_or(or, |p| p.paint.solid())
+    p.map_or(or, |p| ground(&p.paint, or))
+}
+
+/// Contrast follows the visible colour, while the paint keeps its alpha.
+fn ground(paint: &Paint, under: Color) -> Color {
+    let color = paint.solid();
+    if color.alpha() >= 1.0 {
+        return color;
+    }
+    if color.alpha() <= 0.0 {
+        return under;
+    }
+    let foreground = color.to_srgb();
+    let composed = (foreground.premultiply()
+        + under.to_srgb().premultiply() * (1.0 - foreground.components[3]))
+        .un_premultiply();
+    let [r, g, b, a] = composed.components;
+    Color::srgba(r, g, b, a)
 }
 
 impl Walk<'_> {
@@ -51,6 +68,7 @@ impl Walk<'_> {
                     paint: Paint::Solid(under),
                     rect: Some(*image_rect),
                     offset: Point::ZERO,
+                    transform: self.transform,
                     width: 0.0,
                     blur: 0.0,
                     text: None,
@@ -69,14 +87,15 @@ impl Walk<'_> {
             ),
             // Text's own fill is its ink, not a box behind it: never pushed,
             // though its colour still grounds the shells as before.
-            None if matches!(e.content, Content::Text(_)) => self
-                .paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
-                .map_or(under, |p| p.solid()),
+            None if matches!(e.content, Content::Text(_)) && e.extras().editable_text.is_none() => {
+                self.paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
+                    .map_or(under, |p| ground(&p, under))
+            }
             // A joined tab takes the owner's border material; its fill only
             // grounds its content.
             None if e.extras().border_join.is_some() => self
                 .paint_of(e.style.fill.as_ref().unwrap_or(&Fill::None), under)
-                .map_or(under, |p| p.solid()),
+                .map_or(under, |p| ground(&p, under)),
             None => {
                 let path = contour.path.clone();
                 let mut p = self.push(
@@ -196,14 +215,17 @@ impl Walk<'_> {
                 (r.radius() + grow).max(0.0),
             )
         };
-        // ponytail: a welded shadow is the union of the children's blurs,
-        // not the blur of the union -- each child rect keeps the convex
-        // radius, so the seams are rounded where the welded outline is
-        // straight or concave, and overlapping children over-composite
-        // there. A blur filter layer is the upgrade.
+        // A zero-spread drop follows the final outline, including a weld's
+        // filleted corners, rather than its original square participants.
+        // ponytail: inset and spread shadows still use participant rects;
+        // inverse-path blur and path offsets are their upgrade.
         let rects = match &contour.rect {
             Some(r) => std::slice::from_ref(r),
-            None if !contour.shadow_rects.is_empty() => &contour.shadow_rects[..],
+            None if !contour.shadow_rects.is_empty()
+                && (sh.kind != ShadowKind::Drop || grow != 0.0) =>
+            {
+                &contour.shadow_rects[..]
+            }
             // ponytail: no analytic rect and no welds -- the shape travels
             // as a path, and the spread with it is dropped.
             None => {
@@ -420,6 +442,7 @@ impl Walk<'_> {
             paint: Paint::Solid(CLEAR),
             rect,
             offset,
+            transform: self.transform,
             width: 0.0,
             blur: 0.0,
             text: None,
@@ -467,6 +490,7 @@ impl Walk<'_> {
             paint,
             rect,
             offset: Point::ZERO,
+            transform: self.transform,
             width: 0.0,
             blur: 0.0,
             text: None,
@@ -504,29 +528,75 @@ mod tests {
         assert_eq!(s.paint[inset].blur, 4.);
     }
 
-    /// A welded outline has no analytic rounded rect, so its shadow is one
-    /// blurred rect per welded child instead of a single dropped entry.
+    /// A zero-spread drop on a weld uses the final rounded outline as one path.
     #[test]
-    fn a_welded_shadow_is_one_blurred_rect_per_child() {
+    fn a_welded_zero_spread_drop_shadow_uses_the_final_contour() {
+        let shadow = Shadow::soft(12.);
         let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
             .union(Role::Surface)
-            .shadow(Shadow::soft(12.))
+            .radius(8.)
+            .shadow(shadow.clone())
             .id("weld");
         let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
-        let sh: Vec<_> = s
+        let shadows: Vec<_> = s
             .paint
             .iter()
-            .filter(|p| matches!(p.layer, Layer::Shadow(_)))
+            .filter(|p| p.layer == Layer::Shadow(ShadowKind::Drop))
             .collect();
-        assert_eq!(sh.len(), 2, "one blurred rect per welded child");
-        for (p, k) in sh.iter().zip(["a", "b"]) {
-            assert_eq!(p.blur, 12.);
-            let r = p.rect.expect("a rect the renderer can blur").bounds();
-            let r = r + p.offset.to_vec2();
-            let child = s.surface(k).unwrap();
+        let outline = s
+            .paint
+            .iter()
+            .find(|p| p.key.as_str() == "weld" && p.layer == Layer::Fill)
+            .unwrap();
+        assert_eq!(shadows.len(), 1, "one drop shadow follows the weld contour");
+        let shadow_paint = shadows[0];
+        assert_eq!(shadow_paint.blur, shadow.blur);
+        assert!(
+            shadow_paint.rect.is_none(),
+            "the welded contour is not a rect"
+        );
+        assert_eq!(
+            shadow_paint.path.as_ref(),
+            outline.path.as_ref(),
+            "the shadow follows the final outline"
+        );
+        assert_eq!(
+            shadow_paint.offset,
+            outline.offset + mui_geometry::Vec2::new(shadow.dx, shadow.dy)
+        );
+    }
+
+    /// Nonzero spread still expands one blur rect per welded child.
+    #[test]
+    fn a_spread_welded_drop_shadow_uses_each_child_rect() {
+        let shadow = Shadow {
+            spread: 1.,
+            ..Shadow::soft(12.)
+        };
+        let root = row([block(20., 20.).id("a"), block(20., 40.).id("b")])
+            .union(Role::Surface)
+            .shadow(shadow.clone())
+            .id("weld");
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let shadows: Vec<_> = s
+            .paint
+            .iter()
+            .filter(|p| p.layer == Layer::Shadow(ShadowKind::Drop))
+            .collect();
+        assert_eq!(shadows.len(), 2, "spread follows each welded child");
+        for (p, key) in shadows.iter().zip(["a", "b"]) {
+            assert_eq!(p.blur, shadow.blur);
+            let r = p
+                .rect
+                .expect("spread shadow keeps an analytic rect")
+                .bounds()
+                + p.offset.to_vec2();
+            let child = s.surface(key).unwrap();
             let child = child.rect.unwrap().bounds() + child.offset.to_vec2();
-            assert!((r.x0 - child.x0).abs() < 1e-9);
-            assert!((r.y0 - child.y0 - Shadow::soft(12.).dy).abs() < 1e-9);
+            assert!((r.x0 - child.x0 + shadow.spread).abs() < 1e-9);
+            assert!((r.y0 - child.y0 + shadow.spread - shadow.dy).abs() < 1e-9);
+            assert!((r.x1 - child.x1 - shadow.spread).abs() < 1e-9);
+            assert!((r.y1 - child.y1 - shadow.spread - shadow.dy).abs() < 1e-9);
         }
     }
 
@@ -591,6 +661,95 @@ mod tests {
             min = min.min(mui_geometry::boundary_distance(*p, &oc));
         }
         assert!((min - 6.0).abs() < 0.35, "measured inset={min}");
+    }
+
+    #[test]
+    fn translucent_selected_surfaces_keep_their_alpha_and_readable_child_ink() {
+        for mode in [mui_style::Mode::Light, mui_style::Mode::Dark] {
+            let root = col([col([text("selected").id("label")])
+                .fill(Role::Ink.alpha(0.08))
+                .id("selected")])
+            .fill(Role::Surface);
+            let mut spec = SceneSpec::new(root);
+            spec.theme.palette = spec.theme.palette.with_mode(mode);
+            spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+            let scene = resolve(&spec).unwrap();
+            let ink = scene
+                .paint
+                .iter()
+                .find(|p| p.key == "label".into() && p.layer == Layer::Text)
+                .unwrap();
+            assert_eq!(
+                ink.paint,
+                Paint::Solid(spec.theme.palette.ink()),
+                "{mode:?}"
+            );
+            let selected = scene
+                .paint
+                .iter()
+                .find(|p| p.key == "selected".into() && p.layer == Layer::Fill)
+                .unwrap();
+            assert_eq!(
+                selected.paint,
+                Paint::Solid(
+                    spec.theme
+                        .palette
+                        .on(spec.theme.palette.surface())
+                        .with_alpha(0.08)
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn nested_translucent_fills_gradients_and_shells_ground_child_contrast() {
+        for mode in [mui_style::Mode::Light, mui_style::Mode::Dark] {
+            for gradient in [false, true] {
+                let fill = if gradient {
+                    crate::Gradient::vertical(Role::Ink.alpha(0.08), Role::Ink.alpha(0.04)).into()
+                } else {
+                    Role::Ink.alpha(0.08)
+                };
+                let root = col([col([col([text("nested").id("label")])
+                    .fill(fill)
+                    .shell(0., Role::Ink.alpha(0.08))])
+                .fill(Role::Ink.alpha(0.08))])
+                .fill(Role::Surface);
+                let mut spec = SceneSpec::new(root);
+                spec.theme.palette = spec.theme.palette.with_mode(mode);
+                spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+                let scene = resolve(&spec).unwrap();
+                let ink = scene
+                    .paint
+                    .iter()
+                    .find(|p| p.key == "label".into() && p.layer == Layer::Text)
+                    .unwrap();
+                assert_eq!(ink.paint, Paint::Solid(spec.theme.palette.ink()));
+                assert!(scene.paint.iter().any(|p| p.layer == Layer::Shell(0)));
+                for p in scene.paint.iter().filter(|p| {
+                    matches!(p.layer, Layer::Fill | Layer::Shell(_))
+                        && p.paint.solid().alpha() < 1.0
+                }) {
+                    assert_eq!(p.paint.solid().alpha(), 0.08);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn contrast_ground_uses_source_over_and_keeps_opaque_and_clear_identity() {
+        let red = Color::srgba(1., 0., 0., 0.5);
+        let blue = Color::srgba(0., 0., 1., 0.5);
+        let [r, g, b, a] = super::ground(&Paint::Solid(red), blue).to_srgb().components;
+        for (actual, expected) in [(r, 2. / 3.), (g, 0.), (b, 1. / 3.), (a, 0.75)] {
+            assert!(
+                (actual - expected).abs() < 0.00001,
+                "{actual} != {expected}"
+            );
+        }
+        let opaque = Color::oklch(0.6, 0.2, 70.);
+        assert_eq!(super::ground(&Paint::Solid(opaque), blue), opaque);
+        assert_eq!(super::ground(&Paint::Solid(red.with_alpha(0.)), blue), blue);
     }
 
     #[test]

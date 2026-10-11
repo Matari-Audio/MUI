@@ -12,15 +12,16 @@ python3 tools/film/server.py --binary media/target/debug/examples/tone --port 30
 
 Open the page and click **Connect & enable audio**. Play notes, drag the actual native controls, or choose **Arrange** to move presentation planes. The component catalog comes from the native scene. **Extract**, **Highlight**, **Fill view**, and proportional zoom work on selected components. Native layout size rebuilds the component through MUI layout; it does not stretch its pixels.
 
-Kurv uses the same host, browser, input mapping, discovery, and recording path:
+A plugin uses the same host, browser, input mapping, discovery, and recording path:
 
 ```sh
-# Initialize the isolated export checkout first: videos/kurv-unfold/README.md.
-CARGO_TARGET_DIR=/tmp/kurv-motion-target python3 media/tools/kurv-live/build.py --build-dir /tmp/kurv-motion-build
-python3 tools/film/server.py --binary /tmp/kurv-motion-target/debug/kurv-motion-live --port 3020
+# mui-cut generates the plugin's adapter (read-only checkout) against this MUI;
+# `adapter` in the report is its path.
+media/target/release/mui-cut add ../my-plugin --project plugin.cut.json --json
+python3 tools/film/server.py --binary <adapter> --port 3020
 ```
 
-Its working source checkout is never patched. The adapter supplies advancing host transport, the real Truce meter store, and a real LFO-to-oscillator-level route. Native LFO playheads and modulation displays consume the processor's telemetry. The independent Tone instrument demonstrates the same live-editor contract with a native knob and DSP-driven tremolo phase.
+Its checkout is never patched. The adapter runs the plugin's real editor and real DSP with host transport and the plugin's meter store, so meters, LFO playheads and modulation displays follow the sound. If the plugin sounds only in a lab build, add its feature (e.g. `"features": ["process-lab"]`) to the source in `plugin.cut.json` and run `mui-cut capture plugin.cut.json` to rebuild the same adapter with it. The independent Tone instrument demonstrates the same live-editor contract with a native knob and DSP-driven tremolo phase.
 
 ## Script the editor
 
@@ -78,7 +79,7 @@ Call `discover_parts` for the automatic partition, or use `editor.selection` whe
 
 `CaptureStream` compares native paint to reuse static raster results, then content-addresses textures so unchanged PNGs are not retransmitted. The browser preserves plane nodes, inverse-projects pointer coordinates through perspective, and skips transparent pixels when picking. Input goes to the original native controls. A presented image is never a replacement parameter model.
 
-The plugin adapter still supplies processor/model semantics and its existing DSP-to-UI publication path. MUI cannot infer audio processing or modulation meanings from pixels. Kurv's sidebar additionally exposes its first group's VA/Noise/Filter add, reorder, delete, and oscillator parameters; the native editor itself receives the generic input stream.
+The plugin adapter still supplies processor/model semantics and its existing DSP-to-UI publication path. MUI cannot infer audio processing or modulation meanings from pixels. The native editor itself receives the generic input stream.
 
 ## Timing, export, and limits
 
@@ -99,7 +100,7 @@ Wire: native stdin is newline JSON; stdout is one `J`/`A` byte, little-endian u3
 cargo test --manifest-path media/Cargo.toml -p mui-motion-bridge && cargo test -p mui-scene
 PUPPETEER_MODULE=/path/to/puppeteer-core.js CHROME=/path/to/chrome \
   node tools/film/live-check.mjs http://localhost:3022
-# Same check against Kurv on 3020.
+# Same check against a plugin adapter on 3020.
 python3 tools/film/check-recording.py /path/to/film
 ```
 

@@ -3,12 +3,126 @@ use super::*;
 use mui_scene::Id;
 
 impl Ui {
+    /// Rejected input can itself be too deep for Rust's recursive field drop.
+    /// Detach children before dropping each parent, without cloning payloads.
+    pub(super) fn discard_tree(root: El) {
+        let mut pending = vec![root];
+        while let Some(mut node) = pending.pop() {
+            for child in node.children_mut() {
+                pending.push(std::mem::replace(child, mui_scene::block(0.0, 0.0)));
+            }
+        }
+    }
+
+    /// Bound the tree before UI passes recurse into user or expanded memo nodes.
+    pub(super) fn validate_tree_budget(
+        root: &El,
+        limits: mui_layout::Limits,
+    ) -> Result<(), SceneError> {
+        Self::validate_tree_budget_with(root, limits, |node| node)
+    }
+
+    pub(super) fn validate_tree_budget_with<'a>(
+        root: &'a El,
+        limits: mui_layout::Limits,
+        mut expand: impl FnMut(&'a El) -> &'a El,
+    ) -> Result<(), SceneError> {
+        fn visit<'a>(
+            node: &'a El,
+            depth: usize,
+            left: &mut usize,
+            limit: usize,
+            expand: &mut impl FnMut(&'a El) -> &'a El,
+        ) -> Result<(), SceneError> {
+            if depth > limit || *left == 0 {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            let node = expand(node);
+            *left -= 1;
+            if node.children().len() > *left {
+                return Err(mui_layout::Error::BudgetExceeded.into());
+            }
+            for child in node.children().iter().rev() {
+                visit(child, depth + 1, left, limit, expand)?;
+            }
+            Ok(())
+        }
+        // Check depth before descending, so even rejected input has a bounded
+        // call stack. Valid frames need no heap-backed traversal buffer.
+        let mut left = limits.nodes;
+        visit(root, 0, &mut left, limits.depth, &mut expand)
+    }
+
+    /// Read declarations after bounded memo expansion. Only descendants of
+    /// a declared scroll root receive its content allowance; the viewport and
+    /// unrelated nodes retain the ordinary layout cap.
+    pub(super) fn virtual_scroll_extent(
+        root: &mut El,
+        limits: mui_layout::Limits,
+        scale: Option<f64>,
+    ) -> Result<f64, SceneError> {
+        fn extent_of(node: &El, mut extent: f64, scale: Option<f64>) -> Result<f64, SceneError> {
+            if let Some(value) = node.payload().extras().virtual_scroll_extent {
+                // Logical extents also reach geometry backends. Leave ample
+                // headroom for finite scaled coordinates and arithmetic.
+                if !node.is_scroll()
+                    || !value.is_finite()
+                    || value <= 0.0
+                    || value > f32::MAX as f64 / 1024.0
+                    || value * scale.unwrap_or(1.0) > f32::MAX as f64 / 1024.0
+                {
+                    return Err(mui_layout::Error::InvalidValue.into());
+                }
+                extent = extent.max(value);
+            }
+            for child in node.children() {
+                extent = extent_of(child, extent, scale)?;
+            }
+            Ok(extent)
+        }
+        Self::validate_tree_budget(root, limits)?;
+        let extent = extent_of(root, limits.extent, scale)?;
+        if extent > limits.extent {
+            // Ordinary frames need no rare-node allocation or cache-key change.
+            // When the pass ceiling is raised, explicitly cap every node so an
+            // unrelated intrinsic measurement cannot inherit that ceiling.
+            fn cap_tree(node: &mut El, cap: f64) {
+                node.set_layout_extent_limit(cap);
+                let child_cap = node
+                    .payload()
+                    .extras()
+                    .virtual_scroll_extent
+                    .map_or(cap, |value| cap.max(value));
+                for child in node.children_mut() {
+                    cap_tree(child, child_cap);
+                }
+            }
+            cap_tree(root, limits.extent);
+        }
+        Ok(extent)
+    }
+
     /// How far `id`'s children are scrolled to: the settled offset, which
     /// the drawn one springs toward.
     pub fn scroll(&self, id: impl Into<Id>) -> [f64; 2] {
         let id: Id = id.into();
         let id = id.as_str();
         (self.nodes.get(id).and_then(|n| n.scroll)).map_or([0.0, 0.0], |s| s.map(|s| s.target))
+    }
+
+    /// Set both the drawn and target scroll offsets immediately.
+    ///
+    /// Returns `false` for non-finite offsets. Negative offsets clamp to zero;
+    /// the next frame clamps the upper bound against its new content, allowing
+    /// callers to scroll into content inserted during this build. This is useful
+    /// for virtual lists, whose constructed rows must match the drawn offset.
+    pub fn set_scroll(&mut self, id: impl Into<Id>, offset: [f64; 2]) -> bool {
+        if !offset.iter().all(|v| v.is_finite()) {
+            return false;
+        }
+        let id: Id = id.into();
+        node(&mut self.nodes, id.as_str()).scroll = Some(offset.map(|v| Spring::at(v.max(0.0))));
+        true
     }
 
     /// The wheel over `id` last frame, if any: `Some` only while the
@@ -92,7 +206,12 @@ impl Ui {
                 (f.x, f.size.width)
             }
         };
-        let ((start, len), (_, view)) = (along(strip.frame), along(node.frame));
+        let ((_, len), (_, view)) = (along(strip.frame), along(node.frame));
+        let start = 0.;
+        let p = self
+            .capture_pose
+            .unwrap_or_else(|| strip.local_pose())
+            .local(p);
         let total = if vertical {
             node.content.height
         } else {
@@ -133,11 +252,12 @@ impl Ui {
             let Some((key, _)) = bar::bar_of(&s.key) else {
                 continue;
             };
-            let over =
-                |f: mui_layout::Frame| self.pointer.pos.is_some_and(|p| f.contains(p.x, p.y));
+            let over = |s: &mui_scene::ResolvedSurface| {
+                self.pointer.pos.is_some_and(|p| self.inside_surface(s, p))
+            };
             let target = if hovered == Some(&*s.key) || held == Some(&*s.key) {
                 1.0
-            } else if scene.surface(key).is_some_and(|n| over(n.frame)) {
+            } else if scene.surface(key).is_some_and(over) {
                 0.35
             } else {
                 0.0
@@ -167,20 +287,19 @@ impl Ui {
         };
         for s in scene.surfaces().rev() {
             let f = s.frame;
-            if p.x < f.x || p.x > f.right() || p.y < f.y || p.y > f.bottom() {
+            if !self.inside_surface(s, p) {
                 continue;
             }
-            if s.clip.is_some_and(|clip| {
-                p.x < clip.x0 || p.x > clip.x1 || p.y < clip.y0 || p.y > clip.y1
-            }) {
-                continue;
-            }
+            let wheel = s.local_pose().delta(wheel);
             // A node that keeps the wheel reads it from `Response::wheel`
             // or claimed it with `Ui::wheel`; nothing it sits in scrolls
             // under it.
             let claimed = || self.wheel_claims.iter().any(|c| c == s.key.as_str());
+            // It reads the delta in the next tree, so that frame is owed
+            // even when nothing else moves: else the notch shows only on
+            // whatever event comes next.
             if (s.captures_wheel || claimed()) && !s.disabled {
-                return false;
+                return true;
             }
             // `content` is the frame size for everything but a scroll node,
             // so an overflow here *is* the "is this scrollable" test.

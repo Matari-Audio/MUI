@@ -21,6 +21,9 @@ mui-vello = { workspace = true, features = ["gpu-effects"] }
 wgpu = { workspace = true, features = ["wgsl"] }
 pollster.workspace = true
 bytemuck = "1"
+half = "2"
+# Environment maps: `.exr` in, and the studio baked out for Blender.
+exr = { version = "1.74", default-features = false }
 
 [dev-dependencies]
 mui.workspace = true

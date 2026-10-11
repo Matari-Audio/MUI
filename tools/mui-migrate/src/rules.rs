@@ -368,7 +368,7 @@ pub const MUI_CRATES: &[&str] = &[
     "mui-input", "mui-motion", "mui-access", "mui-weld", "mui-material", "mui-symbols",
 ];
 
-/// Extra path roots always treated as mui (KURV imports `mui` as `mui2`).
+/// Extra path roots always treated as mui (a plugin may import `mui` as `mui2`).
 pub const EXTRA_ROOTS: &[&str] = &["mui2"];
 
 /// Path dependencies that moved: a `path = ".../<old>"` becomes `.../<new>`.

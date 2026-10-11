@@ -19,13 +19,16 @@ use mui_scene::{
 };
 use std::sync::Arc;
 
+mod group;
 mod input;
+pub use input::TextInputState;
 mod memo;
 mod motion;
 mod scroll;
 mod text_runs;
 use input::*;
 use memo::*;
+pub use motion::MotionPolicy;
 use motion::*;
 pub use text_runs::TextRuns;
 
@@ -116,6 +119,8 @@ pub enum Edit {
 /// runtime remembers what is hovered, held, and mid-animation.
 pub struct Ui {
     theme: Theme,
+    motion_policy: MotionPolicy,
+    system_reduced_motion: bool,
     font: Option<Font>,
     /// Optional faces tried per grapheme after [`Self::font`].
     fallback_fonts: Vec<Font>,
@@ -124,12 +129,14 @@ pub struct Ui {
     /// See [`Ui::set_scale`].
     scale: Option<f64>,
     weld_backend: mui_scene::WeldBackend,
+    gpu_welding_available: bool,
     /// See [`Ui::set_double_click`].
     double_click: f64,
     interaction: Pointer,
+    capture_pose: Option<mui_scene::LocalPose>,
     actions: Vec<SemanticAction>,
     hit: Hit,
-    scene: Option<ResolvedScene>,
+    scene: Option<Arc<ResolvedScene>>,
     /// Everything kept under a node key between frames: see [`NodeState`].
     nodes: Nodes,
     /// Nodes that left the tree, still fading out where they stood.
@@ -200,6 +207,8 @@ pub struct Ui {
     kept: HashMap<u64, Kept>,
     /// Each kept memo's id and the number the scene knows it by.
     memo_ids: rustc_hash::FxHashMap<Id, u64>,
+    /// Scratch IDs for validating expanded memo trees, reused between frames.
+    expanded_memos: std::collections::HashSet<u64>,
     next_memo: u64,
     /// This `Ui`'s key in [`TREES`].
     me: u64,
@@ -236,6 +245,7 @@ fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
                     && a.pointer_states == b.pointer_states
                     && same([&a.path].into_iter(), [&b.path].into_iter())
                     && a.offset == b.offset
+                    && a.transform == b.transform
                     && a.clip == b.clip
                     && same(
                         a.clip_paths().unwrap_or(&[]).iter().map(|c| &c.0),
@@ -262,12 +272,16 @@ impl Ui {
     pub fn new(theme: Theme) -> Self {
         Self {
             theme,
+            motion_policy: MotionPolicy::default(),
+            system_reduced_motion: false,
             font: None,
             fallback_fonts: Vec::new(),
             runs: TextRuns::default(),
             scale: None,
             weld_backend: mui_scene::WeldBackend::Reference,
+            gpu_welding_available: true,
             interaction: Pointer::new(),
+            capture_pose: None,
             actions: Vec::new(),
             hit: Hit::default(),
             scene: None,
@@ -304,6 +318,7 @@ impl Ui {
             bar_grab: 0.0,
             kept: HashMap::new(),
             memo_ids: rustc_hash::FxHashMap::default(),
+            expanded_memos: std::collections::HashSet::new(),
             next_memo: 0,
             me: NEXT_UI.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hot: BTreeSet::new(),
@@ -374,6 +389,17 @@ impl Ui {
         self.weld_backend = mui_scene::WeldBackend::AnalyticGpu;
         self
     }
+
+    /// Native hosts disable GPU welding when using software presentation.
+    /// Rebuild cached material scenes without changing the application's preference.
+    pub fn set_gpu_welding_available(&mut self, available: bool) {
+        if self.gpu_welding_available != available {
+            self.gpu_welding_available = available;
+            self.scene = None;
+            self.resolver = Resolver::default();
+            self.hot_all = true;
+        }
+    }
     /// Morph-only render update: keep the application declaration synchronized.
     /// Input reads the live scene's analytic predicate, so no hit-mask or closure
     /// has to be recreated on every animation tick.
@@ -382,6 +408,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_morph(id, progress)
     }
@@ -397,6 +424,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_solid_material(id, index, fill, border, width)
     }
@@ -409,6 +437,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(SceneError::UnsupportedWeld("no resolved scene"))?
             .set_weld_material_blend(id, blend)
     }
@@ -426,9 +455,24 @@ impl Ui {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.resolver.layout_stats()
     }
+    /// Borrow the last successfully resolved scene.
     pub fn scene(&self) -> Option<&ResolvedScene> {
-        self.scene.as_ref()
+        self.scene.as_deref()
     }
+    /// Retain the last scene in O(1), without borrowing this `Ui`.
+    ///
+    /// Hosts can take this snapshot under their model lock, then release the
+    /// lock before native presentation or callbacks. Repeated snapshots share
+    /// the same allocation until a frame resolves or a direct scene update is
+    /// applied. Later updates never change a retained snapshot.
+    ///
+    /// Drop snapshots after use so the next frame can recycle their buffers.
+    /// Direct [`Self::set_text`] and weld updates copy the scene only when a
+    /// snapshot is still retained; normal frame commits never clone it.
+    pub fn scene_snapshot(&self) -> Option<Arc<ResolvedScene>> {
+        self.scene.as_ref().map(Arc::clone)
+    }
+
     /// Swap what one text node says without resolving the tree again: the
     /// last frame's layout stands and only that node's glyphs are shaped.
     ///
@@ -458,6 +502,7 @@ impl Ui {
         let id = id.as_str();
         self.scene
             .as_mut()
+            .map(Arc::make_mut)
             .ok_or(mui_scene::SceneError::NoTextLayer)?
             .set_text(id, s.as_ref())
     }
@@ -531,6 +576,12 @@ impl Ui {
                 ..Response::default()
             };
         }
+        if self.interaction.held() == Some(id)
+            && let Some(pose) = self.capture_pose
+        {
+            response.drag_delta = pose.delta(response.drag_delta);
+            response.drag_total = pose.delta(response.drag_total);
+        }
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
             .keys(id)
@@ -539,17 +590,11 @@ impl Ui {
         if self.wheel != Vec2::ZERO
             && let (Some(p), Some(s)) = (
                 self.pointer.pos,
-                self.scene.as_ref().and_then(|s| s.surface(id)),
+                self.scene.as_deref().and_then(|s| s.surface(id)),
             )
+            && self.inside_surface(s, p)
         {
-            let f = s.frame;
-            let inside = p.x >= f.x && p.x <= f.right() && p.y >= f.y && p.y <= f.bottom();
-            let clipped = s
-                .clip
-                .is_some_and(|c| p.x < c.x0 || p.x > c.x1 || p.y < c.y0 || p.y > c.y1);
-            if inside && !clipped {
-                response.wheel = self.wheel;
-            }
+            response.wheel = s.local_pose().delta(self.wheel);
         }
         if self
             .actions
@@ -567,7 +612,7 @@ impl Ui {
     /// incompatible and non-finite requests are rejected without changing state.
     /// Custom controls must consume the matching action through `get`/`drag`.
     pub fn request_action(&mut self, action: SemanticAction) -> bool {
-        let Some(surface) = self.scene.as_ref().and_then(|s| s.surface(action.id())) else {
+        let Some(surface) = self.scene.as_deref().and_then(|s| s.surface(action.id())) else {
             return false;
         };
         if surface.disabled {
@@ -694,7 +739,7 @@ impl Ui {
     /// assert_eq!(ui.min_size(), Some(Size::new(56., 46.)));
     /// ```
     pub fn min_size(&self) -> Option<Size> {
-        Some(self.scene.as_ref()?.layout.min_size())
+        Some(self.scene.as_deref()?.layout.min_size())
     }
     /// The scene's font then its fallbacks, borrowed when there are none.
     fn fonts(&self) -> Option<std::borrow::Cow<'_, [Font]>> {
@@ -800,7 +845,14 @@ impl Ui {
         dt: f64,
     ) -> Result<Frame<'_>, SceneError> {
         if !(dt.is_finite() && dt >= 0.0 && (self.time + dt).is_finite()) {
+            Self::discard_tree(root);
             return Err(SceneError::InvalidFrameDelta);
+        }
+        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default())
+            .and_then(|()| self.validate_expanded_tree_budget(&root))
+        {
+            Self::discard_tree(root);
+            return Err(error);
         }
         self.resolved = false;
         self.bracket_commands();
@@ -814,7 +866,8 @@ impl Ui {
             // The view's, read in its build; the `Ui` hit-tests the newest.
             trail: _,
         } = input.into();
-        let was = std::mem::replace(&mut self.pointer, pointer).buttons;
+        let previous_pointer = std::mem::replace(&mut self.pointer, pointer);
+        let was = previous_pointer.buttons;
         let was_buttons = was;
         // A non-finite delta reaches no widget, as it reaches no scroller.
         self.wheel = if wheel.x.is_finite() && wheel.y.is_finite() {
@@ -832,11 +885,15 @@ impl Ui {
             (c, _) => c,
         };
         let previous_blink = self.blink();
+        // Plays were read while building this tree, before advancing the clock.
+        // Even a frame crossing the last key owes the tree drawing its endpoint.
+        let playing = self.time < self.play_until;
         self.time += dt;
+        // Consume this build's request. An unread/removed play must not keep an
+        // otherwise idle UI awake until its old deadline.
+        self.play_until = self.time;
         // A release is read by the *next* tree, so that frame must come even
         // when nothing is moving.
-        // A key still to land wants the frame that shows it; the clock that
-        // decides is the one this frame advances to.
         // Inline ids: no heap copy for a key under 47 bytes.
         let before = [
             self.interaction.hovered().map(Id::runtime),
@@ -847,7 +904,27 @@ impl Ui {
         // the whole tree.
         let mut root = root;
         let mut memos = self.splice(&mut root);
-        let mut animating = self.reconcile() | (self.time < self.play_until);
+        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default()) {
+            Self::discard_tree(root);
+            return Err(error);
+        }
+        let captured = self.reconcile();
+        // Reduced motion does not poll a stationary gesture. Capture edges and
+        // moved drag samples still owe the next tree its up-to-date response.
+        let capture_wake = if self.reduced_motion() {
+            before[1].as_deref() != self.interaction.held()
+                || (captured
+                    && (previous_pointer.pos != self.pointer.pos
+                        || previous_pointer.buttons != self.pointer.buttons
+                        || !keys.is_empty()
+                        || !text.is_empty()
+                        || !ime.is_empty()
+                        || self.wheel != Vec2::ZERO
+                        || self.pasted.is_some()))
+        } else {
+            captured
+        };
+        let mut animating = capture_wake | playing;
         // The tree just built read last frame's hover: a new target is owed
         // the tree that knows it, even with no spring to carry it there.
         animating |= self.interaction.hovered() != before[0].as_deref();
@@ -863,6 +940,10 @@ impl Ui {
             memos.iter_mut().for_each(|(p, _)| p.insert(0, 0));
         }
         let mut root = Self::wrap_tip(root, tip.as_ref());
+        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default()) {
+            Self::discard_tree(root);
+            return Err(error);
+        }
         let heats = self.bar_heats();
         let (moving, shaped) = self.sweep(&mut root, dt);
         animating |= moving;
@@ -871,6 +952,9 @@ impl Ui {
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
+        // Keys and typed text are read by the next build, like a release:
+        // a host that sleeps between events owes it that frame.
+        animating |= !self.keys.is_empty() || !self.typed.is_empty();
         self.wheel_claims.clear();
         self.heat(&scene, &before, self.pointer.buttons != was_buttons);
         Ok(self.commit(scene, hovered.as_deref(), tip, previous_blink, animating))
@@ -888,7 +972,7 @@ impl Ui {
         let keyed = self
             .focus
             .as_deref()
-            .filter(|id| keyed_edit(self.scene.as_ref(), id, &self.keys))
+            .filter(|id| keyed_edit(self.scene.as_deref(), id, &self.keys))
             .map(str::to_owned);
         let ids = std::mem::take(&mut self.actions)
             .into_iter()
@@ -916,7 +1000,7 @@ impl Ui {
         if self
             .interaction
             .held()
-            .is_some_and(|k| off(self.scene.as_ref(), k))
+            .is_some_and(|k| off(self.scene.as_deref(), k))
         {
             self.cancel();
         }
@@ -925,20 +1009,18 @@ impl Ui {
         if self
             .focus
             .as_deref()
-            .is_some_and(|k| off(self.scene.as_ref(), k))
+            .is_some_and(|k| off(self.scene.as_deref(), k))
         {
             self.focus = None;
         }
         let prev_held = self.interaction.held().map(str::to_owned);
-        let last_scene = self.scene.as_ref();
+        let last_scene = self.scene.as_deref();
         self.interaction
             .update_with(&self.hit, self.pointer, |key, tag, p| {
                 if tag.is_some() {
                     return None;
                 }
-                last_scene
-                    .and_then(|s| s.external_weld(key))
-                    .map(|e| e.contains(p))
+                last_scene.and_then(|s| s.external_contains(key, p))
             });
         // A payload outlives its gesture by exactly the one frame the drop is
         // reported in -- the frame the target's tree reads it from.
@@ -946,6 +1028,14 @@ impl Ui {
             self.drag = None;
         }
         let held = self.interaction.held().map(str::to_owned);
+        if prev_held != held {
+            self.capture_pose = held.as_deref().and_then(|key| {
+                self.scene
+                    .as_ref()?
+                    .surface(key)
+                    .map(mui_scene::ResolvedSurface::local_pose)
+            });
+        }
         // A gesture is exactly the span a target is captured for, so the two
         // edges are the two ends of that capture -- plus the one a `cancel`
         // stole before this frame could see it.
@@ -967,8 +1057,7 @@ impl Ui {
                     }
                     self.scene
                         .as_ref()
-                        .and_then(|s| s.external_weld(key))
-                        .map(|e| e.contains(p))
+                        .and_then(|s| s.external_contains(key, p))
                 })?;
                 Some((id.to_owned(), tag?.to_owned()))
             });
@@ -1068,13 +1157,19 @@ impl Ui {
         heats: rustc_hash::FxHashMap<Id, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme.clone());
+        spec.limits.extent = Self::virtual_scroll_extent(&mut spec.root, spec.limits, self.scale)?;
         spec.offered = offered;
         spec.font = self.font.clone();
         spec.fallback_fonts = self.fallback_fonts.clone();
         spec.device_scale = self.scale;
-        spec.weld_backend = self.weld_backend;
+        spec.weld_backend = if self.gpu_welding_available {
+            self.weld_backend
+        } else {
+            mui_scene::WeldBackend::Reference
+        };
         spec.scroll_bars = Some(heats);
         let mut glided = false;
+        let reduced = self.reduced_motion();
         let nodes = &mut self.nodes;
         let scene = self.resolver.resolve_after(
             &spec,
@@ -1087,7 +1182,7 @@ impl Ui {
                 *seen = true;
                 for (s, t) in s.iter_mut().zip(t) {
                     s.to(t);
-                    glided |= s.step(dt);
+                    glided |= step_spring(s, dt, reduced);
                 }
                 mui_scene::Frame {
                     x: s[0].value,
@@ -1095,7 +1190,7 @@ impl Ui {
                     size: Size::new(s[2].value, s[3].value),
                 }
             },
-            self.scene.as_ref(),
+            self.scene.as_deref(),
         )?;
         if self
             .scene
@@ -1133,7 +1228,22 @@ impl Ui {
             }
             self.hit = hit;
         }
+        // Equivalent contours may arrive in a fresh clip-list Arc even when
+        // the gesture map is reused. Register only this frame's list keys.
+        self.hit
+            .prepare_clips(scene.surfaces().filter_map(|s| s.clip_paths()))?;
         Ok((scene, glided, spec.root))
+    }
+
+    /// Logical frame containment in the node's own axes, plus the same
+    /// cached exact ancestor clips used by gesture hit testing.
+    fn inside_surface(&self, s: &mui_scene::ResolvedSurface, p: Point) -> bool {
+        let local = s.local(p);
+        local.x >= 0.
+            && local.x <= s.frame.size.width
+            && local.y >= 0.
+            && local.y <= s.frame.size.height
+            && self.hit.inside_clips(p, s.clip, s.clip_paths())
     }
 
     /// Keep the scene, hand out the edges, and say what the host should do
@@ -1159,8 +1269,22 @@ impl Ui {
 
         // The caret area a field asked for, moved into the scene's space.
         let ime = self.ime_caret.take().and_then(|(id, at, h)| {
-            let f = scene.surface(&id)?.frame;
-            Some((Point::new(f.x + at.x, f.y + at.y), Size::new(1.0, h)))
+            let s = scene.surface(&id)?;
+            let (at, h) = s
+                .text_geometry
+                .as_ref()
+                .map_or((at, h), |g| (g.caret, g.line_height));
+            let f = s.frame;
+            let rect = s.transform.transform_rect_bbox(mui_geometry::Rect::new(
+                f.x + at.x,
+                f.y + at.y,
+                f.x + at.x + 1.,
+                f.y + at.y + h,
+            ));
+            Some((
+                Point::new(rect.x0, rect.y0),
+                Size::new(rect.width(), rect.height()),
+            ))
         });
         // Where the pin actually put it, so a host placing its own tooltip
         // window agrees with the one in the scene.
@@ -1176,7 +1300,11 @@ impl Ui {
             )
         });
         self.delivered = std::mem::take(&mut self.edits);
-        if let Some(old) = self.scene.replace(scene) {
+        if let Some(old) = self.scene.replace(Arc::new(scene))
+            && let Ok(old) = Arc::try_unwrap(old)
+        {
+            // A host retaining the previous frame still owns its buffers.
+            // Recycling is an allocation optimization, never a scene clone.
             self.resolver.recycle(old);
         }
         let repaint_after = self.repaint_after();
@@ -1187,7 +1315,7 @@ impl Ui {
             && self
                 .focus
                 .as_deref()
-                .and_then(|key| self.scene.as_ref()?.surface(key))
+                .and_then(|key| self.scene.as_deref()?.surface(key))
                 .is_some_and(|surface| {
                     !surface.disabled
                         && matches!(
@@ -1197,7 +1325,7 @@ impl Ui {
                 });
         self.resolved = true;
         Frame {
-            scene: self.scene.as_ref().expect("just set"),
+            scene: self.scene.as_deref().expect("just set"),
             animating,
             repaint_after,
             tip,
@@ -1254,11 +1382,18 @@ struct NodeState {
     sel: Option<(usize, usize)>,
     /// How far a multi-line field's lines are scrolled up, in units.
     text_scroll: Option<f64>,
+    text_edit: Option<Box<TextEditState>>,
     /// What a widget keeps that is not the caller's value -- a picker's hue
     /// at zero saturation, a drag value's half-typed text.
     stash: Option<Box<dyn Any + Send>>,
 }
 
+#[derive(Default)]
+struct TextEditState {
+    goal: Option<f64>,
+    upstream: bool,
+    native: Vec<Ime>,
+}
 impl NodeState {
     /// End-of-frame upkeep: drop what nothing keeps. A seen part survives
     /// once more; so does an unseen one inside a reused memo (`kept`), whose
@@ -1295,6 +1430,7 @@ impl NodeState {
             self.scroll = None;
             self.sel = None;
             self.text_scroll = None;
+            self.text_edit = None;
             self.stash = None;
         }
         self.springs.is_some()
@@ -1307,6 +1443,7 @@ impl NodeState {
             || self.scroll.is_some()
             || self.sel.is_some()
             || self.text_scroll.is_some()
+            || self.text_edit.is_some()
             || self.stash.is_some()
     }
 }

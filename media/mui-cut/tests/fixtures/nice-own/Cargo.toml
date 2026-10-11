@@ -1,0 +1,16 @@
+# A nice-plug plugin's shape, for framework detection (never built).
+[package]
+name = "fixture-nice-own"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+nice-plug = { git = "https://github.com/Matari-Audio/nice-plug" }
+mui = { git = "https://github.com/Matari-Audio/MUI" }
+mui-baseview = { git = "https://github.com/Matari-Audio/MUI" }
+
+[workspace]

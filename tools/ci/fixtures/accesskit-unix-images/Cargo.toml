@@ -1,0 +1,6 @@
+[workspace]
+members = ["image-a", "image-b", "probe"]
+resolver = "2"
+
+[patch.crates-io]
+accesskit_unix = { path = "../../../../vendor/accesskit_unix" }

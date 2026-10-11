@@ -95,6 +95,8 @@ impl Contour {
 /// its end.
 #[derive(Debug, Default)]
 pub(super) struct OutlineCache {
+    /// Last rigid placement per surface/hit shape; swept with outlines.
+    rotated: HashMap<(crate::Id, usize), RotatedPath>,
     pub(super) entries: HashMap<Vec<u64>, Entry>,
     /// A key buffer, handed back after a hit so a warm frame builds keys
     /// without allocating.
@@ -118,6 +120,7 @@ pub(super) struct OutlineCache {
 /// the resolve that last used it.
 pub(super) type Band = (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64);
 pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Vec<Arc<Path>>, u64);
+type RotatedPath = (Arc<Path>, mui_geometry::kurbo::Affine, Arc<Path>, u64);
 
 #[derive(Debug)]
 pub(super) struct Entry {
@@ -127,6 +130,32 @@ pub(super) struct Entry {
 }
 
 impl OutlineCache {
+    pub(super) fn rotated(
+        &mut self,
+        key: (crate::Id, usize),
+        path: &Arc<Path>,
+        offset: Point,
+        transform: mui_geometry::kurbo::Affine,
+    ) -> Result<super::PlacedPath, SceneError> {
+        use mui_geometry::kurbo::Affine;
+        if transform == Affine::IDENTITY {
+            return Ok((path.clone(), offset));
+        }
+        let transform = transform * Affine::translate(offset.to_vec2());
+        if let Some((source, pose, placed, seen)) = self.rotated.get_mut(&key)
+            && Arc::ptr_eq(source, path)
+            && *pose == transform
+        {
+            *seen = self.generation;
+            return Ok((placed.clone(), Point::ZERO));
+        }
+        let placed = Arc::new(super::resolved::rigid_path(path, transform)?);
+        self.rotated.insert(
+            key,
+            (path.clone(), transform, placed.clone(), self.generation),
+        );
+        Ok((placed, Point::ZERO))
+    }
     fn get(&mut self, key: &[u64], origin: Point) -> Option<Contour> {
         let Some(e) = self.entries.get_mut(key) else {
             self.misses += 1;
@@ -168,6 +197,7 @@ impl OutlineCache {
         self.canvases.retain(|_, c| live(c.2));
         self.rects.retain(|_, r| live(r.1));
         self.bands.retain(|_, b| live(b.4));
+        self.rotated.retain(|_, entry| live(entry.3));
         self.generation = generation.wrapping_add(1);
     }
 }

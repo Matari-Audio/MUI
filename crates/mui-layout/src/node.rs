@@ -77,21 +77,49 @@ pub(crate) struct Rare {
     /// The gap between wrapped lines and grid rows; `None` is `gap`. See
     /// [`Node::line_gap`].
     pub(crate) line_gap: Option<Spacing>,
+    pub(crate) grid_tracks: Option<Vec<crate::GridTrack>>,
+    pub(crate) grid_rows: Option<Vec<crate::GridTrack>>,
+    pub(crate) grid_position: Option<[usize; 2]>,
+    pub(crate) grid_row_span: usize,
     pub(crate) maximum: Option<Size>,
+    pub(crate) layout_extent_limit: Option<f64>,
     pub(crate) aspect: Option<f64>,
+    /// Contain the aspect in both offered axes rather than deriving height.
+    pub(crate) aspect_fit: bool,
     /// Anchored placement for a float; see [`Node::pin`].
     pub(crate) pin: Option<Pin>,
     /// Grids only: the narrowest a column may get before the grid drops one.
     pub(crate) min_col: Option<f64>,
+    /// An out-of-flow child painted below siblings inside the parent clip.
+    pub(crate) underlay: bool,
+    /// Local out-of-flow decoration painted above foreground siblings.
+    pub(crate) overlay: bool,
 }
 impl Rare {
     const NONE: Self = Self {
         line_gap: None,
+        grid_tracks: None,
+        grid_rows: None,
+        grid_position: None,
+        grid_row_span: 1,
         maximum: None,
+        layout_extent_limit: None,
         aspect: None,
+        aspect_fit: false,
         pin: None,
         min_col: None,
+        underlay: false,
+        overlay: false,
     };
+    pub(crate) fn fitted_aspect(&self, offered: Size) -> Option<Size> {
+        let ratio = self.aspect.filter(|_| self.aspect_fit)?;
+        let limit = self.maximum.unwrap_or(offered);
+        let width = offered
+            .width
+            .min(limit.width)
+            .min(offered.height.min(limit.height) * ratio);
+        Some(Size::new(width, width / ratio))
+    }
 }
 
 impl<P: Default> Node<P> {
@@ -208,6 +236,33 @@ impl<P> Node<P> {
         self.id = Some(id.into());
         self
     }
+    /// Set this node's local layout extent ceiling. It can narrow the solve's
+    /// global ceiling, never raise it. Descendants keep their own ceilings;
+    /// runtime virtual collections set these individually for viewport and
+    /// content. Invalid ceilings are rejected when validating or resolving.
+    pub fn set_layout_extent_limit(&mut self, extent: f64) {
+        self.rare_mut().layout_extent_limit = Some(extent);
+    }
+
+    /// This node's local ceiling, before the solve's global ceiling is applied.
+    pub fn layout_extent_limit(&self) -> Option<f64> {
+        self.rare().layout_extent_limit
+    }
+
+    /// Validate this node's authored layout values against its local/global
+    /// ceiling. This is shallow: it does not walk children, check duplicate
+    /// IDs, measure intrinsic content, or resolve spacing tokens.
+    pub fn validate_layout_values(&self, limits: crate::Limits) -> Result<(), crate::Error> {
+        if !limits.extent.is_finite()
+            || limits.extent <= 0.0
+            || limits.nodes == 0
+            || limits.depth > 256
+        {
+            return Err(crate::Error::InvalidValue);
+        }
+        crate::measure::validate_node(self, limits)
+    }
+
     pub fn key(&self) -> Option<&str> {
         self.id.as_deref()
     }
@@ -293,7 +348,19 @@ impl<P> Node<P> {
     /// `width / height`. Fills in whichever axis was left `Auto` -- at measure
     /// from a fixed sibling axis, at arrange from the allocated one.
     pub fn aspect(mut self, ratio: impl Px) -> Self {
-        self.rare_mut().aspect = Some(ratio.px());
+        let rare = self.rare_mut();
+        rare.aspect = Some(ratio.px());
+        rare.aspect_fit = false;
+        self
+    }
+    /// Keep `width / height` inside both offered dimensions, including the
+    /// final flex allocation. An unspecified axis follows the other one;
+    /// with no offer, the intrinsic size supplies the containing box.
+    /// Existing [`Node::aspect`] keeps its width-first behavior.
+    pub fn aspect_fit(mut self, ratio: impl Px) -> Self {
+        let rare = self.rare_mut();
+        rare.aspect = Some(ratio.px());
+        rare.aspect_fit = true;
         self
     }
     /// The floor on the width.
@@ -491,6 +558,35 @@ impl<P> Node<P> {
     /// Take this node out of flow: see the `float` field.
     pub fn float(mut self) -> Self {
         self.float = true;
+        if let Some(rare) = &mut self.rare {
+            rare.underlay = false;
+            rare.overlay = false;
+        }
+        self
+    }
+    /// Decorate the parent's content box below its normal children without
+    /// contributing to the parent's intrinsic size. Unlike a float, this
+    /// child stays inside ancestor clips and paints before its siblings.
+    /// Use `Len::Pct(100.)` on either axis to follow the foreground's final size;
+    /// ordinary alignment, offsets and explicit dimensions still apply.
+    pub fn underlay(mut self) -> Self {
+        self.float = true;
+        let rare = self.rare_mut();
+        rare.underlay = true;
+        rare.overlay = false;
+        rare.pin = None;
+        self
+    }
+    /// Decorate the parent's content box above its normal children without
+    /// contributing to its intrinsic size or escaping ancestor clipping.
+    /// Like [`Node::underlay`], final foreground geometry is offered to this
+    /// child. Unlike [`Node::float`], it paints locally, after the siblings.
+    pub fn overlay(mut self) -> Self {
+        self.float = true;
+        let rare = self.rare_mut();
+        rare.underlay = false;
+        rare.overlay = true;
+        rare.pin = None;
         self
     }
     /// Let a row or column break into lines when its children overflow the
@@ -518,6 +614,39 @@ impl<P> Node<P> {
         self
     }
     /// How many grid columns this cell takes, clamped to the column count.
+    /// Use explicit column tracks instead of equal-width columns. The track
+    /// count becomes the grid's column count. An empty list is invalid;
+    /// `min_col` and explicit tracks cannot be combined.
+    pub fn grid_tracks(mut self, tracks: impl IntoIterator<Item = crate::GridTrack>) -> Self {
+        let tracks: Vec<_> = tracks.into_iter().collect();
+        if let Kind::Grid { cols, .. } = &mut self.kind {
+            *cols = tracks.len();
+        }
+        self.rare_mut().grid_tracks = Some(tracks);
+        self
+    }
+
+    /// Explicit row tracks; rows beyond this list use `GridTrack::Auto`.
+    /// Without explicit columns, columns retain equal fractional sizing.
+    pub fn grid_rows(mut self, tracks: impl IntoIterator<Item = crate::GridTrack>) -> Self {
+        self.rare_mut().grid_rows = Some(tracks.into_iter().collect());
+        self
+    }
+
+    /// Place a grid item at a zero-based column and row. Explicit items reserve
+    /// cells before automatic items. Overlap between explicit items is allowed;
+    /// a position outside the declared columns is invalid.
+    pub fn grid_at(mut self, column: usize, row: usize) -> Self {
+        self.rare_mut().grid_position = Some([column, row]);
+        self
+    }
+
+    /// Span adjacent grid rows. Automatic placement skips occupied cells.
+    pub fn grid_row_span(mut self, rows: usize) -> Self {
+        self.rare_mut().grid_row_span = rows.max(1);
+        self
+    }
+
     pub fn span(mut self, cols: usize) -> Self {
         self.span = cols.max(1);
         self
@@ -579,6 +708,14 @@ impl<P> Node<P> {
     }
     pub fn is_float(&self) -> bool {
         self.float
+    }
+    /// Whether this out-of-flow child stays below siblings in their clip.
+    pub fn is_underlay(&self) -> bool {
+        self.float && self.rare().underlay
+    }
+    /// Whether this out-of-flow child stays above siblings in their clip.
+    pub fn is_overlay(&self) -> bool {
+        self.float && self.rare().overlay
     }
     /// Whether [`Node::sticky`] was called: the scene walk asks, because a
     /// sticky child paints after the siblings that scroll under it.

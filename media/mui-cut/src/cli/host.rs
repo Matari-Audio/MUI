@@ -1,0 +1,1148 @@
+//! Plugin layers' captures, native side: build or find each plugin's
+//! mui-motion-bridge adapter, replay the layer's commands on the frame grid
+//! (`Layer::plugin_track`), and write every state the project shows that
+//! the cache lacks. Rendering then only reads the cache.
+//!
+//! The adapter speaks the bridge's wire (tools/film/README.md): newline
+//! JSON in; out, a kind byte (`J` JSON, `A` audio), a little-endian u32
+//! length and the payload. Scene packets carry only textures that changed,
+//! so a session keeps every texture it has seen.
+//!
+//! Adapters run on the bridge's manual sample clock at the project's rate
+//! (`MUI_BRIDGE_CLOCK`): a layer with notes advances it frame by frame, and
+//! the samples that come back are its soundtrack, kept as raw stereo f32
+//! under `CACHE/audio/<key>.f32` ([`Layer::plugin_audio`]).
+use std::collections::{HashMap, HashSet};
+use std::io::{Read as _, Write as _};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+use mui_scene::ResolvedScene;
+
+use crate::plugin::{CACHE, Capture, FNV_OFFSET, Fragment, Image, fnv, frame_at};
+use crate::sources::MediaKind;
+use crate::{Assets, Kind, Layer, Project, Source};
+use base64::Engine as _;
+use serde_json::{Value, json};
+
+use crate::cli::Result;
+
+/// How long one capture may take before the adapter counts as hung.
+const PATIENCE: Duration = Duration::from_secs(60);
+
+/// Every plugin layer's steps in every scene, and its soundtrack's key
+/// and last advance when it plays notes: `(layer, steps, audio)`.
+type Plugin<'a> = (&'a Layer, Vec<crate::Step>, Option<(String, Value)>);
+
+fn plugins(p: &Project) -> Vec<Plugin<'_>> {
+    p.scenes
+        .iter()
+        .flat_map(|s| {
+            s.layers
+                .iter()
+                .filter(|l| matches!(l.kind, Kind::Plugin { .. }))
+                .map(|l| {
+                    let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
+                    let audio = l.plugin_audio(&steps, p.fps, p.sample_rate, p.samples(s));
+                    (l, steps, audio)
+                })
+        })
+        .collect()
+}
+
+/// Where a plugin soundtrack is cached, relative to the project.
+pub fn audio_file(key: &str) -> String {
+    format!("{CACHE}/audio/{key}.f32")
+}
+
+/// Plugin layer `l`'s soundtrack in scene `s`, stereo interleaved, once
+/// [`capture_missing`] has rendered it; `None` for a layer without notes.
+pub fn layer_audio(
+    p: &Project,
+    project: &Path,
+    s: &crate::Scene,
+    l: &Layer,
+) -> Result<Option<Vec<f32>>> {
+    let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
+    let Some((key, _)) = l.plugin_audio(&steps, p.fps, p.sample_rate, p.samples(s)) else {
+        return Ok(None);
+    };
+    let file = project
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(audio_file(&key));
+    let bytes = std::fs::read(&file)
+        .map_err(|e| format!("layer `{}`: its audio {}: {e}", l.id, file.display()))?;
+    Ok(Some(
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|b| f32::from_le_bytes(*b))
+            .collect(),
+    ))
+}
+
+fn source(l: &Layer) -> &Source {
+    match &l.kind {
+        Kind::Plugin { source, .. } => source,
+        _ => unreachable!("plugins() keeps plugin layers"),
+    }
+}
+
+/// Capture what is missing, then add every capture the project shows (and
+/// its images) to `assets`. What failed, as messages.
+pub fn load(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> {
+    let dir = project.parent().unwrap_or(Path::new("."));
+    let mut errs = Vec::new();
+    // A layer whose plugin runs in this process replays here, into the
+    // assets: no adapter, no cache. One layer a source: the editor has
+    // one state, so another layer of it captures as before.
+    let mut hosted: Vec<&Source> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut here: Vec<*const Layer> = Vec::new();
+    for (l, steps, audio) in plugins(p) {
+        let src = source(l);
+        if !crate::inproc::hosts(src) || hosted.contains(&src) {
+            continue;
+        }
+        hosted.push(src);
+        here.push(l);
+        seen.extend(steps.iter().map(|s| format!("{CACHE}/{}.json", s.key)));
+        let ran = crate::inproc::with(src, |plugin| {
+            replay_here(plugin, &steps, audio.as_ref(), dir, assets, &mut errs)
+        });
+        if let Some(Err(e)) = ran {
+            errs.push(format!("layer `{}`: {e}", l.id));
+        }
+    }
+    errs.extend(capture(
+        jobs(p, &here),
+        project,
+        p.sample_rate,
+        &mut Vec::new(),
+    ));
+    for (_, steps, _) in plugins(p) {
+        for s in steps {
+            let rel = format!("{CACHE}/{}.json", s.key);
+            if !seen.insert(rel.clone()) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(dir.join(&rel)) else {
+                continue;
+            };
+            if let Err(e) = assets.add_asset(&rel, &bytes) {
+                errs.push(e);
+                continue;
+            }
+            let cap: Capture = serde_json::from_slice(&bytes).expect("add_asset parsed it");
+            let srcs = cap
+                .fragments
+                .into_iter()
+                .flat_map(|f| [Some(f.src), f.free.map(|i| i.src)]);
+            for src in srcs.flatten() {
+                let rel = format!("{CACHE}/{src}");
+                if seen.insert(rel.clone()) {
+                    let added = std::fs::read(dir.join(&rel))
+                        .map_err(|e| format!("{rel}: {e}"))
+                        .and_then(|b| assets.add_asset(&rel, &b));
+                    errs.extend(added.err());
+                }
+            }
+        }
+    }
+    errs
+}
+
+/// Run the adapters of the plugin layers whose states are not all cached
+/// (or were captured from another build of the adapter). What failed.
+pub fn capture_missing(p: &Project, project: &Path) -> Vec<String> {
+    capture(jobs(p, &[]), project, p.sample_rate, &mut Vec::new())
+}
+
+/// A capture job for every plugin layer but those in `skip`.
+fn jobs<'a>(p: &'a Project, skip: &[*const Layer]) -> Vec<Job<'a>> {
+    plugins(p)
+        .into_iter()
+        .filter(|(l, _, _)| !skip.contains(&std::ptr::from_ref(*l)))
+        .map(|(l, steps, audio)| Job {
+            what: format!("layer `{}`", l.id),
+            source: source(l),
+            steps,
+            audio,
+        })
+        .collect()
+}
+
+/// [`replay`] on the plugin hosted in this process: each step's state
+/// straight into `assets` (its fragments as vector scenes), and the
+/// soundtrack written as a replay writes it.
+fn replay_here(
+    plugin: &mut dyn crate::inproc::LivePlugin,
+    steps: &[crate::Step],
+    audio: Option<&(String, Value)>,
+    dir: &Path,
+    assets: &mut Assets,
+    errs: &mut Vec<String>,
+) -> Result<()> {
+    let mut sound = Vec::new();
+    for step in steps {
+        for c in &step.commands {
+            if c["op"] == "advance" {
+                sound.extend(plugin.advance(c)?);
+            } else if let Err(e) = plugin.command(c) {
+                errs.push(format!("adapter: {e}"));
+            }
+        }
+        let (manifest, vectors) = plugin.frame()?;
+        for (name, scene) in vectors {
+            assets.add_vector(&format!("{CACHE}/{name}"), scene);
+        }
+        let cap: Capture = serde_json::from_value(manifest).map_err(|e| e.to_string())?;
+        assets.add_capture(&format!("{CACHE}/{}.json", step.key), cap);
+    }
+    if let Some((key, tail)) = audio {
+        sound.extend(plugin.advance(tail)?);
+        let bytes: Vec<u8> = sound.iter().flat_map(|v| v.to_le_bytes()).collect();
+        std::fs::create_dir_all(dir.join(CACHE).join("audio"))
+            .map_err(|e| format!("{}: {e}", dir.display()))?;
+        write_atomic(&dir.join(audio_file(key)), &bytes)?;
+    }
+    Ok(())
+}
+
+/// Capture every plugin source's fresh state ([`crate::plugin::home`]),
+/// whose manifest lists its parts for the Sources panel. What failed.
+pub fn capture_sources(p: &Project, project: &Path) -> Vec<String> {
+    capture(
+        source_jobs(&p.all_sources()),
+        project,
+        p.sample_rate,
+        &mut Vec::new(),
+    )
+}
+
+fn source_jobs(all: &[crate::sources::Media]) -> Vec<Job<'_>> {
+    all.iter()
+        .filter_map(|m| match &m.kind {
+            MediaKind::Plugin { source } => Some(Job {
+                what: format!("source `{}`", m.id),
+                source,
+                steps: vec![crate::plugin::home_step(source)],
+                audio: None,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `mui-cut capture`: [`capture_missing`] and [`capture_sources`], but in a
+/// hand-off ([`hand_off`]) the hosted plugin's first layer is made here
+/// ([`make_here`]). With `json`, how `serve` runs it: each batch of
+/// manifests written goes to stdout as a JSON array as it lands, and each
+/// line on stdin (the editor's state: `{"scene_index", "t"}`) moves the
+/// playhead the states nearest it are made for first; stdin closing ends
+/// it.
+pub fn capture_all(p: &Project, project: &Path, json: bool) -> Vec<String> {
+    let dir = project.parent().unwrap_or(Path::new("."));
+    let at = Arc::new(Mutex::new(None));
+    if json {
+        let at = at.clone();
+        std::thread::spawn(move || {
+            for line in std::io::stdin().lines().map_while(std::result::Result::ok) {
+                let v: Value = serde_json::from_str(&line).unwrap_or_default();
+                if let Some(head) = playhead(&v) {
+                    *at.lock().expect("no panic holds it") = Some(head);
+                }
+            }
+            // Whoever asked has gone: so does the capture.
+            std::process::exit(0);
+        });
+    }
+    let ready = |paths: &[String]| {
+        if json && !paths.is_empty() {
+            println!("{}", json!(paths));
+        }
+    };
+    let mut errs = Vec::new();
+    let mut here: Vec<*const Layer> = Vec::new();
+    let hosted = p.scenes.iter().enumerate().find_map(|(i, s)| {
+        let l = s.layers.iter().find(|l| match &l.kind {
+            Kind::Plugin { source, .. } => crate::inproc::hosts(source),
+            _ => false,
+        })?;
+        Some((i, s, l))
+    });
+    if let Some((scene, s, l)) = hosted {
+        here.push(l);
+        let steps = l.plugin_track(p.fps, p.sample_rate, frame_at(s.duration, p.fps));
+        let audio = l.plugin_audio(&steps, p.fps, p.sample_rate, p.samples(s));
+        let job = Here {
+            scene,
+            fps: p.fps,
+            steps: &steps,
+            audio: audio.as_ref(),
+            dir,
+            at: &at,
+        };
+        let made = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| stamp(&exe))
+            .and_then(|stamp| {
+                crate::inproc::with(source(l), |plugin| {
+                    make_here(plugin, &job, &stamp, &ready, &mut errs)
+                })
+                .unwrap_or(Ok(()))
+            });
+        if let Err(e) = made {
+            errs.push(format!("layer `{}`: {e}", l.id));
+        }
+    }
+    let mut written = Vec::new();
+    errs.extend(capture(
+        jobs(p, &here),
+        project,
+        p.sample_rate,
+        &mut written,
+    ));
+    let sources = p.all_sources();
+    errs.extend(capture(
+        source_jobs(&sources),
+        project,
+        p.sample_rate,
+        &mut written,
+    ));
+    ready(&written);
+    errs
+}
+
+/// The hosted layer [`make_here`] replays: its scene, the project's frame
+/// rate, its steps and soundtrack, and the playhead.
+struct Here<'a> {
+    scene: usize,
+    fps: f64,
+    steps: &'a [crate::Step],
+    audio: Option<&'a (String, Value)>,
+    dir: &'a Path,
+    at: &'a Mutex<Option<(usize, f64)>>,
+}
+
+/// A state replayed, waiting for its pixels.
+struct Made {
+    /// Its index in the track.
+    step: usize,
+    key: String,
+    manifest: Value,
+    vectors: Vec<(String, Arc<ResolvedScene>)>,
+}
+
+/// Pixels a point, as the wire's captures have them.
+const PIXELS: f64 = 2.;
+
+/// The hosted plugin through every step on this thread (it lives here),
+/// while workers rasterise each missing state's fragments from the
+/// editor's paint (a paint once: unchanged parts keep their names) and
+/// write its manifest, the state nearest the playhead first. `ready` gets
+/// what landed, in batches.
+fn make_here(
+    plugin: &mut dyn crate::inproc::LivePlugin,
+    job: &Here,
+    stamp: &str,
+    ready: &(dyn Fn(&[String]) + Sync),
+    errs: &mut Vec<String>,
+) -> Result<()> {
+    let cache = job.dir.join(CACHE);
+    std::fs::create_dir_all(cache.join("img")).map_err(|e| format!("{}: {e}", cache.display()))?;
+    let mut seen = HashSet::new();
+    let todo: Vec<bool> = job
+        .steps
+        .iter()
+        .map(|s| seen.insert(&s.key) && !fresh(job.dir, &s.key, stamp))
+        .collect();
+    let heard = job
+        .audio
+        .is_none_or(|(k, _)| job.dir.join(audio_file(k)).is_file());
+    let n = todo.iter().filter(|t| **t).count();
+    if n == 0 && heard {
+        return Ok(());
+    }
+    eprintln!("mui-cut: making {n} plugin states in the adapter");
+    let queue = (Mutex::new((Vec::<Made>::new(), false)), Condvar::new());
+    let pngs: Mutex<HashMap<String, Arc<OnceLock<Result<String>>>>> = Mutex::default();
+    let failed = Mutex::new(Vec::new());
+    // ponytail: half the cores, so a DAW beside it keeps its share.
+    let workers = std::thread::available_parallelism().map_or(1, |n| (n.get() / 2).clamp(1, 8));
+    std::thread::scope(|sc| {
+        let (queue, pngs, failed, cache) = (&queue, &pngs, &failed, &cache);
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        sc.spawn(move || {
+            // What landed in the next tenth of a second, as one batch.
+            while let Ok(first) = rx.recv() {
+                let mut batch = vec![first];
+                let until = Instant::now() + Duration::from_millis(100);
+                while let Some(left) = until.checked_duration_since(Instant::now()) {
+                    match rx.recv_timeout(left) {
+                        Ok(p) => batch.push(p),
+                        Err(_) => break,
+                    }
+                }
+                ready(&batch);
+            }
+        });
+        for _ in 0..workers {
+            let tx = tx.clone();
+            sc.spawn(move || {
+                loop {
+                    let made = {
+                        let mut q = queue.0.lock().expect("no panic holds it");
+                        while q.0.is_empty() {
+                            if q.1 {
+                                return;
+                            }
+                            q = queue.1.wait(q).expect("no panic holds it");
+                        }
+                        let waiting: Vec<usize> = q.0.iter().map(|m| m.step).collect();
+                        let at = *job.at.lock().expect("no panic holds it");
+                        let show = showing(job.steps, job.scene, at, job.fps);
+                        q.0.swap_remove(nearest(&waiting, show))
+                    };
+                    match rasterise(cache, stamp, made, pngs) {
+                        Ok(path) => {
+                            let _ = tx.send(path);
+                        }
+                        Err(e) => failed.lock().expect("no panic holds it").push(e),
+                    }
+                }
+            });
+        }
+        drop(tx);
+        let mut replay = || -> Result<()> {
+            let mut sound = Vec::new();
+            for (i, (step, todo)) in job.steps.iter().zip(&todo).enumerate() {
+                for c in &step.commands {
+                    if c["op"] == "advance" {
+                        sound.extend(plugin.advance(c)?);
+                    } else if let Err(e) = plugin.command(c) {
+                        errs.push(format!("adapter: {e}"));
+                    }
+                }
+                let (manifest, vectors) = plugin.frame()?;
+                if *todo {
+                    queue.0.lock().expect("no panic holds it").0.push(Made {
+                        step: i,
+                        key: step.key.clone(),
+                        manifest,
+                        vectors,
+                    });
+                    queue.1.notify_one();
+                }
+            }
+            if let Some((key, tail)) = job.audio {
+                sound.extend(plugin.advance(tail)?);
+                let bytes: Vec<u8> = sound.iter().flat_map(|v| v.to_le_bytes()).collect();
+                std::fs::create_dir_all(cache.join("audio"))
+                    .map_err(|e| format!("{}: {e}", cache.display()))?;
+                write_atomic(&job.dir.join(audio_file(key)), &bytes)?;
+            }
+            Ok(())
+        };
+        let replayed = replay();
+        queue.0.lock().expect("no panic holds it").1 = true;
+        queue.1.notify_all();
+        replayed
+    })?;
+    errs.extend(failed.into_inner().expect("no panic holds it"));
+    Ok(())
+}
+
+/// The playhead in the editor's state (`/state`): its scene and time.
+pub fn playhead(state: &Value) -> Option<(usize, f64)> {
+    let scene = usize::try_from(state["scene_index"].as_u64()?).ok()?;
+    Some((scene, state["t"].as_f64()?))
+}
+
+/// Which of `steps` (a layer's track in scene `scene`) shows at the
+/// playhead `at`, when that is in its scene.
+fn showing(
+    steps: &[crate::Step],
+    scene: usize,
+    at: Option<(usize, f64)>,
+    fps: f64,
+) -> Option<usize> {
+    let (_, t) = at.filter(|(s, _)| *s == scene)?;
+    let frame = frame_at(t, fps);
+    Some(
+        steps
+            .partition_point(|st| st.frame <= frame)
+            .saturating_sub(1),
+    )
+}
+
+/// How far step `i` of a track is from the one `showing`: steps apart;
+/// with none showing (no playhead in its scene), after those, in order.
+fn distance(i: usize, showing: Option<usize>) -> usize {
+    showing.map_or(usize::MAX / 2 + i, |h| i.abs_diff(h))
+}
+
+/// Which of the waiting steps (their indices in the track) to make next:
+/// the one nearest the step `showing`.
+fn nearest(waiting: &[usize], showing: Option<usize>) -> usize {
+    waiting
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, i)| distance(**i, showing))
+        .map_or(0, |(n, _)| n)
+}
+
+/// Every plugin state the project shows, as the manifest paths the editor
+/// fetches: the layers' nearest the playhead first, then the sources'.
+pub fn by_playhead(p: &Project, at: Option<(usize, f64)>) -> Vec<String> {
+    let mut steps: Vec<(usize, String)> = p
+        .scenes
+        .iter()
+        .enumerate()
+        .flat_map(|(i, s)| {
+            let last = frame_at(s.duration, p.fps);
+            s.layers.iter().flat_map(move |l| {
+                let track = l.plugin_track(p.fps, p.sample_rate, last);
+                let show = showing(&track, i, at, p.fps);
+                track
+                    .into_iter()
+                    .enumerate()
+                    .map(move |(n, st)| (distance(n, show), st.key))
+            })
+        })
+        .collect();
+    steps.sort_by_key(|(d, _)| *d);
+    let sources = p.all_sources();
+    let homes = sources.iter().filter_map(crate::sources::Media::state);
+    let mut seen = HashSet::new();
+    steps
+        .into_iter()
+        .map(|(_, k)| k)
+        .chain(homes)
+        .map(|k| format!("{CACHE}/{k}.json"))
+        .filter(|k| seen.insert(k.clone()))
+        .collect()
+}
+
+/// A replayed state written: each fragment's paint rasterised (once, by
+/// its name) and its manifest, as the wire's capture writes them. Its path.
+fn rasterise(
+    cache: &Path,
+    stamp: &str,
+    m: Made,
+    pngs: &Mutex<HashMap<String, Arc<OnceLock<Result<String>>>>>,
+) -> Result<String> {
+    let mut cap: Capture = serde_json::from_value(m.manifest).map_err(|e| e.to_string())?;
+    let png = |src: &mut String, rect: [f64; 4]| -> Result<()> {
+        let cell = pngs
+            .lock()
+            .expect("no panic holds it")
+            .entry(src.clone())
+            .or_default()
+            .clone();
+        let scene = m
+            .vectors
+            .iter()
+            .find(|(n, _)| n == src)
+            .map(|(_, s)| s)
+            .ok_or_else(|| format!("the editor drew no `{src}`"))?;
+        *src = cell
+            .get_or_init(|| paint_png(cache, src, scene, rect))
+            .clone()?;
+        Ok(())
+    };
+    for f in &mut cap.fragments {
+        png(&mut f.src, f.rect)?;
+        if let Some(i) = &mut f.free {
+            png(&mut i.src, i.rect)?;
+        }
+    }
+    cap.stamp = stamp.to_owned();
+    let rel = format!("{}.json", m.key);
+    let json = serde_json::to_vec_pretty(&cap).map_err(|e| e.to_string())?;
+    write_atomic(&cache.join(&rel), &json)?;
+    Ok(format!("{CACHE}/{rel}"))
+}
+
+/// `scene` (a fragment's paint, at its rect's origin) as a PNG of its
+/// rect at [`PIXELS`], named by its pixels and written once.
+fn paint_png(cache: &Path, name: &str, scene: &ResolvedScene, rect: [f64; 4]) -> Result<String> {
+    #[expect(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped to u16"
+    )]
+    let px = |v: f64| (v * PIXELS).ceil().clamp(1., f64::from(u16::MAX)) as u16;
+    let (w, h) = (px(rect[2]), px(rect[3]));
+    let settings = vello_cpu::RenderSettings {
+        num_threads: 0,
+        ..vello_cpu::RenderSettings::default()
+    };
+    let mut ctx = vello_cpu::RenderContext::new_with(w, h, settings);
+    let mut res = vello_cpu::Resources::default();
+    mui_vello::paint(
+        &mut mui_vello::Cpu {
+            ctx: &mut ctx,
+            resources: &mut res,
+            cache: &mut mui_vello::Cache::default(),
+        },
+        scene,
+        mui_vello::kurbo::Affine::scale(PIXELS),
+    )
+    .map_err(|e| format!("paint: {e:?}"))?;
+    ctx.flush();
+    let mut pix = vello_cpu::Pixmap::new(w, h);
+    ctx.render(&mut pix, &mut res);
+    let rgba: Vec<u8> = pix
+        .take_unpremultiplied()
+        .iter()
+        .flat_map(|p| [p.r, p.g, p.b, p.a])
+        .collect();
+    let hash = fnv(
+        fnv(FNV_OFFSET, &rgba),
+        &[w.to_le_bytes(), h.to_le_bytes()].concat(),
+    );
+    let src = format!("img/{hash:016x}.png");
+    let file = cache.join(&src);
+    if !file.is_file() {
+        let mut bytes = Vec::new();
+        let mut enc = png::Encoder::new(&mut bytes, w.into(), h.into());
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_compression(png::Compression::Fast);
+        enc.write_header()
+            .and_then(|mut w| w.write_image_data(&rgba))
+            .map_err(|e| e.to_string())?;
+        // Two workers may make the same picture: a temporary file each.
+        let tmp = cache.join(format!("img/{name}.tmp"));
+        std::fs::write(&tmp, &bytes)
+            .and_then(|()| std::fs::rename(&tmp, &file))
+            .map_err(|e| format!("{}: {e}", file.display()))?;
+    }
+    Ok(src)
+}
+
+/// A plugin to replay: what it is (for messages), its adapter, the steps
+/// to capture, and its soundtrack's key and last advance.
+struct Job<'a> {
+    what: String,
+    source: &'a Source,
+    steps: Vec<crate::Step>,
+    audio: Option<(String, Value)>,
+}
+
+/// Replay each job whose states (or soundtrack) are not all cached; the
+/// manifests written go to `written`.
+fn capture(jobs: Vec<Job>, project: &Path, rate: u32, written: &mut Vec<String>) -> Vec<String> {
+    let dir = project.parent().unwrap_or(Path::new("."));
+    let mut built: HashMap<&Source, std::result::Result<(PathBuf, String), String>> =
+        HashMap::new();
+    let mut errs = Vec::new();
+    for Job {
+        what,
+        source: src,
+        steps,
+        audio,
+    } in jobs
+    {
+        // In a hand-off, the adapter hosting it is this one: built already.
+        let exe = built.entry(src).or_insert_with(|| {
+            if crate::inproc::hosts(src) {
+                let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+                stamp(&exe).map(|s| (exe, s))
+            } else {
+                executable(src, dir)
+            }
+        });
+        let (exe, stamp) = match exe {
+            Ok(e) => e.clone(),
+            Err(e) => {
+                errs.push(format!("{what}: {e}"));
+                continue;
+            }
+        };
+        let heard = audio
+            .as_ref()
+            .is_none_or(|(k, _)| dir.join(audio_file(k)).is_file());
+        if heard && steps.iter().all(|s| fresh(dir, &s.key, &stamp)) {
+            continue;
+        }
+        eprintln!(
+            "mui-cut: capturing plugin {what} ({} states) from {}",
+            steps.len(),
+            exe.display()
+        );
+        let clock = Clock {
+            rate,
+            audio: audio.as_ref(),
+        };
+        let ran = replay(
+            &exe, &src.args, dir, &steps, &stamp, clock, &mut errs, written,
+        );
+        if let Err(e) = ran {
+            errs.push(format!("{what}: {e}"));
+        }
+    }
+    errs
+}
+
+/// The adapter to run and its build stamp (size and modification time),
+/// building it first when the source is a Cargo target.
+pub fn executable(src: &Source, dir: &Path) -> Result<(PathBuf, String)> {
+    let exe = if !src.plugin.is_empty() {
+        crate::cli::build::adapter(&src.plugin, &src.features, dir)?
+    } else if src.cargo.is_empty() {
+        // Absolute: the adapter starts in `dir`, where a path relative to
+        // mui-cut's own directory means something else.
+        std::path::absolute(dir.join(&src.bin)).map_err(|e| format!("{}: {e}", src.bin))?
+    } else {
+        let (flag, name) = if src.example.is_empty() {
+            ("--bin", &src.bin)
+        } else {
+            ("--example", &src.example)
+        };
+        let manifest = dir.join(&src.cargo);
+        // Built from its own directory, with its own toolchain file: not
+        // the one of wherever mui-cut was started, nor mui-cut's own.
+        let out = Command::new("cargo")
+            .current_dir(manifest.parent().unwrap_or(dir))
+            .env_remove("RUSTUP_TOOLCHAIN")
+            .args([
+                "build",
+                "--message-format=json-render-diagnostics",
+                "--manifest-path",
+            ])
+            .arg(&manifest)
+            .args([flag, name])
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| format!("cargo: {e}"))?;
+        if !out.status.success() {
+            // Quiet unless it fails: `check --json` and friends stay clean.
+            return Err(format!(
+                "cargo build {flag} {name} failed:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
+            .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == **name)
+            .find_map(|m| m["executable"].as_str().map(PathBuf::from))
+            .ok_or_else(|| format!("cargo built no executable for {flag} {name}"))?
+    };
+    let stamp = stamp(&exe)?;
+    Ok((exe, stamp))
+}
+
+/// An adapter build's stamp: its size and modification time.
+fn stamp(exe: &Path) -> Result<String> {
+    let meta = std::fs::metadata(exe).map_err(|e| format!("{}: {e}", exe.display()))?;
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_nanos());
+    Ok(format!("{}-{mtime}", meta.len()))
+}
+
+/// A state is cached when its manifest came from this build and every
+/// image it names is on disk.
+fn fresh(dir: &Path, key: &str, stamp: &str) -> bool {
+    let cache = dir.join(CACHE);
+    std::fs::read(cache.join(format!("{key}.json")))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Capture>(&b).ok())
+        .is_some_and(|c| {
+            c.stamp == stamp
+                && c.fragments.iter().all(|f| {
+                    cache.join(&f.src).is_file()
+                        && f.free.as_ref().is_none_or(|i| cache.join(&i.src).is_file())
+                })
+        })
+}
+
+/// An adapter's stdin, for more than one thread.
+pub type Writer = std::sync::Arc<std::sync::Mutex<ChildStdin>>;
+
+/// One command line to an adapter.
+pub fn write(w: &Writer, v: &Value) -> Result<()> {
+    let mut w = w.lock().map_err(|_| "adapter stdin poisoned")?;
+    writeln!(w, "{v}")
+        .and_then(|()| w.flush())
+        .map_err(|e| format!("adapter stdin: {e}"))
+}
+
+/// What comes back on the audio side of the wire: samples (stereo
+/// interleaved) and the end of an advance.
+pub enum Sound {
+    Samples(Vec<f32>),
+    Advanced,
+}
+
+/// One adapter process: its stdin, its JSON packets, and its sound.
+pub struct Session {
+    child: Child,
+    /// Shared with a live transport's audio thread ([`Session::writer`]).
+    stdin: Writer,
+    packets: Receiver<Value>,
+    /// Taken by a live transport that advances on its own thread.
+    pub sound: Option<Receiver<Sound>>,
+    /// Every texture seen, by the adapter's name, base64 PNG.
+    pub textures: HashMap<String, String>,
+    tag: u64,
+}
+
+impl Session {
+    /// Start `exe` on the manual sample clock at `rate`.
+    pub fn open(exe: &Path, args: &[String], dir: &Path, rate: u32) -> Result<Self> {
+        // A project named without a directory has an empty parent, which
+        // no process can start in.
+        let dir = if dir.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            dir
+        };
+        let mut child = Command::new(exe)
+            .args(args)
+            .current_dir(dir)
+            .env("MUI_BRIDGE_CLOCK", format!("manual:{rate}"))
+            // On the wire, not running mui-cut again: a capture made in a
+            // hand-off starts adapters too.
+            .env_remove(crate::inproc::ENV)
+            .env_remove(crate::inproc::ARGV)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| format!("{}: {e}", exe.display()))?;
+        let stdin = child.stdin.take().ok_or("no adapter stdin")?;
+        let mut out = child.stdout.take().ok_or("no adapter stdout")?;
+        let (tx, packets) = std::sync::mpsc::channel();
+        let (heard, sound) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut head = [0u8; 5];
+            while out.read_exact(&mut head).is_ok() {
+                let n = u32::from_le_bytes([head[1], head[2], head[3], head[4]]) as usize;
+                let mut body = vec![0; n];
+                if out.read_exact(&mut body).is_err() {
+                    break;
+                }
+                // Audio: the block's first sample frame, then stereo f32.
+                if head[0] == b'A' {
+                    let samples = body
+                        .get(8..)
+                        .unwrap_or_default()
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|b| f32::from_le_bytes(*b))
+                        .collect();
+                    let _ = heard.send(Sound::Samples(samples));
+                    continue;
+                }
+                let Ok(v) = serde_json::from_slice::<Value>(&body) else {
+                    continue;
+                };
+                if v["type"] == "advanced" {
+                    let _ = heard.send(Sound::Advanced);
+                } else if tx.send(v).is_err() {
+                    break;
+                }
+            }
+        });
+        Ok(Self {
+            child,
+            stdin: std::sync::Arc::new(std::sync::Mutex::new(stdin)),
+            packets,
+            sound: Some(sound),
+            textures: HashMap::new(),
+            tag: 0,
+        })
+    }
+
+    /// Run the clock to `{"op": "advance"}`'s sample: the sound up to it.
+    fn advance(&mut self, command: &Value) -> Result<Vec<f32>> {
+        self.send(command)?;
+        let sound = self.sound.as_ref().ok_or("the sound was taken")?;
+        let mut out = Vec::new();
+        loop {
+            match sound.recv_timeout(PATIENCE) {
+                Ok(Sound::Samples(s)) => out.extend(s),
+                Ok(Sound::Advanced) => return Ok(out),
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err("the adapter stopped playing".into());
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err("the adapter exited".into()),
+            }
+        }
+    }
+
+    /// Its stdin, for a thread that sends while another snapshots.
+    pub fn writer(&self) -> Writer {
+        self.stdin.clone()
+    }
+
+    pub fn send(&mut self, v: &Value) -> Result<()> {
+        write(&self.stdin, v)
+    }
+
+    /// Ask for a scene and wait for the one that follows the ask: every
+    /// command sent before it has been applied. Adapter errors (a rejected
+    /// parameter, say) go to `errs`.
+    pub fn snapshot(&mut self, errs: &mut Vec<String>) -> Result<Value> {
+        self.tag += 1;
+        let tag = self.tag;
+        self.send(&json!({"op": "snapshot", "tag": tag}))?;
+        let mut acked = false;
+        loop {
+            let v = match self.packets.recv_timeout(PATIENCE) {
+                Ok(v) => v,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err("the adapter stopped answering".into());
+                }
+                Err(RecvTimeoutError::Disconnected) => return Err("the adapter exited".into()),
+            };
+            match v["type"].as_str() {
+                Some("scene") => {
+                    if let Some(imgs) = v["images"].as_object() {
+                        for (k, d) in imgs {
+                            if let Some(d) = d.as_str() {
+                                self.textures.insert(k.clone(), d.to_owned());
+                            }
+                        }
+                    }
+                    if acked {
+                        return Ok(v);
+                    }
+                }
+                Some("edit") if v["command"]["op"] == "snapshot" && v["command"]["tag"] == tag => {
+                    acked = true;
+                }
+                Some("error") => errs.push(format!(
+                    "adapter: {}",
+                    v["message"].as_str().unwrap_or("error")
+                )),
+                _ => {}
+            }
+        }
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The sample clock a replay runs on: its rate, and the soundtrack to
+/// keep (its key and the advance that ends it), if any.
+#[derive(Clone, Copy)]
+struct Clock<'a> {
+    rate: u32,
+    audio: Option<&'a (String, Value)>,
+}
+
+/// Run the adapter through every step, capturing each state, and keep the
+/// soundtrack the advances played.
+#[expect(clippy::too_many_arguments, reason = "one replay, its parts")]
+fn replay(
+    exe: &Path,
+    args: &[String],
+    dir: &Path,
+    steps: &[crate::Step],
+    stamp: &str,
+    clock: Clock,
+    errs: &mut Vec<String>,
+    written: &mut Vec<String>,
+) -> Result<()> {
+    let cache = dir.join(CACHE);
+    std::fs::create_dir_all(cache.join("img")).map_err(|e| format!("{}: {e}", cache.display()))?;
+    let mut s = Session::open(exe, args, dir, clock.rate)?;
+    let mut sound = Vec::new();
+    for step in steps {
+        for c in &step.commands {
+            // The clock first, and finished, so what follows (a parameter,
+            // the capture) lands after exactly those samples.
+            if c["op"] == "advance" {
+                sound.extend(s.advance(c)?);
+            } else {
+                s.send(c)?;
+            }
+        }
+        // Every step is captured, cached or not: the live host queues
+        // input until a scene is taken, and only 256 of it.
+        let scene = s.snapshot(errs)?;
+        if !fresh(dir, &step.key, stamp) {
+            save(&cache, &step.key, stamp, &scene, &s.textures)?;
+            written.push(format!("{CACHE}/{}.json", step.key));
+        }
+    }
+    if let Some((key, tail)) = clock.audio {
+        sound.extend(s.advance(tail)?);
+        let bytes: Vec<u8> = sound.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let file = dir.join(audio_file(key));
+        std::fs::create_dir_all(cache.join("audio"))
+            .map_err(|e| format!("{}: {e}", cache.display()))?;
+        write_atomic(&file, &bytes)?;
+    }
+    Ok(())
+}
+
+/// One state's manifest (a scene packet's `scene`, with its `patch`), its
+/// images renamed by their content so states share them.
+pub fn save(
+    cache: &Path,
+    key: &str,
+    stamp: &str,
+    packet: &Value,
+    textures: &HashMap<String, String>,
+) -> Result<()> {
+    let manifest = &packet["scene"];
+    let num = |v: &Value| v.as_f64().ok_or("a capture without its size");
+    let rect = |r: &Value| -> Result<[f64; 4]> {
+        Ok([num(&r[0])?, num(&r[1])?, num(&r[2])?, num(&r[3])?])
+    };
+    // A texture, renamed by its content, written once.
+    let store = |name: &str| -> Result<String> {
+        let data = textures
+            .get(name)
+            .ok_or_else(|| format!("the adapter never sent texture `{name}`"))?;
+        let png = base64::engine::general_purpose::STANDARD
+            .decode(data)
+            .map_err(|e| format!("texture `{name}`: {e}"))?;
+        let src = format!("img/{:016x}.png", fnv(FNV_OFFSET, &png));
+        let file = cache.join(&src);
+        if !file.is_file() {
+            write_atomic(&file, &png)?;
+        }
+        Ok(src)
+    };
+    let mut fragments = Vec::new();
+    for l in manifest["layers"]
+        .as_array()
+        .ok_or("a capture without layers")?
+    {
+        let free = match l.get("free") {
+            Some(f) if f.is_object() => Some(Image {
+                src: store(f["src"].as_str().unwrap_or(""))?,
+                rect: rect(&f["rect"])?,
+            }),
+            _ => None,
+        };
+        fragments.push(Fragment {
+            group: l["group"].as_str().unwrap_or("background").to_owned(),
+            rect: rect(&l["rect"])?,
+            src: store(l["src"].as_str().unwrap_or(""))?,
+            free,
+        });
+    }
+    let cap = Capture {
+        width: num(&manifest["width"])?,
+        height: num(&manifest["height"])?,
+        fragments,
+        surfaces: serde_json::from_value(manifest["surfaces"].clone()).unwrap_or_default(),
+        parts: serde_json::from_value(manifest["parts"].clone()).unwrap_or_default(),
+        stamp: stamp.to_owned(),
+        patch: packet["patch"].clone(),
+    };
+    let json = serde_json::to_vec_pretty(&cap).map_err(|e| e.to_string())?;
+    write_atomic(&cache.join(format!("{key}.json")), &json)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes)
+        .and_then(|()| std::fs::rename(&tmp, path))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// `render`/`still`/`capture` of a project with a plugin built from source: run the
+/// whole command inside its adapter instead ([`crate::inproc`]), so the
+/// first layer of that plugin draws as vectors. The exit code, or `None`
+/// to render here (no such plugin, `MUI_CUT_CAPTURE` set, or already in it).
+pub fn hand_off(argv: &[String], p: &Project, project: &Path) -> Result<Option<i32>> {
+    if crate::inproc::here() || std::env::var_os("MUI_CUT_CAPTURE").is_some() {
+        return Ok(None);
+    }
+    let Some(src) = plugins(p)
+        .into_iter()
+        .map(|(l, ..)| source(l))
+        .find(|s| !s.plugin.is_empty())
+    else {
+        return Ok(None);
+    };
+    let dir = project.parent().filter(|d| !d.as_os_str().is_empty());
+    let dir = dir.unwrap_or(Path::new("."));
+    let (exe, _) = executable(src, dir)?;
+    // The adapter starts in the project's directory: the paths given
+    // relative to here must say the same there.
+    let abs = |a: &str| {
+        std::path::absolute(a).map_or_else(|_| a.to_owned(), |p| p.to_string_lossy().into_owned())
+    };
+    let mut argv = argv.to_vec();
+    argv[1] = abs(&argv[1]);
+    if let Some(i) = argv.iter().position(|a| a == "-o")
+        && let Some(o) = argv.get_mut(i + 1).filter(|o| *o != "null")
+    {
+        *o = abs(o);
+    }
+    let status = Command::new(&exe)
+        .args(&src.args)
+        .current_dir(dir)
+        .env("MUI_BRIDGE_CLOCK", format!("manual:{}", p.sample_rate))
+        .env(
+            crate::inproc::ENV,
+            serde_json::to_string(src).map_err(|e| e.to_string())?,
+        )
+        .env(crate::inproc::ARGV, Value::from(argv).to_string())
+        .status()
+        .map_err(|e| format!("{}: {e}", exe.display()))?;
+    Ok(Some(status.code().unwrap_or(1)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{by_playhead, nearest};
+
+    #[test]
+    fn the_state_nearest_the_playhead_is_made_first() {
+        let waiting = [0, 1, 2, 30, 31, 90];
+        // No playhead in this scene: in order.
+        assert_eq!(nearest(&waiting, None), 0);
+        // Step 30 showing: it, then what is left nearest it.
+        assert_eq!(nearest(&waiting, Some(30)), 3);
+        assert_eq!(nearest(&[0, 1, 2, 31, 90], Some(30)), 3);
+        assert_eq!(nearest(&waiting, Some(87)), 5);
+    }
+
+    #[test]
+    fn the_editor_gets_the_states_at_its_playhead_first() {
+        let p = crate::Project::load(include_str!("../../examples/plugin.cut.json")).unwrap();
+        let track = |s: usize| {
+            let scene = &p.scenes[s];
+            let last = crate::plugin::frame_at(scene.duration, p.fps);
+            scene
+                .layers
+                .iter()
+                .flat_map(|l| l.plugin_track(p.fps, p.sample_rate, last))
+                .collect::<Vec<_>>()
+        };
+        let path = |k: &str| format!("{}/{k}.json", crate::plugin::CACHE);
+        let synth = track(0);
+        let all = by_playhead(&p, None);
+        assert_eq!(all[0], path(&synth[0].key), "no playhead: in order");
+        // At 4 s in the first scene: the state showing then.
+        let at = synth.iter().rev().find(|s| s.frame <= 120).unwrap();
+        assert_ne!(at.key, synth[0].key);
+        let near = by_playhead(&p, Some((0, 4.)));
+        assert_eq!(near[0], path(&at.key));
+        assert_eq!(near.len(), all.len(), "the same states");
+    }
+}

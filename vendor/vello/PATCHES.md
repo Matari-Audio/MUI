@@ -53,9 +53,9 @@ them every frame (its own `TODO: have a pool`).
 
 `MAX_CACHED_HINT_INSTANCES` 8 -> 32. The LRU keys on (font, size, coords), and
 an editor frame draws 10-14 such combinations, so 8 slots rebuilt a skrifa
-autohint instance for nearly every run of every frame (~35-40% of a KURV
+autohint instance for nearly every run of every frame (~35-40% of a synth
 frame's CPU). The session also looks the instance up lazily, on its first glyph miss
-(`Hinter`): a steady frame hits every glyph, yet KURV's editor draws more
+(`Hinter`): a steady frame hits every glyph, yet a synth editor draws more
 (face, size) runs than 32 slots, and resolving the instance per run
 reconfigured ~56 autohinters a frame for glyphs already cached (2.7 of a
 2.9 ms resolve). Vendored as a path dependency of `vendor/vello`, not a

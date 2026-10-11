@@ -1,0 +1,21 @@
+mui-stage-rt is MIT licensed, as is the rest of MUI. It ports no GPL code
+(nothing from Blender or Cycles). It follows these permissively licensed
+sources and published papers:
+
+- pbrt-v4, Matt Pharr, Wenzel Jakob and Greg Humphreys, Apache License 2.0
+  (https://github.com/mmp/pbrt-v4): the dielectric Fresnel equations and
+  refraction conventions in rt.wgsl (`fresnel`, the refract/TIR handling).
+- Bruce Walter, Stephen R. Marschner, Hongsong Li and Kenneth E. Torrance,
+  "Microfacet Models for Refraction through Rough Surfaces", EGSR 2007: GGX
+  sampling and the rough-transmission weight (`ggx_sample`, `ggx_g1`,
+  `ggx_d`, eq. 41).
+- Holger Dammertz, Daniel Sewtz, Johannes Hanika and Hendrik P. A. Lensch,
+  "Edge-Avoiding A-Trous Wavelet Transform for fast Global Illumination
+  Filtering", HPG 2010, and Christoph Schied et al., "Spatiotemporal
+  Variance-Guided Filtering", HPG 2017: the edge-stopping a-trous filter
+  (`denoise`).
+- Mark Jarzynski and Marc Olano, "Hash Functions for GPU Rendering", JCGT
+  2020: the PCG hash (`pcg`).
+- Martin Roberts, "The Unreasonable Effectiveness of Quasirandom Sequences"
+  (2018): the R2 pixel sequence.
+- The sky is mui-stage's own (MIT), spliced in from stage.wgsl.

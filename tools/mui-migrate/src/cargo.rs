@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn v1_path_deps_are_not_mui() {
-        // KURV: `mui-truce` from the v1 checkout, `mui2` from the v2 one.
+        // A plugin: `mui-truce` from the v1 checkout, `mui2` from the v2 one.
         let tmp = std::env::temp_dir().join(format!("mui-migrate-v1-{}", std::process::id()));
         std::fs::create_dir_all(tmp.join(".build-inputs/mui/crates/mui-truce")).unwrap();
         std::fs::create_dir_all(tmp.join(".build-inputs/mui2/crates/mui-scene")).unwrap();

@@ -1,0 +1,12 @@
+[package]
+name = "accesskit-unix-image-a"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+accesskit = "0.24.1"
+accesskit_unix = "=0.22.1"

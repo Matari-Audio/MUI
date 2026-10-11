@@ -1,4 +1,4 @@
-//! A second, independent adapter proving the framework does not require Kurv.
+//! A second, independent adapter proving the framework does not require any one plugin.
 use mui::prelude::*;
 use serde_json::{Value, json};
 use std::sync::atomic::{AtomicU32, Ordering};

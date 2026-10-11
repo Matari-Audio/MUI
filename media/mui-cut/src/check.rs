@@ -107,6 +107,26 @@ pub fn check(src: &str, r: &mut Renderer, exists: &dyn Fn(&str) -> bool) -> Vec<
     out.done()
 }
 
+/// A note when `src` asks for ray-traced glass and `ray_queries` says
+/// this machine cannot trace it: the render will draw raster glass.
+pub fn rt_glass(src: &str, ray_queries: Result<(), String>) -> Option<Issue> {
+    let p = Project::load(src).ok()?;
+    p.render.as_ref()?.rt_glass()?;
+    let why = ray_queries.err()?;
+    Some(Issue {
+        severity: Severity::Info,
+        code: "rt_glass_unavailable",
+        path: "render.glass".into(),
+        scene: None,
+        layer: None,
+        t: None,
+        message: format!(
+            "ray-traced glass was asked for, but {why}; renders here draw raster glass"
+        ),
+        fix: Some("render on a GPU with hardware ray queries (Vulkan, Metal or DX12)".into()),
+    })
+}
+
 /// Only the field lints (and a load error): what is cheap enough to run
 /// on every edit, and what an edit must not introduce, since a save drops
 /// unknown fields.
@@ -220,7 +240,7 @@ fn variant(node: &Value, kind: &str) -> BTreeSet<String> {
 }
 
 /// The closest known name, if it is close enough to be a typo.
-fn nearest<'a>(name: &str, known: impl IntoIterator<Item = &'a String>) -> Option<&'a String> {
+pub fn nearest<'a>(name: &str, known: impl IntoIterator<Item = &'a String>) -> Option<&'a String> {
     known
         .into_iter()
         .map(|k| (distance(name, k), k))
@@ -280,6 +300,7 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
     let schema = Project::json_schema();
     let def = |n: &str| schema["$defs"][n].clone();
     unknown(out, raw, &props_of(&schema), "", None);
+    binding_fields(out, &raw["scenes"], &props_of(&def("Binding")), "scenes");
     let (scene, layer, animator, deformer) =
         (def("Scene"), def("Layer"), def("Animator"), def("Deformer"));
     let key = props_of(&def("Key_double"));
@@ -328,9 +349,18 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                     && !used.contains(k)
                     && !matches!(
                         k.as_str(),
-                        "id" | "name" | "kind" | "animators" | "deformers"
+                        "id" | "name"
+                            | "parent"
+                            | "kind"
+                            | "animators"
+                            | "deformers"
+                            | "behaviours"
                     )
-                    && !(three && matches!(k.as_str(), "cast_shadows" | "receive_shadows"))
+                    && !(three
+                        && matches!(k.as_str(), "cast_shadows" | "receive_shadows" | "overlay"))
+                    && !(k == "material" && used.iter().any(|u| u.starts_with("material.")))
+                    // Every kind runs its own effect stack, 2D or 3D.
+                    && k != "effects"
                 {
                     out.add(
                         Severity::Info,
@@ -349,13 +379,38 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                         )),
                     );
                 }
-                keys_fields(out, &rl[k], &key, &path, at);
+                if k == "notes" {
+                    // Notes have a `t` like keys, but are notes.
+                    for (ni, n) in rl[k].as_array().into_iter().flatten().enumerate() {
+                        unknown(
+                            out,
+                            n,
+                            &props_of(&def("Note")),
+                            &format!("{path}[{ni}]"),
+                            at,
+                        );
+                    }
+                } else {
+                    keys_fields(out, &rl[k], &key, &path, at);
+                }
             }
             for (ai, ra) in rl["animators"].as_array().into_iter().flatten().enumerate() {
                 let ap = format!("{lp}.animators[{ai}]");
                 unknown(out, ra, &props_of(&animator), &ap, at);
                 for (k, v) in ra.as_object().into_iter().flatten() {
                     keys_fields(out, v, &key, &format!("{ap}.{k}"), at);
+                }
+            }
+            for (bi, rb) in rl["behaviours"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let bp = format!("{lp}.behaviours[{bi}]");
+                unknown(out, rb, &props_of(&def("Behaviour")), &bp, at);
+                for (k, v) in rb.as_object().into_iter().flatten() {
+                    keys_fields(out, v, &key, &format!("{bp}.{k}"), at);
                 }
             }
             for (di, rd) in rl["deformers"].as_array().into_iter().flatten().enumerate() {
@@ -367,6 +422,24 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
                 }
             }
         }
+    }
+}
+
+/// Unknown fields inside every binding (an object with `var`) under `v`.
+fn binding_fields(out: &mut Issues, v: &Value, known: &BTreeSet<String>, path: &str) {
+    match v {
+        Value::Object(m) if m.contains_key("var") => unknown(out, v, known, path, None),
+        Value::Object(m) => {
+            for (k, x) in m {
+                binding_fields(out, x, known, &format!("{path}.{k}"));
+            }
+        }
+        Value::Array(a) => {
+            for (i, x) in a.iter().enumerate() {
+                binding_fields(out, x, known, &format!("{path}[{i}]"));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -435,17 +508,39 @@ fn keys_and_assets(
             None,
         );
     }
+    if let Some(e) = &s.environment
+        && !e.hdri.is_empty()
+        && !exists(&e.hdri)
+    {
+        out.add(
+            Severity::Error,
+            "missing_asset",
+            &format!("{sp}.environment.hdri"),
+            Some((s, "")),
+            None,
+            format!(
+                "`{}` is not there (paths are relative to the project file)",
+                e.hdri
+            ),
+            Some("fix the path or add the file; left out, the built-in studio lights".into()),
+        );
+    }
     let dt = 1. / p.fps;
     for (li, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{li}]");
         let at = Some((s, l.id.as_str()));
-        if let Some(a) = l.asset()
+        if let Some(a) = p.asset_of(l)
             && !exists(a)
         {
+            let field = if matches!(l.kind, Kind::Text { .. }) {
+                "font"
+            } else {
+                "path"
+            };
             out.add(
                 Severity::Error,
                 "missing_asset",
-                &format!("{lp}.path"),
+                &format!("{lp}.{field}"),
                 at,
                 None,
                 format!("`{a}` is not there (paths are relative to the project file)"),
@@ -642,7 +737,7 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             let now = (l.x.at(t), l.y.at(t));
             let v = (now.0 - last.0).hypot(now.1 - last.1);
             last = now;
-            if v > limit && l.opacity.at(t) > 0.01 {
+            if v > limit && l.on(t) && l.opacity.at(t) > 0.01 {
                 out.add(
                     Severity::Warning,
                     "fast_motion",
@@ -718,6 +813,13 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             }
             let frac = on / area(b);
             let background = on > 0.9 * fw * fh;
+            // The box is only a first look: a rotated or sparse shape's
+            // box sticks out where its ink does not.
+            let frac = if still[i] && frac < 0.6 && on > 0. && !background {
+                ink_inside(r, &f, i, b, screen).unwrap_or(frac)
+            } else {
+                frac
+            };
             if still[i] && frac < 0.6 && on > 0. && !background {
                 out.add(
                     Severity::Warning,
@@ -743,7 +845,8 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
                     continue;
                 }
                 let o = area(meet(b, boxes[j]));
-                if o > 0.15 * area(b).min(area(boxes[j])) {
+                if o > 0.15 * area(b).min(area(boxes[j])) && inks_overlap(r, &f, i, j, b, boxes[j])
+                {
                     out.add(
                         Severity::Warning,
                         "text_overlap",
@@ -791,9 +894,11 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
             );
         }
     }
+    // A duplicator's hidden source draws as its copies.
+    let instanced = crate::motion::instanced(s);
     for (i, l) in s.layers.iter().enumerate() {
         let lp = format!("{sp}.layers[{i}]");
-        if !seen[i] {
+        if !seen[i] && !matches!(l.kind, Kind::Group) && !instanced[i] {
             out.add(
                 Severity::Warning,
                 "never_visible",
@@ -824,14 +929,111 @@ fn visual(p: &Project, si: usize, s: &Scene, r: &mut Renderer, out: &mut Issues)
     }
 }
 
+/// Layer `i` of `f` drawn alone over nothing, with `region` of the frame
+/// stretched over the renderer: its coverage, 0..1 a pixel, row by row.
+/// The real outline, where the quad is only its box.
+fn mask(r: &mut Renderer, f: &Frame, i: usize, region: Bbox) -> Option<Vec<f32>> {
+    fn nudge(d: &mut crate::Drawn, dx: f64, dy: f64) {
+        (d.x, d.y) = (d.x - dx, d.y - dy);
+        d.comp.iter_mut().for_each(|k| nudge(k, dx, dy));
+    }
+    let (x0, y0) = (region[0].floor(), region[1].floor());
+    let size = [region[2] - x0, region[3] - y0].map(|v| v.ceil().max(1.) as u32);
+    let mut l = f.layers[i].clone();
+    nudge(&mut l, x0, y0);
+    let alone = Frame {
+        size,
+        background: Rgba([0, 0, 0, 0]),
+        layers: vec![l],
+        view: None,
+        effects: Vec::new(),
+        t: f.t,
+        seed: f.seed,
+    };
+    let (px, _) = r.draw(&alone).ok()?;
+    Some(
+        px.as_chunks::<4>()
+            .0
+            .iter()
+            .map(|p| f32::from(p[3]) / 255.)
+            .collect(),
+    )
+}
+
+/// The share of layer `i`'s ink (box `b`) inside `screen`.
+fn ink_inside(r: &mut Renderer, f: &Frame, i: usize, b: Bbox, screen: Bbox) -> Option<f64> {
+    let u = [
+        b[0].min(screen[0]),
+        b[1].min(screen[1]),
+        b[2].max(screen[2]),
+        b[3].max(screen[3]),
+    ];
+    let m = mask(r, f, i, u)?;
+    let (rw, rh) = r.size();
+    let (rw, rh) = (usize::from(rw), usize::from(rh));
+    let (x0, y0) = (u[0].floor(), u[1].floor());
+    let (sx, sy) = (
+        rw as f64 / (u[2] - x0).ceil().max(1.),
+        rh as f64 / (u[3] - y0).ceil().max(1.),
+    );
+    let px = |v: f64, k: f64, n: usize| ((v * k).round().max(0.) as usize).min(n);
+    let (ax, bx) = (px(screen[0] - x0, sx, rw), px(screen[2] - x0, sx, rw));
+    let (ay, by) = (px(screen[1] - y0, sy, rh), px(screen[3] - y0, sy, rh));
+    let total: f64 = m.iter().map(|&a| f64::from(a)).sum();
+    let inside: f64 = (ay..by)
+        .flat_map(|y| m[y * rw + ax..y * rw + bx].iter())
+        .map(|&a| f64::from(a))
+        .sum();
+    (total > 0.).then(|| inside / total)
+}
+
+/// Whether text layers `i` and `j` (boxes `a`, `b`) really collide: over a
+/// tenth of the smaller one's ink lies on or within a pixel of the other's.
+fn inks_overlap(r: &mut Renderer, f: &Frame, i: usize, j: usize, a: Bbox, b: Bbox) -> bool {
+    let u = [
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ];
+    let (Some(mi), Some(mj)) = (mask(r, f, i, u), mask(r, f, j, u)) else {
+        return true;
+    };
+    let (rw, rh) = r.size();
+    let (rw, rh) = (usize::from(rw) as isize, usize::from(rh) as isize);
+    // Within a pixel: the other's coverage, grown by one.
+    let near = |m: &[f32], x: isize, y: isize| {
+        (-1..=1)
+            .flat_map(|dy| (-1..=1).map(move |dx| (x + dx, y + dy)))
+            .filter(|&(x, y)| x >= 0 && y >= 0 && x < rw && y < rh)
+            .any(|(x, y)| m[(y * rw + x) as usize] > 0.3)
+    };
+    let (ink_i, ink_j) = (
+        mi.iter().filter(|&&v| v > 0.3).count(),
+        mj.iter().filter(|&&v| v > 0.3).count(),
+    );
+    let both = (0..rh)
+        .flat_map(|y| (0..rw).map(move |x| (x, y)))
+        .filter(|&(x, y)| mi[(y * rw + x) as usize] > 0.3 && near(&mj, x, y))
+        .count();
+    ink_i.min(ink_j) > 0 && both * 10 > ink_i.min(ink_j)
+}
+
 /// Text layer `i`'s contrast against the frame drawn without it and
-/// everything above it, averaged over its box; and whether that is dark.
+/// everything above it, averaged under its glyphs (weighted by their
+/// coverage, so the gaps between letters and lines do not count); and
+/// whether that is dark.
 fn contrast_at(r: &mut Renderer, f: &Frame, i: usize, b: Bbox) -> Option<(f64, bool)> {
+    let [fw, fh] = f.size.map(f64::from);
+    let glyphs = mask(r, f, i, [0., 0., fw, fh])?;
     let below = Frame {
         size: f.size,
         background: f.background,
         layers: f.layers[..i].to_vec(),
         view: None,
+        effects: f.effects.clone(),
+        t: f.t,
+        seed: f.seed,
     };
     let (px, _) = r.draw(&below).ok()?;
     let (rw, rh) = r.size();
@@ -849,11 +1051,12 @@ fn contrast_at(r: &mut Renderer, f: &Frame, i: usize, b: Bbox) -> Option<(f64, b
     let mut count = 0f64;
     for y in y0..y1 {
         for x in x0..x1 {
+            let w = f64::from(glyphs[y * usize::from(rw) + x]);
             let o = (y * usize::from(rw) + x) * 4;
             for c in 0..3 {
-                sum[c] += f64::from(px[o + c]) / 255.;
+                sum[c] += w * f64::from(px[o + c]) / 255.;
             }
-            count += 1.;
+            count += w;
         }
     }
     if count == 0. {
@@ -877,6 +1080,7 @@ mod tests {
     const DEMO: &str = include_str!("../examples/demo.cut.json");
     const SHOWCASE: &str = include_str!("../examples/showcase.cut.json");
     const STAGE3D: &str = include_str!("../examples/stage3d.cut.json");
+    const PLUGIN: &str = include_str!("../examples/plugin.cut.json");
 
     fn run(src: &str) -> Vec<Issue> {
         let mut r = Renderer::new(320, 180);
@@ -889,8 +1093,26 @@ mod tests {
     }
 
     #[test]
+    fn ray_traced_glass_without_ray_queries_is_noted() {
+        let rt = r#"{"size":[64,64],"fps":30,"render":{"glass":"rt"},"scenes":[]}"#;
+        let raster = r#"{"size":[64,64],"fps":30,"scenes":[]}"#;
+        let none = || Err("no adapter has ray queries".to_owned());
+        let note = rt_glass(rt, none()).expect("a note");
+        assert_eq!(
+            (note.severity, note.code, &*note.path),
+            (Severity::Info, "rt_glass_unavailable", "render.glass")
+        );
+        assert!(
+            note.message.contains("no adapter has ray queries"),
+            "{note}"
+        );
+        assert_eq!(rt_glass(rt, Ok(())), None);
+        assert_eq!(rt_glass(raster, none()), None);
+    }
+
+    #[test]
     fn the_examples_have_no_warnings() {
-        for src in [DEMO, SHOWCASE, STAGE3D] {
+        for src in [DEMO, SHOWCASE, STAGE3D, PLUGIN] {
             let bad: Vec<String> = run(src)
                 .iter()
                 .filter(|i| i.severity >= Severity::Warning)
@@ -906,6 +1128,7 @@ mod tests {
           "size": [1280, 720], "fps": 30,
           "scenes": [{
             "name": "s", "duration": 2, "background": "#ffffff",
+            "environment": { "hdri": "missing.hdr" },
             "layers": [
               { "id": "gone", "kind": "rect", "x": 5000, "y": 360 },
               { "id": "edge", "kind": "rect", "x": 1270, "y": 360, "width": 200, "height": 200, "fill": "#ff0000" },
@@ -918,7 +1141,9 @@ mod tests {
             ]
           }]
         }"##;
-        let issues = check(src, &mut Renderer::new(320, 180), &|p| p != "missing.png");
+        let issues = check(src, &mut Renderer::new(320, 180), &|p| {
+            !p.starts_with("missing")
+        });
         let text: Vec<String> = issues.iter().map(ToString::to_string).collect();
         let text = text.join("\n");
         let has = |code: &str, path: &str| {
@@ -940,6 +1165,7 @@ mod tests {
         has("duplicate_key", "scenes[0].layers[5].opacity[2]");
         has("key_outside_scene", "scenes[0].layers[5].opacity[3]");
         has("missing_asset", "scenes[0].layers[6].path");
+        has("missing_asset", "scenes[0].environment.hdri");
         // The dark text on white reads fine.
         assert!(
             !issues
@@ -949,6 +1175,64 @@ mod tests {
         );
         let json = serde_json::to_value(&issues).unwrap();
         assert!(json[0]["fix"].is_string(), "{json}");
+    }
+
+    #[test]
+    fn outlines_not_boxes_decide_clipped_overlap_and_contrast() {
+        // A thin bar on the diagonal: its box is under 60% in frame, its
+        // ink about 73%. A two-line text with blank lines between, and a
+        // word in the gap: the boxes overlap, the letters do not. Grey
+        // text whose box is a third over a black band, its letters all on
+        // white: the box averages to grey, the glyphs read.
+        let src = r##"{
+          "size": [1280, 720], "fps": 30,
+          "scenes": [{
+            "name": "a", "duration": 1,
+            "layers": [
+              { "id": "bar", "kind": "rect", "x": 1180, "y": 620, "width": 600, "height": 8, "rotation": 45, "fill": "#ffffff" },
+              { "id": "ends", "kind": "text", "text": "TOP\n\n\n\nBOTTOM", "x": 400, "y": 360, "font_size": 40, "fill": "#ffffff" },
+              { "id": "mid", "kind": "text", "text": "MID", "x": 400, "y": 360, "font_size": 40, "fill": "#ffffff" }
+            ]
+          }, {
+            "name": "b", "duration": 1, "background": "#ffffff",
+            "layers": [
+              { "id": "band", "kind": "rect", "x": 640, "y": 360, "width": 600, "height": 100, "fill": "#000000" },
+              { "id": "grey", "kind": "text", "text": "TOP\n\n\n\nBOTTOM", "x": 640, "y": 360, "font_size": 40, "fill": "#777777" }
+            ]
+          }]
+        }"##;
+        let issues = run(src);
+        let text: Vec<String> = issues.iter().map(ToString::to_string).collect();
+        for code in ["clipped", "text_overlap", "low_contrast"] {
+            assert!(
+                !issues.iter().any(|i| i.code == code),
+                "{code}:\n{}",
+                text.join("\n")
+            );
+        }
+    }
+
+    #[test]
+    fn typos_in_and_around_bindings_are_named() {
+        let i = run(r#"{"size": [200, 100], "fps": 30,
+            "variables": {"k": {"type": "number", "value": 2}},
+            "scenes": [{"name": "s", "duration": 1, "layers": [{"id": "a", "kind": "rect",
+                "x": {"var": "W", "mull": 0.5}, "widh": {"var": "k"},
+                "y": [{"t": 0, "v": {"var": "H", "ad": 1}}]}]}]}"#);
+        let text: Vec<String> = i.iter().map(ToString::to_string).collect();
+        let text = text.join("\n");
+        assert!(!i.iter().any(|i| i.code == "load"), "{text}");
+        for (path, fix) in [
+            ("scenes[0].layers[0].x.mull", "`mul`"),
+            ("scenes[0].layers[0].widh", "`width`"),
+            ("scenes[0].layers[0].y[0].v.ad", "`add`"),
+        ] {
+            let hit = i
+                .iter()
+                .find(|i| i.code == "unknown_field" && i.path == path)
+                .unwrap_or_else(|| panic!("no unknown_field at {path}:\n{text}"));
+            assert!(hit.fix.as_ref().unwrap().contains(fix), "{hit}");
+        }
     }
 
     #[test]
@@ -986,10 +1270,34 @@ mod tests {
     }
 
     #[test]
+    fn layer_effects_are_used_in_2d_and_3d() {
+        let effects = serde_json::json!([{"type": "blur", "radius": 4}]);
+        let doc = |mode: &str| {
+            serde_json::json!({"size": [320, 180], "fps": 30, "scenes": [{
+            "name": "s", "duration": 1, "mode": mode, "layers": [
+                {"id": "t", "kind": "text", "text": "HI", "x": 160, "y": 90, "effects": effects},
+                {"id": "r", "kind": "rect", "x": 160, "y": 90, "effects": effects}
+            ]}]})
+            .to_string()
+        };
+        let ignored = |mode: &str| {
+            check(&doc(mode), &mut Renderer::new(320, 180), &|_| true)
+                .into_iter()
+                .filter(|i| i.code == "ignored_prop" && i.path.ends_with(".effects"))
+                .count()
+        };
+        assert_eq!(ignored("2d"), 0);
+        assert_eq!(ignored("3d"), 0);
+    }
+
+    #[test]
     fn the_schema_accepts_the_examples_and_names_what_is_wrong() {
         let schema = Project::json_schema();
         let v = jsonschema::validator_for(&schema).unwrap();
-        for src in [DEMO, SHOWCASE] {
+        let effects = include_str!("../examples/effects.cut.json");
+        let looks = include_str!("../examples/looks2d.cut.json");
+        let procedural = include_str!("../examples/procedural.cut.json");
+        for src in [DEMO, SHOWCASE, effects, looks, PLUGIN, procedural] {
             let doc: Value = serde_json::from_str(src).unwrap();
             let errs: Vec<String> = v.iter_errors(&doc).map(|e| e.to_string()).collect();
             assert!(errs.is_empty(), "{errs:?}");

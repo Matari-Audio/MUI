@@ -1,0 +1,169 @@
+{
+  "size": [1280, 720],
+  "fps": 30.0,
+  "scenes": [
+    {
+      "name": "glass",
+      "duration": 8.0,
+      "background": "#14161b",
+      "layers": [
+        {
+          "id": "cam",
+          "kind": "camera",
+          "x": 640.0,
+          "y": 360.0,
+          "rx": [
+            { "t": 0.0, "v": 4.0, "interp": "bezier" },
+            { "t": 8.0, "v": 16.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": -35.0, "interp": "bezier" },
+            { "t": 8.0, "v": 30.0, "interp": "bezier" }
+          ],
+          "distance": [
+            { "t": 0.0, "v": 1500.0, "interp": "bezier" },
+            { "t": 4.0, "v": 1100.0, "interp": "bezier" },
+            { "t": 8.0, "v": 1250.0, "interp": "bezier" }
+          ],
+          "fov": 34.0
+        },
+        {
+          "id": "key",
+          "kind": "light",
+          "fill": "#fff3e0",
+          "rx": 50.0,
+          "ry": -40.0,
+          "intensity": 1.4,
+          "softness": 2.0
+        },
+        {
+          "id": "rim",
+          "kind": "light",
+          "fill": "#7fb4ff",
+          "rx": 20.0,
+          "ry": 150.0,
+          "intensity": 0.8
+        },
+        {
+          "id": "amb",
+          "kind": "light",
+          "type": "ambient",
+          "fill": "#9aa0b0",
+          "intensity": 0.35
+        },
+        {
+          "id": "back",
+          "kind": "text",
+          "text": "REFRACT",
+          "x": 640.0,
+          "y": 330.0,
+          "fill": "#ff5a36",
+          "font_size": 200.0,
+          "weight": 900.0,
+          "animators": [
+            {
+              "amount": [
+                { "t": 0.3, "v": 1.0, "interp": "bezier" },
+                { "t": 1.1, "v": 0.0, "interp": "hold" }
+              ],
+              "stagger": 0.05,
+              "y": 40.0,
+              "opacity": 0.0
+            }
+          ],
+          "z": 420.0
+        },
+        {
+          "id": "knot",
+          "kind": "model",
+          "path": "knot.glb",
+          "x": 640.0,
+          "y": 380.0,
+          "scale": [
+            { "t": 0.8, "v": 0.0, "interp": "bezier", "out": [0.096, 0.9] },
+            { "t": 1.32, "v": 1.08, "interp": "bezier" },
+            { "t": 1.6, "v": 1.0, "interp": "bezier" }
+          ],
+          "height": 240.0,
+          "rx": [
+            { "t": 0.0, "v": -10.0, "interp": "bezier" },
+            { "t": 8.0, "v": 20.0, "interp": "bezier" }
+          ],
+          "ry": [
+            { "t": 0.0, "v": 0.0, "interp": "bezier" },
+            { "t": 8.0, "v": 220.0, "interp": "bezier" }
+          ],
+          "material": {
+            "metallic": 0.0,
+            "roughness": 0.0,
+            "transmission": 0.95,
+            "ior": 1.45,
+            "dispersion": 0.5,
+            "tint": "#d8f0ff"
+          }
+        },
+        {
+          "id": "pane0",
+          "kind": "rect",
+          "x": [
+            { "t": 1.2, "v": 60.0, "interp": "bezier", "out": [0.14400000000000002, 300.0] },
+            { "t": 2.1, "v": 360.0, "interp": "bezier", "in": [-0.63, 0.0] }
+          ],
+          "y": 380.0,
+          "opacity": [
+            { "t": 1.2, "v": 0.0, "interp": "bezier", "out": [0.14400000000000002, 1.0] },
+            { "t": 2.1, "v": 1.0, "interp": "bezier", "in": [-0.63, 0.0] }
+          ],
+          "width": 220.0,
+          "height": 300.0,
+          "radius": 28.0,
+          "fill": "#e9edf2",
+          "z": -140.0,
+          "ry": 24.0,
+          "extrude": 14.0,
+          "material": {
+            "roughness": 0.03,
+            "transmission": 0.92,
+            "ior": 1.5
+          }
+        },
+        {
+          "id": "pane1",
+          "kind": "rect",
+          "x": [
+            { "t": 1.4, "v": 1220.0, "interp": "bezier", "out": [0.14400000000000002, -300.0] },
+            { "t": 2.3, "v": 920.0, "interp": "bezier", "in": [-0.63, 0.0] }
+          ],
+          "y": 380.0,
+          "opacity": [
+            { "t": 1.4, "v": 0.0, "interp": "bezier", "out": [0.14400000000000002, 1.0] },
+            { "t": 2.3, "v": 1.0, "interp": "bezier", "in": [-0.63, 0.0] }
+          ],
+          "width": 220.0,
+          "height": 300.0,
+          "radius": 28.0,
+          "fill": "#e9edf2",
+          "z": -140.0,
+          "ry": -24.0,
+          "extrude": 14.0,
+          "material": {
+            "roughness": [
+              { "t": 0.0, "v": 0.6, "interp": "bezier" },
+              { "t": 6.0, "v": 0.05, "interp": "bezier" }
+            ],
+            "transmission": 0.92,
+            "ior": 1.5
+          }
+        }
+      ],
+      "mode": "3d",
+      "ground": {
+        "y": 560.0,
+        "color": "#191b21",
+        "radius": 2400.0,
+        "reflect": 0.35,
+        "contact": 0.6
+      }
+    }
+  ]
+}

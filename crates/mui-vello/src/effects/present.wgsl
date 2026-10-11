@@ -48,7 +48,7 @@ fn fs_blur(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
 }
 
 // The frame's pixel under `p`, straight alpha, or clear past its edge: a
-// swapchain may be larger than the frame (Linux steps it), and past it the
+// retained source may be larger than the frame, and past it the
 // source holds an older, larger frame, or nothing, which a translucent
 // window would show.
 fn frame(p: vec4<f32>) -> vec4<f32> {

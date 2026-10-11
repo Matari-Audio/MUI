@@ -1,0 +1,15 @@
+# A nice-plug plugin mui-cut's adapter builds and plays (tests/sound.rs): a
+# sine at its Pitch while a note is held, its Level loud, and a MUI editor.
+# Its Cargo.lock must never change.
+[package]
+name = "fixture-nice-tone"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+nice-plug = { git = "https://codeberg.org/RustAudio/nice-plug.git", rev = "e60b5db09d8606c3dc3e93f982847a00bce17325", default-features = false, features = ["editor"] }
+mui = { git = "https://github.com/Matari-Audio/MUI" }
+mui-baseview = { git = "https://github.com/Matari-Audio/MUI" }
+
+[workspace]

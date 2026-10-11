@@ -2,8 +2,13 @@
 //! canvas's own Vello engine into one atlas, then mui-stage sets each on a
 //! slab in the lit scene the frame's [`View`] describes and draws it into
 //! the target. The atlas is repainted only when some layer's content (not
-//! its placement) changes, so a card flying about costs no Vello work.
-use mui_stage::{Floor, Fog, Light, LightKind, Mat4, Model, Plane, Post, Shot, Stage};
+//! its placement) changes, so a card flying about costs no Vello work. A
+//! layer with effects gets room in the atlas for what they spread, and its
+//! box there runs through its stack before the slabs sample it.
+use mui_stage::{
+    Ao, Environment, Floor, Fog, Light, LightKind, Mat4, Material, Model, Plane, Post, STUDIO,
+    Shot, Stage,
+};
 use mui_vello::kurbo::Affine;
 
 use crate::render::Assets;
@@ -17,25 +22,40 @@ const PAD: u32 = 32;
 const MIPS: u32 = 3;
 const ATLAS: u32 = 4096;
 
-/// A layer's box in the atlas: top left, size in pixels, and the pixels
-/// per project pixel it was painted at.
+/// A layer's box in the atlas: top left, size in pixels, the pixels per
+/// project pixel it was painted at, and the room its effects take each
+/// side, pixels.
 #[derive(Clone, Debug, PartialEq)]
 struct Slot {
     at: [u32; 2],
     px: [u32; 2],
     k: f64,
+    reach: u32,
 }
+
+type Painted = (Vec<Drawn>, Vec<Slot>, [u32; 2], (f64, u32));
 
 pub(crate) struct Space {
     stage: Stage,
     atlas: [u32; 2],
     /// What the atlas holds: each layer's content with its placement
-    /// zeroed, and where it is.
-    painted: Option<(Vec<Drawn>, Vec<Slot>, [u32; 2])>,
+    /// zeroed, where it is, and the frame's time and seed if an effect
+    /// moves with them.
+    painted: Option<Painted>,
+    /// Layer effects, run over boxes of the atlas.
+    fx: Option<crate::fx::gpu::Passes>,
+    /// Skinned parts' meshes, by id, and the animation time they are bent
+    /// to.
+    skinned: std::collections::HashMap<String, f64>,
+    /// The ray-traced glass ([`GpuCanvas::glass`]), made by the first
+    /// frame that wants it, and the atlas it samples.
+    #[cfg(not(target_arch = "wasm32"))]
+    rt: Option<mui_stage_rt::Rt>,
+    atlas_tex: Option<wgpu::Texture>,
 }
 
 /// sRGB bytes to linear light.
-fn linear(c: Rgba) -> [f32; 3] {
+pub(crate) fn linear(c: Rgba) -> [f32; 3] {
     std::array::from_fn(|i| {
         let s = f32::from(c.0[i]) / 255.;
         if s <= 0.04045 {
@@ -71,6 +91,11 @@ impl Space {
             stage,
             atlas: [ATLAS, 256],
             painted: None,
+            fx: None,
+            skinned: std::collections::HashMap::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            rt: None,
+            atlas_tex: None,
         }
     }
 
@@ -85,6 +110,23 @@ impl Space {
     ) -> Result<Vec<Quad>, String> {
         let [fw, fh] = frame.size.map(f64::from);
         let out = f64::from(canvas.size()[1]) / fh;
+        #[cfg(not(target_arch = "wasm32"))]
+        if canvas.glass.is_some() && self.rt.is_none() {
+            let [w, h] = canvas.size();
+            let mut rt = mui_stage_rt::Rt::new(&canvas.device, &canvas.queue, w, h)
+                .map_err(|e| e.to_string())?;
+            if let Some(atlas) = &self.atlas_tex {
+                rt.layer("atlas", atlas);
+            }
+            self.rt = Some(rt);
+        }
+        // A plugin layer is a slab per part; overlays are drawn flat after.
+        let layers: Vec<Drawn> = frame
+            .layers
+            .iter()
+            .filter(|l| !l.space.overlay)
+            .flat_map(|l| assets.slabs(l))
+            .collect();
         let w = |p: [f64; 3]| crate::three::world(frame.size, p);
         let wd = |d: [f64; 3]| [d[0] as f32, -d[1] as f32, -d[2] as f32];
 
@@ -92,12 +134,11 @@ impl Space {
         let shown = |l: &&Drawn| {
             !matches!(
                 l.kind,
-                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. }
+                Kind::Camera { .. } | Kind::Light { .. } | Kind::Model { .. } | Kind::Audio { .. }
             ) && l.opacity > 0.
                 && l.scale != 0.
         };
-        let contents: Vec<Drawn> = frame
-            .layers
+        let contents: Vec<Drawn> = layers
             .iter()
             .filter(shown)
             .map(|l| Drawn {
@@ -114,69 +155,6 @@ impl Space {
             .iter()
             .map(|c| assets.element(c))
             .collect::<Result<Vec<_>, _>>()?;
-        // Pixels per project pixel: the output's, with headroom for a
-        // closer camera, and more for a scaled-up layer (in octaves, so an
-        // animated scale does not repaint every frame).
-        let base = (out * 1.5).clamp(0.5, 4.);
-        let scales: Vec<f64> = frame
-            .layers
-            .iter()
-            .filter(shown)
-            .map(|l| 2f64.powf(l.scale.abs().log2().ceil().clamp(-2., 2.)))
-            .collect();
-        let mut fit = 1.;
-        let (slots, height) = loop {
-            let ks: Vec<f64> = scales.iter().map(|s| base * s * fit).collect();
-            let px: Vec<[u32; 2]> = elements
-                .iter()
-                .zip(&ks)
-                .map(|((_, size, _), k)| {
-                    let side = |v: f64| ((v * k).ceil() as u32).clamp(1, ATLAS - 2 * PAD);
-                    [side(size.width) + 2 * PAD, side(size.height) + 2 * PAD]
-                })
-                .collect();
-            let (at, height) = pack(&px, ATLAS);
-            if height <= ATLAS || fit < 0.05 {
-                let slots = at
-                    .into_iter()
-                    .zip(px)
-                    .zip(ks)
-                    .map(|((at, px), k)| Slot { at, px, k })
-                    .collect::<Vec<_>>();
-                break (slots, height.min(ATLAS));
-            }
-            fit *= 0.7;
-        };
-        // The atlas only grows, so a steady scene keeps one size.
-        self.atlas[1] = self.atlas[1].max(height.next_multiple_of(256)).min(ATLAS);
-        let key = (contents, slots, self.atlas);
-        if self.painted.as_ref() != Some(&key) {
-            let view = self
-                .stage
-                .layer_target("atlas", self.atlas, format, MIPS)
-                .map_err(|e| e.to_string())?;
-            let placed: Vec<_> = elements
-                .iter()
-                .zip(&key.1)
-                .map(|((scene, _, _), s)| {
-                    let at = [s.at[0] + PAD, s.at[1] + PAD].map(f64::from);
-                    (
-                        scene,
-                        Affine::translate((at[0], at[1])) * Affine::scale(s.k),
-                    )
-                })
-                .collect();
-            canvas.paint(assets, &placed, None, self.atlas, &view)?;
-            self.stage.layer_done("atlas").map_err(|e| e.to_string())?;
-            self.painted = Some(key);
-        }
-        let slots = &self.painted.as_ref().expect("painted above").1;
-
-        // Planes.
-        let [aw, ah] = self.atlas.map(|v| v as f32);
-        let mut planes = Vec::new();
-        let mut shown_i = 0;
-        let mut quads = Vec::with_capacity(frame.layers.len());
         let cam = &view.camera;
         let camera = crate::three::stage_camera(frame.size, cam);
         let vp = camera.view_proj((fw / fh) as f32);
@@ -188,11 +166,133 @@ impl Space {
                 (1. - f64::from(q[1])) * 0.5 * fh,
             ]
         };
+        // Pixels per project pixel: the output's, with headroom, times
+        // how magnified the layer is on screen from this camera (its scale
+        // and its distance), in octaves, so a moving camera or an animated
+        // scale repaints only as it crosses one.
+        let base = (out * 1.5).clamp(0.5, 4.);
+        let scales: Vec<f64> = layers
+            .iter()
+            .filter(shown)
+            .map(|l| {
+                let m = crate::three::pose(frame.size, l, Mat4::scale(l.scale as f32));
+                let o = to_px(&m, [0., 0., 0.]);
+                let seen = [[1., 0., 0.], [0., 1., 0.]]
+                    .map(|a| {
+                        let p = to_px(&m, a);
+                        (p[0] - o[0]).hypot(p[1] - o[1])
+                    })
+                    .into_iter()
+                    .fold(0., f64::max);
+                let seen = if seen.is_finite() {
+                    seen
+                } else {
+                    l.scale.abs()
+                };
+                2f64.powf(seen.max(1e-3).log2().ceil().clamp(-2., 2.))
+            })
+            .collect();
+        let reaches: Vec<f64> = contents
+            .iter()
+            .map(|c| crate::fx::reach(&c.effects))
+            .collect();
+        let mut fit = 1.;
+        let (slots, height) = loop {
+            let ks: Vec<f64> = scales.iter().map(|s| base * s * fit).collect();
+            let rs: Vec<u32> = reaches
+                .iter()
+                .zip(&ks)
+                .map(|(r, k)| ((r * k).ceil() as u32).min(ATLAS / 4))
+                .collect();
+            let px: Vec<[u32; 2]> = elements
+                .iter()
+                .zip(&ks)
+                .zip(&rs)
+                .map(|(((_, size, _), k), r)| {
+                    let gutter = 2 * (PAD + r);
+                    let side = |v: f64| ((v * k).ceil() as u32).clamp(1, ATLAS - gutter);
+                    [side(size.width) + gutter, side(size.height) + gutter]
+                })
+                .collect();
+            let (at, height) = pack(&px, ATLAS);
+            if height <= ATLAS || fit < 0.05 {
+                let slots = at
+                    .into_iter()
+                    .zip(px)
+                    .zip(ks)
+                    .zip(rs)
+                    .map(|(((at, px), k), reach)| Slot { at, px, k, reach })
+                    .collect::<Vec<_>>();
+                break (slots, height.min(ATLAS));
+            }
+            fit *= 0.7;
+        };
+        // The atlas only grows, so a steady scene keeps one size.
+        self.atlas[1] = self.atlas[1].max(height.next_multiple_of(256)).min(ATLAS);
+        let moving = contents.iter().any(|c| !c.effects.is_empty());
+        let stamp = if moving {
+            (frame.t, frame.seed)
+        } else {
+            (0., 0)
+        };
+        let key = (contents, slots, self.atlas, stamp);
+        if self.painted.as_ref() != Some(&key) {
+            let atlas = self
+                .stage
+                .layer_target("atlas", self.atlas, format, MIPS)
+                .map_err(|e| e.to_string())?;
+            let view = atlas.create_view(&wgpu::TextureViewDescriptor::default());
+            let placed: Vec<_> = elements
+                .iter()
+                .zip(&key.1)
+                .map(|((scene, _, _), s)| {
+                    let at = [s.at[0] + PAD + s.reach, s.at[1] + PAD + s.reach].map(f64::from);
+                    (
+                        scene,
+                        Affine::translate((at[0], at[1])) * Affine::scale(s.k),
+                    )
+                })
+                .collect();
+            canvas.paint_scenes(assets, &placed, None, self.atlas, &view)?;
+            let boxes: Vec<_> = key
+                .0
+                .iter()
+                .zip(&key.1)
+                .filter(|(c, _)| !c.effects.is_empty())
+                .map(|(c, s)| {
+                    let at = [s.at[0] + PAD, s.at[1] + PAD];
+                    let px = [s.px[0] - 2 * PAD, s.px[1] - 2 * PAD];
+                    (at, px, s.k, &c.effects[..])
+                })
+                .collect();
+            if !boxes.is_empty() {
+                let fx = match &mut self.fx {
+                    Some(fx) => fx,
+                    none => none.insert(crate::fx::gpu::Passes::new(&canvas.device, format)?),
+                };
+                fx.boxes(canvas, frame, &atlas, &boxes);
+            }
+            self.stage.layer_done("atlas").map_err(|e| e.to_string())?;
+            #[cfg(not(target_arch = "wasm32"))]
+            if let Some(rt) = &mut self.rt {
+                rt.layer("atlas", &atlas);
+            }
+            self.atlas_tex = Some(atlas);
+            self.painted = Some(key);
+        }
+        let slots = &self.painted.as_ref().expect("painted above").1;
+
+        // Planes.
+        let [aw, ah] = self.atlas.map(|v| v as f32);
+        let mut planes = Vec::new();
+        let mut shown_i = 0;
+        let mut quads = Vec::with_capacity(layers.len());
         let marker = |l: &Drawn, id: &str| {
             let [x, y] = to_px(&Mat4::IDENTITY, w([l.x, l.y, l.space.z]));
             let r = 14.;
             Quad {
                 id: id.to_owned(),
+                ui: None,
                 pts: [
                     [x - r, y - r],
                     [x + r, y - r],
@@ -202,15 +302,9 @@ impl Space {
             }
         };
         let mut models = Vec::new();
-        for l in &frame.layers {
+        for l in &layers {
             let s = &l.space;
-            let pose = |offset: Mat4| {
-                Mat4::translate(w([l.x, l.y, s.z]))
-                    * Mat4::rotate_y(s.ry.to_radians() as f32)
-                    * Mat4::rotate_x(-s.rx.to_radians() as f32)
-                    * Mat4::rotate_z(-l.rotation.to_radians() as f32)
-                    * offset
-            };
+            let pose = |offset: Mat4| crate::three::pose(frame.size, l, offset);
             match &l.kind {
                 Kind::Camera { .. } | Kind::Light { .. } => quads.push(marker(l, &l.id)),
                 Kind::Model { path } => {
@@ -239,6 +333,7 @@ impl Space {
                     }
                     quads.push(Quad {
                         id: l.id.clone(),
+                        ui: None,
                         pts: [
                             [lo[0], lo[1]],
                             [hi[0], lo[1]],
@@ -247,22 +342,55 @@ impl Space {
                         ],
                     });
                     let tint = linear(l.fill);
+                    let pose = mesh.pose(mesh.animated().then_some(l.time));
                     for (i, part) in mesh.parts.iter().enumerate() {
-                        let id = format!("{path}#{i}");
-                        if !self.stage.has_mesh(&id) {
-                            self.stage.mesh(&id, &part.vertices, &part.indices);
+                        let mut id = format!("{path}#{i}");
+                        // The glTF's thickness is in model units.
+                        let own = Material {
+                            thickness: part.material.thickness * k,
+                            ..part.material
+                        };
+                        if let Some(bent) = mesh.skinned(part, &pose) {
+                            // Bent per layer, re-uploaded as its time moves.
+                            id = format!("{id}@{}", l.id);
+                            if self.skinned.get(&id) != Some(&l.time) {
+                                self.stage.mesh_uv(&id, &bent, &part.uvs, &part.indices);
+                                #[cfg(not(target_arch = "wasm32"))]
+                                if let Some(rt) = &mut self.rt {
+                                    rt.mesh(&id, &bent, &part.indices);
+                                }
+                                self.skinned.insert(id.clone(), l.time);
+                            }
+                        } else if !self.stage.has_mesh(&id) {
+                            self.stage
+                                .mesh_uv(&id, &part.vertices, &part.uvs, &part.indices);
                         }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        if let Some(rt) = &mut self.rt
+                            && !rt.has_mesh(&id)
+                        {
+                            rt.mesh(&id, &part.vertices, &part.indices);
+                        }
+                        let maps = std::array::from_fn(|k| {
+                            let img = part.maps[k]?;
+                            let pic = &mesh.images[img];
+                            let tid = format!("{path}@{img}:{}", k == 0);
+                            if !self.stage.has_texture(&tid) {
+                                self.stage.texture(&tid, &pic.rgba, pic.size, k == 0);
+                            }
+                            Some(tid)
+                        });
                         models.push(Model {
                             mesh: id,
-                            transform: m,
+                            maps,
+                            transform: m * mesh.place(part, &pose),
                             color: [
                                 part.color[0] * tint[0],
                                 part.color[1] * tint[1],
                                 part.color[2] * tint[2],
                                 part.color[3] * l.opacity as f32,
                             ],
-                            metallic: part.metallic,
-                            roughness: part.roughness,
+                            material: s.material.map_or(own, |m| m.over(own)),
                             cast: s.cast_shadows,
                             receive: s.receive_shadows,
                         });
@@ -283,6 +411,7 @@ impl Space {
                     let (x, y) = (pw / 2., ph / 2.);
                     quads.push(Quad {
                         id: l.id.clone(),
+                        ui: None,
                         pts: [[-x, y], [x, y], [x, -y], [-x, -y]]
                             .map(|[a, b]| to_px(&m, [a, b, 0.])),
                     });
@@ -291,9 +420,15 @@ impl Space {
                     }
                     let slot = &slots[shown_i];
                     shown_i += 1;
+                    // A layer with effects shows the room they spread into.
                     let [x0, y0] = [slot.at[0] + PAD, slot.at[1] + PAD].map(|v| v as f32);
-                    let (iw, ih) = ((size.width * slot.k) as f32, (size.height * slot.k) as f32);
-                    let mut plane = Plane::new("atlas", pw, ph)
+                    let r = slot.reach as f32;
+                    let (iw, ih) = (
+                        (size.width * slot.k) as f32 + 2. * r,
+                        (size.height * slot.k) as f32 + 2. * r,
+                    );
+                    let grow = (f64::from(slot.reach) / slot.k) as f32;
+                    let mut plane = Plane::new("atlas", pw + 2. * grow, ph + 2. * grow)
                         .uv([x0 / aw, y0 / ah, (x0 + iw) / aw, (y0 + ih) / ah])
                         .depth(s.extrude as f32)
                         .edge(linear(s.edge))
@@ -304,9 +439,13 @@ impl Space {
                     plane.position = w([l.x, l.y, s.z]);
                     plane.cast = s.cast_shadows;
                     plane.receive = s.receive_shadows;
+                    if let Some(m) = &s.material {
+                        plane.material = m.over(Material::SLAB);
+                    }
                     if s.extrude > 0.
-                        && let Some(o) = assets.outline(l, size, corner)
+                        && let Some(mut o) = assets.outline(l, size, corner)
                     {
+                        o.translate(mui_geometry::Vec2::new(f64::from(grow), f64::from(grow)));
                         plane = plane.outline(std::sync::Arc::new(o));
                     }
                     planes.push(plane);
@@ -349,6 +488,29 @@ impl Space {
             near: f.near as f32,
             far: f.far as f32,
         });
+        // An HDRI not loaded (yet) lights as the studio does.
+        let environment = view.environment.as_ref().map(|e| {
+            let loaded = !e.hdri.is_empty()
+                && (self.stage.has_environment(&e.hdri)
+                    || assets.env(&e.hdri).is_some_and(|img| {
+                        self.stage.environment(&e.hdri, img);
+                        true
+                    }));
+            Environment {
+                map: if loaded {
+                    e.hdri.clone()
+                } else {
+                    STUDIO.into()
+                },
+                intensity: e.intensity as f32,
+                rotation: e.rotation as f32,
+                background: e.background,
+            }
+        });
+        let ao = view.ao.as_ref().map(|a| Ao {
+            strength: a.strength.max(0.) as f32,
+            radius: a.radius.max(0.) as f32,
+        });
         let blur = (cam.aperture * out).min(64.) as f32;
         let shot = Shot {
             planes,
@@ -357,14 +519,43 @@ impl Space {
             floor,
             fog,
             clear: Some(linear(frame.background)),
+            environment,
+            sky: view.sky,
+            ao,
+            sample: canvas.sample,
+            trace: canvas.trace,
             post: Post {
                 focus: cam.focus as f32,
                 aperture: blur,
                 max_blur: blur,
+                bloom: view
+                    .bloom
+                    .as_ref()
+                    .map_or(0., |b| b.strength.max(0.) as f32),
+                threshold: view
+                    .bloom
+                    .as_ref()
+                    .map_or(1., |b| b.threshold.max(0.) as f32),
+                knee: 0.5,
                 ..Post::NONE
             },
             ..Shot::new(camera)
         };
+        #[cfg(not(target_arch = "wasm32"))]
+        if let (Some(rt), Some(spp)) = (&mut self.rt, canvas.glass) {
+            rt.draw(&mut self.stage, &shot, 0., spp, target, format)
+                .map_err(|e| e.to_string())?;
+            // Profiling: the tracer's GPU time per pass, each frame (waits).
+            if std::env::var_os("MUI_RT_TIMES").is_some()
+                && let Some(g) = rt.gpu_times()
+            {
+                eprintln!(
+                    "mui-stage-rt: sky+tlas {:.2} ms, trace {:.2} ms, filter {:.2} ms, composite {:.2} ms",
+                    g.tlas, g.trace, g.filter, g.composite
+                );
+            }
+            return Ok(quads);
+        }
         self.stage
             .draw(&shot, 0., target, format)
             .map_err(|e| e.to_string())?;

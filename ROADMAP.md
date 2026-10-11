@@ -270,9 +270,18 @@ public function and a test behind it.
       and clap-validator on Linux, but nobody has yet opened it by hand in
       Bitwig, Reaper or Ableton, on any OS. macOS and Windows are only
       compiled for, never run.
-- [ ] `mui-truce` has no IME: baseview has no composition or candidate-window
-      API, so `Frame::ime` is dropped and CJK input does not work in a
-      plugin text field.
+- [x] `mui-truce` forwards native composition and candidate-window state
+      through the pinned baseview patch: Cocoa text services, Windows IMM32,
+      and X11 XIM. Ordered preedit, commit and selection events share the
+      editable field's shaped geometry. See `vendor/moose-baseview/README-MUI.md`.
+- [ ] Native IME acceptance in real DAW editors on Linux, Windows and macOS:
+      cross-compilation and protocol regressions do not establish CJK input,
+      candidate positioning, focus changes or close/reopen behavior in a host.
+- [x] Standalone native windows: `mui-winit` owns independent windows with
+      native Wayland/X11, Windows and macOS backends, clipboard, AccessKit,
+      IME and typed open/resize/redraw/close commands. Linux presentation has
+      been exercised on X11 and Wayland; Windows/macOS runtime acceptance
+      remains open. Native Wayland DAW embedding needs a separate host contract.
 - [ ] `mui-truce` has no AU or AAX: truce builds them, but only CLAP and VST3
       are wired and validated.
 - [x] `mui-truce` swallowed every key while focused. On moose-baseview a key
@@ -282,13 +291,13 @@ public function and a test behind it.
       `vst3 validator`: truce-clap 6.3 never requests a value rescan after a
       state load, and truce-vst3 6.3 declares the wrong
       `IProcessContextRequirements` IID. Both are one-line upstream fixes
-      (Kurv vendors them); see `crates/mui-truce/README.md`.
+      (a downstream plugin vendors them); see `crates/mui-truce/README.md`.
 - [x] Keyboard value stepping: a focused slider or knob steps on the arrow,
       Page and Home/End keys, bracketed as one edit.
 - [ ] The text cache keeps exactly what the last resolve used, with no byte
       budget; `mui_vello::Cache` never evicts a font while its renderer lives.
 - [ ] No fuzzing or property campaigns over layout, welding or text input.
-- [ ] Kurv rewritten on MUI: the first real plugin editor on this stack, and
+- [ ] A shipping synth rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
 - [ ] Classic `vello` (the GPU path since `vello_hybrid` was dropped)
       re-measured on Windows: the switch was made on Linux numbers only.
@@ -317,6 +326,6 @@ public function and a test behind it.
 
 ## Order
 
-Kurv first: everything above is guesswork until a shipping editor uses it,
+A shipping editor first: everything above is guesswork until a shipping editor uses it,
 and it is the only item left that can change the DSL. Then the Windows
 re-measure, before any renderer decision is locked in.
