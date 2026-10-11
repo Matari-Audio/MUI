@@ -80,6 +80,7 @@ pub struct Requests {
     size: AtomicU64,
     scale: AtomicU64,
     redraw: AtomicBool,
+    focus: AtomicBool,
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
@@ -93,6 +94,12 @@ pub struct Requests {
 }
 
 impl Requests {
+    /// Request native keyboard focus on the window's owning thread.
+    pub fn focus(&self) {
+        self.focus.store(true, Ordering::Release);
+        self.wake();
+    }
+
     /// Coherent presentation evidence; absent until the first successful submit.
     pub fn presentation(&self) -> Option<Presentation> {
         *self
@@ -527,6 +534,9 @@ impl<V: View> Handler<V> {
 
     fn tick(&mut self, window: &WindowContext) {
         let requests = &self.requests;
+        if requests.focus.swap(false, Ordering::AcqRel) && !window.has_focus() {
+            let _ = window.focus();
+        }
         let packed = requests.size.swap(0, Ordering::AcqRel);
         let bits = requests.scale.swap(0, Ordering::AcqRel);
         if packed != 0 || bits != 0 {
