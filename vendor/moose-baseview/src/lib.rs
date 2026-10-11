@@ -20,6 +20,8 @@ pub mod gl;
 
 pub use clipboard::*;
 pub use context::{PlatformHandle, WindowContext};
+#[cfg(target_os = "linux")]
+pub use context::MatariX11ScheduleError;
 pub use error::*;
 pub use event::*;
 pub use handler::{FrameDemand, WindowHandler};

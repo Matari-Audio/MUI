@@ -9,6 +9,7 @@ use crate::platform::*;
 use crate::utils::SizingStrategy;
 use crate::{warn, MouseCursor, WindowHandler, WindowSettings, WindowSize};
 use calloop::LoopSignal;
+use matari_audio_drag_and_drop::{DragOrigin, RejectedStart, StartTicket, X11PointerEvent, X11Session};
 use raw_window_handle::{DisplayHandle, XlibWindowHandle};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -76,6 +77,11 @@ pub(crate) struct WindowInner {
     pub(crate) visibility_state: AncestorVisibilityState,
 
     pub(crate) main_thread_shared: Arc<WindowThreadShared>,
+
+    /// The newest pointer event, the authority an outbound drag starts from.
+    pub(crate) last_pointer_event: Cell<Option<X11PointerEvent>>,
+    pub(crate) primary_pointer_down: Cell<bool>,
+    pub(crate) external_drag_session: RefCell<Option<X11Session>>,
 }
 
 impl WindowInner {
@@ -172,6 +178,10 @@ impl WindowInner {
             main_thread_shared: shared,
 
             visibility_state,
+
+            last_pointer_event: Cell::new(None),
+            primary_pointer_down: Cell::new(false),
+            external_drag_session: RefCell::new(None),
 
             #[cfg(feature = "opengl")]
             gl_context,
@@ -322,6 +332,34 @@ impl WindowInner {
 
     pub fn size(&self) -> WindowSize {
         WindowSize::from_physical(self.window_size.get().cast(), self.scaling_factor.get())
+    }
+
+    pub fn can_schedule_matari_x11_drag(&self) -> bool {
+        self.external_drag_session.borrow().as_ref().is_none_or(X11Session::transfer_complete)
+            && self.primary_pointer_down.get()
+            && self.last_pointer_event.get().is_some()
+    }
+
+    pub fn schedule_matari_x11_drag(
+        &self, ticket: StartTicket, origin: DragOrigin<'_>,
+    ) -> std::result::Result<(), RejectedStart<crate::MatariX11ScheduleError>> {
+        if self.external_drag_session.borrow().as_ref().is_some_and(|s| !s.transfer_complete()) {
+            return Err(ticket.reject(crate::MatariX11ScheduleError::Busy));
+        }
+        let Some(press) = self.last_pointer_event.get() else {
+            return Err(ticket.reject(crate::MatariX11ScheduleError::AuthorityUnavailable));
+        };
+        if !self.primary_pointer_down.get() {
+            return Err(ticket.reject(crate::MatariX11ScheduleError::AuthorityUnavailable));
+        }
+        let connection = self.connection.conn.xcb_connection();
+        if let Some(session) = self.external_drag_session.borrow_mut().take() {
+            let _ = session.supersede(connection);
+        }
+        if let Ok(session) = ticket.start_x11(connection, origin, press) {
+            *self.external_drag_session.borrow_mut() = Some(session);
+        }
+        Ok(())
     }
 
     pub fn raw_id(&self) -> xproto::Window {

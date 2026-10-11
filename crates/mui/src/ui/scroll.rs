@@ -295,8 +295,11 @@ impl Ui {
             // or claimed it with `Ui::wheel`; nothing it sits in scrolls
             // under it.
             let claimed = || self.wheel_claims.iter().any(|c| c == s.key.as_str());
+            // It reads the delta in the next tree, so that frame is owed
+            // even when nothing else moves: else the notch shows only on
+            // whatever event comes next.
             if (s.captures_wheel || claimed()) && !s.disabled {
-                return false;
+                return true;
             }
             // `content` is the frame size for everything but a scroll node,
             // so an overflow here *is* the "is this scrollable" test.

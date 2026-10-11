@@ -727,9 +727,12 @@ impl Ui {
                 && prev == id
                 && self.time - t < self.double_click
             {
+                // A pair is spent: the next press starts a new one, so four
+                // quick clicks are two doubles, not three.
                 self.double = Some(id.clone());
+            } else {
+                self.last_press = Some((id.clone(), self.time));
             }
-            self.last_press = Some((id.clone(), self.time));
             let keeps = self
                 .scene
                 .as_ref()
