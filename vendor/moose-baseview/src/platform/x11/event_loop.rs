@@ -15,7 +15,7 @@ use crate::{
     WindowHandler, WindowSize,
 };
 use calloop::generic::Generic;
-use matari_audio_drag_and_drop::{X11PointerEvent, X11SessionStatus};
+use matari_audio_drag_and_drop::{X11DropRouter, X11PointerEvent, X11SessionStatus};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken};
 use std::rc::Rc;
@@ -74,6 +74,9 @@ pub(crate) struct EventLoop {
     last_frame: Instant,
 
     drag_n_drop: DragNDropState,
+    /// Hyprland's XWayland bridge delivers drops to the host's toplevel;
+    /// this routes them down to the editor window.
+    drop_router: Option<X11DropRouter>,
     xkb_state: Option<XkbcommonState>,
 
     run_error: Option<PlatformError>,
@@ -113,6 +116,13 @@ impl EventLoop {
             .insert_source(request_receiver, |e, _, l| l.handle_main_thread_request(e))
             .map_err(|e| e.error)?;
 
+        let drop_router =
+            X11DropRouter::install(window.connection.conn.xcb_connection(), window.raw_id())
+                .unwrap_or_else(|error| {
+                    warn!("Could not install the X11 drop router: {}", error);
+                    None
+                });
+
         Ok(Self {
             loop_signal: inner.get_signal(),
             loop_handle,
@@ -127,6 +137,7 @@ impl EventLoop {
             refresh_rate_stale: false,
             refresh_rate_queried_at: Instant::now(),
             drag_n_drop: DragNDropState::NoCurrentSession,
+            drop_router,
             xkb_state: XkbcommonState::new(&window.connection),
             run_error: None,
             main_thread,
@@ -446,6 +457,7 @@ impl EventLoop {
         }
 
         self.cancel_matari_drag();
+        self.uninstall_drop_router();
         if !self.window.main_thread_shared.callbacks_revoked() {
             if !self.window.xcb_window.is_destroyed() {
                 self.release_forwarded_keys();
@@ -545,6 +557,14 @@ impl EventLoop {
         }
     }
 
+    fn uninstall_drop_router(&mut self) {
+        if let Some(router) = self.drop_router.take() {
+            if let Err(error) = router.uninstall(self.window.connection.conn.xcb_connection()) {
+                warn!("Could not uninstall the X11 drop router: {}", error);
+            }
+        }
+    }
+
     fn cancel_matari_drag(&self) {
         let connection = self.window.connection.conn.xcb_connection();
         if let Some(session) = self.window.external_drag_session.borrow_mut().take() {
@@ -590,6 +610,19 @@ impl EventLoop {
         // - `state` will tell you the state of the main three mouse buttons and some of
         //   the keyboard modifier keys at the time of the event.
         //   http://rtbo.github.io/rust-xcb/src/xcb/ffi/xproto.rs.html#445
+
+        let routed = self
+            .drop_router
+            .as_mut()
+            .map(|router| router.handle_event(self.window.connection.conn.xcb_connection(), &event));
+        match routed {
+            Some(Ok(true)) => return Ok(()),
+            Some(Err(error)) => {
+                warn!("X11 drop router event failed: {}", error);
+                self.uninstall_drop_router();
+            }
+            Some(Ok(false)) | None => {}
+        }
 
         self.update_pointer_authority(&event);
         self.forward_matari_drag_event(&event);
