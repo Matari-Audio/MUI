@@ -50,6 +50,15 @@ fn pin_image() -> bool {
     if info.dli_fname.is_null() {
         return false;
     }
+    // The main executable is never unloaded, and dlopen refuses it (PIE).
+    // SAFETY: `dli_fname` is a NUL-terminated path owned by the loader.
+    let image = unsafe { std::ffi::CStr::from_ptr(info.dli_fname) };
+    let canonical = |p: &std::path::Path| std::fs::canonicalize(p).ok();
+    if let (Ok(exe), Ok(image)) = (std::env::current_exe(), image.to_str()) {
+        if canonical(&exe).is_some_and(|e| Some(e) == canonical(image.as_ref())) {
+            return true;
+        }
+    }
     // SAFETY: `dli_fname` is owned by the loader and valid for this call. The handle is
     // leaked on purpose: NODELETE must stay in effect for the process lifetime.
     !unsafe { libc::dlopen(info.dli_fname, libc::RTLD_NOW | libc::RTLD_LOCAL | RTLD_NODELETE) }
@@ -65,9 +74,9 @@ fn pin_image() -> bool {
 mod tests {
     #[test]
     fn pinning_is_idempotent() {
-        // A PIE test executable cannot be dlopen()ed on Linux, so only the stable result
-        // is checked here; pinning a real plug-in library is covered by hand in hosts.
-        let first = super::pin_current_image_for_detached_work();
-        assert_eq!(first, super::pin_current_image_for_detached_work());
+        // The test binary is the main executable, which counts as pinned; pinning a
+        // real plug-in library is covered by hand in hosts.
+        assert!(super::pin_current_image_for_detached_work());
+        assert!(super::pin_current_image_for_detached_work());
     }
 }
