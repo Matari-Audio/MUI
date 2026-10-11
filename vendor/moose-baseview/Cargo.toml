@@ -48,7 +48,7 @@ xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 x11-dl = { version = "2.21.0" }
 calloop = "0.14.4"
 percent-encoding = "2.3.2"
-matari-audio-drag-and-drop = { git = "https://github.com/DerpcatMusic/matari-audio-drag-and-drop", rev = "cfbb7c17af5fe443ac1c1a46bc0e8c5b15270dbe" }
+matari-audio-drag-and-drop = { git = "https://github.com/DerpcatMusic/matari-audio-drag-and-drop", rev = "fb8db70145793248d98418bdb18e807deb2de452" }
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 
 [target.'cfg(target_os="windows")'.dependencies]
