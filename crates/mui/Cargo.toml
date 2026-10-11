@@ -49,3 +49,7 @@ required-features = ["cpu"]
 
 [lints]
 workspace = true
+
+[[example]]
+name = "semantic_gallery"
+required-features = ["cpu"]

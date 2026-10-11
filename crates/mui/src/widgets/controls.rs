@@ -43,6 +43,9 @@ struct Look {
     role: Role,
     palette: Palette,
     text: Option<String>,
+    reserve: Option<Arc<[String]>>,
+    description: Option<Arc<str>>,
+    step: Option<f64>,
 }
 
 /// A keyboard activation is the same primary action as a click. `Ui::keys`
@@ -52,6 +55,18 @@ fn activated(ui: &Ui, id: &str) -> bool {
     ui.get(id).activated()
 }
 impl Look {
+    fn describe(&self, mut el: El, numeric: bool) -> El {
+        if let Some(description) = &self.description {
+            el = el.described(description.clone());
+        }
+        if numeric && let Some(step) = self.step {
+            el = el.numeric_step(step);
+        }
+        if numeric && let Some(value) = &self.text {
+            el = el.value_description(value.as_str());
+        }
+        el
+    }
     /// What the control's own box is painted with, where the role is the
     /// fill: a button, a toggle that is on.
     fn style(&self) -> Style {
@@ -127,6 +142,8 @@ pub struct Control {
     size: SpacingToken,
     px: Option<f64>,
     kind: Kind,
+    disabled: bool,
+    label_visible: bool,
 }
 
 /// Which control, with what it read from the runtime: the tree waits for
@@ -188,7 +205,11 @@ impl Dial {
         }
     }
     fn readout(&self, look: &Look) -> El {
-        readout(look.text.clone(), self.value, self.min, self.max)
+        let el = readout(look.text.clone(), self.value, self.min, self.max);
+        match &look.reserve {
+            Some(samples) => el.reserve_all(samples.clone()),
+            None => el,
+        }
     }
 }
 
@@ -201,11 +222,26 @@ impl Control {
                 role: Role::Primary,
                 palette: ui.theme().palette,
                 text: None,
+                reserve: None,
+                description: None,
+                step: None,
             },
             size: SpacingToken::M,
             px: None,
             kind,
+            disabled: false,
+            label_visible: true,
         }
+    }
+
+    pub(crate) fn hide_matching_adjustment_label(mut self, setting_label: &str) -> Self {
+        if matches!(
+            &self.kind,
+            Kind::Slider(_, label, _) | Kind::Knob(_, label, _) if label.as_ref() == setting_label
+        ) {
+            self.label_visible = false;
+        }
+        self
     }
     /// How solid this control looks.
     ///
@@ -264,6 +300,34 @@ impl Control {
         self.look.text = Some(s.into());
         self
     }
+    /// Reserve a readout sample in the actual font instead of padding the
+    /// displayed value. Supply the widest formatted value the domain can show.
+    pub fn value_reserve(self, sample: impl Into<String>) -> Self {
+        self.value_reserve_all(vec![sample.into()])
+    }
+    /// Reserve several candidate strings, measured rather than compared by
+    /// character count. A cached `Arc<[String]>` avoids copying the samples.
+    pub fn value_reserve_all(mut self, samples: impl Into<Arc<[String]>>) -> Self {
+        self.look.reserve = Some(samples.into());
+        self
+    }
+    /// Accessible help on the actual input target, including the inner
+    /// lane of a slider or the face of a knob.
+    pub fn described(mut self, description: impl Into<Arc<str>>) -> Self {
+        self.look.description = Some(description.into());
+        self
+    }
+    /// Minimum keyboard/accessibility step. An explicit step is not reduced
+    /// by Shift; Page Up/Down use ten steps. Dragging remains continuous.
+    pub fn step(mut self, step: f64) -> Self {
+        self.look.step = (step.is_finite() && step > 0.0).then_some(step);
+        self
+    }
+    /// Disable the complete control, including any nested input target.
+    pub fn disabled(mut self) -> Self {
+        self.disabled = true;
+        self
+    }
     /// The control's height in pixels, for the knob that has to match a
     /// hardware panel. Overrides [`Control::size`].
     ///
@@ -296,14 +360,17 @@ impl Control {
         };
         self.look.px = self.px.unwrap_or(self.look.px * steps);
         let look = &self.look;
-        match self.kind {
-            Kind::Slider(id, label, d) => slider_el(look, id, label, d),
-            Kind::Knob(id, label, d) => knob_el(look, id, label, d),
+        let label_visible = self.label_visible;
+        let el = match self.kind {
+            Kind::Slider(id, label, d) => slider_el(look, id, label, d, label_visible),
+            Kind::Knob(id, label, d) => knob_el(look, id, label, d, label_visible),
             Kind::Button(id, label) => button_el(look, id, label),
             Kind::Toggle(id, label, on) => toggle_el(look, id, label, on),
             Kind::Drag(id, label, d) => drag_el(look, id, label, d),
-            Kind::Field(el, width) => el.w(width),
-        }
+            Kind::Field(el, width) => look.describe(el.w(width), false),
+        };
+        el.on(State::Disabled, |style| style.opacity(0.45))
+            .when(self.disabled, Styled::disabled)
     }
 }
 impl From<Control> for El {
@@ -327,7 +394,9 @@ pub(crate) fn step(range: &RangeInclusive<f64>) -> f64 {
 /// Step `value` by the focused control's keys: arrows by a hundredth of
 /// `range` (a tenth of that with Shift), Page Up and Down by ten steps, Home
 /// and End to the ends. The runtime brackets the frame as one edit. Returns
-/// whether the value moved.
+/// whether the value moved. An explicit `.step(..)` on the last presented
+/// control overrides the hundredth and is not reduced below that quantum
+/// by Shift. Pointer dragging is unaffected.
 ///
 /// The keyboard half of [`slider`] and [`knob`], for a control of your own:
 ///
@@ -343,13 +412,23 @@ pub fn stepped(ui: &Ui, id: &str, value: &mut f64, range: &RangeInclusive<f64>) 
         return false;
     }
     let before = *value;
+    let explicit = ui
+        .scene()
+        .and_then(|s| s.surface(id))
+        .and_then(|s| s.numeric_step);
+    let step = explicit.map_or_else(|| step(range), |s| s.copysign(hi - lo));
     for k in ui.keys(id) {
-        let one = step(range) * if k.mods.shift { FINE_DRAG } else { 1.0 };
+        let one = step
+            * if k.mods.shift && explicit.is_none() {
+                FINE_DRAG
+            } else {
+                1.0
+            };
         *value = match k.key {
             Key::Right | Key::Up => *value + one,
             Key::Left | Key::Down => *value - one,
-            Key::PageUp => *value + 10.0 * step(range),
-            Key::PageDown => *value - 10.0 * step(range),
+            Key::PageUp => *value + 10.0 * step,
+            Key::PageDown => *value - 10.0 * step,
             Key::Home => lo,
             Key::End => hi,
             _ => continue,
@@ -376,19 +455,22 @@ fn unit(value: f64, range: &RangeInclusive<f64>) -> f64 {
     ((value - range.start()) / span).clamp(0.0, 1.0)
 }
 
-/// What the header says: the text the caller gave, or the value at two
-/// decimals. Either way it is measured for the widest string it can say, so
-/// digits coming and going never shuffle the label beside it.
-///
-/// ponytail: a caller's own text is its own reserve -- one string is all the
-/// widget is told -- so pad it to its widest form if the units change width.
+/// Default numeric endpoints are both measured, never chosen by byte count.
+/// Arbitrary formats can reserve their complete domain with `value_reserve_all`.
+/// These are floors: an unanticipated wider value is never clipped.
 fn readout(given: Option<String>, value: f64, min: f64, max: f64) -> El {
     if let Some(t) = given {
+        // Preserve the existing unwrapped width floor for supplied text;
+        // explicit candidates supplement it, including in constrained rows.
         text(t.clone()).reserve(t)
     } else {
-        let (lo, hi) = (format!("{min:.2}"), format!("{max:.2}"));
-        text(format!("{value:.2}")).reserve(if hi.len() > lo.len() { hi } else { lo })
+        text(format!("{value:.2}")).reserve_all(vec![format!("{min:.2}"), format!("{max:.2}")])
     }
+}
+
+/// A focus ring changes paint, not the authored control's layout or hit frame.
+fn focus_ring(style: Style) -> Style {
+    style.stroke(Role::Ink).stroke_width(2.0)
 }
 
 /// The thumb's diameter and the lane it slides in, as shares of the
@@ -451,7 +533,7 @@ pub fn slider(
     }
 }
 
-fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
+fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
     // The rail is a fraction of the control's height, so one size token
     // moves the track, the thumb and the row together.
     let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
@@ -459,29 +541,39 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
     let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
         .pill()
         .fill(look.role);
-    col([
+    let header = (if label_visible {
         row([
             text(label.clone()),
             spacer(),
             d.readout(look).fill(Role::Dim),
         ])
-        .gap(S),
-        stack([
-            row([
-                block(0.0, track).grow(t).pill().fill(look.role),
-                block(0.0, track).grow(1.0 - t),
+    } else {
+        row([spacer(), d.readout(look).fill(Role::Dim)])
+    })
+    .gap(S);
+    col([
+        header,
+        look.describe(
+            stack([
+                row([
+                    block(0.0, track).grow(t).pill().fill(look.role),
+                    block(0.0, track).grow(1.0 - t),
+                ])
+                .anchor(Align::Stretch, Align::Center)
+                .pill()
+                .preset(look.face(Role::Field)),
+                row([spacer().grow(t), grip, spacer().grow(1.0 - t)])
+                    .anchor(Align::Stretch, Align::Center),
             ])
-            .anchor(Align::Stretch, Align::Center)
-            .pill()
-            .preset(look.face(Role::Field)),
-            row([spacer().grow(t), grip, spacer().grow(1.0 - t)])
-                .anchor(Align::Stretch, Align::Center),
-        ])
-        .h(lane)
-        .a11y(d.a11y())
-        .named(label)
-        .focusable()
-        .id(id),
+            .h(lane)
+            .a11y(d.a11y())
+            .named(label)
+            .focusable()
+            .cursor(Cursor::ResizeH)
+            .on(State::FocusVisible, focus_ring)
+            .id(id),
+            true,
+        ),
     ])
     .gap(Xs)
 }
@@ -522,18 +614,19 @@ pub fn knob(
     }
 }
 
-fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
+fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
     // A dial reads bigger than a button of the same size token: the
     // label sits under it rather than inside it.
     let size = look.px * 1.8;
     let a = (135.0 + 270.0 * d.t).to_radians();
     let r = size / 2.0 - size / 12.0;
-    let caption: Arc<str> = look
-        .text
-        .as_deref()
-        .map_or_else(|| label.clone(), Arc::from);
-    col([
-        stack([
+    let caption = match look.text.as_deref() {
+        Some(text) => Some(Arc::<str>::from(text)),
+        None if label_visible => Some(label.clone()),
+        None => None,
+    };
+    let mut content = vec![stack([
+        look.describe(
             block(size, size)
                 .pill()
                 .preset(look.face(Role::Raised))
@@ -541,18 +634,28 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
                 .a11y(d.a11y())
                 .named(label)
                 .focusable()
+                .cursor(Cursor::ResizeV)
+                .on(State::FocusVisible, focus_ring)
                 .id(id),
-            // The pointer is the reading, so it keeps the role at full
-            // strength whatever the variant does to the face.
-            block(size / 12.0, size / 12.0)
-                .pill()
-                .fill(look.role)
-                .centered_at(r * a.cos(), r * a.sin()),
-        ]),
-        text(caption).fill(Role::Dim),
-    ])
-    .gap(Xs)
-    .align(Align::Center)
+            true,
+        ),
+        // The pointer is the reading, so it keeps the role at full
+        // strength whatever the variant does to the face.
+        block(size / 12.0, size / 12.0)
+            .pill()
+            .fill(look.role)
+            .centered_at(r * a.cos(), r * a.sin()),
+    ])];
+    if let Some(caption) = caption {
+        content.push(
+            match &look.reserve {
+                Some(samples) => text(caption).reserve_all(samples.clone()),
+                None => text(caption),
+            }
+            .fill(Role::Dim),
+        );
+    }
+    col(content).gap(Xs).align(Align::Center)
 }
 
 /// A labelled action. Returns the control and whether it was clicked last
@@ -574,16 +677,21 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> Response<bool, Con
 }
 
 fn button_el(look: &Look, id: Id, label: Arc<str>) -> El {
-    row([text(label.clone()).fill(look.ink())])
-        .pad((look.px * 0.4, look.pad_y()))
-        .pill()
-        .preset(look.style())
-        .on(State::Hover, look.hover())
-        .animate()
-        .a11y(A11y::Button)
-        .named(label)
-        .focusable()
-        .id(id)
+    look.describe(
+        row([text(label.clone()).fill(look.ink())])
+            .pad((look.px * 0.4, look.pad_y()))
+            .pill()
+            .preset(look.style())
+            .on(State::Hover, look.hover())
+            .on(State::FocusVisible, focus_ring)
+            .cursor(Cursor::Hand)
+            .animate()
+            .a11y(A11y::Button)
+            .named(label)
+            .focusable()
+            .id(id),
+        false,
+    )
 }
 
 /// A switch: the knob's side is a flex share it slides between, the click
@@ -620,28 +728,33 @@ fn toggle_el(look: &Look, id: Id, label: Arc<str>, on: bool) -> El {
     // A track is as wide as the control's height and a bit over half as
     // tall: 40 x 22 at the default theme's `M`.
     let (w, h) = (look.px, look.px * 0.55);
-    row([
-        spacer().grow(t),
-        // The knob's side is a flex share; its frame glides between them.
-        block(h * 0.73, h * 0.73)
-            .pill()
-            .fill(Role::Ink)
-            .animate_layout(),
-        spacer().grow(1.0 - t),
-    ])
-    .size(w, h)
-    .pad(h * 0.14)
-    .pill()
-    .preset(if on {
-        look.style()
-    } else {
-        look.face(Role::Field)
-    })
-    .animate()
-    .a11y(A11y::Toggle { on })
-    .when(!label.is_empty(), |e| e.named(label))
-    .focusable()
-    .id(id)
+    look.describe(
+        row([
+            spacer().grow(t),
+            // The knob's side is a flex share; its frame glides between them.
+            block(h * 0.73, h * 0.73)
+                .pill()
+                .fill(Role::Ink)
+                .animate_layout(),
+            spacer().grow(1.0 - t),
+        ])
+        .size(w, h)
+        .pad(h * 0.14)
+        .pill()
+        .preset(if on {
+            look.style()
+        } else {
+            look.face(Role::Field)
+        })
+        .animate()
+        .a11y(A11y::Toggle { on })
+        .cursor(Cursor::Hand)
+        .on(State::FocusVisible, focus_ring)
+        .when(!label.is_empty(), |e| e.named(label))
+        .focusable()
+        .id(id),
+        false,
+    )
 }
 
 /// How far a [`drag_value`] is dragged to sweep its whole range.
@@ -702,6 +815,7 @@ pub fn drag_value(
                 ..TextOpts::default()
             };
             let Response { el, changed: e } = text_edit(ui, field.as_str(), &mut s, opts);
+            let el = el.named(label);
             if opening {
                 ui.set_sel(&field, 0, s.chars().count());
                 ui.focus(field.clone());
@@ -732,13 +846,17 @@ pub fn drag_value(
 }
 
 fn drag_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
-    row([d.readout(look)])
-        .pad((look.px * 0.3, look.pad_y()))
-        .radius(4.0)
-        .preset(look.face(Role::Field))
-        .cursor(Cursor::ResizeH)
-        .a11y(d.a11y())
-        .when(!label.is_empty(), |e| e.named(label))
-        .focusable()
-        .id(id)
+    look.describe(
+        row([d.readout(look)])
+            .pad((look.px * 0.3, look.pad_y()))
+            .radius(4.0)
+            .preset(look.face(Role::Field))
+            .cursor(Cursor::ResizeH)
+            .on(State::FocusVisible, focus_ring)
+            .a11y(d.a11y())
+            .when(!label.is_empty(), |e| e.named(label))
+            .focusable()
+            .id(id),
+        true,
+    )
 }

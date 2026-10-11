@@ -52,9 +52,9 @@ pub mod prelude {
     pub use crate::widgets::{
         BinAxis, BinEdit, Bins, ColorFormat, ColorOpts, Control, CurveEdit, ListEvent, ListItem,
         ListOptions, ListRow, ListState, Newline, OklchPicker, PickerShape, Response, ScrollTo,
-        TextEdit, TextOpts, Variant, bins, bins_hover, button, color_picker, curve, drag_value,
-        knob, oklch_picker, slider, stepped, text_edit, text_input, toggle, uniform_list,
-        variable_list,
+        Setting, TextEdit, TextOpts, Variant, bins, bins_hover, button, color_picker, curve,
+        drag_value, group, knob, oklch_picker, setting, slider, stepped, text_edit, text_input,
+        toggle, uniform_list, variable_list,
     };
     pub use crate::{Edit, Frame, Interaction, MotionPolicy, SemanticAction, Ui};
     pub use mui_input::{
@@ -83,3 +83,8 @@ struct DslDoctests;
 #[cfg(doctest)]
 #[doc = include_str!("../../../README.md")]
 struct ReadmeDoctests;
+
+/// Runnable examples for the semantic control compositions.
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/SEMANTIC-CONTROLS.md")]
+struct SemanticControlDoctests;
