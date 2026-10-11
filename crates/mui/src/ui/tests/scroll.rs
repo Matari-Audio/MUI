@@ -280,3 +280,18 @@ fn a_claimed_wheel_asks_for_the_frame_that_reads_it() {
     let f = ui.frame(tree(), None, still(Vec2::new(0., 30.)), 0.016).unwrap();
     assert!(f.animating);
 }
+
+/// A key is read by the next build too, so it owes that frame.
+#[test]
+fn a_key_asks_for_the_frame_that_reads_it() {
+    let mut ui = Ui::default();
+    let tree = || block(30., 20.).id("pad");
+    ui.frame(tree(), None, PointerInput::default(), 0.016).unwrap();
+    let f = ui.frame(tree(), None, PointerInput::default(), 0.016).unwrap();
+    assert!(!f.animating, "settled before the key");
+    let input = Input {
+        keys: vec![KeyPress { key: Key::Delete, mods: Mods::default() }],
+        ..Input::default()
+    };
+    assert!(ui.frame(tree(), None, input, 0.016).unwrap().animating);
+}

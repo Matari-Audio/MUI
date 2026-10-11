@@ -80,7 +80,7 @@ pub struct Requests {
     presentation: Mutex<Option<Presentation>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
-    drag: Mutex<Option<Vec<std::path::PathBuf>>>,
+    drag: Mutex<Option<(Vec<std::path::PathBuf>, Option<Vec<(f32, f32)>>)>>,
 }
 
 impl Requests {
@@ -177,10 +177,19 @@ impl Requests {
     /// the drop, since a host may reference rather than copy them. Linux
     /// (X11/XWayland) only for now; elsewhere the request is dropped.
     pub fn drag_out(&self, paths: Vec<std::path::PathBuf>) {
+        self.queue_drag(paths, None);
+    }
+    /// [`drag_out`](Self::drag_out), with the dragged audio drawn under the
+    /// pointer: ordered `(min, max)` buckets in -1..=1, as the drag-and-drop
+    /// crate's waveform card draws them.
+    pub fn drag_out_with_waveform(&self, paths: Vec<std::path::PathBuf>, buckets: Vec<(f32, f32)>) {
+        self.queue_drag(paths, Some(buckets));
+    }
+    fn queue_drag(&self, paths: Vec<std::path::PathBuf>, buckets: Option<Vec<(f32, f32)>>) {
         *self
             .drag
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(paths);
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((paths, buckets));
         self.wake();
     }
     /// Hand every key event to `hook` first; see [`KeyHook`].
@@ -410,7 +419,7 @@ impl<V> Handler<V> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        let Some(paths) = paths else { return };
+        let Some((paths, buckets)) = paths else { return };
         struct Adapter<'a>(&'a WindowContext, bool);
         impl dnd::ToolkitAdapter for Adapter<'_> {
             type Error = baseview::MatariX11ScheduleError;
@@ -438,6 +447,10 @@ impl<V> Handler<V> {
             }
         }
         let started = dnd::FileSet::try_from_paths(paths)
+            .map(|files| match buckets {
+                Some(buckets) => files.with_preview(dnd::DragPreview::Waveform { buckets }),
+                None => files,
+            })
             .map_err(|e| e.to_string())
             .and_then(|files| {
                 self.drag

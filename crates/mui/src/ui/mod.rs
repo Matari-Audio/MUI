@@ -939,6 +939,9 @@ impl Ui {
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         animating |= self.settle(&scene, wheel);
+        // Keys and typed text are read by the next build, like a release:
+        // a host that sleeps between events owes it that frame.
+        animating |= !self.keys.is_empty() || !self.typed.is_empty();
         self.wheel_claims.clear();
         self.heat(&scene, &before, self.pointer.buttons != was_buttons);
         Ok(self.commit(scene, hovered.as_deref(), tip, previous_blink, animating))
