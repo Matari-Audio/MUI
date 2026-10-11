@@ -259,3 +259,24 @@ fn a_widget_reading_the_wheel_keeps_it_from_the_scroll_around_it() {
     ui.frame(tree(), None, input(30.), 0.016).unwrap();
     assert_eq!(ui.scroll("outer"), [0., 30.]);
 }
+
+/// A claimed notch is read by the next build, so it owes that frame: a host
+/// that sleeps between events would otherwise show it a notch late.
+#[test]
+fn a_claimed_wheel_asks_for_the_frame_that_reads_it() {
+    let mut ui = Ui::default();
+    let tree = || block(30., 20.).id("dial");
+    let still = |wheel| Input {
+        pointer: at(10., 10., false),
+        wheel,
+        ..Input::default()
+    };
+    ui.frame(tree(), None, still(Vec2::ZERO), 0.016).unwrap();
+    ui.frame(tree(), None, still(Vec2::ZERO), 0.016).unwrap();
+    let _ = ui.wheel("dial");
+    let f = ui.frame(tree(), None, still(Vec2::ZERO), 0.016).unwrap();
+    assert!(!f.animating, "settled before the notch");
+    let _ = ui.wheel("dial");
+    let f = ui.frame(tree(), None, still(Vec2::new(0., 30.)), 0.016).unwrap();
+    assert!(f.animating);
+}
