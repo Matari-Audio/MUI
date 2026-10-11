@@ -28,6 +28,15 @@ pub mod native;
 /// The baseview this window runs on (moose-baseview), so a consumer names
 /// `Window`, `WindowSettings` and friends without depending on it itself.
 pub use baseview;
+
+/// A drag thumbnail's size in logical pixels, for
+/// [`Requests::drag_out_with_image`].
+pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
+
+enum DragPicture {
+    Waveform(Vec<(f32, f32)>),
+    Image(Vec<u8>),
+}
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
@@ -80,7 +89,7 @@ pub struct Requests {
     presentation: Mutex<Option<Presentation>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
-    drag: Mutex<Option<(Vec<std::path::PathBuf>, Option<Vec<(f32, f32)>>)>>,
+    drag: Mutex<Option<(Vec<std::path::PathBuf>, Option<DragPicture>)>>,
 }
 
 impl Requests {
@@ -183,9 +192,14 @@ impl Requests {
     /// pointer: ordered `(min, max)` buckets in -1..=1, as the drag-and-drop
     /// crate's waveform card draws them.
     pub fn drag_out_with_waveform(&self, paths: Vec<std::path::PathBuf>, buckets: Vec<(f32, f32)>) {
-        self.queue_drag(paths, Some(buckets));
+        self.queue_drag(paths, Some(DragPicture::Waveform(buckets)));
     }
-    fn queue_drag(&self, paths: Vec<std::path::PathBuf>, buckets: Option<Vec<(f32, f32)>>) {
+    /// [`drag_out`](Self::drag_out), with a thumbnail of the caller's own
+    /// under the pointer: premultiplied BGRA, [`DRAG_PREVIEW_SIZE`], row by row.
+    pub fn drag_out_with_image(&self, paths: Vec<std::path::PathBuf>, pixels: Vec<u8>) {
+        self.queue_drag(paths, Some(DragPicture::Image(pixels)));
+    }
+    fn queue_drag(&self, paths: Vec<std::path::PathBuf>, buckets: Option<DragPicture>) {
         *self
             .drag
             .lock()
@@ -448,7 +462,8 @@ impl<V> Handler<V> {
         }
         let started = dnd::FileSet::try_from_paths(paths)
             .map(|files| match buckets {
-                Some(buckets) => files.with_preview(dnd::DragPreview::Waveform { buckets }),
+                Some(DragPicture::Waveform(buckets)) => files.with_preview(dnd::DragPreview::Waveform { buckets }),
+                Some(DragPicture::Image(pixels)) => files.with_preview(dnd::DragPreview::Image { pixels }),
                 None => files,
             })
             .map_err(|e| e.to_string())
