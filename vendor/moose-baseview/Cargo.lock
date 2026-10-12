@@ -272,7 +272,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 [[package]]
 name = "matari-audio-drag-and-drop"
 version = "0.1.6"
-source = "git+https://github.com/Matari-Audio/matari-audio-drag-and-drop?rev=e322e05bf13721f3c5ca676898ebf33fd7e21ce0#e322e05bf13721f3c5ca676898ebf33fd7e21ce0"
+source = "git+https://github.com/Matari-Audio/matari-audio-drag-and-drop?rev=c16eb00561894b6475963834f304e053638e7b94#c16eb00561894b6475963834f304e053638e7b94"
 dependencies = [
  "libc",
  "objc2",
