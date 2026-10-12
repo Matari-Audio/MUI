@@ -255,3 +255,12 @@ reopen CPU presentation and redraw. Shared sessions adopt a new generation;
 Do not spin on permanent failures. A caller whose image pin failed receives a
 private synchronous session and cannot inherit another editor's detached-work
 permission. No close joins a detached initializer; its code must remain pinned.
+
+Custom hosts must keep native ownership alive through surface creation and
+configuration in `poll`: pinning the containing image does not preserve a
+native drawable. Baseview's guarded callback lease and handler-before-native
+teardown provide this boundary for its own windows. Keep native close separate
+from detached initialization: workers own only GPU resources and result senders.
+The optional `test-support` feature exposes a hidden `InitGate` that holds actual
+per-window result publication; integration fixtures can close the editor, release
+the late result and verify it was dropped without ever creating a surface.

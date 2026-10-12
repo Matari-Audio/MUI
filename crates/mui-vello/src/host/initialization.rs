@@ -212,6 +212,76 @@ impl Session {
     }
 }
 
+/// A bounded publication gate used only by native integration fixtures.
+/// No native window, surface or callback is retained by this gate.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+#[derive(Clone, Default)]
+pub struct InitGate {
+    state: Arc<(Mutex<GateState>, std::sync::Condvar)>,
+}
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Default)]
+struct GateState {
+    entered: bool,
+    released: bool,
+    rejected: Option<bool>,
+}
+#[cfg(any(test, feature = "test-support"))]
+impl InitGate {
+    /// Wait at most `timeout` for an actual per-window GPU result to be ready.
+    pub fn wait_entered(&self, timeout: std::time::Duration) -> bool {
+        let (lock, ready) = &*self.state;
+        let state = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (state, _) = ready
+            .wait_timeout_while(state, timeout, |s| !s.entered)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.entered
+    }
+    /// Allow the worker to publish or drop its result after the editor closes.
+    pub fn release(&self) {
+        let (lock, ready) = &*self.state;
+        lock.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .released = true;
+        ready.notify_all();
+    }
+    /// Observe that publication finished with the editor's receiver gone.
+    pub fn wait_receiver_dropped(&self, timeout: std::time::Duration) -> bool {
+        let (lock, ready) = &*self.state;
+        let state = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (state, _) = ready
+            .wait_timeout_while(state, timeout, |s| s.rejected.is_none())
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.rejected == Some(true)
+    }
+    fn pause(&self) {
+        let (lock, ready) = &*self.state;
+        let mut state = lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.entered = true;
+        ready.notify_all();
+        // A broken fixture cannot strand an initializer indefinitely.
+        drop(
+            ready
+                .wait_timeout_while(state, std::time::Duration::from_secs(10), |s| !s.released)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+    }
+    fn finished(&self, rejected: bool) {
+        let (lock, ready) = &*self.state;
+        lock.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .rejected = Some(rejected);
+        ready.notify_all();
+    }
+}
+
 /// One editor's asynchronous initializer. Keep this alive while the editor is
 /// open, including during CPU recovery; all editors then adopt one generation.
 /// `detached` must be the successful result of the host's image-pin operation.
@@ -225,6 +295,8 @@ pub struct GpuInit {
     last_failure: Option<String>,
     incompatible: bool,
     transparency: Transparency,
+    #[cfg(any(test, feature = "test-support"))]
+    completion_gate: Option<InitGate>,
 }
 impl GpuInit {
     /// Initialize an opaque window after its first CPU frame has presented.
@@ -257,7 +329,20 @@ impl GpuInit {
             last_failure: None,
             incompatible: true,
             transparency,
+            #[cfg(any(test, feature = "test-support"))]
+            completion_gate: None,
         }
+    }
+    /// Hold result publication for a native-close integration fixture.
+    /// Panics if detached work was not admitted by a successful image pin.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn set_completion_gate_for_testing(&mut self, gate: InitGate) {
+        assert!(
+            self.session.detached,
+            "completion gate requires a pinned worker"
+        );
+        self.completion_gate = Some(gate);
     }
     pub fn pending(&self) -> bool {
         !self.installed && self.retry.ready(Instant::now())
@@ -282,6 +367,10 @@ impl GpuInit {
     }
     /// Poll without waiting. Only `create` and configure touch the native view,
     /// on the caller's window thread, after all heavy compute pipelines are ready.
+    /// The caller must hold its native callback/ownership lease across this call
+    /// and drop the returned Host before native destruction. An image pin only
+    /// preserves code; it does not preserve an HWND, AppKit view or X11 drawable.
+    /// No native handle, surface or factory is ever captured by detached work.
     pub fn poll(
         &mut self,
         size: (u32, u32),
@@ -318,6 +407,8 @@ impl GpuInit {
             self.context = Some(context.clone());
             self.job = Some(receiver);
             let transparency = self.transparency;
+            #[cfg(any(test, feature = "test-support"))]
+            let completion_gate = self.completion_gate.clone();
             let _ = run(self.session.detached, move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let limit = context.device.limits().max_texture_dimension_2d;
@@ -367,7 +458,20 @@ impl GpuInit {
                         class: FailureClass::Permanent,
                     })
                 });
-                let _ = sender.send(result); // Disconnected => drops result on this thread.
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(gate) = &completion_gate {
+                    gate.pause();
+                }
+                // Disconnected => drops GPU-only resources here. No native
+                // handle, surface or factory crossed the worker boundary.
+                #[cfg(any(test, feature = "test-support"))]
+                let rejected = sender.send(result).is_err();
+                #[cfg(not(any(test, feature = "test-support")))]
+                let _ = sender.send(result);
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(gate) = completion_gate {
+                    gate.finished(rejected);
+                }
             });
         }
         let result = match self.job.as_ref()?.try_recv() {
@@ -542,6 +646,33 @@ mod tests {
             session_slot(Transparency::Translucent),
             usize::from(cfg!(windows))
         );
+    }
+
+    #[test]
+    #[ignore = "requires a native compute adapter"]
+    fn close_before_gpu_result_publication_never_creates_a_native_surface() {
+        let gate = InitGate::default();
+        let mut init = GpuInit::new(true);
+        init.session = Session::private(true, Transparency::Opaque, Vec::new());
+        init.set_completion_gate_for_testing(gate.clone());
+        let stop = Instant::now() + std::time::Duration::from_secs(10);
+        while !gate.wait_entered(std::time::Duration::from_millis(1)) {
+            assert!(
+                Instant::now() < stop,
+                "GPU fixture did not reach publication"
+            );
+            assert!(
+                init.poll((32, 32), |_| panic!(
+                    "native factory before gated completion"
+                ))
+                .is_none()
+            );
+        }
+        let began = Instant::now();
+        drop(init);
+        assert!(began.elapsed() < std::time::Duration::from_millis(100));
+        gate.release();
+        assert!(gate.wait_receiver_dropped(std::time::Duration::from_secs(2)));
     }
 
     #[test]
