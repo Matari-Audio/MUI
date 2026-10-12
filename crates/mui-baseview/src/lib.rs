@@ -564,7 +564,7 @@ impl<V: View> Handler<V> {
             && target_size(size.0, size.1).is_some()
             && self.cpu_retry.ready(now)
         {
-            let open = if self.software_only {
+            let open = if self.software_only || self.gpu_init.is_some() {
                 mui::vello::software::Window::new
             } else {
                 mui::vello::software::Window::new_startup
@@ -624,13 +624,15 @@ impl<V: View> Handler<V> {
                                 ),
                             );
                         }
-                        let mut repaint = false;
+                        // Retry classification controls GPU recovery, not CPU scene quality.
+                        // Transient failure must also leave the startup placeholder behind.
                         if error.failure_class() == FailureClass::Permanent {
                             self.software_only = true;
-                            if let Some(software) = &mut self.software {
-                                repaint = software.finish_startup(size);
-                            }
                         }
+                        let repaint = self
+                            .software
+                            .as_mut()
+                            .is_some_and(|software| software.finish_startup(size));
                         self.presenter_reason = "CPU GPU initialization failed";
                         if repaint {
                             self.driver.redraw();
@@ -1012,6 +1014,27 @@ impl<V: View> Adapter<V> {
     }
 }
 
+fn enqueue_event(queue: &mut VecDeque<Event>, event: Event) {
+    // Reentrant native producers can outrun a borrowed handler. Adjacent motion
+    // samples with unchanged modifiers describe one latest pointer state. Never
+    // cross a key, IME, button, focus, wheel, drop or accessibility barrier.
+    if let (
+        Some(Event::Mouse(MouseEvent::CursorMoved {
+            modifiers: previous,
+            ..
+        })),
+        Event::Mouse(MouseEvent::CursorMoved { modifiers, .. }),
+    ) = (queue.back(), &event)
+        && previous == modifiers
+    {
+        if let Some(last) = queue.back_mut() {
+            *last = event;
+        }
+        return;
+    }
+    queue.push_back(event);
+}
+
 fn drain_events<T>(queue: &RefCell<VecDeque<T>>, mut deliver: impl FnMut(T)) {
     loop {
         // Release the queue borrow before invoking reentrant native code.
@@ -1117,7 +1140,7 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
             self.close.fire();
         }
         let Ok(mut h) = self.handler.try_borrow_mut() else {
-            self.pending_events.borrow_mut().push_back(event);
+            enqueue_event(&mut self.pending_events.borrow_mut(), event);
             return EventStatus::Ignored;
         };
         let status = guard(&mut h, |h| h.on_event_inner(&event)).unwrap_or(EventStatus::Ignored);

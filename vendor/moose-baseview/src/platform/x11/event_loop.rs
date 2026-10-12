@@ -740,6 +740,14 @@ impl EventLoop {
 
             XEvent::Expose(e) if e.window == self.window.raw_id() => {
                 self.exposed = true;
+                if !self.window.main_thread_shared.callbacks_revoked()
+                    && !self.window.main_thread_shared.is_stop_host_requested()
+                {
+                    self.handler.damage(crate::DamageArea::Rect(crate::DamageRect::new(
+                        PhysicalPosition::new(u32::from(e.x), u32::from(e.y)),
+                        PhysicalSize::new(u32::from(e.width), u32::from(e.height)),
+                    )));
+                }
                 self.handle_event(Event::Window(WindowEvent::RedrawRequested));
             }
 

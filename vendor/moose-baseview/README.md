@@ -3,18 +3,21 @@
 MOOSE's vendored copy of [baseview](https://github.com/RustAudio/baseview), the
 low-level windowing library for audio plugin UIs.
 
-- Upstream: `baseview` **0.3.4** from crates.io, git commit
-  `bc987b96c22cbdb36507196dbbcad00c768e135b` (the `.cargo_vcs_info.json` of the
-  published crate). The first commit that adds this directory is that source
-  unchanged except for the package name and the removal of upstream's
-  `[workspace]` table (its examples are not vendored).
+- Derived API/behavior baseline: RustAudio/baseview **v0.4.1**, exact commit
+  `8c6e6bab4b3c10f34b23dc12e878814349578777`, forward-integrated into the
+  owned native fork rather than replacing its lifetime, IME and host fixes.
+  [UPSTREAM.md](UPSTREAM.md) classifies every change since the original
+  0.3.4 base `bc987b96c22cbdb36507196dbbcad00c768e135b`, including deliberate
+  differences in pacing, timers, damage and optional GL backends.
+- Package version: `0.4.1-moose.1`; this identifies the derived baseline and
+  downstream fork, and does not claim stock backend parity.
 - License: unchanged, MIT OR Apache-2.0 (`LICENSE-MIT`, `LICENSE-APACHE`).
-- The public API stays source compatible with upstream 0.3.4. MOOSE additions
-  are additive only. Depend on it under the upstream name so `use baseview::*`
-  keeps working:
+- Legacy `on_frame` implementations remain source compatible. Current
+  `draw`, `poll`, `damage`, timer, waker and sizing APIs are additive.
+  Depend on it under the upstream name:
 
   ```toml
-  baseview = { package = "moose-baseview", path = "crates/moose-baseview" }
+  baseview = { package = "moose-baseview", path = "vendor/moose-baseview" }
   ```
 
 ## MOOSE additions (vs upstream 0.3.4)
@@ -50,10 +53,8 @@ Behaviour:
 - macOS: the backing scale is re-read when the view moves into a window, so a
   view created before the host attached it gets its real scale.
 
-Not ported (upstream already covers it, or not needed): KURV's HWND parking on
-close (upstream destroys synchronously), the 4 ms Windows frame timer
-(upstream keeps 15 ms), the bounded X11 close join (upstream joins), X11
-parent tracking and XDND (already upstream).
+The subsequent MUI native lifetime, bounded-close, IME, drag-and-drop and
+frame-pacing patches are documented in [README-MUI.md](README-MUI.md).
 
 `rustfmt.toml` carries upstream's formatting settings so the workspace
 `cargo fmt --check` leaves these sources in upstream style.

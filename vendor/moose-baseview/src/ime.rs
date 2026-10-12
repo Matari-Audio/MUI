@@ -3,6 +3,10 @@ use crate::dpi::{PhysicalPosition, PhysicalSize};
 use std::ops::Range;
 
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::exhaustive_enums,
+    reason = "the owned IME protocol is matched exhaustively by adapters"
+)]
 pub enum Ime {
     Enabled,
     Preedit {
@@ -82,17 +86,22 @@ pub(crate) fn char_to_byte(text: &str, index: usize) -> usize {
 
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 pub(crate) fn utf16_to_byte(text: &str, index: usize) -> usize {
-    let mut units = 0;
+    let mut units: usize = 0;
     for (byte, ch) in text.char_indices() {
-        if units + ch.len_utf16() > index {
+        if units.saturating_add(ch.len_utf16()) > index {
             return byte;
         }
-        units += ch.len_utf16();
+        units = units.saturating_add(ch.len_utf16());
     }
     text.len()
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects,
+    reason = "bounded test fixtures and assertions"
+)]
 mod tests {
     use super::*;
     #[test]
@@ -217,10 +226,11 @@ impl TextShadow {
         let range = range.or_else(|| self.marked.clone()).unwrap_or_else(|| self.selection.clone());
         let start = range.start;
         self.text.replace_range(range, text);
-        let end = start + text.len();
+        let end = start.saturating_add(text.len());
         self.marked = preedit.then_some(start..end).filter(|r| !r.is_empty());
         self.selection_visible = !preedit || cursor.is_some();
-        self.selection = cursor.map_or(end..end, |r| start + r.start..start + r.end);
+        self.selection =
+            cursor.map_or(end..end, |r| start.saturating_add(r.start)..start.saturating_add(r.end));
         self.pending = true;
     }
 }

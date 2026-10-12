@@ -35,11 +35,12 @@ impl std::error::Error for MatariScheduleError {}
 #[derive(Clone)]
 pub struct WindowContext {
     inner: platform::WindowContext,
+    pub(crate) work: std::sync::Arc<crate::work::WindowWork>,
 }
 
 impl WindowContext {
     pub(crate) fn new(inner: platform::WindowContext) -> Self {
-        Self { inner }
+        Self { inner, work: Default::default() }
     }
 
     /// Sets the [`MouseCursor`] icon to be displayed when the mouse cursor hovers this window.
@@ -55,7 +56,31 @@ impl WindowContext {
     /// However, it is guaranteed to only get closed after all [`WindowHandler`](crate::WindowHandler)
     /// methods are completed, and soon enough to be perceived as instantaneous by the user.
     pub fn request_close(&self) {
+        self.work.close();
         self.inner.request_close();
+    }
+
+    /// Requests a new frame at the next native frame interval.
+    pub fn request_redraw(&self) {
+        self.waker().request_redraw();
+    }
+
+    /// Requests a frame after a delay; earlier pending requests take precedence.
+    pub fn request_redraw_after(&self, duration: std::time::Duration) {
+        self.waker().request_redraw_after(duration);
+    }
+
+    /// Returns a thread-safe weak wake handle that is inert after close.
+    pub fn waker(&self) -> WindowWaker {
+        self.work.waker()
+    }
+
+    /// Creates a repeating GUI timer, coalesced on the native frame/poll cadence.
+    /// Timers pause while hidden and are revoked on close. Dropping the weak
+    /// handle does not cancel a timer. These timers are unsuitable for MIDI or
+    /// hardware synchronization. Zero and overflowing intervals are rejected.
+    pub fn create_timer(&self, interval: std::time::Duration) -> Result<TimerHandle, Error> {
+        self.work.create_timer(interval)
     }
 
     /// Returns `true` if this window currently has keyboard focus, `false` otherwise.

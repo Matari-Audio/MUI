@@ -458,6 +458,7 @@ fn replace_preedit(preedit: &mut String, first: i32, len: i32, text: &str) {
     preedit.replace_range(start..end, text);
 }
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test assertions")]
 mod tests {
     use super::*;
     #[test]
