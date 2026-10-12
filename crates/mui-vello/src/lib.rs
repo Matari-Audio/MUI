@@ -11,6 +11,9 @@
 //! line segments; here they become cubics instead, which is what Vello wants
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
 #![deny(unsafe_code)]
+// The shared session's wgpu resource graph needs deeper auto-trait evaluation
+// with the newer Rust trait solver.
+#![recursion_limit = "256"]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;

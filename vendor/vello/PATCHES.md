@@ -19,7 +19,8 @@ Every source patch carries a `MUI patch:` comment (`grep -rn "MUI patch" vendor/
 The forward port was compared file by file against the above commit, including
 both complete `src/` trees: all 10 GPU source files and all 16 encoding source
 files are present, with no added or missing source files. The GPU source differs
-only in `debug/renderer.rs` and `lib.rs` (mapped-buffer `expect` messages),
+only in `debug/renderer.rs` and `lib.rs` (mapped-buffer `expect` messages and
+the explicit trait-evaluation recursion limit),
 `util.rs` (the ordering of the `color_space` initializer), and `wgpu_engine.rs`
 (the retained patches below and absent vertex-buffer slots). Encoding differs
 only in `glyph_cache.rs` (patch 5). In particular, `scene.rs` and
@@ -47,6 +48,12 @@ absent vertex buffer. The optional `wgpu-profiler` feature/dependency remains
 excluded from this vendor manifest; the profiling cfgs stay in source. The
 upstream clippy table is trimmed to the workspace's compatible lint surface.
 `SurfaceColorSpace::Auto` and the other wgpu 30 API adaptations are now upstream.
+
+The crate sets `recursion_limit = "256"` as recommended by the newer Rust
+trait solver. Its default 128 limit warns about the nested wgpu resource
+graph's `Send` evaluation in scoped shader workers. MUI's adapter crate uses
+the same limit for shared `Session` resources. This raises evaluation capacity;
+auto traits remain compiler-checked.
 
 The 0.11 upgrade merged the exact upstream source delta onto the patched 0.10
 source. All retained binding/pool/pass and lazy hint-instance patches below

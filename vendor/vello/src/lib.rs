@@ -85,6 +85,9 @@
 // These lints aren't included in Cargo.toml because they
 // shouldn't apply to examples and tests
 #![warn(unused_crate_dependencies)]
+// MUI patch: wgpu's nested resource graph exceeds the newer Rust trait solver's
+// default auto-trait evaluation depth when compiling scoped shader workers.
+#![recursion_limit = "256"]
 #![warn(clippy::print_stdout, clippy::print_stderr)]
 // Targeting e.g. 32-bit means structs containing usize can give false positives for 64-bit.
 #![cfg_attr(target_pointer_width = "64", warn(clippy::trivially_copy_pass_by_ref))]

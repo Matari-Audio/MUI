@@ -41,6 +41,10 @@ builds and zero dev/test debug information. On stable Rust 1.98.1:
   close, actual device destruction/recovery and surface reconciliation.
   Together they complete in 0.28 seconds. The bitmap fixture also passes in
   0.07 seconds and logs the actual adapter instead of silently claiming a GPU.
+- Downstream BUFR nightly Clippy initially reported auto-trait recursion-depth
+  warnings in both Vello's scoped shader workers and MUI's shared sessions.
+  Both crates adopt the compiler-recommended evaluation limit of 256. The
+  exact nightly UI/engine library-and-test rerun passes with both warnings gone.
 
 These checks establish API/build compatibility and rendering correctness. No
 general CPU or GPU throughput improvement is claimed for the release upgrade.
