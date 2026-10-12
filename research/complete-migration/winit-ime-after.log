@@ -1,0 +1,176 @@
+   Compiling syn v3.0.5
+   Compiling wayland-backend v0.3.17
+   Compiling wayland-client v0.31.15
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling toml_edit v0.25.15+spec-1.1.0
+   Compiling proc-macro-crate v3.5.0
+   Compiling tracing-core v0.1.36
+   Compiling bytemuck_derive v1.12.1
+   Compiling thiserror-impl v2.0.20
+   Compiling bytemuck v1.25.2
+   Compiling serde_derive v1.0.229
+   Compiling thiserror v2.0.20
+   Compiling font-types v0.12.5
+   Compiling tracing v0.1.44
+   Compiling crossbeam-utils v0.8.23
+   Compiling color v0.3.3
+   Compiling peniko v0.6.1
+   Compiling concurrent-queue v2.5.0
+   Compiling wayland-protocols v0.32.13
+   Compiling serde v1.0.229
+   Compiling zvariant_utils v4.2.0
+   Compiling zvariant_derive v5.15.0
+   Compiling enumflags2 v0.7.12
+   Compiling zcheapstr v1.1.0
+   Compiling zvariant v5.15.0
+   Compiling zbus_names v4.3.4
+   Compiling naga-types v30.0.1
+   Compiling uuid v1.26.1
+   Compiling x11rb v0.13.2
+   Compiling async-io v2.6.0
+   Compiling async-channel v2.5.0
+   Compiling wayland-protocols-wlr v0.3.12
+   Compiling read-fonts v0.43.3
+   Compiling read-fonts v0.41.0
+   Compiling tokio-macros v2.7.2
+   Compiling tokio v1.53.2
+   Compiling skrifa v0.44.0
+   Compiling naga v30.0.1
+   Compiling async-signal v0.2.14
+   Compiling wgpu-types v30.0.1
+   Compiling zbus_xml v5.2.1
+   Compiling wayland-csd-frame v0.3.0
+   Compiling gpu-allocator v0.28.0
+   Compiling async-process v2.5.0
+   Compiling zbus-lockstep v0.5.2
+   Compiling blocking v1.7.0
+   Compiling skrifa v0.46.2
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling harfrust v0.13.3
+   Compiling async-executor v1.14.0
+   Compiling zbus_macros v5.19.0
+   Compiling wayland-cursor v0.31.14
+   Compiling async-trait v0.1.92
+   Compiling serde_repr v0.1.21
+   Compiling mui-text v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-text)
+   Compiling wgpu-hal v30.0.1
+   Compiling zbus v5.19.0
+   Compiling zbus-lockstep-macros v0.5.2
+   Compiling vello_shaders v0.11.0
+   Compiling atspi-common v0.13.0
+   Compiling wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling mui-style v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-style)
+   Compiling accesskit v0.24.1
+   Compiling mui-weld v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-weld)
+   Compiling ttf-parser v0.25.1
+   Compiling owned_ttf_parser v0.25.1
+   Compiling mui-scene v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-scene)
+   Compiling tiny-skia-path v0.11.4
+   Compiling vello_common v0.3.0
+   Compiling wgpu-core v30.0.1
+   Compiling ahash v0.8.12
+   Compiling calloop-wayland-source v0.3.0
+   Compiling vello_encoding v0.11.0
+   Compiling calloop v0.14.4
+   Compiling ab_glyph v0.2.32
+   Compiling tiny-xlib v0.2.5
+   Compiling calloop-wayland-source v0.4.1
+   Compiling smithay-client-toolkit v0.19.2
+   Compiling glifo v0.4.0
+   Compiling wgpu v30.0.1
+   Compiling x11-dl v2.21.0
+   Compiling tiny-skia v0.11.4
+   Compiling atspi-proxies v0.13.0
+   Compiling accesskit_consumer v0.38.0
+   Compiling xkbcommon-dl v0.4.2
+   Compiling vello_encoding v0.11.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/vendor/vello_encoding)
+   Compiling wayland-protocols-experimental v20251230.0.3
+   Compiling wayland-protocols-misc v0.3.12
+   Compiling smithay-client-toolkit v0.21.1
+   Compiling vello v0.11.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/vendor/vello)
+   Compiling accesskit_atspi_common v0.19.1
+   Compiling atspi v0.29.0
+   Compiling sctk-adwaita v0.10.1
+   Compiling vello_cpu v0.3.0
+   Compiling softbuffer v0.4.8
+   Compiling tokio-stream v0.1.19
+   Compiling wayland-protocols-plasma v0.3.12
+   Compiling zed-xim v0.4.0-zed (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/vendor/xim-rs)
+   Compiling winit v0.30.13
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:315:28
+    |
+315 |     fn build_ic_attributes(&self) -> AttributeBuilder;
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+315 |     fn build_ic_attributes(&self) -> AttributeBuilder<'_>;
+    |                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:316:28
+    |
+316 |     fn build_im_attributes(&self) -> AttributeBuilder;
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+316 |     fn build_im_attributes(&self) -> AttributeBuilder<'_>;
+    |                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:370:28
+    |
+370 |     fn build_ic_attributes(&self) -> AttributeBuilder {
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+370 |     fn build_ic_attributes(&self) -> AttributeBuilder<'_> {
+    |                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:374:28
+    |
+374 |     fn build_im_attributes(&self) -> AttributeBuilder {
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+374 |     fn build_im_attributes(&self) -> AttributeBuilder<'_> {
+    |                                                      ++++
+
+warning: `zed-xim` (lib) generated 4 warnings (run `cargo fix --lib -p zed-xim` to apply 4 suggestions)
+   Compiling mui-vello v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-vello)
+   Compiling wl-clipboard-rs v0.9.3
+   Compiling accesskit_unix v0.22.1 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/vendor/accesskit_unix)
+   Compiling matari-audio-drag-and-drop v0.1.6 (https://github.com/Matari-Audio/matari-audio-drag-and-drop?rev=c16eb00561894b6475963834f304e053638e7b94#c16eb005)
+   Compiling mui-material v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-material)
+   Compiling moose-baseview v0.3.4-moose.1 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/vendor/moose-baseview)
+   Compiling accesskit_winit v0.33.2 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/vendor/accesskit_winit)
+   Compiling mui v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui)
+   Compiling arboard v3.6.1
+   Compiling mui-access v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-access)
+   Compiling mui-winit v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-winit)
+    Finished `test` profile [optimized] target(s) in 1m 40s
+     Running unittests src/lib.rs (/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/deps/mui_winit-7bdb7779c9825d98)
+
+running 1 test
+test tests::native_ime_preedit_stays_tentative_and_commit_is_not_duplicated ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 13 filtered out; finished in 0.00s
+

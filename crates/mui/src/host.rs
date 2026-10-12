@@ -201,6 +201,8 @@ pub struct Driver {
     /// The model changed: rebuild.
     dirty: bool,
     animating: bool,
+    /// The next tree consumes ordered input effects rather than motion alone.
+    followup: bool,
     /// Live changes consumed from the view while a resize remains active.
     live_changed: bool,
     /// One final reconciliation is owed after the last native resize.
@@ -235,6 +237,7 @@ impl Driver {
             last_frame: Instant::now(),
             dirty: true,
             animating: false,
+            followup: false,
             live_changed: false,
             resize_until: None,
             wake_at: None,
@@ -288,7 +291,7 @@ impl Driver {
         if self.size.0 == 0 || self.size.1 == 0 {
             return None;
         }
-        let deadline = if self.dirty || !self.pending.is_empty() {
+        let deadline = if self.dirty || self.followup || !self.pending.is_empty() {
             Some(self.last_frame)
         } else {
             let animation = (self.animating || self.live_changed)
@@ -590,6 +593,7 @@ impl Driver {
         if (s.ui.scene().is_some() || self.failing)
             && !self.dirty
             && !self.live_changed
+            && !self.followup
             && !self.animating
             && !due
         {
@@ -618,6 +622,7 @@ impl Driver {
         // repaint deadlines and ordered input edges bypass both policies.
         if s.ui.scene().is_some()
             && !self.dirty
+            && !self.followup
             && !due
             && self.pending.is_empty()
             && (self.resize_until.is_some_and(|at| now < at)
@@ -724,7 +729,8 @@ impl Driver {
                 self.cursor = frame.cursor;
                 // An edge is dispatched by the tree after the frame that
                 // delivered it: that tree has to come even if nothing moves.
-                self.animating = frame.animating || !frame.edits.is_empty() || ime_followup;
+                self.animating = frame.animating;
+                self.followup = !frame.edits.is_empty() || ime_followup;
                 self.wake_at = frame.repaint_after.map(|after| now + after);
                 if let Some(text) = frame.clipboard {
                     self.clipboard.set(&text);
@@ -761,6 +767,7 @@ impl Driver {
                 self.dirty = false;
                 self.live_changed = false;
                 self.animating = false;
+                self.followup = false;
                 self.wake_at = None;
                 self.resize_until = None;
                 Err(())

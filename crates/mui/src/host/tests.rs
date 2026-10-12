@@ -716,3 +716,19 @@ fn each_resize_extends_quiet_but_due_repaints_bypass_it() {
     assert!(r.d.advance(&mut r.s, start + Duration::from_millis(55)));
     assert_eq!(r.d.next_wake(), None);
 }
+
+#[test]
+fn semantic_input_followup_bypasses_animation_and_resize_spacing() {
+    let mut r = Rig::new(Pad, (200, 200), 1.0);
+    assert!(r.step());
+    let now = r.d.last_frame();
+    r.d.resized_at((210, 200), 1.0, now);
+    assert!(r.d.advance(&mut r.s, now));
+    r.d.ime(Ime::Commit("a".into()));
+    assert!(r.d.advance(&mut r.s, now + Duration::from_millis(1)));
+    assert!(r.d.followup);
+    assert_eq!(r.d.next_wake(), Some(now + Duration::from_millis(1)));
+    assert!(r.d.advance(&mut r.s, now + Duration::from_millis(2)));
+    assert!(!r.d.followup);
+    assert!(!r.d.advance(&mut r.s, now + Duration::from_millis(3)));
+}
