@@ -320,8 +320,7 @@ impl WindowInner {
 
         self.xcb_window.resize(new_size.cast())?.check()?; // Will not call handler, as size is the same as above.
         if !self.sizing_strategy.is_resizable() {
-            let size_hints =
-                get_size_hints(&self.sizing_strategy, new_size, self.scale_factor());
+            let size_hints = get_size_hints(&self.sizing_strategy, new_size, self.scale_factor());
             self.xcb_window.set_size_hints(size_hints)?.check()?;
         }
 
