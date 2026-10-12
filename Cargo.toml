@@ -67,7 +67,7 @@ pollster = "0.4"
 png = "0.18"
 epaint_default_fonts = "0.36"
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
-vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+vello_cpu = { version = "0.3", default-features = false, features = ["std", "u8_pipeline", "text", "png"] }
 unicode-segmentation = "1.13"
 truce = { version = "6.3", default-features = false }
 

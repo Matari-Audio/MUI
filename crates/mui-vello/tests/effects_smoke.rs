@@ -789,3 +789,93 @@ fn a_backdrop_over_nothing_stays_translucent() {
         "{px:?}"
     );
 }
+
+/// Non-Apple sbix glyphs keep their authored bearings, without the Apple emoji
+/// workaround. The same font passes through both retained GPU and CPU paths.
+#[test]
+#[cfg(feature = "cpu")]
+fn non_apple_bitmap_glyph_bearings_match_cpu_and_gpu() {
+    let font = Font::new(&include_bytes!("fixtures/non_apple_sbix.ttf")[..]).unwrap();
+    let root = text("\u{E000}")
+        .text_size(32.)
+        .offset(32., 32.)
+        .anchor(Align::Start, Align::Start)
+        .id("bitmap");
+    let scene = resolve(
+        &SceneSpec::new(root)
+            .font(font)
+            .offered(Size::new(320., 200.)),
+    )
+    .unwrap();
+    let run = scene.paint.iter().find_map(|p| p.text.as_ref()).unwrap();
+    let x = (run.origin.x + f64::from(run.glyphs[0].x) + 6.).round() as u32;
+    let y = (run.origin.y + f64::from(run.glyphs[0].y) - 4. - 8.).round() as u32;
+    let check = |pixels: &[u8], backend: &str| {
+        assert_eq!(
+            at(pixels, x + 3, y + 3),
+            [0, 255, 0, 255],
+            "{backend} bitmap at authored bearing"
+        );
+        assert_eq!(
+            at(pixels, x - 3, y + 3),
+            [0, 0, 0, 0],
+            "{backend} must not invert x bearing"
+        );
+        assert_eq!(
+            at(pixels, x + 3, y + 11),
+            [0, 0, 0, 0],
+            "{backend} must not apply Apple offset"
+        );
+    };
+    let export = |pixels: &[u8], backend: &str| {
+        if let Some(directory) = std::env::var_os("MUI_RENDER_EVIDENCE_DIR") {
+            std::fs::create_dir_all(&directory).unwrap();
+            let file = std::fs::File::create(
+                std::path::Path::new(&directory).join(format!("synthetic-sbix-{backend}.png")),
+            )
+            .unwrap();
+            let mut encoder = png::Encoder::new(file, 64, 64);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let roi_x = x.saturating_sub(16).min(SIZE[0] - 64) as usize;
+            let roi_y = y.saturating_sub(16).min(SIZE[1] - 64) as usize;
+            let crop: Vec<u8> = pixels
+                .as_chunks::<{ 320 * 4 }>()
+                .0
+                .iter()
+                .skip(roi_y)
+                .take(64)
+                .flat_map(|row| row[roi_x * 4..(roi_x + 64) * 4].iter().copied())
+                .collect();
+            encoder
+                .write_header()
+                .unwrap()
+                .write_image_data(&crop)
+                .unwrap();
+        }
+    };
+    let mut cpu = mui_vello::software::Renderer::new((320, 200)).unwrap();
+    assert!(cpu.render(&scene, Affine::IDENTITY).unwrap());
+    export(cpu.pixels(), "cpu");
+    check(cpu.pixels(), "CPU");
+    assert!(
+        !cpu.render(&scene, Affine::IDENTITY).unwrap(),
+        "CPU retains bitmap frame"
+    );
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    eprintln!("bitmap regression adapter: {:?}", device.adapter_info());
+    let output = readable(&device);
+    let view = output.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut gpu = pollster::block_on(hybrid(&device, &queue));
+    gpu.render(&scene, Affine::IDENTITY, &view).unwrap();
+    let readback = pixels(&device, &queue, &output);
+    export(&readback, "gpu");
+    check(&readback, "GPU");
+    assert_eq!(
+        gpu.render(&scene, Affine::IDENTITY, &view).unwrap().renders,
+        0,
+        "GPU retains bitmap frame"
+    );
+}

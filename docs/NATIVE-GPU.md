@@ -211,11 +211,14 @@ unmeasured.
 
 ## Upstream contracts checked
 
-- https://docs.rs/vello/0.10.0/vello/struct.Renderer.html
-- https://docs.rs/vello/0.10.0/vello/struct.Scene.html
+- https://docs.rs/vello/0.11.0/vello/struct.Renderer.html
+- https://docs.rs/vello/0.11.0/vello/struct.Scene.html
 - https://github.com/gfx-rs/wgpu/tree/v30.0.1/wgpu/src/api
 
-`vello` 0.10 is vendored under `vendor/vello`, ported to `wgpu = 30`.
+`vello` 0.11 is vendored under `vendor/vello`, with MUI retained rendering
+patches preserved on upstream wgpu 30. CPU/common use 0.3 and glifo uses 0.4.
+CPU PNG glyph decoding is enabled for bitmap-font parity; fallible glyph draws
+propagate through the additive `Canvas::try_glyphs` path.
 Cargo --locked remains authoritative; do not invent or
 refresh registry checksums.
 

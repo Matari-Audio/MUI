@@ -1148,11 +1148,7 @@ impl Raster {
         self.ctx.flush();
         let mut pix = Pixmap::new(self.w, self.h);
         self.ctx.render(&mut pix, &mut self.res);
-        Ok(pix
-            .take_unpremultiplied()
-            .iter()
-            .flat_map(|p| [p.r, p.g, p.b, p.a])
-            .collect())
+        Ok(pix.take_rgba8(mui::vello::peniko::ImageAlphaType::Alpha))
     }
 }
 

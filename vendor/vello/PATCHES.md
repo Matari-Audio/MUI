@@ -1,31 +1,59 @@
 # vendor/vello: MUI's patches
 
-Upstream: [`vello` 0.10.0](https://crates.io/crates/vello/0.10.0), from
-linebender/vello at commit `fc0baddd06c63287ef516180d276333aa2401e6e`
-(the crate's `.cargo_vcs_info.json`; `path_in_vcs = "vello"`). `vello_shaders`
-is unpatched registry 0.10.0; `vello_encoding` 0.10.0 (same commit) is vendored
+Upstream: [`vello` 0.11.0](https://crates.io/crates/vello/0.11.0), from
+linebender/vello at commit `f3000c8d9e7a9c7e6abb09b9587238bf8b4860ff`
+(the crate's `.cargo_vcs_info.json`; `path_in_vcs = "research/vello_research"`). `vello_shaders`
+is unpatched registry 0.11.0; `vello_encoding` 0.11.0 (same commit) is vendored
 next door in `vendor/vello_encoding` for patch 5.
 
 Diff it against the registry copy:
 
 ```sh
-diff -ru ~/.cargo/registry/src/index.crates.io-*/vello-0.10.0 vendor/vello
+diff -ru ~/.cargo/registry/src/index.crates.io-*/vello-0.11.0 vendor/vello
 ```
 
 Every source patch carries a `MUI patch:` comment (`grep -rn "MUI patch" vendor/vello`).
 
-## 1. wgpu 30 port
+## 0. Exact 0.11 source coverage
 
-Upstream pins wgpu 29.0.3; MUI's workspace is on wgpu 30.
+The forward port was compared file by file against the above commit, including
+both complete `src/` trees: all 10 GPU source files and all 16 encoding source
+files are present, with no added or missing source files. The GPU source differs
+only in `debug/renderer.rs` and `lib.rs` (mapped-buffer `expect` messages),
+`util.rs` (the ordering of the `color_space` initializer), and `wgpu_engine.rs`
+(the retained patches below and absent vertex-buffer slots). Encoding differs
+only in `glyph_cache.rs` (patch 5). In particular, `scene.rs` and
+`vello_encoding/src/encoding.rs` match the 0.11 source exactly.
 
-- `Cargo.toml`: `wgpu = "30.0.1"`; the `wgpu-profiler` feature and dependency
-  are cut (no wgpu-30 release of it). Its `cfg`s stay in the source so upstream
-  diffs stay small, hence `unexpected_cfgs = "allow"`. Upstream's clippy table
-  is trimmed to what compiles clean under the workspace toolchain.
-- `src/lib.rs`, `src/debug/renderer.rs`: `get_mapped_range()` returns a
-  `Result` in wgpu 30; `.expect` on buffers that were just mapped.
-- `src/util.rs`: `SurfaceConfiguration` gains `color_space: Auto`.
-- `src/wgpu_engine.rs`: an absent vertex buffer is zero slots, not one empty slot.
+The old source baseline was 0.10 at
+`fc0baddd06c63287ef516180d276333aa2401e6e`. The 0.11 delta was merged onto
+that baseline with the downstream patches retained, rather than replacing the
+fork. Manifest deviations are the path encoding dependency, the additional
+`rustc-hash` dependency, the excluded optional profiler, and the workspace lint
+table. The registry 0.11 shaders are unmodified.
+
+The authored `non_apple_sbix.ttf` regression fixture checks the upstream bitmap
+bearing correction on CPU and GPU, including a second retained rendering. Its
+generator and provenance are stored alongside the fixture. Reverting only
+`scene.rs` to the former patched 0.10 source makes the GPU bearing assertion
+fail; 0.11 passes on the Radeon RX 6600. This is a rendering correctness check,
+not a renderer throughput claim.
+
+## 1. wgpu 30 integration
+
+Upstream 0.11 includes its own wgpu 30 port. MUI retains its explanatory
+`expect` messages on mapped buffers and the zero-slot representation of an
+absent vertex buffer. The optional `wgpu-profiler` feature/dependency remains
+excluded from this vendor manifest; the profiling cfgs stay in source. The
+upstream clippy table is trimmed to the workspace's compatible lint surface.
+`SurfaceColorSpace::Auto` and the other wgpu 30 API adaptations are now upstream.
+
+The 0.11 upgrade merged the exact upstream source delta onto the patched 0.10
+source. All retained binding/pool/pass and lazy hint-instance patches below
+remain. Upstream's non-Apple sbix placement and bearing-sign corrections are
+included, and encoding/shaders move together to 0.11. Registry shader CPU
+helpers still consume registry encoding, while classic rendering uses the
+vendored encoding; their serialized buffer layout is from the same release.
 
 ## 2. Bind-group cache (`src/wgpu_engine.rs`, `BindGroupCache`)
 
@@ -60,5 +88,5 @@ frame's CPU). The session also looks the instance up lazily, on its first glyph 
 reconfigured ~56 autohinters a frame for glyphs already cached (2.7 of a
 2.9 ms resolve). Vendored as a path dependency of `vendor/vello`, not a
 `[patch]`, so it reaches downstream workspaces that depend on MUI by git.
-`vello_shaders` (its `cpu` feature) still links the registry copy; it only
+`vello_shaders` (its `cpu` feature) still links the registry 0.11 copy; it only
 shares plain buffer types with it, never glyph caches.

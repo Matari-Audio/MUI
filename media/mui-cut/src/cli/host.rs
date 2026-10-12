@@ -598,11 +598,7 @@ fn paint_png(cache: &Path, name: &str, scene: &ResolvedScene, rect: [f64; 4]) ->
     ctx.flush();
     let mut pix = vello_cpu::Pixmap::new(w, h);
     ctx.render(&mut pix, &mut res);
-    let rgba: Vec<u8> = pix
-        .take_unpremultiplied()
-        .iter()
-        .flat_map(|p| [p.r, p.g, p.b, p.a])
-        .collect();
+    let rgba: Vec<u8> = pix.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha);
     let hash = fnv(
         fnv(FNV_OFFSET, &rgba),
         &[w.to_le_bytes(), h.to_le_bytes()].concat(),

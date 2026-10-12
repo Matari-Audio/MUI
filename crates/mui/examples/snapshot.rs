@@ -101,11 +101,7 @@ fn shot(scale: f64) -> Shot {
             scale,
             width,
             height,
-            rgba: pix
-                .take_unpremultiplied()
-                .iter()
-                .flat_map(|p| [p.r, p.g, p.b, p.a])
-                .collect(),
+            rgba: pix.take_rgba8(mui::vello::peniko::ImageAlphaType::Alpha),
             rects: frame
                 .scene
                 .surfaces()
