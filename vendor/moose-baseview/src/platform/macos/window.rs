@@ -3,7 +3,7 @@ use objc2::rc::{Retained, Weak};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSPasteboard, NSPasteboardTypeString, NSView,
-    NSWindow,
+    NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{NSSize, NSString};
 use std::cell::Cell;
@@ -76,8 +76,10 @@ impl WindowHandle {
     }
 
     pub fn create_window_standalone(
-        init: WindowInitializer, mtm: MainThreadMarker,
+        mut init: WindowInitializer, mtm: MainThreadMarker,
     ) -> Result<Self> {
+        let owner_window =
+            init.settings.owner.take().and_then(|owner| owner.inner.view.into_inner(mtm).window());
         let window = create_window_with_options(&init.settings, mtm);
 
         let final_size = window.contentRectForFrameRect(window.frame()).size;
@@ -87,13 +89,24 @@ impl WindowHandle {
 
         let (view, state) = BaseviewView::new(init, parenting, final_size, mtm)?;
 
+        if let Some(owner_window) = owner_window {
+            // SAFETY: both retained windows are live on the AppKit main thread.
+            unsafe {
+                owner_window.addChildWindow_ordered(&window, NSWindowOrderingMode::Above);
+            }
+        }
+
         Ok(Self { mtm, state, view: Weak::from_retained(&view), _window: Some(window) })
     }
 
     pub fn run_until_closed(self) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
 
             BaseviewView::show(view);
 
@@ -135,8 +148,12 @@ impl WindowHandle {
 
     pub fn resize(&self, size: Size) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
 
             BaseviewView::resize(view, size, false, false);
 
@@ -172,8 +189,12 @@ impl WindowHandle {
 
     pub fn set_parent(&self, new_parent: ParentWindowHandle) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
 
             BaseviewView::set_parent(view, new_parent.view.into_inner(view.mtm));
 
@@ -183,8 +204,12 @@ impl WindowHandle {
 
     pub fn show(&self) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
 
             BaseviewView::show(view);
             Ok(())
@@ -193,8 +218,12 @@ impl WindowHandle {
 
     pub fn hide(&self) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
 
             BaseviewView::hide(view);
             Ok(())
@@ -222,15 +251,20 @@ fn create_window_with_options(
 
 pub(crate) struct WindowSharedState {
     pub closed: Cell<bool>,
+    pub defer_user_close: bool,
     pub size: Cell<LogicalSize<f64>>,
     pub scale_factor: Cell<f64>,
     pub sizing_strategy: SizingStrategy,
 }
 
 impl WindowSharedState {
-    pub fn new(size: LogicalSize<f64>, scale_factor: f64, sizing_strategy: SizingStrategy) -> Self {
+    pub fn new(
+        size: LogicalSize<f64>, scale_factor: f64, sizing_strategy: SizingStrategy,
+        defer_user_close: bool,
+    ) -> Self {
         Self {
             closed: false.into(),
+            defer_user_close,
             size: size.into(),
             scale_factor: scale_factor.into(),
             sizing_strategy,

@@ -1917,13 +1917,15 @@ dependencies = [
 [[package]]
 name = "matari-audio-drag-and-drop"
 version = "0.1.6"
-source = "git+https://github.com/DerpcatMusic/matari-audio-drag-and-drop?rev=fb8db70145793248d98418bdb18e807deb2de452#fb8db70145793248d98418bdb18e807deb2de452"
+source = "git+https://github.com/Matari-Audio/matari-audio-drag-and-drop?rev=e322e05bf13721f3c5ca676898ebf33fd7e21ce0#e322e05bf13721f3c5ca676898ebf33fd7e21ce0"
 dependencies = [
+ "libc",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "percent-encoding",
  "raw-window-handle",
+ "rustix 1.1.4",
  "smithay-client-toolkit 0.21.1",
  "wayland-client",
  "windows",

@@ -22,6 +22,8 @@ pub use size_hints::get_size_hints;
 
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
+        WM_STATE,
+        _NET_WM_MOVERESIZE,
         WM_PROTOCOLS,
         WM_DELETE_WINDOW,
 
@@ -101,6 +103,53 @@ impl X11Connection {
 
     pub fn default_screen(&self) -> &Screen {
         self.conn.default_screen()
+    }
+
+    pub fn top_level_for(&self, window: NonZeroU32) -> Result<NonZeroU32> {
+        let root = self.default_screen().root;
+        let mut current = window;
+
+        loop {
+            let wm_state = self
+                .conn
+                .get_property(
+                    false,
+                    current.get(),
+                    self.atoms.WM_STATE,
+                    xproto::AtomEnum::ANY,
+                    0,
+                    0,
+                )?
+                .reply()?;
+            if wm_state.type_ == self.atoms.WM_STATE {
+                return Ok(current);
+            }
+
+            let tree = self.conn.query_tree(current.get())?.reply()?;
+            let Some(parent) = NonZeroU32::new(tree.parent) else {
+                return Ok(current);
+            };
+            if parent.get() == root {
+                return Ok(current);
+            }
+            current = parent;
+        }
+    }
+
+    pub fn pointer_centered_position(
+        &self, size: crate::dpi::PhysicalSize<u16>,
+    ) -> Result<(i32, i32)> {
+        let screen = self.default_screen();
+        let pointer = self.conn.query_pointer(screen.root)?.reply()?;
+        let max_x = i32::from(screen.width_in_pixels.saturating_sub(size.width));
+        let max_y = i32::from(screen.height_in_pixels.saturating_sub(size.height));
+        let x = i32::from(pointer.root_x)
+            .saturating_sub(i32::from(size.width).checked_div(2).unwrap_or_default())
+            .clamp(0, max_x);
+        let y = i32::from(pointer.root_y)
+            .saturating_sub(i32::from(size.height).checked_div(2).unwrap_or_default())
+            .clamp(0, max_y);
+        Ok((x, y))
     }
 
     pub fn get_property<T: bytemuck::Pod>(

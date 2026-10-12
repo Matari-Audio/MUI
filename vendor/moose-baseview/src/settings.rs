@@ -19,6 +19,12 @@ pub struct WindowSettings {
     /// If `None`, the window will be standalone.
     pub parent: Option<ParentWindowHandle>,
 
+    /// Native owner for a detached utility window, preserving top-level semantics.
+    pub owner: Option<ParentWindowHandle>,
+
+    /// Report user close requests through `WillClose` without destroying the native window.
+    pub defer_user_close: bool,
+
     /// If the window expects to have a parent when first displayed.
     ///
     /// Setting this will delay the actual creation of the window until the parent is set (unless
@@ -104,6 +110,20 @@ impl WindowSettings {
         self
     }
 
+    /// Set an owner while keeping a detached top-level window.
+    pub fn with_owner<'a, P: HasWindowHandle + 'a>(
+        mut self, owner: impl Into<Option<&'a P>>,
+    ) -> Self {
+        self.owner = owner.into().map(ParentWindowHandle::from_window);
+        self
+    }
+
+    /// Defer native close buttons until the owner closes the window explicitly.
+    pub fn with_deferred_user_close(mut self, defer: bool) -> Self {
+        self.defer_user_close = defer;
+        self
+    }
+
     /// Sets [`wait_for_parent`](Self::wait_for_parent) to `true`.
     #[inline]
     pub fn wait_for_parent(mut self) -> Self {
@@ -165,6 +185,8 @@ impl Default for WindowSettings {
             title: String::from("baseview window"),
             size: LogicalSize { width: 500.0, height: 400.0 }.into(),
             parent: None,
+            owner: None,
+            defer_user_close: false,
             wait_for_parent: false,
             fallback_scale_factor: None,
             scale_factor_override: None,

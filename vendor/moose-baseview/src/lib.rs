@@ -1,6 +1,7 @@
 mod clipboard;
 mod context;
 pub mod dpi;
+mod drag_resize;
 mod error;
 mod event;
 mod handler;
@@ -19,9 +20,13 @@ pub(crate) mod platform;
 pub mod gl;
 
 pub use clipboard::*;
-pub use context::{PlatformHandle, WindowContext};
 #[cfg(target_os = "linux")]
 pub use context::MatariX11ScheduleError;
+pub use context::{MatariDragAdapter, MatariScheduleError};
+pub use context::{PlatformHandle, WindowContext};
+pub use drag_resize::{DragResizeError, ResizeEdge};
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+mod drag;
 pub use error::*;
 pub use event::*;
 pub use handler::{FrameDemand, WindowHandler};

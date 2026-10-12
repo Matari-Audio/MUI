@@ -1,0 +1,100 @@
+name: Native drag adapter
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/native-drag.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'crates/mui-baseview/**'
+      - 'vendor/moose-baseview/**'
+      - 'vendor/xim-rs/**'
+  push:
+    branches: [main, 'audit/**']
+    paths:
+      - '.github/workflows/native-drag.yml'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - 'crates/mui-baseview/**'
+      - 'vendor/moose-baseview/**'
+      - 'vendor/xim-rs/**'
+
+permissions:
+  contents: read
+concurrency:
+  group: native-drag-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 2
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/native-drag
+  MUI_REPORTING_DISABLED: '1'
+
+jobs:
+  adapter:
+    # Standard hosted runners are free for public repositories. Do not run this
+    # workflow in private forks or allocate paid larger/self-hosted builders.
+    if: github.event.repository.private == false
+    name: Drag / ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Linux native dependencies and isolated display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-icccm4-dev \
+            libxcb-dri2-0-dev libxcb-xkb-dev libxcb-render0-dev libxcb-shape0-dev \
+            libxcb-xfixes0-dev libxcb-randr0-dev libxcb-sync-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
+            libfontconfig1-dev libclang-dev libssl-dev libzstd-dev xvfb xauth
+      # Use the repository's exact Rust toolchain; no persistent caches/artifacts
+      # are uploaded by this focused workflow.
+      - name: Pinned toolchain
+        run: |
+          drag_toolchain=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
+          test -n "$drag_toolchain"
+          rustup toolchain install "$drag_toolchain" --profile minimal
+      - name: Native scheduling and gesture ownership
+        run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked drag::tests
+      - name: MUI queue, coherent scene, lifecycle and teardown
+        run: cargo test -p mui-baseview --lib --locked drag::tests
+      - name: Build the product adapter and native hooks
+        run: cargo build -p mui-baseview --lib --locked
+      - name: X11 recipient unit checks
+        if: runner.os == 'Linux'
+        run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked platform::x11::drag_n_drop::tests
+      - name: X11 recipient wire checks
+        if: runner.os == 'Linux'
+        run: >-
+          xvfb-run -a -s '-screen 0 1280x800x24'
+          cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked
+          platform::x11::drag_n_drop::tests -- --ignored --test-threads=1
+      - name: Windows source capture ownership
+        if: runner.os == 'Windows'
+        run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked capture_tests
+      - name: Native CPU presentation and editor reopen
+        if: runner.os == 'Linux'
+        run: >-
+          env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1280x1024x24 -noreset'
+          cargo test -p mui-baseview --locked --lib
+          native_cpu_fallback_presents_and_reopens -- --ignored --test-threads=1
+      - name: AppKit destination-window to embedded-view coordinates
+        if: runner.os == 'macOS'
+        run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --locked --test mac_drag_geometry
