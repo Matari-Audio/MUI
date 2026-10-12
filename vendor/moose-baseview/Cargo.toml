@@ -35,6 +35,7 @@ opengl = [
 ]
 
 [dependencies]
+matari-audio-drag-and-drop = { git = "https://github.com/Matari-Audio/matari-audio-drag-and-drop", rev = "c16eb00561894b6475963834f304e053638e7b94" }
 keyboard-types = { version = "0.8.3" }
 raw-window-handle = "0.6.2"
 dpi = "0.1.2"
@@ -48,7 +49,6 @@ xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 x11-dl = { version = "2.21.0" }
 calloop = "0.14.4"
 percent-encoding = "2.3.2"
-matari-audio-drag-and-drop = { git = "https://github.com/DerpcatMusic/matari-audio-drag-and-drop", rev = "fb8db70145793248d98418bdb18e807deb2de452" }
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 
 [target.'cfg(target_os="windows")'.dependencies]
@@ -139,3 +139,8 @@ all-features = true
 
 # Standalone vendored package: native cfg checks must not build the MUI workspace.
 [workspace]
+
+[[test]]
+name = "mac_drag_geometry"
+path = "tests/mac_drag_geometry.rs"
+harness = false

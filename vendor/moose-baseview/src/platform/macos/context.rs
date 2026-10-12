@@ -27,6 +27,41 @@ impl WindowContext {
         }
     }
 
+    pub fn can_schedule_matari_drag(&self) -> bool {
+        if self.state.closed.get() || objc2_app_kit::NSEvent::pressedMouseButtons() & 1 == 0 {
+            return false;
+        }
+        self.view
+            .load()
+            .and_then(|view| {
+                view.inner_ref().map(|inner| {
+                    inner.attached.get()
+                        && inner.drag_event.borrow().is_some()
+                        && inner.drag.available()
+                })
+            })
+            .unwrap_or(false)
+    }
+    pub fn schedule_matari_drag(
+        &self, ticket: matari_audio_drag_and_drop::StartTicket,
+    ) -> std::result::Result<
+        (),
+        matari_audio_drag_and_drop::RejectedStart<crate::MatariScheduleError>,
+    > {
+        if self.state.closed.get() || objc2_app_kit::NSEvent::pressedMouseButtons() & 1 == 0 {
+            return Err(ticket.reject(crate::MatariScheduleError::AuthorityUnavailable));
+        }
+        let Some(view) = self.view.load() else {
+            return Err(ticket.reject(crate::MatariScheduleError::MissingWindowHandle));
+        };
+        let Some(inner) = view.inner_ref() else {
+            return Err(ticket.reject(crate::MatariScheduleError::MissingWindowHandle));
+        };
+        if !inner.attached.get() || inner.drag_event.borrow().is_none() {
+            return Err(ticket.reject(crate::MatariScheduleError::AuthorityUnavailable));
+        }
+        inner.drag.queue(ticket)
+    }
     pub fn request_close(&self) {
         objc2::rc::autoreleasepool(|_| {
             let Some(view) = self.view.load() else { return };
@@ -39,7 +74,9 @@ impl WindowContext {
         if self.state.closed.get() {
             return false;
         }
-        let Some(view) = self.view.load() else { return false };
+        let Some(view) = self.view.load() else {
+            return false;
+        };
         let Some(window) = view.window() else {
             return false;
         };
@@ -60,7 +97,9 @@ impl WindowContext {
             return Ok(());
         }
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
             if let Some(window) = view.window() {
                 window.makeFirstResponder(Some(&view));
             }
@@ -71,8 +110,12 @@ impl WindowContext {
 
     pub fn resize(&self, size: Size) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
             if view.inner.state.closed.get() {
                 return Ok(());
             }
@@ -81,6 +124,18 @@ impl WindowContext {
 
             Ok(())
         })
+    }
+
+    pub fn drag_resize(
+        &self, edge: crate::ResizeEdge,
+    ) -> std::result::Result<(), crate::DragResizeError> {
+        let Some(view) = self.view.load() else {
+            return Err(crate::DragResizeError::Os("window is closed".into()));
+        };
+        let Some(view) = view.inner_ref() else {
+            return Err(crate::DragResizeError::Os("window is closed".into()));
+        };
+        BaseviewView::begin_resize_drag(view, edge)
     }
 
     pub fn set_ime_configuration(&self, config: Option<crate::ImeConfiguration>) {
@@ -158,8 +213,12 @@ impl WindowContext {
 
     pub fn set_mouse_cursor(&self, cursor: MouseCursor) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
-            let Some(view) = self.view.load() else { return Ok(()) };
-            let Some(view) = view.inner_ref() else { return Ok(()) };
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            let Some(view) = view.inner_ref() else {
+                return Ok(());
+            };
 
             view.inner.cursor_manager.set_cursor(cursor);
 

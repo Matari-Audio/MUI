@@ -15,9 +15,9 @@ use crate::{
     WindowHandler, WindowSize,
 };
 use calloop::generic::Generic;
-use matari_audio_drag_and_drop::{X11DropRouter, X11PointerEvent, X11SessionStatus};
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken};
+use matari_audio_drag_and_drop::{X11DropRouter, X11PointerEvent, X11SessionStatus};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
@@ -70,6 +70,7 @@ pub(crate) struct EventLoop {
     loop_signal: LoopSignal,
     loop_handle: LoopHandle<'static, Self>,
     frame_timer: Option<RegistrationToken>,
+    drag_timer: Option<RegistrationToken>,
     frame_deadline: Option<Instant>,
     last_frame: Instant,
 
@@ -128,6 +129,7 @@ impl EventLoop {
             loop_handle,
             frame_timer: None,
             frame_deadline: None,
+            drag_timer: None,
             last_frame: Instant::now(),
             handler,
             new_size: None,
@@ -287,7 +289,9 @@ impl EventLoop {
             }
         }
 
-        let Some(new_size) = self.new_size.take() else { return Ok(()) };
+        let Some(new_size) = self.new_size.take() else {
+            return Ok(());
+        };
         let previous = self.window.store_size(new_size);
 
         if previous == new_size {
@@ -436,6 +440,7 @@ impl EventLoop {
         }
 
         self.schedule_frame()?;
+        self.schedule_drag_poll()?;
         self.window.connection.conn.flush()?;
         // Only take_frame_request at the beginning of an idle pass clears the
         // latch. A producer racing demand query/timer re-arm keeps its request
@@ -557,6 +562,48 @@ impl EventLoop {
         }
     }
 
+    fn poll_matari_drag(&self) {
+        let connection = self.window.connection.conn.xcb_connection();
+        let session = self.window.external_drag_session.borrow_mut().take();
+        if let Some(mut session) = session {
+            match session.poll(connection) {
+                Ok(X11SessionStatus::Active) => {
+                    *self.window.external_drag_session.borrow_mut() = Some(session);
+                }
+                Ok(X11SessionStatus::Finished) => {}
+                Err(_) => {
+                    let _ = session.cancel(connection);
+                }
+            }
+        }
+    }
+
+    fn schedule_drag_poll(&mut self) -> Result<(), calloop::Error> {
+        if self.window.external_drag_session.borrow().is_none() {
+            if let Some(timer) = self.drag_timer.take() {
+                self.loop_handle.remove(timer);
+            }
+        } else if self.drag_timer.is_none() {
+            self.drag_timer = Some(
+                self.loop_handle
+                    .insert_source(
+                        Timer::from_duration(Duration::from_millis(100)),
+                        |_, _, event_loop| {
+                            event_loop.poll_matari_drag();
+                            if event_loop.window.external_drag_session.borrow().is_some() {
+                                TimeoutAction::ToDuration(Duration::from_millis(100))
+                            } else {
+                                event_loop.drag_timer = None;
+                                TimeoutAction::Drop
+                            }
+                        },
+                    )
+                    .map_err(|error| error.error)?,
+            );
+        }
+        Ok(())
+    }
+
     fn uninstall_drop_router(&mut self) {
         if let Some(router) = self.drop_router.take() {
             if let Err(error) = router.uninstall(self.window.connection.conn.xcb_connection()) {
@@ -567,7 +614,8 @@ impl EventLoop {
 
     fn cancel_matari_drag(&self) {
         let connection = self.window.connection.conn.xcb_connection();
-        if let Some(session) = self.window.external_drag_session.borrow_mut().take() {
+        let session = self.window.external_drag_session.borrow_mut().take();
+        if let Some(session) = session {
             let _ = session.cancel(connection);
         }
     }
@@ -611,10 +659,9 @@ impl EventLoop {
         //   the keyboard modifier keys at the time of the event.
         //   http://rtbo.github.io/rust-xcb/src/xcb/ffi/xproto.rs.html#445
 
-        let routed = self
-            .drop_router
-            .as_mut()
-            .map(|router| router.handle_event(self.window.connection.conn.xcb_connection(), &event));
+        let routed = self.drop_router.as_mut().map(|router| {
+            router.handle_event(self.window.connection.conn.xcb_connection(), &event)
+        });
         match routed {
             Some(Ok(true)) => return Ok(()),
             Some(Err(error)) => {
@@ -637,7 +684,11 @@ impl EventLoop {
                 }
 
                 if event.data.as_data32()[0] == self.window.connection.atoms.WM_DELETE_WINDOW {
-                    self.window.request_close();
+                    if self.window.defer_user_close {
+                        self.handle_event(Event::Window(WindowEvent::WillClose));
+                    } else {
+                        self.window.request_close();
+                    }
                     return Ok(());
                 }
 
@@ -656,7 +707,7 @@ impl EventLoop {
             }
 
             XEvent::SelectionNotify(event) => {
-                if event.property == self.window.connection.atoms.XdndSelection {
+                if event.selection == self.window.connection.atoms.XdndSelection {
                     self.drag_n_drop.handle_selection_notify_event(
                         &self.window,
                         &*self.handler,
@@ -856,6 +907,11 @@ impl EventLoop {
                 && !matches!(event, Event::Window(WindowEvent::WillClose)))
         {
             return EventStatus::Ignored;
+        }
+        if matches!(&event, Event::Window(WindowEvent::WillClose)) {
+            self.window.primary_pointer_down.set(false);
+            self.window.last_pointer_event.set(None);
+            self.cancel_matari_drag();
         }
         self.exposed = true;
         self.handler.on_event(event)
