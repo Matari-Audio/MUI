@@ -1,0 +1,151 @@
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.24
+   Compiling quote v1.0.47
+   Compiling libm v0.2.16
+   Compiling arrayvec v0.7.8
+   Compiling smallvec v1.16.1
+   Compiling syn v3.0.5
+   Compiling cfg_aliases v0.2.2
+   Compiling once_cell v1.21.4
+   Compiling autocfg v1.5.1
+   Compiling bitflags v2.13.2
+   Compiling cfg-if v1.0.4
+   Compiling num-traits v0.2.19
+   Compiling thiserror v2.0.20
+   Compiling bytemuck_derive v1.12.1
+   Compiling thiserror-impl v2.0.20
+   Compiling bytemuck v1.25.2
+   Compiling polycool v0.4.0
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling kurbo v0.13.1
+   Compiling syn v2.0.119
+   Compiling equivalent v1.0.2
+   Compiling zerocopy v0.8.57
+   Compiling indexmap v2.14.2
+   Compiling i_float v4.1.0
+   Compiling log v0.4.34
+   Compiling rustc-hash v2.1.3
+   Compiling rustc-hash v1.1.0
+   Compiling naga-types v30.0.1
+   Compiling i_shape v4.0.0
+   Compiling font-types v0.12.5
+   Compiling zerocopy-derive v0.8.57
+   Compiling naga v30.0.1
+   Compiling bit-vec v0.9.1
+   Compiling i_tree v0.19.0
+   Compiling unicode-width v0.2.2
+   Compiling i_key_sort v0.11.0
+   Compiling i_overlay v8.1.0
+   Compiling codespan-reporting v0.13.1
+   Compiling bit-set v0.10.0
+   Compiling read-fonts v0.43.3
+   Compiling half v2.7.1
+   Compiling color v0.3.3
+   Compiling static_assertions v1.1.0
+   Compiling raw-window-handle v0.6.2
+   Compiling libc v0.2.189
+   Compiling wgpu-types v30.0.1
+   Compiling mui-geometry v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-geometry)
+   Compiling wgpu-hal v30.0.1
+   Compiling linebender_resource_handle v0.1.1
+   Compiling parking_lot_core v0.9.12
+   Compiling peniko v0.6.1
+   Compiling harfrust v0.13.3
+   Compiling wgpu-naga-bridge v30.0.1
+   Compiling skrifa v0.46.2
+   Compiling mui-layout v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-layout)
+   Compiling libloading v0.8.9
+   Compiling simd-adler32 v0.3.10
+   Compiling unicode-bidi v0.3.18
+   Compiling renderdoc-sys v1.1.0
+   Compiling unicode-segmentation v1.13.3
+   Compiling scopeguard v1.2.0
+   Compiling unicode-linebreak v0.1.5
+   Compiling lock_api v0.4.14
+   Compiling mui-text v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-text)
+   Compiling wgpu-core v30.0.1
+   Compiling crc32fast v1.5.2
+   Compiling litrs v1.0.0
+   Compiling adler2 v2.0.1
+   Compiling mui-style v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-style)
+   Compiling document-features v0.2.12
+   Compiling parking_lot v0.12.5
+   Compiling wgpu-core-deps-windows-linux-android v30.0.1
+   Compiling mui-weld v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-weld)
+   Compiling euclid v0.22.14
+   Compiling wgpu v30.0.1
+   Compiling mui-motion v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-motion)
+   Compiling mui-symbols v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-symbols)
+   Compiling profiling v1.0.18
+   Compiling mui-scene v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-scene)
+   Compiling guillotiere v0.7.0
+   Compiling miniz_oxide v0.9.1
+   Compiling fearless_simd v0.4.1
+   Compiling vello_common v0.2.0
+   Compiling flate2 v1.1.10
+   Compiling miniz_oxide v0.8.9
+   Compiling fdeflate v0.3.7
+   Compiling mui-vello v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-vello)
+   Compiling png v0.18.1
+   Compiling mui-material v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-material)
+   Compiling mui-input v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-input)
+   Compiling epaint_default_fonts v0.36.2
+   Compiling ttf-inter v0.1.0
+   Compiling mui v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui)
+    Finished `test` profile [optimized] target(s) in 39.94s
+     Running unittests src/lib.rs (/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/deps/mui-b1298e629cd9fdb5)
+
+running 23 tests
+test host::tests::a_view_that_draws_the_pointer_rebuilds_on_an_inert_hover ... ok
+test host::tests::a_minimised_window_holds_its_input_until_it_has_a_size ... ok
+test host::tests::a_delivered_edge_gets_the_tree_that_dispatches_it_and_an_inert_hover_none ... ok
+test host::tests::a_press_and_release_between_two_ticks_are_two_frames ... ok
+test host::tests::animation_spacing_never_delays_input_redraw_or_due_deadlines ... FAILED
+test host::tests::an_idle_tick_builds_nothing_until_something_changes ... ok
+test host::tests::hover_bursts_coalesce_but_drag_samples_and_modifier_changes_survive ... ok
+test host::tests::focus_loss_queues_a_cancel_after_the_pressed_snapshot ... ok
+test host::tests::keys_route_to_the_host_unless_focus_or_a_shortcut_claims_them ... ok
+test host::tests::keyboard_modifiers_track_their_own_edges ... ok
+test host::tests::profiling_tracks_invalidation_skips_coalescing_and_clock_regressions ... ok
+test host::tests::queued_pointer_edges_keep_their_order ... ok
+test host::tests::layout_is_logical_when_the_surface_is_physical ... ok
+test host::tests::shared_state_with_canvas_caches_is_send ... ok
+test host::tests::space_is_a_key_and_text_but_a_shortcut_is_only_a_key ... ok
+test host::tests::queued_ime_edges_survive_throttling_minimize_and_clock_regression ... ok
+test host::tests::drag_samples_between_two_edges_are_one_frame_with_a_trail ... ok
+test host::tests::zoom_reads_the_logical_window_size ... ok
+test host::tests::zoom_scales_the_paint_and_divides_the_pointer_and_pixel_wheel ... ok
+test host::tests::resize_quiet_window_defers_live_work_but_preserves_input_and_final_frame ... FAILED
+test host::tests::ime_configuration_uses_utf8_boundaries_and_disables_after_blur ... ok
+test host::tests::a_refused_layout_does_not_replay_the_keys_it_took ... ok
+test host::tests::refused_layout_stops_unchanged_retries_and_retries_real_changes ... FAILED
+
+failures:
+
+---- host::tests::animation_spacing_never_delays_input_redraw_or_due_deadlines stdout ----
+
+thread 'host::tests::animation_spacing_never_delays_input_redraw_or_due_deadlines' (4193567) panicked at crates/mui/src/host/tests.rs:636:5:
+assertion failed: !r.d.advance(&mut r.s, frame + Duration::from_millis(1))
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- host::tests::resize_quiet_window_defers_live_work_but_preserves_input_and_final_frame stdout ----
+
+thread 'host::tests::resize_quiet_window_defers_live_work_but_preserves_input_and_final_frame' (4193579) panicked at crates/mui/src/host/tests.rs:657:5:
+assertion failed: !r.d.advance(&mut r.s, now + Duration::from_millis(8))
+
+---- host::tests::refused_layout_stops_unchanged_retries_and_retries_real_changes stdout ----
+mui: layout refused at Size { width: 200.0, height: 200.0 }: a size, spacing or limit is negative, not finite or out of range
+
+thread 'host::tests::refused_layout_stops_unchanged_retries_and_retries_real_changes' (4193578) panicked at crates/mui/src/host/tests.rs:619:5:
+refusal consumes this redraw
+
+
+failures:
+    host::tests::animation_spacing_never_delays_input_redraw_or_due_deadlines
+    host::tests::refused_layout_stops_unchanged_retries_and_retries_real_changes
+    host::tests::resize_quiet_window_defers_live_work_but_preserves_input_and_final_frame
+
+test result: FAILED. 20 passed; 3 failed; 0 ignored; 0 measured; 128 filtered out; finished in 0.06s
+
+error: test failed, to rerun pass `-p mui --lib`

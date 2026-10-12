@@ -1,0 +1,4 @@
+   Compiling mui v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui)
+    Finished `dev` profile [optimized] target(s) in 1.95s
+     Running `/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/examples/resize_schedule`
+resize_frames=200 live_frames=200 input_frames=20 final_frame=true driver_cpu_ms=405.769 builds=421 resolve_samples=421 build_p50_us=110.392 build_p95_us=161.013
