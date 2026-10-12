@@ -5,11 +5,27 @@
 use super::*;
 use std::sync::{Weak, mpsc};
 
-static SHARED: Mutex<Weak<Session>> = Mutex::new(Weak::new());
+// DX12 HWND and DirectComposition surfaces require different instance options.
+// Other backends can share one compute context regardless of surface alpha.
+static SHARED: Mutex<[Weak<Session>; 2]> = Mutex::new([Weak::new(), Weak::new()]);
+
+fn session_slot(transparency: Transparency) -> usize {
+    usize::from(cfg!(windows) && transparency == Transparency::Translucent)
+}
+
+fn session_descriptor(transparency: Transparency) -> wgpu::InstanceDescriptor {
+    let mut descriptor = instance_descriptor();
+    if transparency == Transparency::Translucent {
+        descriptor.backend_options.dx12.presentation_system =
+            wgpu::Dx12SwapchainKind::DxgiFromVisual;
+    }
+    descriptor
+}
 
 pub(super) struct Session {
     state: Mutex<State>,
     detached: bool,
+    transparency: Transparency,
     excluded: Vec<(String, wgpu::Backend)>,
 }
 struct State {
@@ -57,20 +73,30 @@ fn run(detached: bool, work: impl FnOnce() + Send + 'static) -> bool {
 }
 
 impl Session {
-    fn acquire(detached: bool) -> Arc<Self> {
+    fn acquire(detached: bool, transparency: Transparency) -> Arc<Self> {
+        // A caller without an image pin cannot inherit another caller's worker
+        // permission. Its initialization must remain on its owning thread.
+        if !detached {
+            return Self::private(detached, transparency, Vec::new());
+        }
         let mut weak = SHARED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(session) = weak.upgrade() {
+        if let Some(session) = weak[session_slot(transparency)].upgrade() {
             return session;
         }
-        let session = Self::private(detached, Vec::new());
-        *weak = Arc::downgrade(&session);
+        let session = Self::private(detached, transparency, Vec::new());
+        weak[session_slot(transparency)] = Arc::downgrade(&session);
         session
     }
-    fn private(detached: bool, excluded: Vec<(String, wgpu::Backend)>) -> Arc<Self> {
+    fn private(
+        detached: bool,
+        transparency: Transparency,
+        excluded: Vec<(String, wgpu::Backend)>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             detached,
+            transparency,
             excluded,
             state: Mutex::new(State {
                 generation: 0,
@@ -105,11 +131,12 @@ impl Session {
         let generation = state.begin_generation()?;
         state.failure = None;
         let excluded = self.excluded.clone();
+        let transparency = self.transparency;
         let weak = Arc::downgrade(self);
         drop(state);
         let started = run(self.detached, move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let mut descriptor = instance_descriptor();
+                let mut descriptor = session_descriptor(transparency);
                 // Vello cannot render through GL. Vulkan WSI accepts each window's
                 // own X connection; no process-wide borrowed display is retained.
                 descriptor.backends &= wgpu::Backends::PRIMARY;
@@ -197,9 +224,22 @@ pub struct GpuInit {
     excluded: Vec<(String, wgpu::Backend)>,
     last_failure: Option<String>,
     incompatible: bool,
+    transparency: Transparency,
 }
 impl GpuInit {
+    /// Initialize an opaque window after its first CPU frame has presented.
     pub fn new(detached: bool) -> Self {
+        Self::new_with_transparency(detached, Transparency::Opaque)
+    }
+
+    /// Initialize a native window while preserving its alpha presentation mode.
+    ///
+    /// Create this only after a successful CPU present. `detached` must be the
+    /// host's successful image pin result; false keeps heavy work synchronous.
+    /// Native surfaces are created only by [`Self::poll`] on the window thread.
+    /// DX12 translucent windows use DirectComposition. Compatible windows share
+    /// device/pipelines; alpha capability is still checked for each surface.
+    pub fn new_with_transparency(detached: bool, transparency: Transparency) -> Self {
         if !detached {
             crate::diagnostics::breadcrumb(
                 "mui-vello",
@@ -208,7 +248,7 @@ impl GpuInit {
             );
         }
         Self {
-            session: Session::acquire(detached),
+            session: Session::acquire(detached, transparency),
             job: None,
             context: None,
             installed: false,
@@ -216,6 +256,7 @@ impl GpuInit {
             excluded: Vec::new(),
             last_failure: None,
             incompatible: true,
+            transparency,
         }
     }
     pub fn pending(&self) -> bool {
@@ -263,7 +304,7 @@ impl GpuInit {
                         error
                     } else {
                         self.excluded.clear();
-                        self.session = Session::acquire(self.session.detached);
+                        self.session = Session::acquire(self.session.detached, self.transparency);
                         HostError::Unavailable {
                             message: error.to_string(),
                             class: FailureClass::Transient,
@@ -276,6 +317,7 @@ impl GpuInit {
             let (sender, receiver) = mpsc::sync_channel(1);
             self.context = Some(context.clone());
             self.job = Some(receiver);
+            let transparency = self.transparency;
             let _ = run(self.session.detached, move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let limit = context.device.limits().max_texture_dimension_2d;
@@ -304,7 +346,13 @@ impl GpuInit {
                             height,
                             present_mode: wgpu::PresentMode::AutoNoVsync,
                             desired_maximum_frame_latency: 1,
-                            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                            alpha_mode: alpha_mode(
+                                &[
+                                    wgpu::CompositeAlphaMode::Opaque,
+                                    wgpu::CompositeAlphaMode::PreMultiplied,
+                                ],
+                                transparency,
+                            ),
                             view_formats: Vec::new(),
                             color_space: wgpu::SurfaceColorSpace::Auto,
                         },
@@ -342,7 +390,7 @@ impl GpuInit {
             }
             let surface = create(&context.instance).map_err(HostError::Configuration)?;
             surface_attempted = true;
-            let config = surface_config(&surface, &gpu.adapter, size, Transparency::Opaque)?;
+            let config = surface_config(&surface, &gpu.adapter, size, self.transparency)?;
             configure(&surface, &gpu.device, &config).map_err(HostError::Configuration)?;
             gpu.renderer.set_surface_format(config.format);
             gpu.renderer
@@ -358,7 +406,7 @@ impl GpuInit {
                 wanted: target_size(size.0, size.1),
                 retry: Retry::default(),
                 generation: context.generation,
-                transparency: Transparency::Opaque,
+                transparency: self.transparency,
                 first_frame: true,
             })
         });
@@ -371,7 +419,11 @@ impl GpuInit {
                 self.incompatible &= matches!(error, HostError::Surface(_));
                 let info = context.adapter.get_info();
                 self.excluded.push((info.name, info.backend));
-                self.session = Session::private(self.session.detached, self.excluded.clone());
+                self.session = Session::private(
+                    self.session.detached,
+                    self.transparency,
+                    self.excluded.clone(),
+                );
                 HostError::Unavailable {
                     message: error.to_string(),
                     class: FailureClass::Transient,
@@ -426,7 +478,7 @@ mod tests {
         // The test executable cannot unload. Model an admitted, pinned worker
         // stalled in a driver; it owns only a weak session and result sender.
         let mut init = GpuInit::new(true);
-        init.session = Session::private(true, Vec::new());
+        init.session = Session::private(true, Transparency::Opaque, Vec::new());
         let weak = Arc::downgrade(&init.session);
         let (result, receiver) = mpsc::sync_channel(1);
         let (entered, entered_rx) = mpsc::sync_channel(1);
@@ -462,8 +514,39 @@ mod tests {
     }
 
     #[test]
+    fn unpinned_editor_cannot_inherit_detached_work_from_a_pinned_editor() {
+        let pinned = GpuInit::new(true);
+        let unpinned = GpuInit::new(false);
+        assert!(pinned.session.detached);
+        assert!(!unpinned.session.detached);
+        assert!(!Arc::ptr_eq(&pinned.session, &unpinned.session));
+    }
+
+    #[test]
+    fn transparent_initializer_preserves_alpha_and_windows_presentation_contract() {
+        let opaque = GpuInit::new(true);
+        let transparent = GpuInit::new_with_transparency(true, Transparency::Translucent);
+        assert_eq!(transparent.transparency, Transparency::Translucent);
+        assert_eq!(
+            Arc::ptr_eq(&opaque.session, &transparent.session),
+            !cfg!(windows)
+        );
+        assert_eq!(
+            session_descriptor(Transparency::Translucent)
+                .backend_options
+                .dx12
+                .presentation_system,
+            wgpu::Dx12SwapchainKind::DxgiFromVisual
+        );
+        assert_eq!(
+            session_slot(Transparency::Translucent),
+            usize::from(cfg!(windows))
+        );
+    }
+
+    #[test]
     fn one_rebuild_claim_is_shared_by_all_observers() {
-        let session = Session::private(false, Vec::new());
+        let session = Session::private(false, Transparency::Opaque, Vec::new());
         let observer = session.clone();
         assert_eq!(session.state.lock().unwrap().begin_generation().unwrap(), 1);
         assert!(observer.state.lock().unwrap().begin_generation().is_err());
@@ -476,7 +559,7 @@ mod tests {
     #[test]
     #[ignore = "requires native compute adapter"]
     fn editors_adopt_one_device_and_rebuilt_generation() {
-        let editor = Session::private(false, Vec::new());
+        let editor = Session::private(false, Transparency::Opaque, Vec::new());
         let second = editor.clone();
         assert!(editor.context().unwrap().is_none());
         let context = editor.context().unwrap().unwrap();
@@ -504,7 +587,7 @@ mod tests {
 
     #[test]
     fn weak_registry_does_not_own_the_last_editor() {
-        let session = Session::private(false, Vec::new());
+        let session = Session::private(false, Transparency::Opaque, Vec::new());
         let weak = Arc::downgrade(&session);
         let second = session.clone();
         drop(session);
