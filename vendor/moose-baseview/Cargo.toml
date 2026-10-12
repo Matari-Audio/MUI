@@ -1,8 +1,8 @@
 [package]
 name = "moose-baseview"
-# Upstream baseview 0.3.4 (crates.io, git bc987b96c22cbdb36507196dbbcad00c768e135b)
-# plus MOOSE patches; see README.md.
-version = "0.3.4-moose.1"
+# Derived from baseview v0.4.1 API/behavior (8c6e6bab), preserving owned native backends.
+# See UPSTREAM.md for the exhaustive forward-port and downstream deviations.
+version = "0.4.1-moose.1"
 authors = [
     "William Light <git@wrl.lhiaudio.com>",
     "Charles Saracco <crsaracco@gmail.com>",
@@ -47,7 +47,7 @@ libc = "0.2"
 x11rb = { version = "0.13.2", features = ["cursor", "randr", "resource_manager", "allow-unsafe-code", "dl-libxcb"], default-features = false }
 xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 x11-dl = { version = "2.21.0" }
-calloop = "0.14.4"
+calloop = "=0.14.4" # 0.14.5 raises MSRV to 1.86.
 percent-encoding = "2.3.2"
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
 

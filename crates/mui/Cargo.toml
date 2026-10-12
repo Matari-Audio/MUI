@@ -7,6 +7,8 @@ license.workspace = true
 
 [features]
 default = []
+# Opt-in native integration-fixture hooks, omitted from shipping builds.
+test-support = ["mui-vello/test-support"]
 reporting = ["mui-vello/reporting"]
 gpu-effects = ["mui-vello/gpu-effects"]
 cpu = ["mui-vello/cpu"]

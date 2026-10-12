@@ -1,0 +1,67 @@
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:315:28
+    |
+315 |     fn build_ic_attributes(&self) -> AttributeBuilder;
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+    = note: `#[warn(mismatched_lifetime_syntaxes)]` on by default
+help: use `'_` for type paths
+    |
+315 |     fn build_ic_attributes(&self) -> AttributeBuilder<'_>;
+    |                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:316:28
+    |
+316 |     fn build_im_attributes(&self) -> AttributeBuilder;
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+316 |     fn build_im_attributes(&self) -> AttributeBuilder<'_>;
+    |                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:370:28
+    |
+370 |     fn build_ic_attributes(&self) -> AttributeBuilder {
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+370 |     fn build_ic_attributes(&self) -> AttributeBuilder<'_> {
+    |                                                      ++++
+
+warning: hiding a lifetime that's elided elsewhere is confusing
+   --> vendor/xim-rs/src/client.rs:374:28
+    |
+374 |     fn build_im_attributes(&self) -> AttributeBuilder {
+    |                            ^^^^^     ^^^^^^^^^^^^^^^^ the same lifetime is hidden here
+    |                            |
+    |                            the lifetime is elided here
+    |
+    = help: the same lifetime is referred to in inconsistent ways, making the signature confusing
+help: use `'_` for type paths
+    |
+374 |     fn build_im_attributes(&self) -> AttributeBuilder<'_> {
+    |                                                      ++++
+
+warning: `zed-xim` (lib) generated 4 warnings (run `cargo fix --lib -p zed-xim` to apply 4 suggestions)
+   Compiling mui-vello v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-vello)
+   Compiling mui v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui)
+    Finished `test` profile [optimized] target(s) in 7.45s
+     Running unittests src/lib.rs (/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/deps/mui_vello-41b07a7373e8210e)
+
+running 1 test
+test host::initialization::tests::close_before_gpu_result_publication_never_creates_a_native_surface ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 71 filtered out; finished in 0.03s

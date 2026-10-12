@@ -73,11 +73,7 @@ fn main() {
         ctx.flush();
         let mut pix = Pixmap::new(480, 340);
         ctx.render(&mut pix, &mut resources);
-        let rgba: Vec<u8> = pix
-            .take_unpremultiplied()
-            .iter()
-            .flat_map(|p| [p.r, p.g, p.b, p.a])
-            .collect();
+        let rgba: Vec<u8> = pix.take_rgba8(mui::vello::peniko::ImageAlphaType::Alpha);
         let path = format!("{stem}-{name}.png");
         let file = std::fs::File::create(&path).unwrap();
         let mut encoder = png::Encoder::new(std::io::BufWriter::new(file), 480, 340);

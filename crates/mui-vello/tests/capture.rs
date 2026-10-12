@@ -22,9 +22,11 @@ fn raster(scene: &ResolvedScene) -> Vec<[u8; 4]> {
     ctx.flush();
     let mut pix = Pixmap::new(120, 80);
     ctx.render(&mut pix, &mut resources);
-    pix.take_unpremultiplied()
+    pix.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha)
+        .as_chunks::<4>()
+        .0
         .iter()
-        .map(|p| [p.r, p.g, p.b, p.a])
+        .map(|p| [p[0], p[1], p[2], p[3]])
         .collect()
 }
 

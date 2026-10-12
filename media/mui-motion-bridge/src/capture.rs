@@ -41,9 +41,15 @@ fn raster(
     ctx.flush();
     let mut pix = Pixmap::new(width, height);
     ctx.render(&mut pix, &mut res);
-    let pixels = pix.take_unpremultiplied();
+    let pixels = pix.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha);
     let (mut x0, mut y0, mut x1, mut y1) = (usize::from(width), usize::from(height), 0, 0);
-    for (i, _) in pixels.iter().enumerate().filter(|(_, p)| p.a != 0) {
+    for (i, _) in pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p[3] != 0)
+    {
         let (x, y) = (i % usize::from(width), i / usize::from(width));
         x0 = x0.min(x);
         y0 = y0.min(y);
@@ -55,9 +61,9 @@ fn raster(
     }
     let rgba: Vec<u8> = (y0..y1)
         .flat_map(|y| {
-            pixels[y * usize::from(width) + x0..y * usize::from(width) + x1]
+            pixels[(y * usize::from(width) + x0) * 4..(y * usize::from(width) + x1) * 4]
                 .iter()
-                .flat_map(|p| [p.r, p.g, p.b, p.a])
+                .copied()
         })
         .collect();
     let mut bytes = Vec::new();

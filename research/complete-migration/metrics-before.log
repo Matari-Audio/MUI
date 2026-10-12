@@ -1,0 +1,28 @@
+   Compiling read-fonts v0.43.3
+   Compiling skrifa v0.46.2
+   Compiling harfrust v0.13.3
+   Compiling mui-text v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-text)
+    Finished `test` profile [optimized] target(s) in 9.27s
+     Running unittests src/lib.rs (/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/deps/mui_text-13593cd75741b70c)
+
+running 2 tests
+test shape::tests::unused_fallback_faces_do_not_change_primary_line_metrics ... FAILED
+test shape::tests::contributing_fallback_faces_keep_their_line_metrics ... ok
+
+failures:
+
+---- shape::tests::unused_fallback_faces_do_not_change_primary_line_metrics stdout ----
+
+thread 'shape::tests::unused_fallback_faces_do_not_change_primary_line_metrics' (60687) panicked at crates/mui-text/src/shape.rs:646:13:
+assertion `left == right` failed: ""
+  left: (17.1015625, 4.6875, 21.7890625)
+ right: (15.5, 3.8636364936828613, 19.363636016845703)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    shape::tests::unused_fallback_faces_do_not_change_primary_line_metrics
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 45 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p mui-text --lib`

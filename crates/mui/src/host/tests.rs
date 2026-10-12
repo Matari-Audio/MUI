@@ -605,3 +605,130 @@ fn ime_configuration_uses_utf8_boundaries_and_disables_after_blur() {
     r.d.close(&mut r.s);
     assert!(r.d.ime_area().is_none());
 }
+
+#[test]
+fn refused_layout_stops_unchanged_retries_and_retries_real_changes() {
+    let mut r = Rig::new(
+        Keys {
+            enters: 0,
+            refuse: false,
+        },
+        (200, 200),
+        1.0,
+    );
+    assert!(r.step());
+    r.s.view.refuse = true;
+    r.d.animating = true;
+    r.d.wake_at = Some(r.d.last_frame());
+    r.d.redraw();
+    assert!(!r.step());
+    assert!(!r.d.dirty, "refusal consumes this redraw");
+    assert!(!r.d.animating, "a failed frame owes no old animation");
+    assert_eq!(r.d.next_wake(), None);
+    r.d.enable_profiling(ProfileConfig::default());
+    for _ in 0..5 {
+        assert!(!r.step());
+    }
+    assert_eq!(
+        r.d.profiler().unwrap().percentiles(Phase::ViewBuild).total,
+        0
+    );
+    r.s.view.refuse = false;
+    r.d.resized((250, 250), 1.0);
+    assert!(r.step(), "a new size must retry");
+}
+
+#[test]
+fn animation_spacing_never_delays_input_redraw_or_due_deadlines() {
+    let mut r = Rig::new(Pad, (200, 200), 1.0);
+    assert!(r.step());
+    r.d.animating = true;
+    let frame = r.d.last_frame();
+    assert!(!r.d.advance(&mut r.s, frame + Duration::from_millis(1)));
+    assert_eq!(r.d.next_wake(), Some(frame + Duration::from_millis(7)));
+    r.d.ime(Ime::Commit("a".into()));
+    assert!(r.d.advance(&mut r.s, frame + Duration::from_millis(2)));
+    r.d.animating = true;
+    r.d.redraw();
+    assert!(r.d.advance(&mut r.s, frame + Duration::from_millis(3)));
+    r.d.animating = true;
+    r.d.wake_at = Some(frame + Duration::from_millis(4));
+    assert!(r.d.advance(&mut r.s, frame + Duration::from_millis(4)));
+}
+
+#[test]
+fn resize_quiet_window_defers_live_work_but_preserves_input_and_final_frame() {
+    let mut r = Rig::new(Knob::default(), (200, 200), 1.0);
+    assert!(r.step());
+    let now = r.d.last_frame() + Duration::from_millis(1);
+    r.d.resized_at((240, 220), 1.0, now);
+    assert!(r.d.advance(&mut r.s, now), "resize paints immediately");
+    r.s.view.changed = true;
+    r.d.animating = true;
+    assert!(!r.d.advance(&mut r.s, now + Duration::from_millis(8)));
+    r.d.ime(Ime::Commit("a".into()));
+    assert!(r.d.advance(&mut r.s, now + Duration::from_millis(9)));
+    assert!(
+        r.d.advance(&mut r.s, now + Duration::from_millis(36)),
+        "quiet resize owes final reconciliation even after input"
+    );
+    assert_eq!(r.d.size(), (240, 220));
+}
+
+#[test]
+fn initially_refused_layout_waits_for_a_real_retry_even_without_a_scene() {
+    let mut r = Rig::new(
+        Keys {
+            enters: 0,
+            refuse: true,
+        },
+        (200, 200),
+        1.0,
+    );
+    assert!(!r.step());
+    assert!(r.s.ui.scene().is_none());
+    assert_eq!(r.d.next_wake(), None);
+    r.d.enable_profiling(ProfileConfig::default());
+    assert!(!r.step());
+    assert_eq!(
+        r.d.profiler().unwrap().percentiles(Phase::ViewBuild).total,
+        0
+    );
+    r.s.view.refuse = false;
+    r.d.redraw();
+    assert!(r.step());
+}
+
+#[test]
+fn each_resize_extends_quiet_but_due_repaints_bypass_it() {
+    let mut r = Rig::new(Pad, (200, 200), 1.0);
+    assert!(r.step());
+    let start = r.d.last_frame();
+    r.d.resized_at((210, 200), 1.0, start);
+    assert!(r.d.advance(&mut r.s, start));
+    r.d.resized_at((220, 200), 1.0, start + Duration::from_millis(20));
+    assert!(r.d.advance(&mut r.s, start + Duration::from_millis(20)));
+    assert_eq!(r.d.next_wake(), Some(start + Duration::from_millis(55)));
+    assert!(!r.d.advance(&mut r.s, start + Duration::from_millis(36)));
+    r.d.wake_at = Some(start + Duration::from_millis(37));
+    assert!(r.d.advance(&mut r.s, start + Duration::from_millis(37)));
+    assert_eq!(r.d.next_wake(), Some(start + Duration::from_millis(55)));
+    assert!(r.d.advance(&mut r.s, start + Duration::from_millis(55)));
+    assert_eq!(r.d.next_wake(), None);
+}
+
+#[test]
+fn semantic_input_followup_bypasses_animation_and_resize_spacing() {
+    let mut r = Rig::new(Pad, (200, 200), 1.0);
+    assert!(r.step());
+    let now = r.d.last_frame();
+    r.d.resized_at((210, 200), 1.0, now);
+    assert!(r.d.advance(&mut r.s, now));
+    r.d.ime(Ime::Commit("a".into()));
+    assert!(r.d.advance(&mut r.s, now + Duration::from_millis(1)));
+    assert!(r.d.followup);
+    assert_eq!(r.d.next_wake(), Some(now + Duration::from_millis(1)));
+    assert!(r.d.advance(&mut r.s, now + Duration::from_millis(2)));
+    assert!(!r.d.followup);
+    assert!(!r.d.advance(&mut r.s, now + Duration::from_millis(3)));
+}

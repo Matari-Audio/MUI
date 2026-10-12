@@ -10,7 +10,7 @@ use mui::prelude::{El, Input, knob};
 #[test]
 #[ignore = "requires an X11 display"]
 fn native_cpu_fallback_presents_and_reopens() {
-    cpu_presentation_fixture(false);
+    cpu_presentation_fixture(false, false);
 }
 
 #[cfg(target_os = "linux")]
@@ -23,20 +23,37 @@ fn native_resize_failure_falls_back_and_presents() {
         eprintln!("SKIPPED: no native GPU backend enabled by WGPU_BACKEND");
         return;
     }
-    cpu_presentation_fixture(true);
+    cpu_presentation_fixture(true, false);
 }
 
 #[cfg(target_os = "linux")]
-fn cpu_presentation_fixture(resize_failure: bool) {
+#[test]
+#[ignore = "requires a live X11 display and graphics driver; exercises the >1M pixel startup placeholder"]
+fn native_large_resize_failure_recovers_full_scene() {
+    if (mui::vello::host::instance_descriptor().backends & wgpu::Backends::PRIMARY).is_empty() {
+        return;
+    }
+    cpu_presentation_fixture(true, true);
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_presentation_fixture(resize_failure: bool, large: bool) {
     use mui::prelude::*;
     use std::sync::mpsc::{Sender, channel};
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 
-    struct Green;
+    struct Green {
+        size: (u32, u32),
+    }
     impl View for Green {
         fn build(&mut self, _: &mut Ui, _: &Input) -> El {
-            block(240., 200.).fill(Color::srgb(0., 1., 0.))
+            // A foreground child distinguishes a full scene from startup background-only pixels.
+            col![
+                block(self.size.0 as f32, 40.).fill(Color::srgb(0., 0., 1.)),
+                block(self.size.0 as f32, self.size.1 as f32 - 40.).fill(Color::srgb(0., 1., 0.)),
+            ]
+            .fill(Color::srgb(0., 1., 0.))
         }
         fn changed(&mut self) -> bool {
             false
@@ -52,6 +69,8 @@ fn cpu_presentation_fixture(resize_failure: bool) {
         traced: std::cell::Cell<u8>,
         exposed: std::cell::Cell<bool>,
         resize_failure: bool,
+        initial: (u32, u32),
+        resized: (u32, u32),
         recovered_size: std::cell::Cell<(u32, u32)>,
         result: RefCell<Option<Sender<Result<(), String>>>>,
     }
@@ -81,10 +100,10 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                             }
                             return Ok(false);
                         }
-                        if presented.size != (240, 200) {
+                        if presented.size != self.initial {
                             return Err("fixture did not establish the correct GPU extent".into());
                         }
-                        handler.requests.resize(200, 160);
+                        handler.requests.resize(self.resized.0, self.resized.1);
                         handler.tick(&self.cx);
                         let gpu = handler.gpu.as_ref().ok_or("missing initial GPU")?;
                         // Lose the device before X11 acknowledges the requested resize.
@@ -118,7 +137,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                 let mut handler = self.handler.borrow_mut();
                 // A WM can constrain the request (XWayland here uses 200x161).
                 // Verify the acknowledged native extent, not our requested one.
-                if handler.driver.size() == (240, 200) {
+                if handler.driver.size() == self.initial {
                     return Ok(());
                 }
                 self.recovered_size.set(handler.driver.size());
@@ -186,7 +205,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                 let expected = if self.resize_failure {
                     self.recovered_size.get()
                 } else {
-                    (240, 200)
+                    self.initial
                 };
                 let presented = handler
                     .requests
@@ -227,15 +246,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                 let deadline = Instant::now() + Duration::from_secs(1);
                 loop {
                     let pixels = connection
-                        .get_image(
-                            ImageFormat::Z_PIXMAP,
-                            window,
-                            20,
-                            i16::try_from(expected.1 - 20).unwrap(),
-                            1,
-                            1,
-                            u32::MAX,
-                        )
+                        .get_image(ImageFormat::Z_PIXMAP, window, 20, 20, 1, 1, u32::MAX)
                         .map_err(|e| e.to_string())?
                         .reply()
                         .map_err(|e| e.to_string())?;
@@ -252,8 +263,8 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                     } else {
                         u32::from_be_bytes(bytes)
                     };
-                    if pixel & visual.green_mask == visual.green_mask
-                        && pixel & (visual.red_mask | visual.blue_mask) == 0
+                    if pixel & visual.blue_mask == visual.blue_mask
+                        && pixel & (visual.red_mask | visual.green_mask) == 0
                     {
                         if depth == 32 && pixel >> 24 != 255 {
                             return Err(
@@ -317,19 +328,21 @@ fn cpu_presentation_fixture(resize_failure: bool) {
             self.handler.borrow_mut().on_event_inner(&event)
         }
     }
+    let initial = if large { (1200, 1100) } else { (240, 200) };
+    let resized = if large { (1150, 1050) } else { (200, 160) };
     for _ in 0..2 {
         let (send, recv) = channel();
         let shared = Arc::new(Mutex::new(Shared {
             ui: Ui::default(),
-            view: Green,
+            view: Green { size: initial },
         }));
         let window = Window::create(
-            settings("MUI CPU regression", (240, 200))
+            settings("MUI CPU regression", initial)
                 .with_resizable(false)
                 .with_scale_factor_override(Some(1.0)),
             move |cx| {
                 let requests = Arc::new(Requests::default());
-                let mut handler = Handler::new(shared, requests, (240, 200), 1.0);
+                let mut handler = Handler::new(shared, requests, initial, 1.0);
                 handler.software_only = !resize_failure
                     && (handler.software_only
                         || std::env::var("WGPU_BACKEND").as_deref() != Ok("metal"));
@@ -349,7 +362,9 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                     traced: std::cell::Cell::new(255),
                     exposed: std::cell::Cell::new(false),
                     resize_failure,
-                    recovered_size: std::cell::Cell::new((240, 200)),
+                    initial,
+                    resized,
+                    recovered_size: std::cell::Cell::new(initial),
                     result: RefCell::new(Some(send)),
                 })
             },
@@ -1066,4 +1081,66 @@ fn live_poll_interval_is_set_and_cleared_without_a_wake() {
     assert_eq!(requests.poll_interval(), Some(Duration::from_micros(1)));
     requests.set_poll_interval(None);
     assert_eq!(requests.poll_interval(), None);
+}
+
+#[test]
+fn queued_motion_coalesces_only_adjacent_equal_modifier_samples_and_preserves_barriers() {
+    let mut queue = VecDeque::new();
+    let movement = |x, modifiers| {
+        Event::Mouse(MouseEvent::CursorMoved {
+            position: PhysicalPosition::new(x, 1.),
+            modifiers,
+        })
+    };
+    let none = Modifiers::default();
+    for x in 0..1000 {
+        enqueue_event(&mut queue, movement(f64::from(x), none));
+    }
+    let key_event = key(
+        HostKey::Character("a".into()),
+        Code::KeyA,
+        KeyState::Down,
+        none,
+    );
+    enqueue_event(&mut queue, key_event);
+    enqueue_event(&mut queue, movement(1001., none));
+    enqueue_event(&mut queue, Event::Ime(baseview::Ime::Commit("😀".into())));
+    enqueue_event(&mut queue, movement(1002., none));
+    enqueue_event(&mut queue, movement(1003., Modifiers::SHIFT));
+    enqueue_event(
+        &mut queue,
+        Event::Mouse(MouseEvent::ButtonReleased {
+            button: MouseButton::Left,
+            modifiers: Modifiers::SHIFT,
+        }),
+    );
+    assert_eq!(queue.len(), 7);
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, ..
+    })) if position.x == 999.)
+    );
+    assert!(matches!(queue.pop_front(), Some(Event::Keyboard(_))));
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, ..
+    })) if position.x == 1001.)
+    );
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Ime(baseview::Ime::Commit(text))) if text == "😀")
+    );
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, ..
+    })) if position.x == 1002.)
+    );
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, modifiers
+    })) if position.x == 1003. && modifiers == Modifiers::SHIFT)
+    );
+    assert!(matches!(
+        queue.pop_front(),
+        Some(Event::Mouse(MouseEvent::ButtonReleased { .. }))
+    ));
 }

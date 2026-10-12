@@ -33,7 +33,7 @@ use crate::wrappers::win32::{
 };
 use crate::{Event, MouseButton, MouseEvent, ScrollDelta, WindowEvent, WindowSize};
 
-fn paint_background(hwnd: HWND, fill: bool) {
+fn paint_background(hwnd: HWND, fill: bool) -> crate::DamageRect {
     use windows_sys::Win32::Graphics::Gdi::*;
     let mut paint = PAINTSTRUCT::default();
     let dc = unsafe { BeginPaint(hwnd, &mut paint) };
@@ -50,6 +50,16 @@ fn paint_background(hwnd: HWND, fill: bool) {
     unsafe {
         EndPaint(hwnd, &paint);
     }
+    crate::DamageRect::new(
+        crate::dpi::PhysicalPosition::new(
+            paint.rcPaint.left.max(0) as u32,
+            paint.rcPaint.top.max(0) as u32,
+        ),
+        crate::dpi::PhysicalSize::new(
+            paint.rcPaint.right.saturating_sub(paint.rcPaint.left).max(0) as u32,
+            paint.rcPaint.bottom.saturating_sub(paint.rcPaint.top).max(0) as u32,
+        ),
+    )
 }
 
 fn hi_word(wparam: WPARAM) -> u16 {
@@ -872,7 +882,8 @@ unsafe fn wnd_proc_inner(
         WM_PAINT => {
             // Validate before calling user code: nested pumps must not repeatedly
             // deliver the same paint. GDI supplies a visible first-open placeholder.
-            paint_background(window.as_raw(), window_bv.background_pending.get());
+            let damage = paint_background(window.as_raw(), window_bv.background_pending.get());
+            window_bv.handler.with(|handler| handler.damage(crate::DamageArea::Rect(damage)));
             window_bv.handle_event(Event::Window(WindowEvent::RedrawRequested));
             Some(0)
         }

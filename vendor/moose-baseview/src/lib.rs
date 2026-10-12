@@ -1,5 +1,6 @@
 mod clipboard;
 mod context;
+mod damage;
 pub mod dpi;
 mod drag_resize;
 mod error;
@@ -8,6 +9,7 @@ mod handler;
 pub mod host;
 mod ime;
 mod keyboard;
+mod work;
 pub use ime::{Ime, ImeConfiguration};
 mod mouse_cursor;
 mod settings;
@@ -27,12 +29,14 @@ pub use context::{PlatformHandle, WindowContext};
 pub use drag_resize::{DragResizeError, ResizeEdge};
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod drag;
+pub use damage::{DamageArea, DamageRect};
 pub use error::*;
 pub use event::*;
 pub use handler::{FrameDemand, WindowHandler};
 pub use mouse_cursor::MouseCursor;
 pub use settings::*;
 pub use window::*;
+pub use work::{TimerHandle, WindowWaker};
 
 #[allow(unused, reason = "Some platforms may not use all exports from this mod")]
 pub(crate) use tracing::*;

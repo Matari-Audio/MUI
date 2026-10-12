@@ -102,7 +102,11 @@ race-free by this fork. Use of this mutex is not a claim of host cooperation.
 ## Ported upstream fixes
 
 This vendored fork is MUI's first-party windowing layer. We retain its `on_frame`
-contract; we do not rebase onto upstream's 0.4 `draw` API.
+contract alongside the current `draw`/`poll`/`damage`/waker/timer APIs. A common
+scheduler adapts these APIs onto the existing native lifetime guards and pacers.
+`draw` delegates to `on_frame` by default, and legacy `Continuous` demand remains
+the default. New idle handlers can override `frame_demand` to `Idle`. See
+[UPSTREAM.md](UPSTREAM.md) for exact upstream provenance and adapted behavior.
 
 * [RustAudio/baseview #345](https://github.com/RustAudio/baseview/pull/345):
   Windows DPI virtualization. Unaware hosts remain at 96 DPI; per-monitor-v1

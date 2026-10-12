@@ -1,3 +1,9 @@
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "native protocol fixture assertions"
+)]
 //! Unit policy checks and opt-in recipient wire checks on an isolated X server.
 use super::*;
 use std::cell::RefCell;
