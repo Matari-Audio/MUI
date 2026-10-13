@@ -205,6 +205,15 @@ impl Default for Limits {
         }
     }
 }
+impl Limits {
+    /// Validate a layout budget before any traversal uses its recursion bound.
+    pub fn validate(self) -> Result<(), Error> {
+        if !self.extent.is_finite() || self.extent <= 0.0 || self.nodes == 0 || self.depth > 256 {
+            return Err(Error::InvalidValue);
+        }
+        Ok(())
+    }
+}
 
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
 /// Content leaves measure as empty; use [`resolve_with`] to size them.
@@ -276,12 +285,8 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
     cache: Option<&mut LayoutCache>,
     boxed: Option<Insets>,
 ) -> Result<Layout, Error> {
-    if !limits.extent.is_finite()
-        || limits.extent <= 0.0
-        || limits.nodes == 0
-        || limits.depth > 256
-        || !scale.is_valid()
-    {
+    limits.validate()?;
+    if !scale.is_valid() {
         return Err(Error::InvalidValue);
     }
     let mut measurer = crate::measure::intrinsic(measurer);
