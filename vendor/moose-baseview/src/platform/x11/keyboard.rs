@@ -403,10 +403,12 @@ pub(crate) fn convert_key_press_event(
 ) -> KeyboardEvent {
     let hw_keycode = key_press.detail;
 
-    // Update the xkbc state
+    // Translate using the server snapshot, including changes while unfocused
+    // and modifier edges consumed by XIM. Physical repeat/release ownership is
+    // tracked separately by the event loop and MUI's driver.
     let hw_code = hw_keycode.into();
     if let Some(state) = state {
-        state.update_key_down(hw_code);
+        state.update_core_state(key_press.state.into());
     }
 
     let code = hardware_keycode_to_code(hw_keycode.into());
@@ -423,10 +425,10 @@ pub(crate) fn convert_key_release_event(
 ) -> KeyboardEvent {
     let hw_keycode = key_release.detail;
 
-    // Update the xkbc state
+    // A release also carries the server's effective state before its edge.
     let hw_code = hw_keycode.into();
     if let Some(state) = state {
-        state.update_key_up(hw_code);
+        state.update_core_state(key_release.state.into());
     }
 
     let code = hardware_keycode_to_code(hw_keycode.into());
@@ -436,4 +438,88 @@ pub(crate) fn convert_key_release_event(
     let state = KeyState::Up;
 
     KeyboardEvent { code, key, modifiers, location, state, repeat: false, is_composing: false }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn press(detail: u8, state: KeyButMask, xkb: &mut Option<XkbcommonState>) -> KeyboardEvent {
+        convert_key_press_event(&KeyPressEvent { detail, state, ..Default::default() }, xkb)
+    }
+
+    #[test]
+    fn native_text_uses_the_events_caps_lock_and_shift_snapshot() {
+        let mut xkb = Some(XkbcommonState::for_test(c"us"));
+        // CapsLock changed while the editor was unfocused: no local CapsLock edge.
+        assert_eq!(press(38, KeyButMask::LOCK, &mut xkb).key, Key::Character("A".into()));
+        assert_eq!(press(38, KeyButMask::default(), &mut xkb).key, Key::Character("a".into()));
+        assert_eq!(press(38, KeyButMask::SHIFT, &mut xkb).key, Key::Character("A".into()));
+        assert_eq!(
+            press(38, KeyButMask::SHIFT | KeyButMask::LOCK, &mut xkb).key,
+            Key::Character("a".into())
+        );
+    }
+
+    #[test]
+    fn native_text_uses_shifted_digits_without_a_local_shift_press() {
+        let mut xkb = Some(XkbcommonState::for_test(c"us"));
+        for (detail, plain, shifted) in [
+            (10, "1", "!"),
+            (11, "2", "@"),
+            (12, "3", "#"),
+            (13, "4", "$"),
+            (14, "5", "%"),
+            (15, "6", "^"),
+            (16, "7", "&"),
+            (17, "8", "*"),
+            (18, "9", "("),
+            (19, "0", ")"),
+        ] {
+            assert_eq!(
+                press(detail, KeyButMask::SHIFT, &mut xkb).key,
+                Key::Character(shifted.into())
+            );
+            // CapsLock only changes letters, never the digit's shift level.
+            assert_eq!(press(detail, KeyButMask::LOCK, &mut xkb).key, Key::Character(plain.into()));
+        }
+    }
+
+    #[test]
+    fn native_text_recovers_from_a_missing_shift_release_and_repeated_presses() {
+        let mut xkb = Some(XkbcommonState::for_test(c"us"));
+        // Shift down; its release outside the editor or consumed by XIM never arrives.
+        press(50, KeyButMask::default(), &mut xkb);
+        for _ in 0..3 {
+            assert_eq!(press(38, KeyButMask::default(), &mut xkb).key, Key::Character("a".into()));
+        }
+        let release = convert_key_release_event(
+            &KeyReleaseEvent { detail: 38, state: KeyButMask::SHIFT, ..Default::default() },
+            &mut xkb,
+        );
+        assert_eq!(release.key, Key::Character("A".into()));
+        assert_eq!(release.state, KeyState::Up);
+        assert_eq!(release.code, Code::KeyA);
+    }
+
+    #[test]
+    fn native_shortcut_letters_keep_their_unmodified_identity() {
+        let mut xkb = Some(XkbcommonState::for_test(c"us"));
+        assert_eq!(
+            press(54, KeyButMask::CONTROL | KeyButMask::SHIFT, &mut xkb).key,
+            Key::Character("c".into())
+        );
+    }
+
+    #[test]
+    fn native_text_preserves_keyboard_groups_and_altgr() {
+        let mut xkb = Some(XkbcommonState::for_test(c"us,il"));
+        assert_eq!(
+            press(38, KeyButMask::from(1u16 << 13), &mut xkb).key,
+            Key::Character("ש".into())
+        );
+        assert_eq!(press(38, KeyButMask::BUTTON1, &mut xkb).key, Key::Character("a".into()));
+        let mut xkb = Some(XkbcommonState::for_test(c"de"));
+        assert_eq!(press(24, KeyButMask::MOD5, &mut xkb).key, Key::Character("@".into()));
+    }
 }

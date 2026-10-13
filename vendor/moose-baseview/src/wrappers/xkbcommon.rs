@@ -8,6 +8,34 @@ pub struct XkbcommonState {
 }
 
 impl XkbcommonState {
+    #[cfg(test)]
+    pub(crate) fn for_test(layout: &std::ffi::CStr) -> Self {
+        let xkb_common = xkbc::xkbcommon_option().expect("libxkbcommon for native keyboard tests");
+        let names = xkbc::xkb_rule_names {
+            rules: c"evdev".as_ptr(),
+            model: c"pc105".as_ptr(),
+            layout: layout.as_ptr(),
+            variant: c"".as_ptr(),
+            options: c"".as_ptr(),
+        };
+        unsafe {
+            let context =
+                (xkb_common.xkb_context_new)(xkbc::xkb_context_flags::XKB_CONTEXT_NO_FLAGS);
+            assert!(!context.is_null());
+            let keymap = (xkb_common.xkb_keymap_new_from_names)(
+                context,
+                &names,
+                xkbc::xkb_keymap_compile_flags::XKB_KEYMAP_COMPILE_NO_FLAGS,
+            );
+            assert!(!keymap.is_null());
+            let state = (xkb_common.xkb_state_new)(keymap);
+            assert!(!state.is_null());
+            (xkb_common.xkb_keymap_unref)(keymap);
+            (xkb_common.xkb_context_unref)(context);
+            Self { state, xkb_common }
+        }
+    }
+
     pub fn new(xcb_connection: &crate::platform::X11Connection) -> Option<Self> {
         let xkb_common = xkbc::xkbcommon_option()?;
         let xkb_x11 = xkbc::x11::xkbcommon_x11_option()?;
@@ -64,18 +92,17 @@ impl XkbcommonState {
         }
     }
 
-    pub fn update_key(&mut self, code: Keycode, dir: xkbc::xkb_key_direction) {
+    /// Synchronize the client translator with an X11 core key event's state.
+    /// The server owns modifier and lock transitions. Replaying local key edges
+    /// misses releases outside this window and keys filtered by an input method.
+    pub fn update_core_state(&mut self, state: u16) {
+        // X11's low eight bits are the real modifier mask; bits 13-14 are
+        // the effective keyboard group. Button bits must not become modifiers.
+        let modifiers = u32::from(state & 0xff);
+        let group = u32::from((state >> 13) & 3);
         unsafe {
-            (self.xkb_common.xkb_state_update_key)(self.state, code, dir);
+            (self.xkb_common.xkb_state_update_mask)(self.state, modifiers, 0, 0, 0, 0, group);
         }
-    }
-
-    pub fn update_key_down(&mut self, code: Keycode) {
-        self.update_key(code, xkbc::xkb_key_direction::XKB_KEY_DOWN)
-    }
-
-    pub fn update_key_up(&mut self, code: Keycode) {
-        self.update_key(code, xkbc::xkb_key_direction::XKB_KEY_UP)
     }
 }
 

@@ -321,26 +321,10 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         scale,
     };
     arrange(&m, "root", [0.0, 0.0], size, &pins(&empty), None, &mut out)?;
-    // ponytail: one extra arrange resolves every pin, because a float takes no
-    // space and so cannot move an anchor. A pin whose anchor is itself inside a
-    // pinned float reads that float's first-pass position; give the pass a
-    // dependency order if that ever matters.
+    // An anchor inside a pinned float must use that float's final position,
+    // regardless of declaration order. Resolve only the affected subtrees.
     if pass.pinned {
-        let named = std::mem::take(&mut out.0);
-        let anchors = named
-            .into_iter()
-            .map(|(id, at)| (id, out.1[at as usize]))
-            .collect();
-        out.1.clear();
-        arrange(
-            &m,
-            "root",
-            [0.0, 0.0],
-            size,
-            &pins(&anchors),
-            None,
-            &mut out,
-        )?;
+        pin::resolve_pins(&m, size, scale, &mut out)?;
     }
     Ok(Layout {
         size,

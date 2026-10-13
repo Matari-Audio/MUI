@@ -1030,6 +1030,120 @@ fn a_matched_pin_takes_the_anchor_width() {
 }
 
 #[test]
+fn a_pin_uses_an_anchor_inside_another_pin_in_either_declaration_order() {
+    for picker_first in [false, true] {
+        let trigger = block(20., 20.).at(300., 20.).id("trigger");
+        let menu = col([block(30., 20.).id("swatch")])
+            .pad(10.)
+            .anchor(Align::Start, Align::Start)
+            .pin(Pin::to("trigger").area(Area::BottomEnd).gap(4.))
+            .id("menu");
+        let picker = block(60., 50.)
+            .pin(Pin::to("swatch").area(Area::Start).gap(8.))
+            .id("picker");
+        let floats = if picker_first {
+            vec![picker, menu]
+        } else {
+            vec![menu, picker]
+        };
+        let tree = stack(std::iter::once(trigger).chain(floats));
+        let l = resolve(&tree, Some(Size::new(500., 300.)), Limits::default()).unwrap();
+        let swatch = l.frame("swatch").unwrap();
+        let picker = l.frame("picker").unwrap();
+        assert_eq!(picker.right() + 8., swatch.x);
+        assert_eq!(picker.center().1, swatch.center().1);
+        assert_eq!((swatch.x, swatch.y), (280., 54.));
+    }
+}
+
+#[test]
+fn nested_pin_chains_settle_sizes_and_descendant_anchors_in_one_resolve() {
+    let trigger = block(90., 20.).at(100., 10.).id("trigger");
+    let last = block(25., 15.)
+        .pin(Pin::to("inner").area(Area::End))
+        .id("last");
+    let second = col([block(10., 10.).id("inner")])
+        .pad(5.)
+        .anchor(Align::Start, Align::Start)
+        .pin(Pin::to("menu").area(Area::End).match_width())
+        .id("second");
+    let menu = block(20., 30.)
+        .pin(Pin::to("trigger").area(Area::BottomStart).match_width())
+        .id("menu");
+    let l = resolve(
+        &stack([last, second, menu, trigger]),
+        Some(Size::new(500., 300.)),
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(l.frame("menu").unwrap().size.width, 90.);
+    assert_eq!(l.frame("second").unwrap().size.width, 90.);
+    assert_eq!(
+        l.frame("last").unwrap().x,
+        l.frame("inner").unwrap().right()
+    );
+    assert_eq!(
+        l.frame("last").unwrap().center().1,
+        l.frame("inner").unwrap().center().1
+    );
+}
+
+#[test]
+fn cyclic_pin_anchors_are_rejected() {
+    let tree = stack([
+        block(20., 20.).pin(Pin::to("b")).id("a"),
+        block(20., 20.).pin(Pin::to("a")).id("b"),
+    ]);
+    assert_eq!(
+        resolve(&tree, Some(Size::new(200., 200.)), Limits::default()),
+        Err(Error::InvalidValue)
+    );
+}
+
+#[test]
+fn a_pin_nested_in_a_pinned_container_follows_its_sized_parent() {
+    let menu = col([
+        block(20., 20.).id("swatch"),
+        block(30., 10.)
+            .pin(Pin::to("swatch").area(Area::End))
+            .id("picker"),
+    ])
+    .pad(8.)
+    .anchor(Align::Start, Align::Start)
+    .pin(Pin::to("trigger").area(Area::BottomStart).match_width())
+    .id("menu");
+    let trigger = block(90., 20.).at(150., 20.).id("trigger");
+    let l = resolve(
+        &stack([menu, trigger]),
+        Some(Size::new(500., 300.)),
+        Limits::default(),
+    )
+    .unwrap();
+    let swatch = l.frame("swatch").unwrap();
+    let picker = l.frame("picker").unwrap();
+    assert_eq!(picker.x, swatch.right());
+    assert_eq!(picker.center().1, swatch.center().1);
+    assert_eq!(l.frame("menu").unwrap().size.width, 90.);
+}
+
+#[test]
+fn pins_in_a_hidden_fits_branch_remain_hidden_and_do_not_form_dependencies() {
+    let hidden = row([
+        block(200., 20.),
+        block(20., 20.).pin(Pin::to("b")).id("a"),
+        block(20., 20.).pin(Pin::to("a")).id("b"),
+    ]);
+    let l = resolve(
+        &fits([hidden, block(10., 10.)]),
+        Some(Size::new(100., 100.)),
+        Limits::default(),
+    )
+    .unwrap();
+    assert_eq!(l.frame("a").unwrap().size, Size::ZERO);
+    assert_eq!(l.frame("b").unwrap().size, Size::ZERO);
+}
+
+#[test]
 fn a_sticky_header_holds_the_viewport_edge_until_its_section_ends() {
     let section = |k: &str| {
         col([
