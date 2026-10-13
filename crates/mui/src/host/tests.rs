@@ -235,6 +235,67 @@ fn space_is_a_key_and_text_but_a_shortcut_is_only_a_key() {
 }
 
 #[test]
+fn native_text_reaches_the_field_verbatim_with_repeats_and_ime_commits() {
+    struct Text(String);
+    impl View for Text {
+        fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+            crate::widgets::text_input(ui, "edit", &mut self.0).el
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+    let mut r = Rig::new(Text(String::new()), (400, 300), 1.);
+    r.s.ui =
+        Ui::default().font(crate::prelude::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    r.step();
+    r.s.ui.focus("edit");
+    let shifted = Mods {
+        shift: true,
+        ..none()
+    };
+    for (code, text, mods) in [
+        (1, "a", none()),
+        (2, "A", shifted),
+        (3, "#", shifted),
+        (3, "#", shifted),
+        (4, "!@#$%^&*()", shifted),
+    ] {
+        assert!(r.key(&press(code, NativeKey::Text(text.into()), mods)));
+        r.step();
+        r.step();
+    }
+    assert_eq!(r.s.view.0, "aA##!@#$%^&*()");
+    r.d.ime(Ime::Commit("é日本".into()));
+    r.step();
+    r.step();
+    assert_eq!(r.s.view.0, "aA##!@#$%^&*()é日本");
+    // Shortcut matching remains case-insensitive without adding typed text.
+    assert_eq!(
+        shortcut_key(&NativeKey::Text("Z".into())),
+        Some(Key::Char('z'))
+    );
+    let mut input = Input::default();
+    typed(
+        &mut input,
+        &NativeKey::Text("Z".into()),
+        Mods {
+            ctrl: true,
+            ..shifted
+        },
+    );
+    assert!(input.text.is_empty());
+    assert_eq!(input.keys[0].key, Key::Char('Z'));
+    // Ownership follows the physical key even if focus and Shift change.
+    r.s.ui.blur();
+    assert!(r.key(&release(3, NativeKey::Text("3".into()), none())));
+    assert!(!r.key(&release(3, NativeKey::Text("3".into()), none())));
+}
+
+#[test]
 fn keys_route_to_the_host_unless_focus_or_a_shortcut_claims_them() {
     let mut r = Rig::new(Knob::default(), (400, 400), 1.0);
     r.step();

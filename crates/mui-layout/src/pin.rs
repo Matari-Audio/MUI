@@ -178,6 +178,134 @@ pub(crate) struct Pins<'a> {
     pub(crate) scale: SpacingScale,
 }
 
+/// Resolve a pin after the pin that owns its anchor and its parent. The first
+/// arrange already supplied every intrinsic size and frame slot; replaying a
+/// pinned subtree updates those slots without disturbing tree/named order.
+pub(crate) fn resolve_pins<P>(
+    root: &Measured<'_, P>,
+    size: Size,
+    scale: SpacingScale,
+    out: &mut (Vec<(Id, u32)>, Vec<Frame>),
+) -> Result<(), Error> {
+    struct Pending<'a, 'n, P> {
+        node: &'a Measured<'n, P>,
+        at: usize,
+        end: usize,
+        parent: Option<usize>,
+    }
+    fn collect<'a, 'n, P>(
+        node: &'a Measured<'n, P>,
+        next: &mut usize,
+        parent: Option<usize>,
+        pending: &mut Vec<Pending<'a, 'n, P>>,
+        owners: &mut BTreeMap<Id, usize>,
+        frames: &[Frame],
+    ) {
+        let at = *next;
+        *next += 1;
+        let owner =
+            if frames[at].size != Size::ZERO && node.node.float && node.node.rare().pin.is_some() {
+                let i = pending.len();
+                pending.push(Pending {
+                    node,
+                    at,
+                    end: 0,
+                    parent,
+                });
+                Some(i)
+            } else {
+                parent
+            };
+        if let (Some(id), Some(owner)) = (&node.node.id, owner) {
+            owners.insert(id.clone(), owner);
+        }
+        for child in &node.children {
+            collect(child, next, owner, pending, owners, frames);
+        }
+        if owner != parent {
+            pending[owner.unwrap()].end = *next;
+        }
+    }
+    let mut pending = Vec::new();
+    let mut owners = BTreeMap::new();
+    collect(root, &mut 0, None, &mut pending, &mut owners, &out.1);
+    let dependencies: Vec<Vec<usize>> = pending
+        .iter()
+        .map(|p| {
+            p.parent
+                .into_iter()
+                .chain(
+                    owners
+                        .get(p.node.node.rare().pin.as_ref().unwrap().anchor.as_str())
+                        .copied(),
+                )
+                .collect()
+        })
+        .collect();
+    let mut order = Vec::with_capacity(pending.len());
+    let mut remaining: Vec<_> = dependencies.iter().map(Vec::len).collect();
+    let mut dependents = vec![Vec::new(); pending.len()];
+    for (i, dependencies) in dependencies.iter().enumerate() {
+        for &dependency in dependencies {
+            dependents[dependency].push(i);
+        }
+        if dependencies.is_empty() {
+            order.push(i);
+        }
+    }
+    let mut ready = 0;
+    while ready < order.len() {
+        for &dependent in &dependents[order[ready]] {
+            remaining[dependent] -= 1;
+            if remaining[dependent] == 0 {
+                order.push(dependent);
+            }
+        }
+        ready += 1;
+    }
+    if order.len() != pending.len() {
+        return Err(Error::InvalidValue);
+    }
+    let mut anchors: BTreeMap<_, _> = out
+        .0
+        .iter()
+        .map(|(id, at)| (id.clone(), out.1[*at as usize]))
+        .collect();
+    for i in order {
+        let p = &pending[i];
+        let frame = out.1[p.at];
+        // A losing `fits` branch stays hidden, including its floats.
+        if frame.size == Size::ZERO {
+            continue;
+        }
+        let pin = p.node.node.rare().pin.as_ref().unwrap();
+        let Some(&anchor) = anchors.get(pin.anchor.as_str()) else {
+            continue;
+        };
+        let extent = pin.sized(anchor, frame.size);
+        let origin = pin.place(anchor, extent, size, scale);
+        let mut resolved = (Vec::new(), Vec::with_capacity(p.end - p.at));
+        arrange(
+            p.node,
+            "root",
+            origin,
+            extent,
+            &Pins {
+                anchors: &anchors,
+                root: size,
+                scale,
+            },
+            None,
+            &mut resolved,
+        )?;
+        out.1[p.at..p.end].copy_from_slice(&resolved.1);
+        for (id, at) in resolved.0 {
+            anchors.insert(id, resolved.1[at as usize]);
+        }
+    }
+    Ok(())
+}
+
 /// The scroll frame a [`sticky`](Node::sticky) child pins itself against: the
 /// enclosing scroll node's main axis and the absolute coordinate of its
 /// leading edge. Sticky is the same second thought as a pin -- a position the

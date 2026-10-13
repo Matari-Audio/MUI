@@ -14,6 +14,26 @@ fn face(v: Variant) -> Style {
         .clone()
 }
 
+#[test]
+fn a_stretched_button_centres_its_intrinsic_label_on_both_axes() {
+    for size in [Size::new(180., 60.), Size::new(240., 80.)] {
+        let mut ui = Ui::default();
+        let mut el = button(&mut ui, "button", "Appearance").el.size(S).el();
+        el.children_mut()[0] = el.children()[0].clone().text_size(22.).id("label");
+        let scene = resolve(
+            &SceneSpec::new(el.size(size.width, size.height))
+                .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
+        )
+        .unwrap();
+        let face = scene.surface("button").unwrap().frame;
+        let label = scene.surface("label").unwrap().frame;
+        assert!((face.center().0 - label.center().0).abs() < 0.01);
+        assert!((face.center().1 - label.center().1).abs() < 0.01);
+        assert!(label.x >= face.x && label.right() <= face.right());
+        assert!(label.y >= face.y && label.bottom() <= face.bottom());
+    }
+}
+
 /// Each variant is arithmetic on one role: filled, faded, stroked, bare.
 #[test]
 fn a_variant_paints_the_role_without_naming_a_second_colour() {

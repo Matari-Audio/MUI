@@ -680,6 +680,7 @@ fn button_el(look: &Look, id: Id, label: Arc<str>) -> El {
     look.describe(
         row([text(label.clone()).fill(look.ink())])
             .pad((look.px * 0.4, look.pad_y()))
+            .center()
             .pill()
             .preset(look.style())
             .on(State::Hover, look.hover())
