@@ -63,6 +63,36 @@ struct MeasureInput {
     room: Option<u64>,
     container: [Option<u64>; 2],
 }
+impl MeasureInput {
+    fn for_node<P>(
+        node: &Node<P>,
+        mut definite: [Option<f64>; 2],
+        room: Option<f64>,
+        mut container: [Option<f64>; 2],
+        redo: bool,
+        boxed: bool,
+    ) -> Self {
+        // Aspect derives another axis and boxed roots consume their raw box.
+        // Keep those inputs exact rather than duplicating the aspect solver.
+        if !boxed && node.rare().aspect.is_none() {
+            definite = measure::definite_offer(node, definite, redo, false);
+            for axis in 0..2 {
+                // A definite inner axis shadows the inherited container for
+                // every descendant. This node still reads it for CQ units;
+                // all other lengths use its own size or its parent's share.
+                if definite[axis].is_some() && !matches!(node.len(axis == 1), Len::Container(_)) {
+                    container[axis] = None;
+                }
+            }
+        }
+        Self {
+            redo,
+            definite: definite.map(|v| v.map(f64::to_bits)),
+            room: room.map(f64::to_bits),
+            container: container.map(|v| v.map(f64::to_bits)),
+        }
+    }
+}
 /// A measured subtree with its node references dropped. Children are shared,
 /// so storing a parent costs one record, not its whole subtree again.
 #[derive(Debug, PartialEq)]
@@ -440,7 +470,8 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
     Ok(layout)
 }
 /// Hook around the ORIGINAL measure implementation. Re-measure requests under
-/// different flex constraints receive different keys, including room/container.
+/// different consumed flex constraints receive different keys. Fixed axes
+/// discard only offers replaced by the original solver's own decision.
 pub(crate) fn measure_cached<'a, P>(
     node: &'a Node<P>,
     ancestor: &str,
@@ -453,12 +484,14 @@ pub(crate) fn measure_cached<'a, P>(
     let Some(cache) = pass.cache.as_deref_mut() else {
         return measure::measure_uncached(node, ancestor, definite, room, container, depth, pass);
     };
-    let key = MeasureInput {
-        redo: pass.redo,
-        definite: definite.map(|v| v.map(f64::to_bits)),
-        room: room.map(f64::to_bits),
-        container: container.map(|v| v.map(f64::to_bits)),
-    };
+    let key = MeasureInput::for_node(
+        node,
+        definite,
+        room,
+        container,
+        pass.redo,
+        pass.boxed.is_some(),
+    );
     let hit = cache
         .stamp(node)
         .and_then(|s| s.measured.iter().find(|(k, _)| *k == key));
@@ -617,6 +650,300 @@ mod tests {
             metric,
         )
         .unwrap()
+    }
+
+    /// Exercise the measurement hook at changing offers, including offers
+    /// inside one solve. The public cache deliberately solves live resizes
+    /// bare, which would otherwise hide constraint-variant equivalence.
+    fn offer_oracle(n: &Node<Text>, offers: &[Size], boxed: Option<Insets>) -> LayoutStats {
+        let mut cache = LayoutCache::default();
+        let mut totals = LayoutStats::default();
+        for &size in offers {
+            cache
+                .prepare(n, Limits::default(), SpacingScale::DEFAULT, &mut key)
+                .unwrap();
+            let actual = crate::resolve_impl(
+                n,
+                Some(size),
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                metric,
+                Some(&mut cache),
+                boxed,
+            );
+            let fresh = crate::resolve_impl(
+                n,
+                Some(size),
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                metric,
+                None,
+                boxed,
+            );
+            assert_eq!(actual, fresh, "offer {size:?}, boxed {boxed:?}");
+            actual.unwrap();
+            totals.measured_nodes += cache.stats.measured_nodes;
+            totals.measure_hits += cache.stats.measure_hits;
+            totals.measure_variant_evictions += cache.stats.measure_variant_evictions;
+        }
+        totals
+    }
+
+    #[test]
+    fn replaced_fixed_offers_share_one_variant_with_exact_fresh_layouts() {
+        let n = Node::stack([
+            Node::col([
+                label("percent", "Percent descendant")
+                    .w(Len::Pct(50.))
+                    .h(Len::Pct(25.)),
+                label("container", "Container descendant")
+                    .w(Len::Container(75.))
+                    .h(Len::Container(50.)),
+            ])
+            .scroll()
+            .scrolled(0., 7.)
+            .id("flow"),
+            label("pin", "Pinned").pin(Pin::to("percent").area(Area::End)),
+        ])
+        .size(240., 160.)
+        .shrink(0.)
+        .pad(4.)
+        .id("root");
+        let offers: Vec<_> = (0..12)
+            .map(|i| Size::new(280. + i as f64 * 7., 180. + i as f64 * 3.))
+            .collect();
+        offer_oracle(&n, &offers, None);
+        let fixed_label = label("fixed-label", "Fixed measured content")
+            .size(240., 160.)
+            .shrink(0.);
+        let stats = offer_oracle(&fixed_label, &offers, None);
+        assert_eq!(stats.measure_hits, offers.len() - 1);
+        assert_eq!(stats.measured_nodes, 1, "only the first offer is measured");
+        assert_eq!(stats.measure_variant_evictions, 0);
+    }
+
+    #[test]
+    fn effective_offer_keys_preserve_redo_room_aspect_box_and_container_axes() {
+        let fixed = label("fixed", "Fixed").size(120., 80.).shrink(0.);
+        let input = |n: &Node<Text>, h, room, cq, redo, boxed| {
+            MeasureInput::for_node(
+                n,
+                [Some(200.), Some(h)],
+                Some(room),
+                [Some(200.), Some(cq)],
+                redo,
+                boxed,
+            )
+        };
+        let fixed_key = input(&fixed, 100., 200., 300., false, false);
+        assert_eq!(fixed_key, input(&fixed, 500., 200., 600., false, false));
+        assert_ne!(fixed_key, input(&fixed, 100., 100., 300., false, false));
+        assert_ne!(fixed_key, input(&fixed, 100., 200., 300., true, false));
+        for flexible in [fixed.clone().grow(1.), fixed.clone().shrink(1.)] {
+            assert_eq!(
+                input(&flexible, 100., 200., 300., false, false),
+                input(&flexible, 500., 200., 600., false, false)
+            );
+            assert_ne!(
+                input(&flexible, 100., 200., 300., true, false),
+                input(&flexible, 500., 200., 600., true, false)
+            );
+        }
+        let cq = fixed.clone().h(Len::Container(50.));
+        assert_ne!(
+            input(&cq, 100., 200., 300., false, false),
+            input(&cq, 100., 200., 600., false, false)
+        );
+        for n in [fixed.clone().aspect(2.), fixed.clone().aspect_fit(2.)] {
+            assert_ne!(
+                input(&n, 100., 200., 300., false, false),
+                input(&n, 100., 200., 600., false, false)
+            );
+            assert_ne!(
+                input(&n, 100., 200., 300., false, false),
+                input(&n, 500., 200., 300., false, false)
+            );
+        }
+        assert_ne!(
+            input(&fixed, 100., 200., 300., false, true),
+            input(&fixed, 500., 200., 600., false, true)
+        );
+        let auto = fixed.h(Len::Auto);
+        assert_ne!(
+            MeasureInput::for_node(
+                &auto,
+                [Some(200.), None],
+                None,
+                [None, Some(300.)],
+                false,
+                false
+            ),
+            MeasureInput::for_node(
+                &auto,
+                [Some(200.), None],
+                None,
+                [None, Some(600.)],
+                false,
+                false
+            )
+        );
+    }
+
+    #[test]
+    fn fixed_natural_subtree_matches_fresh_inside_a_changing_scroll_shutter() {
+        let natural = Node::col([
+            label("relative", "A relative child of the natural content")
+                .w(Len::Container(80.))
+                .h(Len::Pct(50.)),
+            label("tail", "Stable tail").h(32.).shrink(0.),
+        ])
+        .size(240., 160.)
+        .shrink(0.)
+        .id("natural");
+        let mut cache = LayoutCache::default();
+        for height in [100., 80., 60., 40., 20., 4., 40., 80., 100.] {
+            let n = Node::stack([
+                Node::col([natural.clone()])
+                    .size(240., height)
+                    .shrink(0.)
+                    .scroll()
+                    .scrolled(0., height * 0.1)
+                    .id("shutter"),
+                label("pin", "Pinned").pin(Pin::to("relative").area(Area::End)),
+            ])
+            .id("root");
+            assert_eq!(cached(&n, 300., &mut cache), oracle(&n, 300.));
+            assert_eq!(cached(&n, 300., &mut cache), oracle(&n, 300.));
+            let variants = cache
+                .stamp(&n.children()[0].children()[0])
+                .unwrap()
+                .measured
+                .len();
+            assert_eq!(variants, 1, "the shutter does not resize natural content");
+        }
+    }
+
+    #[test]
+    fn normalized_flex_minmax_aspect_and_relative_lengths_match_fresh_layouts() {
+        let offers = [
+            Size::new(300., 160.),
+            Size::new(180., 95.),
+            Size::new(350., 220.),
+            Size::new(220., 110.),
+            Size::new(300., 160.),
+        ];
+        for (grow, shrink) in [(0., 0.), (1., 0.), (0., 1.), (1., 1.)] {
+            for len in [
+                Len::Px(120.),
+                Len::Pct(60.),
+                Len::Container(70.),
+                Len::Clamp {
+                    min: 80.,
+                    pct: 55.,
+                    max: 180.,
+                },
+            ] {
+                for aspect in [None, Some(false), Some(true)] {
+                    let mut panel = Node::col([
+                        label("text", "Wrapping a long label inside the final flex share"),
+                        label("relative", "Relative")
+                            .w(Len::Container(80.))
+                            .h(Len::Pct(40.)),
+                    ])
+                    .size(len, 90.)
+                    .min_size(Size::new(75., 50.))
+                    .max_size(Size::new(190., 120.))
+                    .grow(grow)
+                    .shrink(shrink)
+                    .pad(3.)
+                    .id("panel");
+                    panel = match aspect {
+                        Some(false) => panel.h(Len::Auto).aspect(2.),
+                        Some(true) => panel.aspect_fit(2.),
+                        None => panel,
+                    };
+                    let n = Node::row([
+                        panel,
+                        label("sibling", "Sibling takes the remaining share").grow(1.),
+                    ])
+                    .id("root");
+                    offer_oracle(&n, &offers, None);
+                }
+            }
+        }
+        let n = Node::col([label("boxed-child", "Boxed child")])
+            .size(100., 50.)
+            .min_h(30.)
+            .max_size(Size::new(200., 130.));
+        offer_oracle(&n, &offers, Some(Insets::all(5.)));
+    }
+
+    #[test]
+    fn normalized_warm_measurements_keep_invalid_offers_and_limits_rejected() {
+        let n = Node::col([label("child", "Child")])
+            .size(120., 80.)
+            .shrink(0.)
+            .id("root");
+        let mut cache = LayoutCache::default();
+        prime(&n, 200., &mut cache);
+        for limits in [
+            Limits {
+                nodes: 1,
+                ..Limits::default()
+            },
+            Limits {
+                depth: 0,
+                ..Limits::default()
+            },
+            Limits {
+                extent: 70.,
+                ..Limits::default()
+            },
+        ] {
+            let actual = resolve_cached_with(
+                &n,
+                Some(Size::new(200., 100.)),
+                limits,
+                SpacingScale::DEFAULT,
+                &mut cache,
+                key,
+                metric,
+            );
+            let fresh = resolve_with(
+                &n,
+                Some(Size::new(200., 100.)),
+                limits,
+                SpacingScale::DEFAULT,
+                metric,
+            );
+            assert!(fresh.is_err());
+            assert_eq!(actual, fresh);
+            assert_eq!(cached(&n, 200., &mut cache), oracle(&n, 200.));
+            assert_eq!(cached(&n, 200., &mut cache), oracle(&n, 200.));
+        }
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.] {
+            let offered = Some(Size::new(200., invalid));
+            let actual = resolve_cached_with(
+                &n,
+                offered,
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                &mut cache,
+                key,
+                metric,
+            );
+            let fresh = resolve_with(
+                &n,
+                offered,
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                metric,
+            );
+            assert_eq!(actual, fresh);
+            assert!(fresh.is_err());
+            assert_eq!(cached(&n, 200., &mut cache), oracle(&n, 200.));
+            assert_eq!(cached(&n, 200., &mut cache), oracle(&n, 200.));
+        }
     }
 
     fn scroll_fixture() -> Node<Text> {

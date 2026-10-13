@@ -343,6 +343,41 @@ pub(crate) struct Pass<'a, 'f, P> {
 /// can wrap in the first and only pass. It is the room, not the flex share:
 /// a row still squeezes its content after measuring.
 pub(crate) use crate::incremental::measure_cached as measure;
+
+/// The definite axes the solver actually consumes before aspect resolution.
+/// A cache key uses the same decision rather than retaining parent offers
+/// that a fixed pixel axis replaces. Boxed roots keep their offered box.
+pub(crate) fn definite_offer<P>(
+    node: &Node<P>,
+    raw: [Option<f64>; 2],
+    redo: bool,
+    boxed: bool,
+) -> [Option<f64>; 2] {
+    if boxed {
+        return raw;
+    }
+    let flex = node.grow > 0.0 || node.shrink > 0.0;
+    let mut definite = [
+        node.width
+            .px()
+            .filter(|_| !(redo && raw[0].is_some() && flex))
+            .or(raw[0]),
+        node.height
+            .px()
+            .filter(|_| !(redo && raw[1].is_some() && flex))
+            .or(raw[1]),
+    ];
+    for (axis, value) in definite.iter_mut().enumerate() {
+        *value = value.map(|v| {
+            node.rare()
+                .maximum
+                .map_or(v, |m| v.min(m.main(axis == 1)))
+                .max(node.minimum.main(axis == 1))
+        });
+    }
+    definite
+}
+
 pub(crate) fn measure_uncached<'a, P>(
     node: &'a Node<P>,
     ancestor: &str,
@@ -393,32 +428,7 @@ pub(crate) fn measure_uncached<'a, P>(
     // share, that share is authoritative for dependent descendants. Keep the
     // declared extent for the first pass and for nodes that opted out of both growth and shrink;
     // those are genuinely fixed even when a parent has spare room.
-    let flex_width = node.width.px().filter(|_| {
-        !(pass.redo && definite[0].is_some() && (node.grow > 0.0 || node.shrink > 0.0))
-    });
-    // A given box is the offered size on both axes, whatever the node says.
-    let mut definite = match boxed {
-        Some(_) => definite,
-        None => [
-            flex_width.or(definite[0]),
-            node.height
-                .px()
-                .filter(|_| {
-                    !(pass.redo && definite[1].is_some() && (node.grow > 0.0 || node.shrink > 0.0))
-                })
-                .or(definite[1]),
-        ],
-    };
-    if boxed.is_none() {
-        for (axis, value) in definite.iter_mut().enumerate() {
-            *value = value.map(|v| {
-                node.rare()
-                    .maximum
-                    .map_or(v, |m| v.min(m.main(axis == 1)))
-                    .max(node.minimum.main(axis == 1))
-            });
-        }
-    }
+    let mut definite = definite_offer(node, definite, pass.redo, boxed.is_some());
     if let Some(a) = node.rare().aspect.filter(|_| boxed.is_none()) {
         if node.rare().aspect_fit {
             if definite.iter().any(Option::is_some) {
