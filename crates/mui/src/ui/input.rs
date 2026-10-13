@@ -715,6 +715,16 @@ impl Ui {
         ime: Vec<Ime>,
     ) {
         self.double = None;
+        // A press becomes ineligible for the next double click once the
+        // existing pointer machine recognizes its drag. Merely holding,
+        // or moving within the click threshold, still permits two clicks.
+        if self
+            .last_press
+            .as_ref()
+            .is_some_and(|(id, _)| self.interaction.get(id).dragged)
+        {
+            self.last_press = None;
+        }
         let went_down = [Button::Primary, Button::Secondary, Button::Middle]
             .into_iter()
             .any(|b| self.pointer.buttons.contains(b) && !was.contains(b));
