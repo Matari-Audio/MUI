@@ -436,6 +436,12 @@ impl Resolver {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.text.layout_stats()
     }
+    pub fn trace_layout_requests(&mut self, enabled: bool) {
+        self.text.layout.trace_requests(enabled);
+    }
+    pub fn take_layout_request_trace(&mut self) -> Option<mui_layout::LayoutRequestTrace> {
+        self.text.layout.take_request_trace()
+    }
     /// Shaped text runs held: one per (string, size, face, axes) variant.
     pub fn text_runs(&self) -> usize {
         self.text.len()

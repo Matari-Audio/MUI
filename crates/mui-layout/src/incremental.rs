@@ -208,13 +208,27 @@ pub struct LayoutCache {
     /// The size offered last call, cached or not.
     sized: Option<Option<[u64; 2]>>,
     stats: LayoutStats,
+    /// None in ordinary operation: no trace history or export buffers exist.
+    trace: Option<Box<crate::diagnostics::Recorder>>,
 }
 impl LayoutCache {
     pub fn clear(&mut self) {
-        *self = Self::default();
+        *self = Self {
+            trace: self.trace.take(),
+            ..Self::default()
+        };
     }
     pub fn stats(&self) -> LayoutStats {
         self.stats
+    }
+    /// Start a fresh bounded work trace, or discard it. Enabled tracing adds
+    /// history-search overhead; its timings are not a performance baseline.
+    pub fn trace_requests(&mut self, enabled: bool) {
+        self.trace = enabled.then(|| Box::new(crate::diagnostics::Recorder::new()));
+    }
+    /// Export owned records and disable collection. Geometry caches are kept.
+    pub fn take_request_trace(&mut self) -> Option<LayoutRequestTrace> {
+        self.trace.take().map(|trace| trace.export())
     }
     /// Constraint variants kept per node: a first pass, a flex re-measure and
     /// a couple of sizes to go back to. Fewer trades hit rate for memory,
@@ -230,11 +244,19 @@ impl LayoutCache {
     ) -> Result<(u64, u64), Error> {
         // A context change invalidates every metric. Limits cannot be bypassed.
         if self.context != Some((limits, scale)) {
+            let mut trace = self.trace.take();
+            if let Some(trace) = trace.as_mut() {
+                trace.context_changed();
+            }
             *self = Self {
                 context: Some((limits, scale)),
                 sized: self.sized,
+                trace,
                 ..Self::default()
             };
+        }
+        if let Some(trace) = self.trace.as_mut() {
+            trace.frame(false);
         }
         self.pointers.clear();
         self.pinned = false;
@@ -458,6 +480,9 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
     // size cannot use. The cache starts again once the size holds.
     let offered_bits = offered.map(|s| [s.width.to_bits(), s.height.to_bits()]);
     if cache.sized.replace(offered_bits) != Some(offered_bits) {
+        if let Some(trace) = cache.trace.as_mut() {
+            trace.frame(true);
+        }
         let layout = super::resolve_impl(root, offered, limits, scale, measurer, None, None)?;
         cache.stats = LayoutStats {
             arranged_nodes: layout.all().len(),
@@ -469,6 +494,9 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
     if let Some((r, p, o, layout)) = &cache.last
         && (*r, *p, *o) == (revision, placement, offered_bits)
     {
+        if let Some(trace) = cache.trace.as_mut() {
+            trace.whole_layout_reused();
+        }
         return Ok(layout.clone());
     }
     let layout = super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)?;
@@ -500,23 +528,55 @@ pub(crate) fn measure_cached<'a, P>(
         pass.boxed.is_some(),
         pass.scale,
     );
-    let hit = cache
+    let snapshot = cache
         .stamp(node)
-        .and_then(|s| s.measured.iter().find(|(k, _)| *k == key));
-    if let Some(snapshot) = hit.map(|(_, f)| f.clone()) {
+        .and_then(|s| s.measured.iter().find(|(k, _)| *k == key))
+        .map(|(_, f)| f.clone());
+    let traced = if cache.trace.is_some() {
+        let stamp = cache
+            .pointers
+            .get(&(node as *const Node<P> as usize))
+            .and_then(|&address| cache.stamps.get(&address).map(|s| (address, s.revision)));
+        let started = (cache.stats.measured_nodes, cache.stats.rebound_nodes);
+        let ticket = cache.trace.as_mut().unwrap().begin(
+            stamp,
+            node.id.as_ref(),
+            ancestor,
+            depth,
+            LayoutRequestInput {
+                redo: key.redo,
+                definite: key.definite,
+                room: key.room,
+                container: key.container,
+            },
+            snapshot.is_some(),
+        );
+        Some((ticket, started))
+    } else {
+        None
+    };
+    if let Some(snapshot) = snapshot {
         if !pass.redo {
             if snapshot.cost > pass.left {
+                finish_request(cache, traced, false, true);
                 return Err(Error::BudgetExceeded);
             }
             pass.left -= snapshot.cost;
         }
         pass.pinned |= cache.pinned;
         cache.stats.measure_hits += 1;
-        return Ok(Frozen::bind(&snapshot, node, &mut cache.stats));
+        let bound = Frozen::bind(&snapshot, node, &mut cache.stats);
+        finish_request(cache, traced, false, false);
+        return Ok(bound);
     }
     cache.stats.measured_nodes += 1;
     let before = pass.left;
-    let mut m = measure::measure_uncached(node, ancestor, definite, room, container, depth, pass)?;
+    let measured =
+        measure::measure_uncached(node, ancestor, definite, room, container, depth, pass);
+    if let Some(cache) = pass.cache.as_deref_mut() {
+        finish_request(cache, traced, true, measured.is_err());
+    }
+    let mut m = measured?;
     let frozen = Frozen::freeze(&m, before - pass.left);
     m.frozen = Some(frozen.clone());
     if let Some(cache) = pass.cache.as_deref_mut() {
@@ -532,6 +592,24 @@ pub(crate) fn measure_cached<'a, P>(
         cache.stats.measure_variant_evictions += usize::from(evicted);
     }
     Ok(m)
+}
+
+fn finish_request(
+    cache: &mut LayoutCache,
+    traced: Option<(crate::diagnostics::Ticket, (usize, usize))>,
+    missed: bool,
+    failed: bool,
+) {
+    if let Some((ticket, (measured, rebound))) = traced {
+        let children = cache
+            .stats
+            .measured_nodes
+            .saturating_sub(measured + usize::from(missed));
+        let rebound = cache.stats.rebound_nodes.saturating_sub(rebound);
+        if let Some(trace) = cache.trace.as_mut() {
+            trace.finish(ticket, children, rebound, failed);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -597,6 +675,125 @@ mod tests {
         let stats = pass.cache.as_ref().unwrap().stats;
         assert_eq!(stats.measure_hits, 1);
         assert_eq!(stats.measure_variant_evictions, 2);
+    }
+
+    #[test]
+    fn request_trace_records_exact_fifo_revisits_without_changing_measurements() {
+        let n = label("text", "A measured label");
+        let mut cache = LayoutCache::default();
+        assert!(cache.trace.is_none());
+        assert!(cache.take_request_trace().is_none());
+        cache.trace_requests(false);
+        assert!(
+            cache.trace.is_none(),
+            "disabled collection owns no recorder or history"
+        );
+        cache.trace_requests(true);
+        let limits = Limits::default();
+        cache
+            .prepare(&n, limits, SpacingScale::DEFAULT, &mut key)
+            .unwrap();
+        let mut measurer = crate::measure::intrinsic(metric);
+        let mut pass = Pass {
+            left: limits.nodes,
+            limits,
+            scale: SpacingScale::DEFAULT,
+            keys: Default::default(),
+            redo: false,
+            pinned: false,
+            measurer: &mut measurer,
+            cache: Some(&mut cache),
+            boxed: None,
+        };
+        for width in [32., 33., 34., 35., 36., 37., 32., 37.] {
+            let measured = measure_cached(
+                &n,
+                "root",
+                [Some(width), None],
+                Some(width),
+                [Some(width), None],
+                0,
+                &mut pass,
+            )
+            .unwrap();
+            assert_eq!(measured.size, metric(&n.payload, Some(width)));
+        }
+        let cache = pass.cache.as_deref_mut().unwrap();
+        assert_eq!(cache.stats.measure_variant_evictions, 3);
+        let trace = cache.take_request_trace().unwrap();
+        assert_eq!((trace.requests, trace.hits, trace.misses), (8, 1, 7));
+        assert_eq!(trace.depths[0].requests, trace.requests);
+        assert_eq!(trace.nodes.len(), 1);
+        let revision = &trace.nodes[0].revisions[0];
+        assert_eq!(revision.keys.len(), 6);
+        assert_eq!(revision.miss_reuse_distances[5], 1);
+        assert_eq!(revision.lru_reuse_distances[1], 1);
+        assert_eq!(revision.repeated_misses, 1);
+        assert_eq!(revision.keys[0].input.definite[0], Some(32_f64.to_bits()));
+        assert!(
+            cache.trace.is_none(),
+            "export stops capture and keeps the geometry cache"
+        );
+        assert_eq!(
+            cache.stamp(&n).unwrap().measured.len(),
+            LayoutCache::VARIANTS
+        );
+    }
+
+    #[test]
+    fn tracing_preserves_frames_stats_and_persistent_stamp_identity_across_rebuilt_trees() {
+        let original = Box::new(scroll_fixture());
+        let mut plain = LayoutCache::default();
+        let mut traced = LayoutCache::default();
+        traced.trace_requests(true);
+        for _ in 0..2 {
+            assert_eq!(
+                cached(&original, 400., &mut traced),
+                cached(&original, 400., &mut plain)
+            );
+            assert_eq!(traced.stats(), plain.stats());
+        }
+        for scroll in [3., 11., 29.] {
+            let mut rebuilt = Box::new((*original).clone());
+            assert!(!std::ptr::eq(&*rebuilt, &*original));
+            rebuilt.children_mut()[0].scrolled = [0., scroll];
+            for _ in 0..2 {
+                let actual = cached(&rebuilt, 400., &mut traced);
+                assert_eq!(actual, cached(&rebuilt, 400., &mut plain));
+                assert_eq!(actual, oracle(&rebuilt, 400.));
+                assert_eq!(traced.stats(), plain.stats());
+            }
+        }
+        let trace = traced.take_request_trace().unwrap();
+        assert!(trace.whole_layout_reuses >= 3);
+        assert_eq!(trace.bare_resolves, 1);
+        assert_eq!(trace.requests, trace.hits + trace.misses);
+        assert_eq!(
+            trace.requests,
+            trace.depths.iter().map(|d| d.requests).sum::<u64>()
+        );
+        assert_eq!(
+            trace.node_overflow_requests
+                + trace.revision_overflow_requests
+                + trace.key_overflow_requests,
+            0
+        );
+        assert_eq!(trace.failed_requests, 0);
+        let roots: Vec<_> = trace
+            .nodes
+            .iter()
+            .filter(|n| n.id.as_deref() == Some("root"))
+            .collect();
+        assert_eq!(
+            roots.len(),
+            1,
+            "rebuilt pointers retain one exact cache stamp slot"
+        );
+        assert_eq!(roots[0].revisions.len(), 1);
+        assert!(roots[0].child_misses > 0);
+        assert!(roots[0].rebound_nodes > 0);
+        assert!(plain.trace.is_none());
+        assert!(plain.take_request_trace().is_none());
     }
     #[derive(Clone, Debug, Default)]
     struct Text {

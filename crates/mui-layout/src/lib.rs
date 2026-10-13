@@ -15,6 +15,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 mod incremental;
 pub use incremental::{LayoutCache, LayoutStats, resolve_cached_with};
+mod diagnostics;
+pub use diagnostics::{
+    LayoutRequestDepth, LayoutRequestInput, LayoutRequestNode, LayoutRequestRevision,
+    LayoutRequestTrace, LayoutRequestVariant,
+};
 mod arrange;
 mod grid;
 mod id;

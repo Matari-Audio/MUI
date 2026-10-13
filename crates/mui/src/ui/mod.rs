@@ -481,6 +481,14 @@ impl Ui {
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.resolver.layout_stats()
     }
+    /// Opt-in exact layout work tracing. Keep disabled for latency measurements.
+    pub fn trace_layout_requests(&mut self, enabled: bool) {
+        self.resolver.trace_layout_requests(enabled);
+    }
+    /// Export bounded owned work records and stop tracing.
+    pub fn take_layout_request_trace(&mut self) -> Option<mui_layout::LayoutRequestTrace> {
+        self.resolver.take_layout_request_trace()
+    }
     /// Borrow the last successfully resolved scene.
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_deref()
