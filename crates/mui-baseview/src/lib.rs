@@ -405,6 +405,7 @@ fn build<V: View + Send + 'static>(
             handler: RefCell::new(handler),
             pending_resize: Cell::new(None),
             pending_events: RefCell::new(VecDeque::new()),
+            buttons: NativeButtons::default(),
         })
     }
 }
@@ -968,6 +969,7 @@ struct Adapter<V> {
     cx: WindowContext,
     pending_resize: Cell<Option<WindowSize>>,
     pending_events: RefCell<VecDeque<Event>>,
+    buttons: NativeButtons,
 }
 
 struct NativeClose {
@@ -1014,10 +1016,37 @@ impl<V: View> Adapter<V> {
     }
 }
 
-fn enqueue_event(queue: &mut VecDeque<Event>, event: Event) {
-    // Reentrant native producers can outrun a borrowed handler. Adjacent motion
-    // samples with unchanged modifiers describe one latest pointer state. Never
-    // cross a key, IME, button, focus, wheel, drop or accessibility barrier.
+#[derive(Default)]
+struct NativeButtons(RefCell<Vec<MouseButton>>);
+
+impl NativeButtons {
+    fn observe(&self, event: &Event) {
+        match event {
+            Event::Mouse(MouseEvent::ButtonPressed { button, .. }) => {
+                let mut buttons = self.0.borrow_mut();
+                if !buttons.contains(button) {
+                    buttons.push(*button);
+                }
+            }
+            Event::Mouse(MouseEvent::ButtonReleased { button, .. }) => {
+                self.0.borrow_mut().retain(|held| held != button);
+            }
+            Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose) => {
+                self.0.borrow_mut().clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn held(&self) -> bool {
+        !self.0.borrow().is_empty()
+    }
+}
+
+fn enqueue_event(queue: &mut VecDeque<Event>, event: Event, dragging: bool) {
+    // Only hover is replaceable state. A held gesture needs every position for
+    // Driver's trail, including when its press preceded this inbox/drain.
+    // Never cross a key, IME, button, focus, wheel, drop or accessibility barrier.
     if let (
         Some(Event::Mouse(MouseEvent::CursorMoved {
             modifiers: previous,
@@ -1025,6 +1054,7 @@ fn enqueue_event(queue: &mut VecDeque<Event>, event: Event) {
         })),
         Event::Mouse(MouseEvent::CursorMoved { modifiers, .. }),
     ) = (queue.back(), &event)
+        && !dragging
         && previous == modifiers
     {
         if let Some(last) = queue.back_mut() {
@@ -1136,11 +1166,18 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
     }
 
     fn on_event(&self, event: Event) -> EventStatus {
+        // Observe directly delivered edges too, before the handler borrow can
+        // fail. The button set survives inbox drains and tracks every button.
+        self.buttons.observe(&event);
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
             self.close.fire();
         }
         let Ok(mut h) = self.handler.try_borrow_mut() else {
-            enqueue_event(&mut self.pending_events.borrow_mut(), event);
+            enqueue_event(
+                &mut self.pending_events.borrow_mut(),
+                event,
+                self.buttons.held(),
+            );
             return EventStatus::Ignored;
         };
         let status = guard(&mut h, |h| h.on_event_inner(&event)).unwrap_or(EventStatus::Ignored);
