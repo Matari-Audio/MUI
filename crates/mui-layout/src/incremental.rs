@@ -67,10 +67,11 @@ impl MeasureInput {
     fn for_node<P>(
         node: &Node<P>,
         mut definite: [Option<f64>; 2],
-        room: Option<f64>,
+        mut room: Option<f64>,
         mut container: [Option<f64>; 2],
         redo: bool,
         boxed: bool,
+        scale: SpacingScale,
     ) -> Self {
         // Aspect derives another axis and boxed roots consume their raw box.
         // Keep those inputs exact rather than duplicating the aspect solver.
@@ -83,6 +84,12 @@ impl MeasureInput {
                 if definite[axis].is_some() && !matches!(node.len(axis == 1), Len::Container(_)) {
                     container[axis] = None;
                 }
+            }
+            if definite[0].is_some() && !matches!(node.width, Len::Container(_)) {
+                // Wider parent offers wrap identically at this node's own
+                // definite inner width. Use the solver's exact subtraction,
+                // clamp and cap, retaining unresolved/CQ widths verbatim.
+                room = measure::wrapping_room(room, definite[0], node.padding(scale).horizontal());
             }
         }
         Self {
@@ -491,6 +498,7 @@ pub(crate) fn measure_cached<'a, P>(
         container,
         pass.redo,
         pass.boxed.is_some(),
+        pass.scale,
     );
     let hit = cache
         .stamp(node)
@@ -733,6 +741,7 @@ mod tests {
                 [Some(200.), Some(cq)],
                 redo,
                 boxed,
+                SpacingScale::DEFAULT,
             )
         };
         let fixed_key = input(&fixed, 100., 200., 300., false, false);
@@ -776,7 +785,8 @@ mod tests {
                 None,
                 [None, Some(300.)],
                 false,
-                false
+                false,
+                SpacingScale::DEFAULT
             ),
             MeasureInput::for_node(
                 &auto,
@@ -784,7 +794,8 @@ mod tests {
                 None,
                 [None, Some(600.)],
                 false,
-                false
+                false,
+                SpacingScale::DEFAULT
             )
         );
     }
@@ -820,6 +831,140 @@ mod tests {
                 .measured
                 .len();
             assert_eq!(variants, 1, "the shutter does not resize natural content");
+        }
+    }
+
+    #[test]
+    fn consumed_room_keeps_narrow_unresolved_cq_aspect_and_boxed_offers_distinct() {
+        let fixed = label("fixed", "Fixed").size(120., 80.).shrink(0.);
+        let input = |n: &Node<Text>, width, room, boxed, scale| {
+            MeasureInput::for_node(
+                n,
+                [width, Some(100.)],
+                room,
+                [Some(300.), Some(200.)],
+                false,
+                boxed,
+                scale,
+            )
+        };
+        for xs in [2., 5., 11.] {
+            let scale = SpacingScale {
+                xs,
+                ..SpacingScale::DEFAULT
+            };
+            let padded = fixed.clone().pad(SpacingToken::Xs);
+            let capped = input(&padded, Some(200.), Some(120.), false, scale);
+            assert_eq!(capped.room, Some((120. - 2. * xs).to_bits()));
+            for room in [None, Some(200.), Some(500.)] {
+                assert_eq!(capped, input(&padded, Some(200.), room, false, scale));
+            }
+            assert_ne!(capped, input(&padded, Some(200.), Some(60.), false, scale));
+            for n in [
+                padded.clone().aspect(2.),
+                padded.clone().aspect_fit(2.),
+                padded.clone().w(Len::Container(40.)),
+            ] {
+                assert_ne!(
+                    input(&n, Some(200.), Some(200.), false, scale),
+                    input(&n, Some(200.), Some(500.), false, scale)
+                );
+            }
+            let unresolved = padded.clone().w(Len::Auto);
+            assert_ne!(
+                input(&unresolved, None, Some(200.), false, scale),
+                input(&unresolved, None, Some(500.), false, scale)
+            );
+            assert_ne!(
+                input(&padded, Some(200.), Some(200.), true, scale),
+                input(&padded, Some(200.), Some(500.), true, scale)
+            );
+        }
+    }
+
+    #[test]
+    fn capped_parent_rooms_reuse_scaled_wrapping_subtrees_with_exact_fresh_frames() {
+        for xs in [2., 5., 11.] {
+            let scale = SpacingScale {
+                xs,
+                ..SpacingScale::DEFAULT
+            };
+            for scrolling in [false, true] {
+                let mut panel = Node::col([
+                    Node::row([
+                        label("first", "Percent wrapping child").w(Len::Pct(55.)),
+                        label("second", "Clamped wrapping child").w(Len::Clamp {
+                            min: 50.,
+                            pct: 45.,
+                            max: 100.,
+                        }),
+                    ])
+                    .wrap()
+                    .id("wrap"),
+                    label("cq", "Container child").w(Len::Container(80.)).h(24.),
+                ])
+                .w(180.)
+                .min_w(120.)
+                .max_size(Size::new(220., 200.))
+                .shrink(0.)
+                .pad(SpacingToken::Xs)
+                .id("panel");
+                if scrolling {
+                    panel = panel.h(110.).scroll().scrolled(0., 13.);
+                }
+                let mut cache = LayoutCache::default();
+                for width in [240., 260., 280., 300., 320., 340., 360., 240.] {
+                    let n =
+                        Node::col([Node::col([panel.clone()]).w(width).shrink(0.).id("parent")])
+                            .id("root");
+                    let fresh = resolve_with(
+                        &n,
+                        Some(Size::new(600., 400.)),
+                        Limits::default(),
+                        scale,
+                        metric,
+                    )
+                    .unwrap();
+                    for _ in 0..2 {
+                        assert_eq!(
+                            resolve_cached_with(
+                                &n,
+                                Some(Size::new(600., 400.)),
+                                Limits::default(),
+                                scale,
+                                &mut cache,
+                                key,
+                                metric,
+                            )
+                            .unwrap(),
+                            fresh
+                        );
+                    }
+                    assert_eq!(
+                        cache
+                            .stamp(&n.children()[0].children()[0])
+                            .unwrap()
+                            .measured
+                            .len(),
+                        1,
+                        "wider parent rooms do not create another panel variant"
+                    );
+                }
+                let invalid = panel.pad(f64::NAN);
+                let offered = Some(Size::new(600., 400.));
+                let cached = resolve_cached_with(
+                    &invalid,
+                    offered,
+                    Limits::default(),
+                    scale,
+                    &mut cache,
+                    key,
+                    metric,
+                );
+                let fresh = resolve_with(&invalid, offered, Limits::default(), scale, metric);
+                assert!(fresh.is_err());
+                assert_eq!(cached, fresh, "room reuse cannot bypass padding validation");
+            }
         }
     }
 

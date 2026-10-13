@@ -64,6 +64,19 @@ fn narrower(a: Option<f64>, b: Option<f64>) -> Option<f64> {
     }
 }
 
+/// The wrapping width actually consumed by this node's content. A definite
+/// width caps wider inherited room after both have lost this node's padding.
+pub(crate) fn wrapping_room(
+    raw: Option<f64>,
+    definite_width: Option<f64>,
+    horizontal_padding: f64,
+) -> Option<f64> {
+    narrower(
+        raw.map(|r| (r - horizontal_padding).max(0.0)),
+        definite_width.map(|w| (w - horizontal_padding).max(0.0)),
+    )
+}
+
 /// Greedy line breaking: ranges into `flow`, each as long as it fits `avail`.
 /// A child wider than the line gets a line of its own.
 pub(crate) fn wrap_lines<P>(
@@ -453,7 +466,7 @@ pub(crate) fn measure_uncached<'a, P>(
         definite[0].map(|w| (w - padding.horizontal()).max(0.0)),
         definite[1].map(|h| (h - padding.vertical()).max(0.0)),
     ];
-    let room = narrower(room.map(|r| (r - padding.horizontal()).max(0.0)), inner[0]);
+    let room = wrapping_room(room, definite[0], padding.horizontal());
     // A grid's column count is settled once, before anything is offered a
     // column's worth of room: `min_col` makes the declared count a ceiling and
     // drops columns until each one clears it. Everything downstream reads
