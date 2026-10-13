@@ -47,6 +47,9 @@ struct Scan<'k, K> {
     /// Child revisions of every node on the current path, stacked.
     revisions: Vec<u64>,
     payload: Vec<u8>,
+    /// Exact scroll coordinates in declaration order. Measurement never reads
+    /// them, but a changed coordinate still requires fresh arranged frames.
+    placement: Vec<[u64; 2]>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct MeasureInput {
@@ -154,10 +157,14 @@ pub struct LayoutCache {
     pass: u64,
     revisions: Vec<u64>,
     payload: Vec<u8>,
+    placement: Vec<[u64; 2]>,
+    placement_scratch: Vec<[u64; 2]>,
+    placement_revision: u64,
     context: Option<(Limits, SpacingScale)>,
     pinned: bool,
-    /// The root's revision and offered size, and what they resolved to.
-    last: Option<(u64, Option<[u64; 2]>, Layout)>,
+    /// Measurement, placement and offered-size revisions must all agree to
+    /// reuse the complete layout rather than arrange the measured tree again.
+    last: Option<(u64, u64, Option<[u64; 2]>, Layout)>,
     /// The size offered last call, cached or not.
     sized: Option<Option<[u64; 2]>>,
     stats: LayoutStats,
@@ -173,14 +180,14 @@ impl LayoutCache {
     /// a couple of sizes to go back to. Fewer trades hit rate for memory,
     /// never correctness.
     const VARIANTS: usize = 4;
-    /// Validates the tree and returns the root's revision.
+    /// Validates the tree and returns its measurement and placement revisions.
     fn prepare<P>(
         &mut self,
         n: &Node<P>,
         limits: Limits,
         scale: SpacingScale,
         key: &mut impl FnMut(&P, &mut Vec<u8>),
-    ) -> Result<u64, Error> {
+    ) -> Result<(u64, u64), Error> {
         // A context change invalidates every metric. Limits cannot be bypassed.
         if self.context != Some((limits, scale)) {
             *self = Self {
@@ -193,6 +200,7 @@ impl LayoutCache {
         self.pinned = false;
         self.stats = LayoutStats::default();
         self.pass = self.pass.wrapping_add(1);
+        self.placement_scratch.clear();
         let mut scan = Scan {
             limits,
             key,
@@ -200,15 +208,25 @@ impl LayoutCache {
             count: 0,
             revisions: std::mem::take(&mut self.revisions),
             payload: std::mem::take(&mut self.payload),
+            placement: std::mem::take(&mut self.placement_scratch),
         };
         let walked = self.scan(n, 0, 0, &mut scan);
-        (self.revisions, self.payload) = (scan.revisions, scan.payload);
+        (self.revisions, self.payload, self.placement_scratch) =
+            (scan.revisions, scan.payload, scan.placement);
         // A failed walk returns before popping its path's revisions.
         self.revisions.clear();
         let revision = walked?;
+        if self.placement != self.placement_scratch {
+            self.placement_revision = self
+                .placement_revision
+                .checked_add(1)
+                .ok_or(Error::RevisionExhausted)?;
+            std::mem::swap(&mut self.placement, &mut self.placement_scratch);
+        }
+        self.placement_scratch.clear();
         self.stamps.retain(|_, s| s.seen == scan.pass);
         self.stats.validated_nodes = scan.count;
-        Ok(revision)
+        Ok((revision, self.placement_revision))
     }
     /// Validates `n`'s subtree and returns its revision: unchanged while its
     /// shallow projection and every child revision are, so equal revisions
@@ -226,6 +244,12 @@ impl LayoutCache {
             return Err(Error::BudgetExceeded);
         }
         s.count += 1;
+        // Scroll coordinates are excluded from measurement equality, so they
+        // must still be checked on every warm scan, not only changed stamps.
+        if !n.scrolled.iter().all(|v| v.is_finite()) {
+            return Err(Error::InvalidValue);
+        }
+        s.placement.push(n.scrolled.map(f64::to_bits));
         self.pinned |= n.rare().pin.is_some();
         let base = s.revisions.len();
         for (i, c) in n.children().iter().enumerate() {
@@ -259,9 +283,6 @@ impl LayoutCache {
                 // A matching stamp was validated when it was made, under the
                 // same limits: only a changed node needs checking.
                 measure::validate_node(n, s.limits)?;
-                if !n.scrolled.iter().all(|v| v.is_finite()) {
-                    return Err(Error::InvalidValue);
-                }
                 self.serial = self.serial.checked_add(1).ok_or(Error::RevisionExhausted)?;
                 let stamp = Stamp {
                     shape,
@@ -292,8 +313,8 @@ impl LayoutCache {
         self.stamps.get_mut(address)
     }
 }
-/// Complete shallow layout projection; destructuring without `..` makes adding
-/// a layout field a compile-time prompt to update invalidation. Payload values
+/// Complete shallow measurement projection; destructuring without `..` makes
+/// adding a layout field a compile-time prompt to update invalidation. Payload values
 /// are exact bytes, not a hash used as a substitute for equality. The pin is
 /// left out: [`Stamp`] keeps it and `scan` compares it by reference.
 fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
@@ -318,7 +339,7 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         rare: _,
         scroll,
         clip,
-        scrolled,
+        scrolled: _,
         sticky,
         float,
         wrap,
@@ -360,7 +381,9 @@ fn projection<P>(n: &Node<P>, payload: Vec<u8>) -> Node<Vec<u8>> {
         rare: None,
         scroll: *scroll,
         clip: *clip,
-        scrolled: *scrolled,
+        // Kept exactly in the separate placement receipt. The original
+        // measure pass does not consume these arrange-only coordinates.
+        scrolled: [0.; 2],
         sticky: *sticky,
         float: *float,
         wrap: *wrap,
@@ -402,15 +425,15 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
         };
         return Ok(layout);
     }
-    let revision = cache.prepare(root, limits, scale, &mut key)?;
-    if let Some((r, o, layout)) = &cache.last
-        && (*r, *o) == (revision, offered_bits)
+    let (revision, placement) = cache.prepare(root, limits, scale, &mut key)?;
+    if let Some((r, p, o, layout)) = &cache.last
+        && (*r, *p, *o) == (revision, placement, offered_bits)
     {
         return Ok(layout.clone());
     }
     let layout = super::resolve_impl(root, offered, limits, scale, measurer, Some(cache), None)?;
     cache.stats.arranged_nodes = layout.all().len();
-    cache.last = Some((revision, offered_bits, layout.clone()));
+    cache.last = Some((revision, placement, offered_bits, layout.clone()));
     Ok(layout)
 }
 /// Hook around the ORIGINAL measure implementation. Re-measure requests under
@@ -534,6 +557,240 @@ mod tests {
         )
         .unwrap()
     }
+
+    fn scroll_fixture() -> Node<Text> {
+        let nested = Node::col([
+            label("nested-first", "Nested first")
+                .size(240., 48.)
+                .shrink(0.),
+            label("nested-last", "Nested last")
+                .size(240., 48.)
+                .shrink(0.),
+        ])
+        .size(240., 64.)
+        .scroll()
+        .id("nested");
+        let flow = Node::col([
+            label("anchor", "Scrolling anchor")
+                .size(240., 36.)
+                .shrink(0.),
+            nested.shrink(0.),
+            label("tail", "Scrolling tail").size(240., 96.).shrink(0.),
+        ])
+        .shrink(0.)
+        .id("flow");
+        Node::stack([
+            Node::col([
+                label("header", "Sticky header")
+                    .size(240., 24.)
+                    .shrink(0.)
+                    .sticky(),
+                flow,
+            ])
+            .size(260., 100.)
+            .scroll()
+            .id("scroll"),
+            label("tip", "Pinned").pin(Pin::to("anchor").area(Area::End)),
+        ])
+        .pad(SpacingToken::Xs)
+        .id("root")
+    }
+
+    #[test]
+    fn scroll_placement_reuses_measurements_and_rearranges_nested_sticky_pins() {
+        let mut n = scroll_fixture();
+        let mut c = LayoutCache::default();
+        let before = prime(&n, 400., &mut c);
+        for step in 1..=64 {
+            n.children_mut()[0].scrolled = [step as f64 * 0.125, step as f64 * 0.75];
+            n.children_mut()[0].children_mut()[1].children_mut()[1].scrolled =
+                [0., step as f64 * 0.25];
+            let result = cached(&n, 400., &mut c);
+            assert_eq!(result, oracle(&n, 400.));
+            assert_ne!(result.frame("anchor"), before.frame("anchor"));
+            let stats = c.stats();
+            assert_eq!(
+                stats.measured_nodes, 0,
+                "scroll does not change any intrinsic input"
+            );
+            assert_eq!(
+                stats.measure_hits, 1,
+                "the complete root measurement is shared"
+            );
+            assert_eq!(stats.rebound_nodes, result.all().len());
+            assert_eq!(
+                stats.arranged_nodes,
+                result.all().len(),
+                "scroll must update real frames"
+            );
+            assert_eq!(cached(&n, 400., &mut c), result);
+            assert_eq!(
+                c.stats().arranged_nodes,
+                0,
+                "unchanged placement reuses the whole layout"
+            );
+        }
+    }
+
+    #[test]
+    fn scroll_placement_preserves_reorder_offset_and_pin_invalidation() {
+        let mut n = scroll_fixture();
+        let mut c = LayoutCache::default();
+        prime(&n, 400., &mut c);
+        n.children_mut()[0].scrolled = [2., 17.];
+        n.children_mut()[0].children_mut()[1]
+            .children_mut()
+            .swap(0, 2);
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        assert!(
+            c.stats().measured_nodes > 0,
+            "a reordered intrinsic declaration is still invalidated"
+        );
+        n.children_mut()[0].offset = [9.5, -2.];
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        assert!(
+            c.stats().measured_nodes > 0,
+            "OFFSET remains in the measurement projection"
+        );
+        n.children_mut()[1] =
+            label("tip", "Pinned").pin(Pin::to("nested-last").area(Area::Bottom).match_width());
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        n.children_mut()[0].scrolled = [3., 29.];
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        assert_eq!(
+            c.stats().measured_nodes,
+            0,
+            "a fresh pin uses freshly arranged scroll anchors"
+        );
+
+        // Anonymous ancestor addresses and named child identities both take
+        // part in the intrinsic revision; placement is not keyed by hash.
+        n.children_mut()[0].children_mut()[1].id = None;
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        n.children_mut()[0].children_mut()[1]
+            .children_mut()
+            .swap(0, 2);
+        n.children_mut()[0].scrolled = [0., 11.];
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+    }
+
+    #[test]
+    fn scroll_placement_validates_warm_coordinates_and_budget_context() {
+        let mut n = scroll_fixture();
+        let mut c = LayoutCache::default();
+        prime(&n, 400., &mut c);
+        for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            n.children_mut()[0].scrolled = [0., invalid];
+            assert!(matches!(
+                resolve_cached_with(
+                    &n,
+                    Some(Size::new(400., 100.)),
+                    Limits::default(),
+                    SpacingScale::DEFAULT,
+                    &mut c,
+                    key,
+                    metric
+                ),
+                Err(Error::InvalidValue)
+            ));
+            n.children_mut()[0].scrolled = [0., 13.];
+            assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        }
+        for limits in [
+            Limits {
+                nodes: 2,
+                ..Limits::default()
+            },
+            Limits {
+                depth: 1,
+                ..Limits::default()
+            },
+            Limits {
+                extent: 250.,
+                ..Limits::default()
+            },
+        ] {
+            assert!(
+                resolve_cached_with(
+                    &n,
+                    Some(Size::new(400., 100.)),
+                    limits,
+                    SpacingScale::DEFAULT,
+                    &mut c,
+                    key,
+                    metric
+                )
+                .is_err(),
+                "placement reuse never bypasses nodes, depth or extent limits"
+            );
+            assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+            assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        }
+        n.children_mut()[0].scrolled = [0., 19.];
+        assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+        assert_eq!(c.stats().measured_nodes, 0);
+    }
+
+    #[test]
+    fn scroll_placement_survives_resizing_and_spacing_context_changes() {
+        let mut n = scroll_fixture();
+        let mut c = LayoutCache::default();
+        let wider_spacing = SpacingScale {
+            xs: 9.,
+            ..SpacingScale::DEFAULT
+        };
+        for width in [400., 300., 600., 400.] {
+            n.children_mut()[0].scrolled = [1., width * 0.04];
+            for scale in [SpacingScale::DEFAULT, wider_spacing, SpacingScale::DEFAULT] {
+                let fresh = resolve_with(
+                    &n,
+                    Some(Size::new(width, 100.)),
+                    Limits::default(),
+                    scale,
+                    metric,
+                )
+                .unwrap();
+                for _ in 0..2 {
+                    assert_eq!(
+                        resolve_cached_with(
+                            &n,
+                            Some(Size::new(width, 100.)),
+                            Limits::default(),
+                            scale,
+                            &mut c,
+                            key,
+                            metric
+                        )
+                        .unwrap(),
+                        fresh
+                    );
+                }
+                n.children_mut()[0].scrolled[1] += 0.375;
+                assert_eq!(
+                    resolve_cached_with(
+                        &n,
+                        Some(Size::new(width, 100.)),
+                        Limits::default(),
+                        scale,
+                        &mut c,
+                        key,
+                        metric
+                    )
+                    .unwrap(),
+                    resolve_with(
+                        &n,
+                        Some(Size::new(width, 100.)),
+                        Limits::default(),
+                        scale,
+                        metric
+                    )
+                    .unwrap()
+                );
+                assert_eq!(c.stats().measured_nodes, 0);
+            }
+        }
+    }
+
     #[test]
     fn a_changed_word_moves_the_cached_floor() {
         // Eight per char, as `metric`, and the longest word is the floor:
