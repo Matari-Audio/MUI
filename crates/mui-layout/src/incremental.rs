@@ -37,7 +37,8 @@ struct Stamp {
     /// The `prepare` pass that last visited this address.
     seen: u64,
     /// This revision's measurements, one per constraint it was offered,
-    /// oldest first. A new revision is a new stamp, so these never go stale.
+    /// Least recently used first. A new revision is a new stamp, so these
+    /// never go stale. Hits rotate their existing entry to the most recent end.
     measured: Vec<(MeasureInput, Arc<Frozen>)>,
 }
 /// One `prepare` walk's state. The buffers live in the cache between frames,
@@ -528,10 +529,15 @@ pub(crate) fn measure_cached<'a, P>(
         pass.boxed.is_some(),
         pass.scale,
     );
-    let snapshot = cache
-        .stamp(node)
-        .and_then(|s| s.measured.iter().find(|(k, _)| *k == key))
-        .map(|(_, f)| f.clone());
+    let snapshot = cache.stamp(node).and_then(|s| {
+        let at = s.measured.iter().position(|(k, _)| *k == key)?;
+        let snapshot = s.measured[at].1.clone();
+        // Four entries stay in their existing allocation. Refreshing a
+        // hit prevents an older, frequently used constraint from being
+        // evicted merely because it was inserted before a colder one.
+        s.measured[at..].rotate_left(1);
+        Some(snapshot)
+    });
     let traced = if cache.trace.is_some() {
         let stamp = cache
             .pointers
@@ -675,6 +681,183 @@ mod tests {
         let stats = pass.cache.as_ref().unwrap().stats;
         assert_eq!(stats.measure_hits, 1);
         assert_eq!(stats.measure_variant_evictions, 2);
+    }
+
+    #[test]
+    fn hot_constraint_hits_survive_a_five_key_cycle_with_the_same_four_entries() {
+        let n = label("text", "A measured label");
+        let mut cache = LayoutCache::default();
+        let limits = Limits::default();
+        cache.trace_requests(true);
+        cache
+            .prepare(&n, limits, SpacingScale::DEFAULT, &mut key)
+            .unwrap();
+        let mut measurer = crate::measure::intrinsic(metric);
+        let mut pass = Pass {
+            left: limits.nodes,
+            limits,
+            scale: SpacingScale::DEFAULT,
+            keys: Default::default(),
+            redo: false,
+            pinned: false,
+            measurer: &mut measurer,
+            cache: Some(&mut cache),
+            boxed: None,
+        };
+        // A stays hot while B/C/D/E cycle. The old insertion-order selector
+        // does not refresh A on its hits and eventually discards it.
+        let widths = [
+            32., 33., 32., 34., 32., 35., 32., 36., 32., 33., 32., 34., 32., 35., 32., 36., 32.,
+        ];
+        let mut fifo = Vec::new();
+        let mut fifo_hits = 0;
+        let mut hot_snapshot = None;
+        let mut capacity = None;
+        for width in widths {
+            if fifo.contains(&width) {
+                fifo_hits += 1;
+            } else {
+                if fifo.len() == LayoutCache::VARIANTS {
+                    fifo.remove(0);
+                }
+                fifo.push(width);
+            }
+            let measured = measure_cached(
+                &n,
+                "root",
+                [Some(width), None],
+                Some(width),
+                [Some(width), None],
+                0,
+                &mut pass,
+            )
+            .unwrap();
+            assert_eq!(measured.size, metric(&n.payload, Some(width)));
+            let cache = pass.cache.as_deref_mut().unwrap();
+            let variants = &cache.stamp(&n).unwrap().measured;
+            assert!(variants.len() <= LayoutCache::VARIANTS);
+            if variants.len() == LayoutCache::VARIANTS {
+                let allocated = capacity.get_or_insert(variants.capacity());
+                assert_eq!(
+                    variants.capacity(),
+                    *allocated,
+                    "hit promotion never grows storage"
+                );
+            }
+            let hot = &variants
+                .iter()
+                .find(|(k, _)| k.definite[0] == Some(32_f64.to_bits()))
+                .unwrap()
+                .1;
+            if let Some(original) = &hot_snapshot {
+                assert!(
+                    Arc::ptr_eq(original, hot),
+                    "the hot snapshot is retained, not remeasured"
+                );
+            } else {
+                hot_snapshot = Some(hot.clone());
+            }
+            assert_eq!(
+                variants.last().unwrap().0.definite[0],
+                Some(width.to_bits())
+            );
+        }
+        let cache = pass.cache.as_deref_mut().unwrap();
+        assert_eq!(cache.stats.measure_hits, 8, "every repeated A request hits");
+        assert!(cache.stats.measure_hits > fifo_hits);
+        let trace = cache.take_request_trace().unwrap();
+        assert_eq!(trace.hits, cache.stats.measure_hits as u64);
+        assert_eq!(trace.misses, cache.stats.measured_nodes as u64);
+        let revision = &trace.nodes[0].revisions[0];
+        assert_eq!(revision.keys.len(), 5);
+        assert_eq!(revision.key_overflow_requests, 0);
+        assert_eq!(revision.keys[0].misses, 1);
+        assert_eq!(revision.keys[0].hits, 8);
+        assert_eq!(
+            revision.miss_reuse_distances[..LayoutCache::VARIANTS]
+                .iter()
+                .sum::<u64>(),
+            0
+        );
+
+        // A remains a lookup hit, but retained data never bypasses the host's
+        // node budget. Promotion changes replacement order, not admission.
+        pass.left = 0;
+        assert!(matches!(
+            measure_cached(
+                &n,
+                "root",
+                [Some(32.), None],
+                Some(32.),
+                [Some(32.), None],
+                0,
+                &mut pass,
+            ),
+            Err(Error::BudgetExceeded)
+        ));
+    }
+
+    #[test]
+    fn promoted_constraint_variants_keep_exact_fresh_frames_and_warm_validation() {
+        let n = scroll_fixture();
+        let offers: Vec<_> = [
+            300., 320., 300., 340., 300., 360., 300., 380., 300., 320., 300.,
+        ]
+        .into_iter()
+        .map(|w| Size::new(w, 100.))
+        .collect();
+        offer_oracle(&n, &offers, None);
+        let mut cache = LayoutCache::default();
+        prime(&n, 400., &mut cache);
+        let mut invalid = n.clone();
+        invalid.children_mut()[0].width = Len::Px(f64::NAN);
+        let actual = resolve_cached_with(
+            &invalid,
+            Some(Size::new(400., 100.)),
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            &mut cache,
+            key,
+            metric,
+        );
+        let fresh = resolve_with(
+            &invalid,
+            Some(Size::new(400., 100.)),
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            metric,
+        );
+        assert!(fresh.is_err());
+        assert_eq!(actual, fresh);
+        for limits in [
+            Limits {
+                nodes: 2,
+                ..Limits::default()
+            },
+            Limits {
+                depth: 1,
+                ..Limits::default()
+            },
+        ] {
+            let actual = resolve_cached_with(
+                &n,
+                Some(Size::new(400., 100.)),
+                limits,
+                SpacingScale::DEFAULT,
+                &mut cache,
+                key,
+                metric,
+            );
+            let fresh = resolve_with(
+                &n,
+                Some(Size::new(400., 100.)),
+                limits,
+                SpacingScale::DEFAULT,
+                metric,
+            );
+            assert!(fresh.is_err());
+            assert_eq!(actual, fresh);
+        }
     }
 
     #[test]
