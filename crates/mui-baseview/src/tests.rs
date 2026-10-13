@@ -1094,7 +1094,7 @@ fn queued_motion_coalesces_only_adjacent_equal_modifier_samples_and_preserves_ba
     };
     let none = Modifiers::default();
     for x in 0..1000 {
-        enqueue_event(&mut queue, movement(f64::from(x), none));
+        enqueue_event(&mut queue, movement(f64::from(x), none), false);
     }
     let key_event = key(
         HostKey::Character("a".into()),
@@ -1102,17 +1102,22 @@ fn queued_motion_coalesces_only_adjacent_equal_modifier_samples_and_preserves_ba
         KeyState::Down,
         none,
     );
-    enqueue_event(&mut queue, key_event);
-    enqueue_event(&mut queue, movement(1001., none));
-    enqueue_event(&mut queue, Event::Ime(baseview::Ime::Commit("😀".into())));
-    enqueue_event(&mut queue, movement(1002., none));
-    enqueue_event(&mut queue, movement(1003., Modifiers::SHIFT));
+    enqueue_event(&mut queue, key_event, false);
+    enqueue_event(&mut queue, movement(1001., none), false);
+    enqueue_event(
+        &mut queue,
+        Event::Ime(baseview::Ime::Commit("😀".into())),
+        false,
+    );
+    enqueue_event(&mut queue, movement(1002., none), false);
+    enqueue_event(&mut queue, movement(1003., Modifiers::SHIFT), false);
     enqueue_event(
         &mut queue,
         Event::Mouse(MouseEvent::ButtonReleased {
             button: MouseButton::Left,
             modifiers: Modifiers::SHIFT,
         }),
+        false,
     );
     assert_eq!(queue.len(), 7);
     assert!(
@@ -1143,4 +1148,193 @@ fn queued_motion_coalesces_only_adjacent_equal_modifier_samples_and_preserves_ba
         queue.pop_front(),
         Some(Event::Mouse(MouseEvent::ButtonReleased { .. }))
     ));
+}
+
+#[derive(Default)]
+struct Stroke(Vec<Point>);
+impl View for Stroke {
+    fn build(&mut self, _: &mut Ui, input: &Input) -> El {
+        if input.pointer.buttons.contains(Button::Primary) {
+            self.0.extend_from_slice(&input.trail);
+            self.0.extend(input.pointer.pos);
+        }
+        mui::prelude::block(100., 100.)
+    }
+    fn changed(&mut self) -> bool {
+        false
+    }
+    fn request_resize(&mut self, _: u32, _: u32) -> bool {
+        false
+    }
+}
+
+#[test]
+fn queued_drag_samples_reach_the_driver_trail_across_drains() {
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: Stroke::default(),
+    }));
+    let mut h = Handler::new(shared.clone(), Arc::default(), (200, 200), 2.0);
+    h.step();
+    // The press was delivered directly in an earlier native callback; it is
+    // absent from the busy-handler inbox throughout both subsequent drains.
+    let buttons = NativeButtons::default();
+    let press = Event::Mouse(MouseEvent::ButtonPressed {
+        button: MouseButton::Left,
+        modifiers: Modifiers::empty(),
+    });
+    buttons.observe(&press);
+    h.on_event_inner(&press);
+    h.step();
+    lock(&shared).view.0.clear();
+    let queue = RefCell::new(VecDeque::new());
+    let bends = [
+        [
+            Point::new(10., 10.),
+            Point::new(20., 35.),
+            Point::new(35., 20.),
+        ],
+        [
+            Point::new(45., 40.),
+            Point::new(60., 15.),
+            Point::new(75., 30.),
+        ],
+    ];
+    for segment in bends {
+        for p in segment {
+            enqueue_event(
+                &mut queue.borrow_mut(),
+                Event::Mouse(MouseEvent::CursorMoved {
+                    position: PhysicalPosition::new(p.x * 2., p.y * 2.),
+                    modifiers: Modifiers::empty(),
+                }),
+                buttons.held(),
+            );
+        }
+        drain_events(&queue, |event| {
+            h.on_event_inner(&event);
+        });
+        h.step();
+        assert!(queue.borrow().is_empty());
+    }
+    assert_eq!(lock(&shared).view.0, bends.concat());
+}
+
+#[test]
+fn native_button_tracking_keeps_other_buttons_and_resets_on_focus_loss_or_close() {
+    let buttons = NativeButtons::default();
+    let edge = |button, down| {
+        Event::Mouse(if down {
+            MouseEvent::ButtonPressed {
+                button,
+                modifiers: Modifiers::empty(),
+            }
+        } else {
+            MouseEvent::ButtonReleased {
+                button,
+                modifiers: Modifiers::empty(),
+            }
+        })
+    };
+    buttons.observe(&edge(MouseButton::Left, true));
+    buttons.observe(&edge(MouseButton::Other(255), true));
+    buttons.observe(&edge(MouseButton::Left, false));
+    assert!(buttons.held(), "releasing one button must retain the other");
+    buttons.observe(&edge(MouseButton::Other(255), false));
+    assert!(!buttons.held());
+    for reset in [WindowEvent::Unfocused, WindowEvent::WillClose] {
+        buttons.observe(&edge(MouseButton::Right, true));
+        buttons.observe(&edge(MouseButton::Right, true));
+        buttons.observe(&Event::Window(reset));
+        assert!(!buttons.held());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 display"]
+fn native_reentrant_drag_keeps_the_driver_trail_after_a_direct_press() {
+    use std::sync::mpsc::{Sender, channel};
+
+    struct Probe {
+        adapter: Adapter<Stroke>,
+        result: RefCell<Option<Sender<Result<(), String>>>>,
+    }
+    impl WindowHandler for Probe {
+        fn on_frame(&self) -> Result<(), HandlerError> {
+            let Some(send) = self.result.borrow_mut().take() else {
+                return Ok(());
+            };
+            let result = (|| {
+                self.adapter.handler.borrow_mut().step();
+                // A directly delivered press is absent from the later inbox.
+                self.adapter
+                    .on_event(Event::Mouse(MouseEvent::ButtonPressed {
+                        button: MouseButton::Left,
+                        modifiers: Modifiers::empty(),
+                    }));
+                let mut h = self.adapter.handler.borrow_mut();
+                h.step();
+                lock(&h.shared).view.0.clear();
+                let bends = [
+                    [
+                        Point::new(10., 10.),
+                        Point::new(20., 35.),
+                        Point::new(35., 20.),
+                    ],
+                    [
+                        Point::new(45., 40.),
+                        Point::new(60., 15.),
+                        Point::new(75., 30.),
+                    ],
+                ];
+                for segment in bends {
+                    for p in segment {
+                        // Reenter the actual adapter while its model is busy.
+                        self.adapter.on_event(Event::Mouse(MouseEvent::CursorMoved {
+                            position: PhysicalPosition::new(p.x, p.y),
+                            modifiers: Modifiers::empty(),
+                        }));
+                    }
+                    self.adapter.drain(&mut h);
+                    h.step();
+                }
+                let received = &lock(&h.shared).view.0;
+                if *received != bends.concat() {
+                    return Err(format!("native stroke lost bends: {received:?}"));
+                }
+                Ok(())
+            })();
+            let _ = send.send(result);
+            Ok(())
+        }
+        fn on_event(&self, event: Event) -> EventStatus {
+            self.adapter.on_event(event)
+        }
+        fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+            self.adapter.resized(size)
+        }
+    }
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: Stroke::default(),
+    }));
+    let (send, receive) = channel();
+    let window = Window::create(
+        settings("MUI reentrant stroke regression", (200, 200))
+            .with_scale_factor_override(Some(1.0)),
+        move |cx| {
+            Ok(Probe {
+                adapter: build(shared, Arc::default(), false)(cx)?,
+                result: RefCell::new(Some(send)),
+            })
+        },
+    )
+    .expect("native window creation");
+    window.show().expect("native window mapping");
+    let result = receive.recv_timeout(Duration::from_secs(30));
+    window.close();
+    result
+        .expect("native frame callback")
+        .expect("complete stroke");
 }
