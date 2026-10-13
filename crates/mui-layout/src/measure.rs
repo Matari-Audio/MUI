@@ -816,7 +816,7 @@ pub(crate) fn measure_uncached<'a, P>(
                         .iter()
                         .map(|(a, b)| {
                             flow[*a..*b].iter().map(|c| c.base(v, None)).sum::<f64>()
-                                + gap * (b - a - 1) as f64
+                                + gap * (b - a).saturating_sub(1) as f64
                         })
                         .fold(0.0, f64::max)
                 });

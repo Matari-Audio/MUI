@@ -19,6 +19,9 @@ pub struct LayoutStats {
     pub validated_nodes: usize,
     pub measured_nodes: usize,
     pub measure_hits: usize,
+    /// Constraint variants discarded by the bounded measurement cache this
+    /// frame. A high count identifies reuse lost to constraint churn.
+    pub measure_variant_evictions: usize,
     /// Nodes given frames this frame: zero when the whole layout was reused.
     pub arranged_nodes: usize,
     pub rebound_nodes: usize,
@@ -475,12 +478,17 @@ pub(crate) fn measure_cached<'a, P>(
     let mut m = measure::measure_uncached(node, ancestor, definite, room, container, depth, pass)?;
     let frozen = Frozen::freeze(&m, before - pass.left);
     m.frozen = Some(frozen.clone());
-    if let Some(stamp) = pass.cache.as_deref_mut().and_then(|c| c.stamp(node)) {
-        let measured = &mut stamp.measured;
-        if measured.len() >= LayoutCache::VARIANTS {
-            measured.remove(0);
+    if let Some(cache) = pass.cache.as_deref_mut() {
+        let mut evicted = false;
+        if let Some(stamp) = cache.stamp(node) {
+            let measured = &mut stamp.measured;
+            if measured.len() >= LayoutCache::VARIANTS {
+                measured.remove(0);
+                evicted = true;
+            }
+            measured.push((key, frozen));
         }
-        measured.push((key, frozen));
+        cache.stats.measure_variant_evictions += usize::from(evicted);
     }
     Ok(m)
 }
@@ -495,6 +503,59 @@ mod tests {
     fn an_unscanned_node_has_no_stamp() {
         let mut cache = LayoutCache::default();
         assert!(cache.stamp(&label("a", "x")).is_none());
+    }
+    #[test]
+    fn variant_churn_counts_evictions_without_counting_cache_hits() {
+        let n = label("text", "A measured label");
+        let mut cache = LayoutCache::default();
+        let limits = Limits::default();
+        cache
+            .prepare(&n, limits, SpacingScale::DEFAULT, &mut key)
+            .unwrap();
+        let mut measurer = crate::measure::intrinsic(metric);
+        let mut pass = Pass {
+            left: limits.nodes,
+            limits,
+            scale: SpacingScale::DEFAULT,
+            keys: Default::default(),
+            redo: false,
+            pinned: false,
+            measurer: &mut measurer,
+            cache: Some(&mut cache),
+            boxed: None,
+        };
+        for i in 0..LayoutCache::VARIANTS + 2 {
+            let width = 32. + i as f64;
+            let measured = measure_cached(
+                &n,
+                "",
+                [Some(width), None],
+                Some(width),
+                [Some(width), None],
+                0,
+                &mut pass,
+            )
+            .unwrap();
+            assert_eq!(measured.size.width, width);
+        }
+        assert_eq!(
+            pass.cache.as_ref().unwrap().stats.measure_variant_evictions,
+            2
+        );
+        let width = 32. + (LayoutCache::VARIANTS + 1) as f64;
+        measure_cached(
+            &n,
+            "",
+            [Some(width), None],
+            Some(width),
+            [Some(width), None],
+            0,
+            &mut pass,
+        )
+        .unwrap();
+        let stats = pass.cache.as_ref().unwrap().stats;
+        assert_eq!(stats.measure_hits, 1);
+        assert_eq!(stats.measure_variant_evictions, 2);
     }
     #[derive(Clone, Debug, Default)]
     struct Text {
