@@ -34,6 +34,9 @@ struct Stamp {
     rare: Option<Box<Rare>>,
     children: Vec<u64>,
     revision: u64,
+    /// Conservatively true when any length in this subtree uses the inherited
+    /// container. Computed with the existing validation walk, never in measure.
+    container_dependent: bool,
     /// The `prepare` pass that last visited this address.
     seen: u64,
     /// This revision's measurements, one per constraint it was offered,
@@ -278,7 +281,7 @@ impl LayoutCache {
             (scan.revisions, scan.payload, scan.placement);
         // A failed walk returns before popping its path's revisions.
         self.revisions.clear();
-        let revision = walked?;
+        let revision = walked?.0;
         if self.placement != self.placement_scratch {
             self.placement_revision = self
                 .placement_revision
@@ -302,7 +305,7 @@ impl LayoutCache {
         path: u64,
         depth: usize,
         s: &mut Scan<'_, K>,
-    ) -> Result<u64, Error> {
+    ) -> Result<(u64, bool), Error> {
         if depth > s.limits.depth || s.count >= s.limits.nodes {
             return Err(Error::BudgetExceeded);
         }
@@ -315,8 +318,11 @@ impl LayoutCache {
         s.placement.push(n.scrolled.map(f64::to_bits));
         self.pinned |= n.rare().pin.is_some();
         let base = s.revisions.len();
+        let mut container_dependent =
+            matches!(n.width, Len::Container(_)) || matches!(n.height, Len::Container(_));
         for (i, c) in n.children().iter().enumerate() {
-            let revision = self.scan(c, fx((path, i)), depth + 1, s)?;
+            let (revision, child_container) = self.scan(c, fx((path, i)), depth + 1, s)?;
+            container_dependent |= child_container;
             s.revisions.push(revision);
         }
         let mut address = n.key().map_or(path, fx);
@@ -352,6 +358,7 @@ impl LayoutCache {
                     rare: n.rare.clone(),
                     children: children.to_vec(),
                     revision: self.serial,
+                    container_dependent,
                     seen: s.pass,
                     measured: Vec::new(),
                 };
@@ -367,7 +374,7 @@ impl LayoutCache {
         };
         s.revisions.truncate(base);
         self.pointers.insert(n as *const Node<P> as usize, address);
-        Ok(revision)
+        Ok((revision, container_dependent))
     }
     /// The stamp `scan` gave this node. `None` for a node `scan` did not
     /// visit: it is measured uncached rather than panicking.
@@ -520,7 +527,7 @@ pub(crate) fn measure_cached<'a, P>(
     let Some(cache) = pass.cache.as_deref_mut() else {
         return measure::measure_uncached(node, ancestor, definite, room, container, depth, pass);
     };
-    let key = MeasureInput::for_node(
+    let mut key = MeasureInput::for_node(
         node,
         definite,
         room,
@@ -529,6 +536,17 @@ pub(crate) fn measure_cached<'a, P>(
         pass.boxed.is_some(),
         pass.scale,
     );
+    if cache
+        .stamp(node)
+        .is_some_and(|stamp| !stamp.container_dependent)
+    {
+        // Only Len::Container reads these inherited extents. A subtree without
+        // any CQ length is measured and arranged identically at different
+        // inherited containers: its own offers, room, padding and aspect still
+        // remain exact in the key. Frozen::container is then unconsumed data.
+        // A later CQ declaration changes the subtree revision before reuse.
+        key.container = [None; 2];
+    }
     let snapshot = cache.stamp(node).and_then(|s| {
         let at = s.measured.iter().position(|(k, _)| *k == key)?;
         let snapshot = s.measured[at].1.clone();
@@ -1178,6 +1196,80 @@ mod tests {
                 SpacingScale::DEFAULT
             )
         );
+    }
+
+    #[test]
+    fn unused_inherited_containers_reuse_natural_controls_with_fresh_frames() {
+        let natural = Node::col([
+            Node::row([
+                label("wrapped", "A deliberately long musical parameter caption")
+                    .w(Len::Pct(60.))
+                    .min_w(18.),
+                label("aspect", "Aspect").w(48.).aspect(2.).shrink(0.),
+            ])
+            .wrap()
+            .id("rail"),
+            label("bounded", "Minimum and maximum")
+                .min_size(Size::new(20., 18.))
+                .max_size(Size::new(160., 90.)),
+        ])
+        .w(180.)
+        .shrink(0.)
+        .id("natural");
+        let mut cache = LayoutCache::default();
+        for height in [320., 240., 160., 80., 20., 4., 160., 320.] {
+            let root = Node::stack([
+                Node::col([natural.clone()])
+                    .size(320., height)
+                    .shrink(0.)
+                    .scroll()
+                    .scrolled(0., height * 0.1)
+                    .id("shutter"),
+                label("pin", "Pinned").pin(Pin::to("bounded").area(Area::End)),
+            ])
+            .id("root");
+            assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
+            assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
+            let stamp = cache.stamp(&root.children()[0].children()[0]).unwrap();
+            assert_eq!(
+                stamp.measured.len(),
+                1,
+                "inherited shutter height is not consumed by this natural subtree"
+            );
+        }
+    }
+
+    #[test]
+    fn introducing_container_units_rebuilds_inherited_extent_dependencies() {
+        let mut cache = LayoutCache::default();
+        for use_container in [false, true, false] {
+            for height in [320., 240., 160., 80., 20., 160., 320.] {
+                let length = if use_container {
+                    Len::Container(50.)
+                } else {
+                    Len::Px(24.)
+                };
+                let root = Node::col([Node::col([Node::block(32., length).id("control")])
+                    .w(180.)
+                    .shrink(0.)
+                    .id("natural")])
+                .size(320., height)
+                .shrink(0.)
+                .scroll()
+                .id("root");
+                let actual = cached(&root, 400., &mut cache);
+                assert_eq!(actual, oracle(&root, 400.));
+                assert_eq!(
+                    actual.frame("control").unwrap().size.height,
+                    if use_container { height * 0.5 } else { 24. },
+                    "the consumed CQ extent must change sound-independent geometry"
+                );
+                assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
+                if !use_container {
+                    assert_eq!(cache.stamp(&root.children()[0]).unwrap().measured.len(), 1);
+                }
+            }
+        }
     }
 
     #[test]
