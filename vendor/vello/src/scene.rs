@@ -97,10 +97,6 @@ impl Scene {
     ///
     /// **However, the transforms are *not* saved or modified by the layer stack.**
     /// That is, the `transform` argument to this function only applies a transform to the `clip` shape.
-    #[expect(
-        single_use_lifetimes,
-        reason = "False positive: https://github.com/rust-lang/rust/issues/129255"
-    )]
     #[track_caller]
     pub fn push_layer<'a>(
         &mut self,
@@ -147,10 +143,6 @@ impl Scene {
     /// This issue only occurs if there are no intermediate opaque layers, so can be worked around
     /// by drawing something opaque (or having an opaque `base_color`), then putting a layer around your entire scene
     /// with a [`Compose::SrcOver`].
-    #[expect(
-        single_use_lifetimes,
-        reason = "False positive: https://github.com/rust-lang/rust/issues/129255"
-    )]
     pub fn push_luminance_mask_layer<'a>(
         &mut self,
         clip_style: impl Into<StyleRef<'a>>,
@@ -185,10 +177,6 @@ impl Scene {
     ///
     /// **However, the transforms are *not* saved or modified by the layer stack.**
     /// That is, the `transform` argument to this function only applies a transform to the `clip` shape.
-    #[expect(
-        single_use_lifetimes,
-        reason = "False positive: https://github.com/rust-lang/rust/issues/129255"
-    )]
     pub fn push_clip_layer<'a>(
         &mut self,
         clip_style: impl Into<StyleRef<'a>>,
@@ -309,10 +297,6 @@ impl Scene {
     }
 
     /// Fills a shape using the specified style and brush.
-    #[expect(
-        single_use_lifetimes,
-        reason = "False positive: https://github.com/rust-lang/rust/issues/129255"
-    )]
     pub fn fill<'b>(
         &mut self,
         style: Fill,
@@ -340,10 +324,6 @@ impl Scene {
     }
 
     /// Strokes a shape using the specified style and brush.
-    #[expect(
-        single_use_lifetimes,
-        reason = "False positive: https://github.com/rust-lang/rust/issues/129255"
-    )]
     pub fn stroke<'b>(
         &mut self,
         style: &Stroke,
@@ -678,6 +658,10 @@ impl<'a> DrawGlyphs<'a> {
 
         let color_collection = font.color_glyphs();
         let bitmaps = font.bitmap_strikes();
+        let is_apple_color_emoji = bitmaps.format() == Some(BitmapFormat::Sbix)
+            && font
+                .localized_strings(skrifa::string::StringId::POSTSCRIPT_NAME)
+                .any(|name| name.chars().eq("AppleColorEmoji".chars()));
         let mut final_glyph = None;
         let mut outline_count = 0;
         // We copy out of the variable font coords here because we need to call an exclusive self method
@@ -818,28 +802,24 @@ impl<'a> DrawGlyphs<'a> {
                     let image_scale_factor = self.run.font_size / bitmap.ppem_y;
                     let font_units_to_size = self.run.font_size / upem;
 
-                    // CoreText appears to special case Apple Color Emoji, adding
-                    // a 100 font unit vertical offset. We do the same but only
-                    // when both vertical offsets are 0 to avoid incorrect
-                    // rendering if Apple ever does encode the offset directly in
-                    // the font.
-                    let bearing_y = if bitmap.bearing_y == 0.0
-                        && bitmaps.format() == Some(BitmapFormat::Sbix)
-                    {
-                        100.0
+                    // Apple applies a hardcoded shift to Apple Color Emoji, see
+                    // https://wh0.github.io/2024/12/31/emoji-metrics.html
+                    // and https://github.com/harfbuzz/harfbuzz/issues/2679#issuecomment-1345595425.
+                    let outer_offset = if is_apple_color_emoji {
+                        Vec2::new(0.0, f64::from(self.run.font_size) / 8.0)
                     } else {
-                        bitmap.bearing_y
+                        Vec2::new(
+                            f64::from(bitmap.bearing_x * font_units_to_size),
+                            -f64::from(bitmap.bearing_y * font_units_to_size),
+                        )
                     };
 
                     let transform = transform
-                        .pre_translate(Vec2 {
-                            x: (-bitmap.bearing_x * font_units_to_size).into(),
-                            y: (bearing_y * font_units_to_size).into(),
-                        })
+                        .pre_translate(outer_offset)
                         // Unclear why this isn't non-uniform
                         .pre_scale(image_scale_factor.into())
                         .pre_translate(Vec2 {
-                            x: (-bitmap.inner_bearing_x).into(),
+                            x: bitmap.inner_bearing_x.into(),
                             y: (-bitmap.inner_bearing_y).into(),
                         });
                     let mut transform = match bitmap.placement_origin {

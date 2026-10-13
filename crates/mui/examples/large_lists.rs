@@ -104,11 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ctx.flush();
             let mut pixmap = Pixmap::new(760, 480);
             ctx.render(&mut pixmap, &mut resources);
-            let rgba: Vec<_> = pixmap
-                .take_unpremultiplied()
-                .iter()
-                .flat_map(|p| [p.r, p.g, p.b, p.a])
-                .collect();
+            let rgba: Vec<_> = pixmap.take_rgba8(mui::vello::peniko::ImageAlphaType::Alpha);
             let mut encoder = png::Encoder::new(std::fs::File::create(&path)?, 760, 480);
             encoder.set_color(png::ColorType::Rgba);
             encoder.set_depth(png::BitDepth::Eight);

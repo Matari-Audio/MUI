@@ -158,11 +158,7 @@ fn main() {
         ctx.flush();
         let mut pix = Pixmap::new(w, h);
         ctx.render(&mut pix, &mut res);
-        strip.extend(
-            pix.take_unpremultiplied()
-                .iter()
-                .flat_map(|p| [p.r, p.g, p.b, p.a]),
-        );
+        strip.extend(pix.take_rgba8(mui::vello::peniko::ImageAlphaType::Alpha));
     }
     let file = std::fs::File::create(&out).expect("create");
     let mut enc = png::Encoder::new(

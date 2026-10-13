@@ -365,6 +365,16 @@ and the remaining Linux host-thread integration limitation there.
   whether it did): paint a faded root, `Role::Surface.alpha(0.7)`, over an OS
   blur for frosted glass.
 
+`mui-baseview::Requests::drag_out` and `drag_out_with_preview` return a
+`Result<(), DragQueueError>`. A successful call admits one owned file export for
+the current primary mouse gesture; it does not establish destination import.
+Handle `Busy`, `Closed`, `GestureExpired`, and `InvalidFiles` without retrying
+the same gesture. The host starts the drag after a coherent scene is presented
+and delegates native scheduling to its shared baseview adapter.
+`take_drag_events()` delivers session progress and typed terminal outcomes;
+`drag_active()` includes queued and native work. `DragImage` declares validated
+backing pixels, logical display size, and cursor hotspot for bitmap previews.
+
 ### Native graphics diagnostics and automatic MUI issues
 
 Native hosts persist adapter attempts, startup stages, device errors and caught

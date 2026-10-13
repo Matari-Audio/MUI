@@ -11,6 +11,9 @@ pub struct NativeSize<P> {
 }
 
 impl<P> NativeSize<P> {
+    /// Whether native window sizes use logical rather than physical pixels.
+    pub const IS_LOGICAL: bool = cfg!(target_os = "macos");
+
     #[inline]
     pub const fn new(width: P, height: P) -> Self {
         NativeSize { width, height }

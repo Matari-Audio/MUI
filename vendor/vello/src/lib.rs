@@ -1,8 +1,10 @@
 // Copyright 2022 the Vello Authors
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! Vello is a 2d graphics rendering engine written in Rust, using [`wgpu`].
-//! It efficiently draws large 2d scenes with interactive or near-interactive performance.
+//! Vello is a compute-centric 2D graphics rendering engine written in Rust,
+//! using [`wgpu`].
+//! It efficiently draws large 2D scenes with interactive or near-interactive
+//! performance.
 //!
 //! ![image](https://github.com/linebender/vello/assets/8573618/cc2b742e-2135-4b70-8051-c49aeddb5d19)
 //!
@@ -76,13 +78,16 @@
 //! // wgpu::util::TextureBlitter.
 //! ```
 //!
-//! See the [`examples/`](https://github.com/linebender/vello/tree/main/examples) folder to see how that code integrates with frameworks like winit.
+//! See the [`research/examples/`](https://github.com/linebender/vello/tree/main/research/examples) folder to see how that code integrates with frameworks like winit.
 
 // LINEBENDER LINT SET - lib.rs - v2
 // See https://linebender.org/wiki/canonical-lints/
 // These lints aren't included in Cargo.toml because they
 // shouldn't apply to examples and tests
 #![warn(unused_crate_dependencies)]
+// MUI patch: wgpu's nested resource graph exceeds the newer Rust trait solver's
+// default auto-trait evaluation depth when compiling scoped shader workers.
+#![recursion_limit = "256"]
 #![warn(clippy::print_stdout, clippy::print_stderr)]
 // Targeting e.g. 32-bit means structs containing usize can give false positives for 64-bit.
 #![cfg_attr(target_pointer_width = "64", warn(clippy::trivially_copy_pass_by_ref))]
@@ -129,8 +134,8 @@ pub mod low_level {
     };
     pub use crate::render::Render;
     pub use crate::shaders::FullShaders;
-    /// Temporary export, used in `with_winit` for stats
-    pub use vello_encoding::BumpAllocators;
+
+    pub use vello_encoding;
 }
 /// Styling and composition primitives.
 pub use peniko;
@@ -147,13 +152,13 @@ pub use vello_encoding::{FontEmbolden, Glyph, NormalizedCoord};
 
 use low_level::ShaderId;
 #[cfg(feature = "wgpu")]
-use low_level::{BumpAllocators, FullShaders, Recording, Render};
+use low_level::{FullShaders, Recording, Render};
 use thiserror::Error;
 
 #[cfg(feature = "wgpu")]
 use debug::DebugLayers;
 #[cfg(feature = "wgpu")]
-use vello_encoding::Resolver;
+use vello_encoding::{BumpAllocators, Resolver};
 #[cfg(feature = "wgpu")]
 use wgpu_engine::{ExternalResource, WgpuEngine};
 

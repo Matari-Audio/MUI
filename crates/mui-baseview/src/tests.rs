@@ -10,7 +10,7 @@ use mui::prelude::{El, Input, knob};
 #[test]
 #[ignore = "requires an X11 display"]
 fn native_cpu_fallback_presents_and_reopens() {
-    cpu_presentation_fixture(false);
+    cpu_presentation_fixture(false, false);
 }
 
 #[cfg(target_os = "linux")]
@@ -23,20 +23,37 @@ fn native_resize_failure_falls_back_and_presents() {
         eprintln!("SKIPPED: no native GPU backend enabled by WGPU_BACKEND");
         return;
     }
-    cpu_presentation_fixture(true);
+    cpu_presentation_fixture(true, false);
 }
 
 #[cfg(target_os = "linux")]
-fn cpu_presentation_fixture(resize_failure: bool) {
+#[test]
+#[ignore = "requires a live X11 display and graphics driver; exercises the >1M pixel startup placeholder"]
+fn native_large_resize_failure_recovers_full_scene() {
+    if (mui::vello::host::instance_descriptor().backends & wgpu::Backends::PRIMARY).is_empty() {
+        return;
+    }
+    cpu_presentation_fixture(true, true);
+}
+
+#[cfg(target_os = "linux")]
+fn cpu_presentation_fixture(resize_failure: bool, large: bool) {
     use mui::prelude::*;
     use std::sync::mpsc::{Sender, channel};
     use x11rb::connection::Connection;
     use x11rb::protocol::xproto::{ConnectionExt, ImageFormat};
 
-    struct Green;
+    struct Green {
+        size: (u32, u32),
+    }
     impl View for Green {
         fn build(&mut self, _: &mut Ui, _: &Input) -> El {
-            block(240., 200.).fill(Color::srgb(0., 1., 0.))
+            // A foreground child distinguishes a full scene from startup background-only pixels.
+            col![
+                block(self.size.0 as f32, 40.).fill(Color::srgb(0., 0., 1.)),
+                block(self.size.0 as f32, self.size.1 as f32 - 40.).fill(Color::srgb(0., 1., 0.)),
+            ]
+            .fill(Color::srgb(0., 1., 0.))
         }
         fn changed(&mut self) -> bool {
             false
@@ -52,6 +69,8 @@ fn cpu_presentation_fixture(resize_failure: bool) {
         traced: std::cell::Cell<u8>,
         exposed: std::cell::Cell<bool>,
         resize_failure: bool,
+        initial: (u32, u32),
+        resized: (u32, u32),
         recovered_size: std::cell::Cell<(u32, u32)>,
         result: RefCell<Option<Sender<Result<(), String>>>>,
     }
@@ -81,10 +100,10 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                             }
                             return Ok(false);
                         }
-                        if presented.size != (240, 200) {
+                        if presented.size != self.initial {
                             return Err("fixture did not establish the correct GPU extent".into());
                         }
-                        handler.requests.resize(200, 160);
+                        handler.requests.resize(self.resized.0, self.resized.1);
                         handler.tick(&self.cx);
                         let gpu = handler.gpu.as_ref().ok_or("missing initial GPU")?;
                         // Lose the device before X11 acknowledges the requested resize.
@@ -118,7 +137,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                 let mut handler = self.handler.borrow_mut();
                 // A WM can constrain the request (XWayland here uses 200x161).
                 // Verify the acknowledged native extent, not our requested one.
-                if handler.driver.size() == (240, 200) {
+                if handler.driver.size() == self.initial {
                     return Ok(());
                 }
                 self.recovered_size.set(handler.driver.size());
@@ -186,7 +205,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                 let expected = if self.resize_failure {
                     self.recovered_size.get()
                 } else {
-                    (240, 200)
+                    self.initial
                 };
                 let presented = handler
                     .requests
@@ -227,15 +246,7 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                 let deadline = Instant::now() + Duration::from_secs(1);
                 loop {
                     let pixels = connection
-                        .get_image(
-                            ImageFormat::Z_PIXMAP,
-                            window,
-                            20,
-                            i16::try_from(expected.1 - 20).unwrap(),
-                            1,
-                            1,
-                            u32::MAX,
-                        )
+                        .get_image(ImageFormat::Z_PIXMAP, window, 20, 20, 1, 1, u32::MAX)
                         .map_err(|e| e.to_string())?
                         .reply()
                         .map_err(|e| e.to_string())?;
@@ -252,8 +263,8 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                     } else {
                         u32::from_be_bytes(bytes)
                     };
-                    if pixel & visual.green_mask == visual.green_mask
-                        && pixel & (visual.red_mask | visual.blue_mask) == 0
+                    if pixel & visual.blue_mask == visual.blue_mask
+                        && pixel & (visual.red_mask | visual.green_mask) == 0
                     {
                         if depth == 32 && pixel >> 24 != 255 {
                             return Err(
@@ -317,19 +328,21 @@ fn cpu_presentation_fixture(resize_failure: bool) {
             self.handler.borrow_mut().on_event_inner(&event)
         }
     }
+    let initial = if large { (1200, 1100) } else { (240, 200) };
+    let resized = if large { (1150, 1050) } else { (200, 160) };
     for _ in 0..2 {
         let (send, recv) = channel();
         let shared = Arc::new(Mutex::new(Shared {
             ui: Ui::default(),
-            view: Green,
+            view: Green { size: initial },
         }));
         let window = Window::create(
-            settings("MUI CPU regression", (240, 200))
+            settings("MUI CPU regression", initial)
                 .with_resizable(false)
                 .with_scale_factor_override(Some(1.0)),
             move |cx| {
                 let requests = Arc::new(Requests::default());
-                let mut handler = Handler::new(shared, requests, (240, 200), 1.0);
+                let mut handler = Handler::new(shared, requests, initial, 1.0);
                 handler.software_only = !resize_failure
                     && (handler.software_only
                         || std::env::var("WGPU_BACKEND").as_deref() != Ok("metal"));
@@ -349,7 +362,9 @@ fn cpu_presentation_fixture(resize_failure: bool) {
                     traced: std::cell::Cell::new(255),
                     exposed: std::cell::Cell::new(false),
                     resize_failure,
-                    recovered_size: std::cell::Cell::new((240, 200)),
+                    initial,
+                    resized,
+                    recovered_size: std::cell::Cell::new(initial),
                     result: RefCell::new(Some(send)),
                 })
             },
@@ -1066,4 +1081,260 @@ fn live_poll_interval_is_set_and_cleared_without_a_wake() {
     assert_eq!(requests.poll_interval(), Some(Duration::from_micros(1)));
     requests.set_poll_interval(None);
     assert_eq!(requests.poll_interval(), None);
+}
+
+#[test]
+fn queued_motion_coalesces_only_adjacent_equal_modifier_samples_and_preserves_barriers() {
+    let mut queue = VecDeque::new();
+    let movement = |x, modifiers| {
+        Event::Mouse(MouseEvent::CursorMoved {
+            position: PhysicalPosition::new(x, 1.),
+            modifiers,
+        })
+    };
+    let none = Modifiers::default();
+    for x in 0..1000 {
+        enqueue_event(&mut queue, movement(f64::from(x), none), false);
+    }
+    let key_event = key(
+        HostKey::Character("a".into()),
+        Code::KeyA,
+        KeyState::Down,
+        none,
+    );
+    enqueue_event(&mut queue, key_event, false);
+    enqueue_event(&mut queue, movement(1001., none), false);
+    enqueue_event(
+        &mut queue,
+        Event::Ime(baseview::Ime::Commit("😀".into())),
+        false,
+    );
+    enqueue_event(&mut queue, movement(1002., none), false);
+    enqueue_event(&mut queue, movement(1003., Modifiers::SHIFT), false);
+    enqueue_event(
+        &mut queue,
+        Event::Mouse(MouseEvent::ButtonReleased {
+            button: MouseButton::Left,
+            modifiers: Modifiers::SHIFT,
+        }),
+        false,
+    );
+    assert_eq!(queue.len(), 7);
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, ..
+    })) if position.x == 999.)
+    );
+    assert!(matches!(queue.pop_front(), Some(Event::Keyboard(_))));
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, ..
+    })) if position.x == 1001.)
+    );
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Ime(baseview::Ime::Commit(text))) if text == "😀")
+    );
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, ..
+    })) if position.x == 1002.)
+    );
+    assert!(
+        matches!(queue.pop_front(), Some(Event::Mouse(MouseEvent::CursorMoved {
+        position, modifiers
+    })) if position.x == 1003. && modifiers == Modifiers::SHIFT)
+    );
+    assert!(matches!(
+        queue.pop_front(),
+        Some(Event::Mouse(MouseEvent::ButtonReleased { .. }))
+    ));
+}
+
+#[derive(Default)]
+struct Stroke(Vec<Point>);
+impl View for Stroke {
+    fn build(&mut self, _: &mut Ui, input: &Input) -> El {
+        if input.pointer.buttons.contains(Button::Primary) {
+            self.0.extend_from_slice(&input.trail);
+            self.0.extend(input.pointer.pos);
+        }
+        mui::prelude::block(100., 100.)
+    }
+    fn changed(&mut self) -> bool {
+        false
+    }
+    fn request_resize(&mut self, _: u32, _: u32) -> bool {
+        false
+    }
+}
+
+#[test]
+fn queued_drag_samples_reach_the_driver_trail_across_drains() {
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: Stroke::default(),
+    }));
+    let mut h = Handler::new(shared.clone(), Arc::default(), (200, 200), 2.0);
+    h.step();
+    // The press was delivered directly in an earlier native callback; it is
+    // absent from the busy-handler inbox throughout both subsequent drains.
+    let buttons = NativeButtons::default();
+    let press = Event::Mouse(MouseEvent::ButtonPressed {
+        button: MouseButton::Left,
+        modifiers: Modifiers::empty(),
+    });
+    buttons.observe(&press);
+    h.on_event_inner(&press);
+    h.step();
+    lock(&shared).view.0.clear();
+    let queue = RefCell::new(VecDeque::new());
+    let bends = [
+        [
+            Point::new(10., 10.),
+            Point::new(20., 35.),
+            Point::new(35., 20.),
+        ],
+        [
+            Point::new(45., 40.),
+            Point::new(60., 15.),
+            Point::new(75., 30.),
+        ],
+    ];
+    for segment in bends {
+        for p in segment {
+            enqueue_event(
+                &mut queue.borrow_mut(),
+                Event::Mouse(MouseEvent::CursorMoved {
+                    position: PhysicalPosition::new(p.x * 2., p.y * 2.),
+                    modifiers: Modifiers::empty(),
+                }),
+                buttons.held(),
+            );
+        }
+        drain_events(&queue, |event| {
+            h.on_event_inner(&event);
+        });
+        h.step();
+        assert!(queue.borrow().is_empty());
+    }
+    assert_eq!(lock(&shared).view.0, bends.concat());
+}
+
+#[test]
+fn native_button_tracking_keeps_other_buttons_and_resets_on_focus_loss_or_close() {
+    let buttons = NativeButtons::default();
+    let edge = |button, down| {
+        Event::Mouse(if down {
+            MouseEvent::ButtonPressed {
+                button,
+                modifiers: Modifiers::empty(),
+            }
+        } else {
+            MouseEvent::ButtonReleased {
+                button,
+                modifiers: Modifiers::empty(),
+            }
+        })
+    };
+    buttons.observe(&edge(MouseButton::Left, true));
+    buttons.observe(&edge(MouseButton::Other(255), true));
+    buttons.observe(&edge(MouseButton::Left, false));
+    assert!(buttons.held(), "releasing one button must retain the other");
+    buttons.observe(&edge(MouseButton::Other(255), false));
+    assert!(!buttons.held());
+    for reset in [WindowEvent::Unfocused, WindowEvent::WillClose] {
+        buttons.observe(&edge(MouseButton::Right, true));
+        buttons.observe(&edge(MouseButton::Right, true));
+        buttons.observe(&Event::Window(reset));
+        assert!(!buttons.held());
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 display"]
+fn native_reentrant_drag_keeps_the_driver_trail_after_a_direct_press() {
+    use std::sync::mpsc::{Sender, channel};
+
+    struct Probe {
+        adapter: Adapter<Stroke>,
+        result: RefCell<Option<Sender<Result<(), String>>>>,
+    }
+    impl WindowHandler for Probe {
+        fn on_frame(&self) -> Result<(), HandlerError> {
+            let Some(send) = self.result.borrow_mut().take() else {
+                return Ok(());
+            };
+            let result = (|| {
+                self.adapter.handler.borrow_mut().step();
+                // A directly delivered press is absent from the later inbox.
+                self.adapter
+                    .on_event(Event::Mouse(MouseEvent::ButtonPressed {
+                        button: MouseButton::Left,
+                        modifiers: Modifiers::empty(),
+                    }));
+                let mut h = self.adapter.handler.borrow_mut();
+                h.step();
+                lock(&h.shared).view.0.clear();
+                let bends = [
+                    [
+                        Point::new(10., 10.),
+                        Point::new(20., 35.),
+                        Point::new(35., 20.),
+                    ],
+                    [
+                        Point::new(45., 40.),
+                        Point::new(60., 15.),
+                        Point::new(75., 30.),
+                    ],
+                ];
+                for segment in bends {
+                    for p in segment {
+                        // Reenter the actual adapter while its model is busy.
+                        self.adapter.on_event(Event::Mouse(MouseEvent::CursorMoved {
+                            position: PhysicalPosition::new(p.x, p.y),
+                            modifiers: Modifiers::empty(),
+                        }));
+                    }
+                    self.adapter.drain(&mut h);
+                    h.step();
+                }
+                let received = &lock(&h.shared).view.0;
+                if *received != bends.concat() {
+                    return Err(format!("native stroke lost bends: {received:?}"));
+                }
+                Ok(())
+            })();
+            let _ = send.send(result);
+            Ok(())
+        }
+        fn on_event(&self, event: Event) -> EventStatus {
+            self.adapter.on_event(event)
+        }
+        fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+            self.adapter.resized(size)
+        }
+    }
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: Stroke::default(),
+    }));
+    let (send, receive) = channel();
+    let window = Window::create(
+        settings("MUI reentrant stroke regression", (200, 200))
+            .with_scale_factor_override(Some(1.0)),
+        move |cx| {
+            Ok(Probe {
+                adapter: build(shared, Arc::default(), false)(cx)?,
+                result: RefCell::new(Some(send)),
+            })
+        },
+    )
+    .expect("native window creation");
+    window.show().expect("native window mapping");
+    let result = receive.recv_timeout(Duration::from_secs(30));
+    window.close();
+    result
+        .expect("native frame callback")
+        .expect("complete stroke");
 }

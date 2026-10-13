@@ -309,11 +309,7 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
     Ok(Frame {
         surfaces: scene.surfaces().count() as u32,
         paint_ops: scene.paint.len() as u32,
-        pixels: pixmap
-            .take_unpremultiplied()
-            .iter()
-            .flat_map(|p| [p.r, p.g, p.b, p.a])
-            .collect(),
+        pixels: pixmap.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha),
     })
 }
 

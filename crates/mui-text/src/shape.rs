@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::sync::{Arc, Mutex};
 
 use harfrust::{
@@ -34,7 +35,8 @@ const PLAN_CAP: usize = 64;
 /// `y = 0`, `ascent` is a positive distance *above* it and `descent` a positive
 /// distance *below*. skrifa reports descent as a negative number in a y-up
 /// space; flipping it here is why this is a struct and not a tuple. With
-/// fallback faces each metric is the largest any face reports.
+/// fallback faces each metric is the largest contributing face reports. Empty
+/// and whitespace runs use the primary face.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRun {
     /// Every glyph's contours, each already translated to its pen position.
@@ -94,8 +96,21 @@ pub(crate) struct Face<'a> {
     font: FontRef<'a>,
     data: &'a ShaperData,
     plans: &'a Mutex<Vec<Arc<ShapePlan>>>,
-    location: skrifa::instance::Location,
-    instance: ShaperInstance,
+    size_px: f64,
+    axes: &'a [Axis<'a>],
+    location: OnceCell<skrifa::instance::Location>,
+    instance: OnceCell<ShaperInstance>,
+}
+impl Face<'_> {
+    fn location(&self) -> &skrifa::instance::Location {
+        self.location
+            .get_or_init(|| location(&self.font, self.size_px, self.axes))
+    }
+    fn instance(&self) -> &ShaperInstance {
+        self.instance.get_or_init(|| {
+            ShaperInstance::from_coords(&self.font, self.location().coords().iter().copied())
+        })
+    }
 }
 
 /// Open `fonts` -- the primary face, then its fallbacks -- at one size and
@@ -103,7 +118,7 @@ pub(crate) struct Face<'a> {
 pub(crate) fn open<'a>(
     fonts: &'a [Font],
     size_px: f64,
-    axes: &[Axis<'_>],
+    axes: &'a [Axis<'a>],
 ) -> Result<Vec<Face<'a>>, Error> {
     checked_size(size_px)?;
     if fonts.is_empty() {
@@ -114,17 +129,17 @@ pub(crate) fn open<'a>(
         .map(|f| {
             let font = f.font_ref()?;
             let data = f.0.shaper.get_or_init(|| ShaperData::new(&font));
-            let location = location(&font, size_px, axes);
-            // The same normalized coordinates the outlines are drawn at, so
-            // the shaper's advances and FeatureVariations never disagree
-            // with the ink.
-            let instance = ShaperInstance::from_coords(&font, location.coords().iter().copied());
+            // Only a face that actually contributes needs a variable location
+            // and shaping instance. Resident fallback chains must not allocate
+            // two variation buffers per unused face on each measurement.
             Ok(Face {
                 font,
                 data,
                 plans: &f.0.plans,
-                location,
-                instance,
+                size_px,
+                axes,
+                location: OnceCell::new(),
+                instance: OnceCell::new(),
             })
         })
         .collect()
@@ -165,7 +180,7 @@ pub fn text_run(
         if let Some(outline) = outlines[g.font].get(GlyphId::new(g.id)) {
             pen.dx = g.x;
             pen.dy = g.y;
-            let location = LocationRef::from(&faces[g.font].location);
+            let location = LocationRef::from(faces[g.font].location());
             outline
                 .draw(DrawSettings::unhinted(size, location), &mut pen)
                 .map_err(Error::Draw)?;
@@ -191,9 +206,20 @@ pub fn shape_run(
 
 fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, Error> {
     let size = Size::new(checked_size(size_px)?);
+    let shaped = shape(faces, text, size_px);
+    // Resident fallback faces must not enlarge controls whose glyphs all came
+    // from the primary. Preserve fallback metrics when that face contributes.
+    let primary_only = shaped.glyphs.is_empty() || text.chars().all(char::is_whitespace);
     let (mut ascent, mut descent, mut line_height) = (0f64, 0f64, 0f64);
-    for face in faces {
-        let m = face.font.metrics(size, LocationRef::from(&face.location));
+    for (index, face) in faces.iter().enumerate() {
+        if !(if primary_only {
+            index == 0
+        } else {
+            shaped.glyphs.iter().any(|g| g.font == index)
+        }) {
+            continue;
+        }
+        let m = face.font.metrics(size, LocationRef::from(face.location()));
         ascent = ascent.max(checked_metric(m.ascent, "font metrics")?);
         // Negative in font space, positive below the baseline here.
         descent = descent.max(checked_metric(-m.descent, "font metrics")?);
@@ -202,7 +228,6 @@ fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, E
             "font metrics",
         )?);
     }
-    let shaped = shape(faces, text, size_px);
     let min_content = min_content_width(text, &advances_of(text, &clusters(text, &shaped))?);
     Ok(TextRun {
         path: Arc::default(),
@@ -272,10 +297,7 @@ fn fallback_chunks(
 /// chunks within each. Every glyph's x is its pen position from the run
 /// start; outlines are never touched, so measuring costs only the shaping.
 pub(crate) fn shape(faces: &[Face<'_>], text: &str, size_px: f64) -> ShapedText {
-    let shapers: Vec<_> = faces
-        .iter()
-        .map(|f| f.data.shaper(&f.font).instance(Some(&f.instance)).build())
-        .collect();
+    let shapers: Vec<_> = faces.iter().map(|_| OnceCell::new()).collect();
     // One face needs no coverage test: it is the fallback for everything.
     let charmaps: Vec<_> = if faces.len() > 1 {
         faces.iter().map(|f| f.font.charmap()).collect()
@@ -304,7 +326,13 @@ pub(crate) fn shape(faces: &[Face<'_>], text: &str, size_px: f64) -> ShapedText 
             // it the shaper picks the default shaper and skips mark
             // positioning.
             buffer.guess_segment_properties();
-            let shaper = &shapers[font];
+            let shaper = shapers[font].get_or_init(|| {
+                let face = &faces[font];
+                face.data
+                    .shaper(&face.font)
+                    .instance(Some(face.instance()))
+                    .build()
+            });
             let plan = plan(&faces[font], shaper, &buffer);
             // Default feature set: HarfBuzz turns on rlig/rclt/calt/liga,
             // which is what FeatureVariations-driven swaps (Material Symbols
@@ -338,7 +366,7 @@ fn plan(face: &Face<'_>, shaper: &harfrust::Shaper<'_>, buffer: &UnicodeBuffer) 
     // An unset script reads back as Unknown; the per-call plan sees `None`.
     let script = Some(buffer.script()).filter(|&s| s != harfrust::script::UNKNOWN);
     let direction = buffer.direction();
-    let key = ShapePlanKey::new(script, direction).instance(Some(&face.instance));
+    let key = ShapePlanKey::new(script, direction).instance(Some(face.instance()));
     let lock = || {
         face.plans
             .lock()
@@ -633,5 +661,49 @@ mod tests {
         assert!(list.contains(&0), "a hit refreshed it");
         assert!(!list.contains(&1), "the oldest went");
         assert_eq!(list.last(), Some(&PLAN_CAP));
+    }
+
+    #[test]
+    fn unused_fallback_faces_do_not_change_primary_line_metrics() {
+        let primary = inter();
+        let emoji = Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap();
+        for text in ["", "   ", "Output trim"] {
+            let original = shape_run(std::slice::from_ref(&primary), text, 16., &[]).unwrap();
+            let expanded = shape_run(&[primary.clone(), emoji.clone()], text, 16., &[]).unwrap();
+            assert!(expanded.glyphs.iter().all(|g| g.font == 0));
+            assert_eq!(
+                (expanded.ascent, expanded.descent, expanded.line_height),
+                (original.ascent, original.descent, original.line_height),
+                "{text:?}"
+            );
+            assert_eq!(expanded.advance, original.advance);
+        }
+    }
+
+    #[test]
+    fn contributing_fallback_faces_keep_their_line_metrics() {
+        let primary = inter();
+        let emoji = Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap();
+        let fallback = shape_run(std::slice::from_ref(&emoji), "😀", 16., &[]).unwrap();
+        let only_fallback = shape_run(&[primary.clone(), emoji.clone()], "😀", 16., &[]).unwrap();
+        assert!(only_fallback.glyphs.iter().all(|g| g.font == 1));
+        assert_eq!(
+            (
+                only_fallback.ascent,
+                only_fallback.descent,
+                only_fallback.line_height
+            ),
+            (fallback.ascent, fallback.descent, fallback.line_height)
+        );
+        let latin = shape_run(std::slice::from_ref(&primary), "A", 16., &[]).unwrap();
+        let mixed = shape_run(&[primary, emoji], "A😀", 16., &[]).unwrap();
+        assert_eq!(
+            (mixed.ascent, mixed.descent, mixed.line_height),
+            (
+                latin.ascent.max(fallback.ascent),
+                latin.descent.max(fallback.descent),
+                latin.line_height.max(fallback.line_height)
+            )
+        );
     }
 }

@@ -15,7 +15,7 @@
 
 </div>
 
-> **MUI's vendored copy.** Upstream vello 0.10.0 ported to wgpu 30 and
+> **MUI's vendored copy.** Upstream vello 0.11.0 on wgpu 30 and
 > patched for MUI's retained renderer; see [PATCHES.md](PATCHES.md). The rest
 > of this file is upstream's.
 

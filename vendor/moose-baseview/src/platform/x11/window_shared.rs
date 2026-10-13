@@ -9,11 +9,15 @@ use crate::platform::*;
 use crate::utils::SizingStrategy;
 use crate::{warn, MouseCursor, WindowHandler, WindowSettings, WindowSize};
 use calloop::LoopSignal;
-use matari_audio_drag_and_drop::{DragOrigin, RejectedStart, StartTicket, X11PointerEvent, X11Session};
+use matari_audio_drag_and_drop::{
+    DragOrigin, RejectedStart, StartTicket, X11PointerEvent, X11Session,
+};
 use raw_window_handle::{DisplayHandle, XlibWindowHandle};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use x11rb::connection::Connection;
+use x11rb::properties::WmSizeHintsSpecification;
 use x11rb::protocol::xproto;
 use x11rb::protocol::xproto::{ChangeWindowAttributesAux, ConnectionExt, InputFocus, Visualid};
 use x11rb::CURRENT_TIME;
@@ -79,6 +83,8 @@ pub(crate) struct WindowInner {
     pub(crate) main_thread_shared: Arc<WindowThreadShared>,
 
     /// The newest pointer event, the authority an outbound drag starts from.
+    parented: bool,
+    pub(crate) defer_user_close: bool,
     pub(crate) last_pointer_event: Cell<Option<X11PointerEvent>>,
     pub(crate) primary_pointer_down: Cell<bool>,
     pub(crate) external_drag_session: RefCell<Option<X11Session>>,
@@ -109,7 +115,7 @@ impl WindowInner {
 
         let sizing_strategy = SizingStrategy::from_settings(&options);
 
-        let size_hints = get_size_hints(&sizing_strategy, physical_size, initial_scale_factor);
+        let mut size_hints = get_size_hints(&sizing_strategy, physical_size, initial_scale_factor);
 
         #[cfg(feature = "opengl")]
         let visual_info =
@@ -119,6 +125,17 @@ impl WindowInner {
         let visual_info = WindowVisualConfig::find_best_visual_config(&xcb_connection)?;
 
         let connection = Rc::new(xcb_connection);
+        let owner = options
+            .owner
+            .as_ref()
+            .map(|owner| connection.top_level_for(owner.inner.window_id))
+            .transpose()?;
+        let owner_position =
+            owner.map(|_| connection.pointer_centered_position(physical_size)).transpose()?;
+
+        if let Some((x, y)) = owner_position {
+            size_hints.position = Some((WmSizeHintsSpecification::ProgramSpecified, x, y));
+        }
 
         let will_have_parent = options.parent.is_some() || options.wait_for_parent;
 
@@ -136,12 +153,19 @@ impl WindowInner {
         let visibility_state =
             AncestorVisibilityState::discover(&connection, xcb_window.id(), will_have_parent)?;
 
-        let cookies = [
+        let mut cookies = vec![
             xcb_window.set_title(&options.title)?,
             xcb_window.enable_wm_protocols()?,
             xcb_window.enable_dnd_protocols()?,
             xcb_window.set_size_hints(size_hints)?,
         ];
+
+        if let Some(owner) = owner {
+            cookies.push(xcb_window.set_transient_for(owner)?);
+        }
+        if let Some((x, y)) = owner_position {
+            cookies.push(xcb_window.move_to(x, y)?);
+        }
 
         for cookie in cookies {
             cookie.check()?;
@@ -179,6 +203,8 @@ impl WindowInner {
 
             visibility_state,
 
+            parented: will_have_parent,
+            defer_user_close: options.defer_user_close,
             last_pointer_event: Cell::new(None),
             primary_pointer_down: Cell::new(false),
             external_drag_session: RefCell::new(None),
@@ -332,6 +358,42 @@ impl WindowInner {
 
     pub fn size(&self) -> WindowSize {
         WindowSize::from_physical(self.window_size.get().cast(), self.scaling_factor.get())
+    }
+
+    pub fn drag_resize(
+        &self, edge: crate::ResizeEdge,
+    ) -> std::result::Result<(), crate::DragResizeError> {
+        self.drag_initiate(edge.x11_moveresize_direction())
+    }
+
+    fn drag_initiate(&self, direction: u32) -> std::result::Result<(), crate::DragResizeError> {
+        if self.parented {
+            return Err(crate::DragResizeError::NotTopLevel);
+        }
+        if !self.primary_pointer_down.get() || self.external_drag_session.borrow().is_some() {
+            return Err(crate::DragResizeError::NoActivePointer);
+        }
+        let conn = &self.connection.conn;
+        let pointer = conn
+            .query_pointer(self.xcb_window.id().get())
+            .map_err(|error| crate::DragResizeError::Os(error.to_string()))?
+            .reply()
+            .map_err(|error| crate::DragResizeError::Os(error.to_string()))?;
+        let event = xproto::ClientMessageEvent::new(
+            32,
+            self.xcb_window.id().get(),
+            self.connection.atoms._NET_WM_MOVERESIZE,
+            [pointer.root_x as i32 as u32, pointer.root_y as i32 as u32, direction, 1, 1],
+        );
+        conn.send_event(
+            false,
+            self.connection.default_screen().root,
+            xproto::EventMask::SUBSTRUCTURE_REDIRECT | xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        )
+        .map_err(|error| crate::DragResizeError::Os(error.to_string()))?;
+        conn.flush().map_err(|error| crate::DragResizeError::Os(error.to_string()))?;
+        Ok(())
     }
 
     pub fn can_schedule_matari_x11_drag(&self) -> bool {

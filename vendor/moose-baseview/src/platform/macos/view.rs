@@ -14,8 +14,8 @@ use crate::window::WindowInitializer;
 use crate::wrappers::appkit::*;
 use crate::MouseEvent::{ButtonPressed, ButtonReleased};
 use crate::{
-    DropData, DropEffect, Event, EventStatus, FrameDemand, FrameRequester, MouseButton, MouseEvent,
-    ScrollDelta, WindowEvent, WindowHandler, WindowSize,
+    DragResizeError, DropData, DropEffect, Event, EventStatus, FrameDemand, FrameRequester,
+    MouseButton, MouseEvent, ResizeEdge, ScrollDelta, WindowEvent, WindowHandler, WindowSize,
 };
 use objc2::__framework_prelude::Retained;
 use objc2::rc::Weak;
@@ -88,10 +88,13 @@ impl ViewParentingType {
 pub(crate) struct BaseviewView {
     pub(crate) state: Rc<WindowSharedState>,
     pub(crate) mtm: MainThreadMarker,
+    pub(crate) drag: crate::drag::NativeDrag,
+    resize_drag: RefCell<Option<MacResizeDrag>>,
+    pub(crate) drag_event: RefCell<Option<Retained<NSEvent>>>,
     window_handler: WindowHandlerContainer,
     ready: Cell<bool>,
     resizing: Cell<bool>,
-    attached: Cell<bool>,
+    pub(crate) attached: Cell<bool>,
     view_id: u64,
     wake: Arc<WakeState>,
     demand: Cell<FrameDemand>,
@@ -120,6 +123,14 @@ pub(crate) struct BaseviewView {
     pub(crate) gl_context: std::cell::OnceCell<super::gl::GlContext>,
 }
 
+#[derive(Clone, Copy)]
+struct MacResizeDrag {
+    edge: ResizeEdge,
+    start_mouse: LogicalPosition<f64>,
+    start_frame_size: LogicalSize<f64>,
+    start_frame_origin: LogicalPosition<f64>,
+}
+
 impl BaseviewView {
     pub fn new(
         init: WindowInitializer, parenting: ViewParentingType, final_size: LogicalSize<f64>,
@@ -132,10 +143,14 @@ impl BaseviewView {
             final_size,
             1.0,
             SizingStrategy::from_settings(&init.settings),
+            init.settings.defer_user_close,
         ));
 
         let inner = BaseviewView {
             mtm,
+            drag: Default::default(),
+            drag_event: RefCell::new(None),
+            resize_drag: RefCell::new(None),
             state: Rc::clone(&state),
 
             keyboard_state: KeyboardState::new(),
@@ -230,7 +245,9 @@ impl BaseviewView {
         if this.state.closed.get() {
             return;
         }
-        let Ok(parent) = this.parenting.try_borrow() else { return };
+        let Ok(parent) = this.parenting.try_borrow() else {
+            return;
+        };
 
         if let ViewParentingType::Windowed { owned_window } = &*parent {
             if let Some(window) = owned_window.load() {
@@ -246,7 +263,9 @@ impl BaseviewView {
             return;
         }
         Self::stop_frame_driver(this);
-        let Ok(parent) = this.parenting.try_borrow() else { return };
+        let Ok(parent) = this.parenting.try_borrow() else {
+            return;
+        };
 
         if let ViewParentingType::Windowed { owned_window } = &*parent {
             if let Some(window) = owned_window.load() {
@@ -259,6 +278,9 @@ impl BaseviewView {
         if this.state.closed.replace(true) {
             return;
         }
+        this.drag.release();
+        this.drag_event.borrow_mut().take();
+        this.resize_drag.borrow_mut().take();
         // Revocation happens before any Objective-C call that can reenter us.
         this.wake.revoke();
         let _ = VIEWS.try_with(|views| views.borrow_mut().remove(&this.view_id));
@@ -354,10 +376,87 @@ impl BaseviewView {
         Self::request_frame(this);
     }
 
+    pub(crate) fn begin_resize_drag(
+        this: ViewRef<Self>, edge: ResizeEdge,
+    ) -> std::result::Result<(), DragResizeError> {
+        let ViewParentingType::Windowed { owned_window } = &*this.parenting.borrow() else {
+            return Err(DragResizeError::NotTopLevel);
+        };
+        let Some(window) = owned_window.load() else {
+            return Err(DragResizeError::Os("owned NSWindow is gone".into()));
+        };
+        if this.state.closed.get()
+            || !this.attached.get()
+            || !this.drag.available()
+            || NSEvent::pressedMouseButtons() & 1 == 0
+        {
+            return Err(DragResizeError::NoActivePointer);
+        }
+        let mouse = NSEvent::mouseLocation();
+        let frame = window.frame();
+        *this.resize_drag.borrow_mut() = Some(MacResizeDrag {
+            edge,
+            start_mouse: LogicalPosition::new(mouse.x, mouse.y),
+            start_frame_size: LogicalSize::new(frame.size.width, frame.size.height),
+            start_frame_origin: LogicalPosition::new(frame.origin.x, frame.origin.y),
+        });
+        Ok(())
+    }
+
+    fn continue_resize_drag(this: ViewRef<Self>) -> bool {
+        let Some(drag) = *this.resize_drag.borrow() else {
+            return false;
+        };
+        let ViewParentingType::Windowed { owned_window } = &*this.parenting.borrow() else {
+            this.resize_drag.borrow_mut().take();
+            return false;
+        };
+        let Some(window) = owned_window.load() else {
+            this.resize_drag.borrow_mut().take();
+            return false;
+        };
+
+        let mouse = NSEvent::mouseLocation();
+        let dx = mouse.x - drag.start_mouse.x;
+        let dy = mouse.y - drag.start_mouse.y;
+        let mut width = drag.start_frame_size.width;
+        let mut height = drag.start_frame_size.height;
+        let mut origin_x = drag.start_frame_origin.x;
+        let mut origin_y = drag.start_frame_origin.y;
+
+        if drag.edge.affects_width() {
+            if drag.edge.grows_from_west() {
+                width = (drag.start_frame_size.width - dx).max(1.0);
+                origin_x += drag.start_frame_size.width - width;
+            } else {
+                width = (drag.start_frame_size.width + dx).max(1.0);
+            }
+        }
+        if drag.edge.affects_height() {
+            if drag.edge.grows_from_south() {
+                height = (drag.start_frame_size.height - dy).max(1.0);
+                origin_y += drag.start_frame_size.height - height;
+            } else {
+                height = (drag.start_frame_size.height + dy).max(1.0);
+            }
+        }
+
+        window.setFrame_display(
+            NSRect::new(NSPoint::new(origin_x, origin_y), NSSize::new(width, height)),
+            true,
+        );
+        true
+    }
+
     /// Trigger the event immediately and return the event status.
     pub(crate) fn trigger_event(this: ViewRef<Self>, event: Event) -> EventStatus {
         if this.state.closed.get() || !this.attached.get() {
             return EventStatus::Ignored;
+        }
+        if matches!(&event, Event::Window(WindowEvent::WillClose)) {
+            this.drag.release();
+            this.drag_event.borrow_mut().take();
+            this.resize_drag.borrow_mut().take();
         }
         match &event {
             Event::Window(WindowEvent::Focused) => this.ime.focused.set(true),
@@ -378,6 +477,56 @@ impl BaseviewView {
         this.frame_requested.set(true);
         Self::update_frame_demand(this);
         status
+    }
+
+    fn start_pending_drag(this: ViewRef<Self>, current: &NSEvent) {
+        if current.r#type() != NSEventType::LeftMouseDragged
+            || NSEvent::pressedMouseButtons() & 1 == 0
+        {
+            return;
+        }
+        let Some(ticket) = this.drag.take() else {
+            return;
+        };
+        let initiating = this.drag_event.borrow().clone();
+        let Some(initiating) = initiating else {
+            drop(ticket);
+            return;
+        };
+        let Some(window) = this.view.window() else {
+            drop(ticket);
+            return;
+        };
+        if this.state.closed.get()
+            || initiating.windowNumber() != window.windowNumber()
+            || current.windowNumber() != window.windowNumber()
+        {
+            drop(ticket);
+            return;
+        }
+        let cx = crate::WindowContext::new(super::context::WindowContext::new(this));
+        let event = std::ptr::NonNull::from(&*initiating).cast();
+        // SAFETY: retained initiating press belongs to this live source view/window;
+        // execution is the same view's main-thread callback for that live drag gesture.
+        let origin =
+            unsafe { matari_audio_drag_and_drop::DragOrigin::with_appkit_event(&cx, event) };
+        let active = this.drag.begin();
+        if let Ok(origin) = origin {
+            let _ = ticket.start(&mut matari_audio_drag_and_drop::NativeRuntime, origin);
+        } else {
+            drop(ticket);
+        }
+        drop(active);
+        this.drag_event.borrow_mut().take();
+        // AppKit consumes mouse-up while dragging. The native session owns it now.
+        Self::trigger_event(
+            this,
+            Event::Mouse(ButtonReleased {
+                button: MouseButton::Left,
+                modifiers: keyboard_types::Modifiers::empty(),
+            }),
+        );
+        Self::trigger_event(this, Event::Mouse(MouseEvent::CursorLeft));
     }
 
     fn drawable(this: ViewRef<Self>) -> bool {
@@ -631,6 +780,9 @@ impl BaseviewView {
     fn detach_callbacks(this: ViewRef<Self>) {
         let had_focus = this.ime.focused.get();
         this.attached.set(false);
+        this.drag.release();
+        this.drag_event.borrow_mut().take();
+        this.resize_drag.borrow_mut().take();
         Self::stop_frame_driver(this);
         this.notification_center_observer.take();
         Self::remove_tracking_area(this);
@@ -683,7 +835,9 @@ impl BaseviewView {
         let ViewParentingType::Windowed { owned_window } = &*this.parenting.borrow() else {
             return;
         };
-        let Some(window) = owned_window.load() else { return };
+        let Some(window) = owned_window.load() else {
+            return;
+        };
         let scale_factor = window.backingScaleFactor();
 
         if let Some(min_size) = this.state.sizing_strategy.min_size() {
@@ -742,7 +896,9 @@ impl ViewImpl for BaseviewView {
         Self::request_frame(this);
     }
     fn view_did_move_to_window(this: ViewRef<Self>) {
-        let Some(window) = this.view.window() else { return };
+        let Some(window) = this.view.window() else {
+            return;
+        };
         this.attached.set(true);
         Self::view_did_change_backing_properties(this, false);
         Self::update_tracking_areas(this);
@@ -779,13 +935,18 @@ impl ViewImpl for BaseviewView {
     }
 
     fn window_should_close(this: ViewRef<Self>) -> bool {
+        if this.state.defer_user_close {
+            Self::trigger_event(this, Event::Window(WindowEvent::WillClose));
+            return false;
+        }
         Self::close(this, false);
-
         true
     }
 
     fn window_did_resize(this: ViewRef<Self>) {
-        let Some(window) = this.view.window() else { return };
+        let Some(window) = this.view.window() else {
+            return;
+        };
 
         let size = window.contentRectForFrameRect(window.frame()).size;
         let size = LogicalSize::new(size.width, size.height);
@@ -911,6 +1072,9 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_moved(this: ViewRef<Self>, event: &NSEvent) {
+        if Self::continue_resize_drag(this) {
+            return;
+        }
         let point = this.view.convertPoint_fromView(event.locationInWindow(), None);
 
         let position = LogicalPosition { x: point.x, y: point.y };
@@ -923,6 +1087,7 @@ impl ViewImpl for BaseviewView {
             }),
         );
 
+        Self::start_pending_drag(this, event);
         // SAFETY: Our superclass is NSView
         let _: () = unsafe { msg_send![super(this.view, NSView::class()), mouseMoved: event] };
     }
@@ -953,7 +1118,8 @@ impl ViewImpl for BaseviewView {
         let drop_data = get_drop_data(sender);
 
         let event = MouseEvent::DragEntered {
-            position: get_drag_position(sender).to_physical(this.view.backing_scale_factor()),
+            position: get_drag_position(this.view, sender)
+                .to_physical(this.view.backing_scale_factor()),
             modifiers: make_modifiers(modifiers),
             data: drop_data,
         };
@@ -968,7 +1134,8 @@ impl ViewImpl for BaseviewView {
         let drop_data = get_drop_data(sender);
 
         let event = MouseEvent::DragMoved {
-            position: get_drag_position(sender).to_physical(this.view.backing_scale_factor()),
+            position: get_drag_position(this.view, sender)
+                .to_physical(this.view.backing_scale_factor()),
             modifiers: make_modifiers(modifiers),
             data: drop_data,
         };
@@ -992,7 +1159,8 @@ impl ViewImpl for BaseviewView {
         let drop_data = get_drop_data(sender);
 
         let event = MouseEvent::DragDropped {
-            position: get_drag_position(sender).to_physical(this.view.backing_scale_factor()),
+            position: get_drag_position(this.view, sender)
+                .to_physical(this.view.backing_scale_factor()),
             modifiers: make_modifiers(modifiers),
             data: drop_data,
         };
@@ -1007,7 +1175,9 @@ impl ViewImpl for BaseviewView {
     }
 
     fn handle_notification(this: ViewRef<Self>, notification: &NSNotification) {
-        let Some(window) = this.view.window() else { return };
+        let Some(window) = this.view.window() else {
+            return;
+        };
         // The subject of the notification, in this case an NSWindow object.
         let Some(notification_object) = notification.object().and_then(|o| o.downcast().ok())
         else {
@@ -1031,7 +1201,9 @@ impl ViewImpl for BaseviewView {
         {
             return;
         }
-        let Some(first_responder) = window.firstResponder() else { return };
+        let Some(first_responder) = window.firstResponder() else {
+            return;
+        };
 
         // If the first responder isn't our NSView, the focus events will instead be triggered
         // by the becomeFirstResponder and resignFirstResponder methods on the NSView itself.
@@ -1050,6 +1222,8 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_down(this: ViewRef<Self>, event: &NSEvent) {
+        this.drag.press();
+        *this.drag_event.borrow_mut() = Some(event.retain());
         Self::take_focus(this);
         Self::trigger_event(
             this,
@@ -1061,6 +1235,9 @@ impl ViewImpl for BaseviewView {
     }
 
     fn mouse_up(this: ViewRef<Self>, event: &NSEvent) {
+        this.resize_drag.borrow_mut().take();
+        this.drag.release();
+        this.drag_event.borrow_mut().take();
         Self::trigger_event(
             this,
             Event::Mouse(ButtonReleased {
@@ -1331,12 +1508,15 @@ fn new_tracking_area(this: &NSView) -> Retained<NSTrackingArea> {
     }
 }
 
-fn get_drag_position(sender: Option<&ProtocolObject<dyn NSDraggingInfo>>) -> LogicalPosition<f64> {
+fn get_drag_position(
+    view: &NSView, sender: Option<&ProtocolObject<dyn NSDraggingInfo>>,
+) -> LogicalPosition<f64> {
     let point = match sender {
         Some(sender) => sender.draggingLocation(),
         None => NSPoint::ZERO,
     };
 
+    let point = super::drag_geometry::window_point_to_view(view, point);
     LogicalPosition::new(point.x, point.y)
 }
 

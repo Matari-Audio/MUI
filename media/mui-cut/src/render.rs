@@ -196,11 +196,7 @@ impl Renderer {
         self.ctx.flush();
         let mut pix = Pixmap::new(self.w, self.h);
         self.ctx.render(&mut pix, &mut self.res);
-        let rgba = pix
-            .take_unpremultiplied()
-            .iter()
-            .flat_map(|p| [p.r, p.g, p.b, p.a])
-            .collect();
+        let rgba = pix.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha);
         Ok((rgba, layers.all_quads()))
     }
 }
@@ -425,11 +421,7 @@ impl Assets {
         ctx.flush();
         let mut pix = Pixmap::new(w, h);
         ctx.render(&mut pix, &mut res);
-        let rgba = pix
-            .take_unpremultiplied()
-            .iter()
-            .flat_map(|p| [p.r, p.g, p.b, p.a])
-            .collect();
+        let rgba = pix.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha);
         Ok((rgba, [w, h], size, corner))
     }
 

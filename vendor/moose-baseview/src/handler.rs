@@ -55,6 +55,7 @@ impl<T> ClosingHandler<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test assertions")]
 mod close_tests {
     use super::ClosingHandler;
     use std::{
@@ -133,7 +134,29 @@ pub trait WindowHandler: 'static {
     ///
     /// If this returns an error, the window will be considered unable to render its contents, and
     /// will be subsequently closed.
-    fn on_frame(&self) -> core::result::Result<(), HandlerError>;
+    fn on_frame(&self) -> core::result::Result<(), HandlerError> {
+        Ok(())
+    }
+
+    /// Draws a requested frame. The default preserves legacy `on_frame` handlers.
+    /// Requests made while drawing schedule the next native frame interval.
+    fn draw(&self) -> core::result::Result<(), HandlerError> {
+        self.on_frame()
+    }
+
+    /// Reports external damage before the next draw. Track internal damage separately.
+    fn damage(&self, area: DamageArea<'_>) {
+        let _ = area;
+    }
+
+    /// Polls external updates before drawing, or after an explicit poll wake.
+    /// Call `WindowContext::request_redraw` when an update needs presentation.
+    fn poll(&self) {}
+
+    /// Receives a coalesced GUI timer firing on the window's callback thread.
+    fn on_timer(&self, timer: &TimerHandle) {
+        let _ = timer;
+    }
     /// Informs the handler that the window has been resized.
     ///
     /// # Errors
@@ -154,18 +177,20 @@ type DynBuilderResult = core::result::Result<Box<dyn WindowHandler>, HandlerErro
 
 pub struct WindowHandlerBuilder {
     inner: Box<dyn FnOnce(WindowContext) -> DynBuilderResult + Send + 'static>,
+    pub(crate) work: std::sync::Arc<crate::work::WindowWork>,
 }
 
 impl WindowHandlerBuilder {
     pub fn new<H: WindowHandler>(
         f: impl FnOnce(WindowContext) -> core::result::Result<H, HandlerError> + Send + 'static,
     ) -> WindowHandlerBuilder {
-        Self { inner: Box::new(|c| Ok(Box::new(f(c)?))) }
+        Self { inner: Box::new(|c| Ok(Box::new(f(c)?))), work: Default::default() }
     }
 
-    pub fn build(self, ctx: WindowContext) -> Result<Box<dyn WindowHandler>> {
+    pub fn build(self, mut ctx: WindowContext) -> Result<Box<dyn WindowHandler>> {
+        ctx.work = std::sync::Arc::clone(&self.work);
         match (self.inner)(ctx) {
-            Ok(handle) => Ok(handle),
+            Ok(handle) => Ok(Box::new(crate::work::ScheduledHandler::new(handle, self.work))),
             Err(e) => Err(platform::PlatformError::Handler(e)),
         }
     }

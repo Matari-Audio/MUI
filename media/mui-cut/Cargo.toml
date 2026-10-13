@@ -26,9 +26,9 @@ serde_path_to_error = "0.1"
 mui-scene = { path = "../../crates/mui-scene" }
 mui-vello = { workspace = true, features = ["cpu", "gpu-effects"] }
 pollster.workspace = true
-vello_cpu = { version = "0.2", default-features = false, features = ["std", "u8_pipeline", "text"] }
+vello_cpu = { version = "0.3", default-features = false, features = ["std", "u8_pipeline", "text", "png"] }
 # The ImageId mui-vello's brushes carry.
-vello_common = { version = "0.2", default-features = false, features = ["std"] }
+vello_common = { version = "0.3", default-features = false, features = ["std"] }
 # Vello's sparse-strips GPU renderer (ex `vello_hybrid`), the `gpu` engine.
 # Git main: crates.io still has it as `vello_hybrid` on wgpu 29. It brings a
 # second, git `vello_common`; mui-vello stays on the crates.io one (patching
@@ -66,7 +66,7 @@ mui-reel = { path = "../mui-reel" }
 mui-stage-rt = { path = "../mui-stage-rt", default-features = false }
 # A still or a preview frame rasterises on several threads; export runs
 # several frames at once instead (src/pool.rs).
-vello_cpu = { version = "0.2", default-features = false, features = ["multithreading"] }
+vello_cpu = { version = "0.3", default-features = false, features = ["multithreading"] }
 # `mui-cut gen`: sandboxed, deterministic scripts that write projects. No
 # clock, no modules: a script's output depends on its text alone.
 # Plugin captures arrive as base64 PNGs over the bridge's wire.

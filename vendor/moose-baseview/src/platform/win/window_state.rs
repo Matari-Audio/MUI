@@ -14,12 +14,29 @@ use raw_window_handle::{DisplayHandle, Win32WindowHandle};
 use std::cell::{Cell, Ref, RefCell};
 use std::num::NonZeroIsize;
 use std::rc::Rc;
-use windows_sys::Win32::UI::WindowsAndMessaging::PostMessageW;
+use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetCapture, ReleaseCapture};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    GetCursorPos, PostMessageW, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTLEFT, HTRIGHT, HTTOP,
+    HTTOPLEFT, HTTOPRIGHT, WM_NCLBUTTONDOWN,
+};
+
+/// Release only capture still belonging to this source, including after a modal drag.
+pub(super) fn release_capture_if_owned(source: HWND) {
+    // SAFETY: caller runs on the owning GUI thread; the query touches no Rust memory.
+    if unsafe { GetCapture() } == source {
+        // SAFETY: capture belongs to this source on this thread.
+        unsafe {
+            ReleaseCapture();
+        }
+    }
+}
 
 /// All data associated with the window.
 pub(crate) struct WindowState {
     /// The HWND belonging to this window.
     pub hwnd: HWnd,
+    pub(crate) drag: crate::drag::NativeDrag,
     pub keyboard_state: RefCell<KeyboardState>,
     pub(crate) ime: super::ime::NativeIme,
     pub mouse_button_counter: Cell<usize>,
@@ -39,6 +56,7 @@ impl WindowState {
     ) -> Self {
         Self {
             hwnd,
+            drag: Default::default(),
             keyboard_state: RefCell::new(KeyboardState::new()),
             ime: Default::default(),
             mouse_button_counter: Cell::new(0),
@@ -52,6 +70,22 @@ impl WindowState {
         }
     }
 
+    fn primary_held() -> bool {
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+        // SAFETY: this native-thread key-state query accesses no Rust memory.
+        unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON)) < 0 }
+    }
+    pub fn can_schedule_matari_drag(&self) -> bool {
+        self.shared.is_alive.get() && self.drag.available() && Self::primary_held()
+    }
+    pub fn schedule_matari_drag(
+        &self, ticket: matari_audio_drag_and_drop::StartTicket,
+    ) -> Result<(), matari_audio_drag_and_drop::RejectedStart<crate::MatariScheduleError>> {
+        if !self.shared.is_alive.get() || !Self::primary_held() {
+            return Err(ticket.reject(crate::MatariScheduleError::AuthorityUnavailable));
+        }
+        self.drag.queue(ticket)
+    }
     /// Returns the current size of this window.
     pub fn size(&self) -> WindowSize {
         self.shared.size()
@@ -114,6 +148,44 @@ impl WindowState {
         Ok(())
     }
 
+    pub fn drag_resize(&self, edge: crate::ResizeEdge) -> Result<(), crate::DragResizeError> {
+        let hit_test = match edge {
+            crate::ResizeEdge::East => HTRIGHT,
+            crate::ResizeEdge::North => HTTOP,
+            crate::ResizeEdge::NorthEast => HTTOPRIGHT,
+            crate::ResizeEdge::NorthWest => HTTOPLEFT,
+            crate::ResizeEdge::South => HTBOTTOM,
+            crate::ResizeEdge::SouthEast => HTBOTTOMRIGHT,
+            crate::ResizeEdge::SouthWest => HTBOTTOMLEFT,
+            crate::ResizeEdge::West => HTLEFT,
+        };
+        self.begin_os_drag(hit_test as usize)
+    }
+
+    fn begin_os_drag(&self, hit_test: usize) -> Result<(), crate::DragResizeError> {
+        if self.shared.parented.get() {
+            return Err(crate::DragResizeError::NotTopLevel);
+        }
+        if !self.shared.is_alive.get() || !self.drag.available() || !Self::primary_held() {
+            return Err(crate::DragResizeError::NoActivePointer);
+        }
+        let mut point = POINT { x: 0, y: 0 };
+        // SAFETY: point is writable; all HWND calls execute on this window's native thread.
+        unsafe {
+            if GetCursorPos(&mut point) == 0 {
+                return Err(crate::DragResizeError::NoActivePointer);
+            }
+            release_capture_if_owned(self.hwnd.as_raw());
+            let packed = u32::from(point.x as u16) | (u32::from(point.y as u16) << 16);
+            if PostMessageW(self.hwnd.as_raw(), WM_NCLBUTTONDOWN, hit_test, packed as i32 as LPARAM)
+                == 0
+            {
+                return Err(crate::DragResizeError::Os("PostMessageW failed".into()));
+            }
+        }
+        Ok(())
+    }
+
     pub fn set_ime_configuration(&self, configuration: Option<crate::ImeConfiguration>) {
         if self.shared.is_alive.get() {
             self.ime.configure(self.hwnd.as_raw(), configuration);
@@ -166,6 +238,7 @@ pub struct WindowSharedState {
     pub(super) native_class: Cell<Option<super::native::RegisteredClass>>,
     pub(super) frame_signal: std::sync::Arc<super::frame::FrameSignal>,
     pub parented: Cell<bool>,
+    pub defer_user_close: bool,
     pub is_alive: Cell<bool>,
     pub current_size: Cell<PhysicalSize<u32>>,
     pub current_dpi: Cell<Option<Dpi>>, // None if Win32 HiDPI isn't supported
@@ -185,6 +258,7 @@ impl WindowSharedState {
             native_class: None.into(),
             frame_signal: super::frame::FrameSignal::new(),
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
+            defer_user_close: settings.defer_user_close,
             is_alive: true.into(),
             current_dpi: None.into(),
             // With an override the final physical size is already known, so the window is
@@ -283,5 +357,64 @@ pub(crate) fn set_keyboard_capture(hwnd: HWnd, capture: bool) {
             usize::from(capture),
             0,
         );
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use super::release_capture_if_owned;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetCapture, SetCapture};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WS_POPUP};
+
+    #[test]
+    fn release_preserves_another_windows_capture() {
+        // SAFETY: both hidden system-class windows live on this test's GUI thread.
+        unsafe {
+            let previous = GetCapture();
+            let class = [83u16, 84, 65, 84, 73, 67, 0]; // STATIC
+            let source = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                10,
+                10,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            );
+            let other = CreateWindowExW(
+                0,
+                class.as_ptr(),
+                class.as_ptr(),
+                WS_POPUP,
+                0,
+                0,
+                10,
+                10,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            );
+            assert!(!source.is_null() && !other.is_null());
+            SetCapture(other);
+            release_capture_if_owned(source);
+            let preserved = GetCapture() == other;
+            SetCapture(source);
+            release_capture_if_owned(source);
+            let released = GetCapture().is_null();
+            if !previous.is_null() {
+                SetCapture(previous);
+            }
+            DestroyWindow(source);
+            DestroyWindow(other);
+            assert!(preserved, "the other window's capture must survive source cleanup");
+            assert!(released, "source-owned capture must be released");
+        }
     }
 }

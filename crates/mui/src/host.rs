@@ -27,9 +27,12 @@ use crate::{Clipboard, Ui};
 
 pub mod headless;
 
-/// A frame after a stall advances time by at most this. Springs are closed
-/// form and do not need it; a tooltip timer should not jump a whole idle
-/// minute on the first hover after it.
+/// Automatic animation/live ticks never follow a drawn frame within 7 ms.
+const ANIMATION_INTERVAL: Duration = Duration::from_millis(7);
+const RESIZE_QUIET: Duration = Duration::from_millis(35);
+
+/// A tooltip timer should not jump a whole idle minute after a stall.
+/// Springs are closed form and do not need a maximum step.
 const MAX_DT: f64 = 1.0;
 
 /// What the window asks of whoever owns the model.
@@ -198,6 +201,12 @@ pub struct Driver {
     /// The model changed: rebuild.
     dirty: bool,
     animating: bool,
+    /// The next tree consumes ordered input effects rather than motion alone.
+    followup: bool,
+    /// Live changes consumed from the view while a resize remains active.
+    live_changed: bool,
+    /// One final reconciliation is owed after the last native resize.
+    resize_until: Option<Instant>,
     wake_at: Option<Instant>,
     asked_to_grow: bool,
     /// A refused layout is reported once per run of refusals.
@@ -228,6 +237,9 @@ impl Driver {
             last_frame: Instant::now(),
             dirty: true,
             animating: false,
+            followup: false,
+            live_changed: false,
+            resize_until: None,
             wake_at: None,
             asked_to_grow: false,
             failing: false,
@@ -279,11 +291,18 @@ impl Driver {
         if self.size.0 == 0 || self.size.1 == 0 {
             return None;
         }
-        let immediate = self.dirty || self.animating || !self.pending.is_empty();
-        let deadline = if immediate {
+        let deadline = if self.dirty || self.followup || !self.pending.is_empty() {
             Some(self.last_frame)
         } else {
-            self.wake_at
+            let animation = (self.animating || self.live_changed)
+                .then_some(self.last_frame + ANIMATION_INTERVAL);
+            let automatic = self.resize_until.map_or(animation, |quiet| {
+                Some(animation.map_or(quiet, |at| at.max(quiet)))
+            });
+            match (automatic, self.wake_at) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            }
         };
         deadline.map(|at| {
             self.min_interval
@@ -361,6 +380,16 @@ impl Driver {
 
     /// The window is now `size` physical pixels at `scale` per point.
     pub fn resized(&mut self, size: (u32, u32), scale: f64) {
+        self.resized_at(size, scale, Instant::now());
+    }
+
+    /// Report a resize at the host's event timestamp. Resize frames and input
+    /// remain immediate; only animation/live-source ticks wait for 35 ms quiet.
+    /// A final frame reconciles layout-dependent reads even without animation.
+    pub fn resized_at(&mut self, size: (u32, u32), scale: f64, now: Instant) {
+        if self.size != size || self.scale != scale {
+            self.resize_until = Some(now + RESIZE_QUIET);
+        }
         self.count(Counter::Resizes, 1);
         self.size = size;
         self.scale = scale;
@@ -543,7 +572,7 @@ impl Driver {
         if changed {
             self.count(Counter::ModelChanges, 1);
         }
-        self.dirty |= changed;
+        self.live_changed |= changed;
         if self.size.0 == 0 || self.size.1 == 0 {
             // Minimised: hold the input edges until there is a size again.
             self.count(Counter::MinimizedSkips, 1);
@@ -555,7 +584,19 @@ impl Driver {
             self.dirty = true;
         }
         let due = self.wake_at.is_some_and(|at| now >= at);
-        if s.ui.scene().is_some() && !self.dirty && !self.animating && !due {
+        if self.resize_until.is_some_and(|at| now >= at) {
+            self.resize_until = None;
+            self.dirty = true;
+        }
+        // Refusals consume the rejected attempt. Only a new invalidation,
+        // live change or input edge can retry it, including before first layout.
+        if (s.ui.scene().is_some() || self.failing)
+            && !self.dirty
+            && !self.live_changed
+            && !self.followup
+            && !self.animating
+            && !due
+        {
             // A hover that lands on what it already hovers changes nothing,
             // unless the view draws the pointer itself.
             let (ui, view, framed) = (&mut s.ui, &s.view, self.framed);
@@ -575,6 +616,20 @@ impl Driver {
                 }
                 return false;
             }
+        }
+        // Automatic work cannot crowd a recent event/resize frame or fill the
+        // gaps between native resize samples. Explicit invalidations, due
+        // repaint deadlines and ordered input edges bypass both policies.
+        if s.ui.scene().is_some()
+            && !self.dirty
+            && !self.followup
+            && !due
+            && self.pending.is_empty()
+            && (self.resize_until.is_some_and(|at| now < at)
+                || now < self.last_frame + ANIMATION_INTERVAL)
+        {
+            self.count(Counter::ThrottledSkips, 1);
+            return false;
         }
         if self
             .min_interval
@@ -637,6 +692,7 @@ impl Driver {
             return false;
         }
         self.dirty = false;
+        self.live_changed = false;
         self.ask_to_grow(s);
         true
     }
@@ -673,7 +729,8 @@ impl Driver {
                 self.cursor = frame.cursor;
                 // An edge is dispatched by the tree after the frame that
                 // delivered it: that tree has to come even if nothing moves.
-                self.animating = frame.animating || !frame.edits.is_empty() || ime_followup;
+                self.animating = frame.animating;
+                self.followup = !frame.edits.is_empty() || ime_followup;
                 self.wake_at = frame.repaint_after.map(|after| now + after);
                 if let Some(text) = frame.clipboard {
                     self.clipboard.set(&text);
@@ -707,6 +764,12 @@ impl Driver {
                         .log(&format!("mui: layout refused at {offered:?}: {e}"));
                 }
                 self.failing = true;
+                self.dirty = false;
+                self.live_changed = false;
+                self.animating = false;
+                self.followup = false;
+                self.wake_at = None;
+                self.resize_until = None;
                 Err(())
             }
         }

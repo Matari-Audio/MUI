@@ -11,6 +11,9 @@
 //! line segments; here they become cubics instead, which is what Vello wants
 //! and what keeps a 24 px corner smooth when the scene is scaled up.
 #![deny(unsafe_code)]
+// The shared session's wgpu resource graph needs deeper auto-trait evaluation
+// with the newer Rust trait solver.
+#![recursion_limit = "256"]
 
 use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
@@ -25,10 +28,9 @@ use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 pub use vello_common::paint::PaintType;
 #[cfg(feature = "cpu")]
 use vello_common::peniko::ImageSampler;
-use vello_common::peniko::color::PremulRgba8;
 use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
-use vello_common::pixmap::Pixmap;
+use vello_common::pixmap::{PixelMetadata, Pixmap};
 pub use vello_common::{kurbo, peniko};
 pub mod diagnostics;
 #[cfg(feature = "cpu")]
@@ -174,6 +176,12 @@ pub trait Canvas {
     /// Draw a hinted glyph run in the current paint, each glyph's `x`
     /// measured from the run's origin along the baseline.
     fn glyphs(&mut self, text: &mui_scene::Text);
+    /// Fallible glyph painting. Renderers with fallible glyph APIs override this;
+    /// existing canvases retain their infallible contract by default.
+    fn try_glyphs(&mut self, text: &mui_scene::Text) -> Result<(), Error> {
+        self.glyphs(text);
+        Ok(())
+    }
 }
 
 #[cfg(feature = "cpu")]
@@ -336,7 +344,7 @@ macro_rules! wrapper {
             self.$inner.push_clip_path(p)
         }
         fn pop_clip(&mut self) {
-            self.$inner.pop_clip_path()
+            self.$inner.pop_clip()
         }
         fn push_layer(&mut self, blend: peniko::BlendMode, opacity: f32) {
             self.$inner
@@ -346,6 +354,10 @@ macro_rules! wrapper {
             self.$inner.pop_layer()
         }
         fn glyphs(&mut self, text: &mui_scene::Text) {
+            // Keep the legacy void API; paint() uses the fallible path below.
+            let _ = self.try_glyphs(text);
+        }
+        fn try_glyphs(&mut self, text: &mui_scene::Text) -> Result<(), Error> {
             let mut start = 0;
             while start < text.glyphs.len() {
                 let font_index = text.glyphs[start].font;
@@ -371,9 +383,14 @@ macro_rules! wrapper {
                     // Rasterise each glyph once and reuse the bitmap: strip
                     // generation per glyph was most of a frame's encode.
                     .atlas_cache($atlas && warm)
-                    .fill_glyphs(run(text.origin, &text.glyphs[start..end]));
+                    .fill_glyphs(run(text.origin, &text.glyphs[start..end]))
+                    .map_err(|error| {
+                        diagnostics::error("mui-vello", "glyph_render_failed", &error.to_string());
+                        Error::InvalidPath
+                    })?;
                 start = end;
             }
+            Ok(())
         }
     };
 }
@@ -469,28 +486,25 @@ fn size(img: &mui_scene::Image) -> Option<(u16, u16)> {
         u16::try_from(img.height).ok()?,
     );
     // `Image`'s fields are public, so the buffer need not match the size;
-    // `Pixmap::from_parts_with_opacity` asserts that it does.
+    // `Pixmap::from_parts` asserts that it does.
     (img.rgba.len() == usize::from(w) * usize::from(h) * 4).then_some((w, h))
 }
 
 /// [`premultiply`] for a size [`size`] already checked.
 fn premultiplied(img: &mui_scene::Image, w: u16, h: u16) -> Pixmap {
     let mut clear = false;
-    let (pixels, _) = img.rgba.as_chunks::<4>();
-    let data = pixels
-        .iter()
-        .map(|p| {
-            clear |= p[3] != 255;
-            let m = |c: u8| ((u16::from(p[3]) * u16::from(c)) / 255) as u8;
-            PremulRgba8 {
-                r: m(p[0]),
-                g: m(p[1]),
-                b: m(p[2]),
-                a: p[3],
-            }
-        })
-        .collect();
-    Pixmap::from_parts_with_opacity(data, w, h, clear)
+    let mut data = Vec::with_capacity(img.rgba.len());
+    for p in img.rgba.as_chunks::<4>().0 {
+        clear |= p[3] != 255;
+        let m = |c: u8| ((u16::from(p[3]) * u16::from(c)) / 255) as u8;
+        data.extend_from_slice(&[m(p[0]), m(p[1]), m(p[2]), p[3]]);
+    }
+    Pixmap::from_parts(
+        data,
+        w,
+        h,
+        PixelMetadata::new(peniko::ImageAlphaType::AlphaPremultiplied, clear),
+    )
 }
 
 /// Where the image's pixels land so that it fills `bounds` per `fit`.
@@ -986,7 +1000,7 @@ fn one(
     let solid = matches!(fill, PaintType::Solid(_));
     canvas.set_paint(fill);
     if let Some(t) = &p.text {
-        canvas.glyphs(t);
+        canvas.try_glyphs(t)?;
         return Ok(());
     }
     // An image paint lives in pixel space; this is what puts it on the box.

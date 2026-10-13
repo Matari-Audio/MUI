@@ -125,8 +125,11 @@ impl Canvas for Classic<'_> {
                     }),
                     None => Brush::Solid(peniko::Color::TRANSPARENT),
                 },
-                // `image` below only ever hands out opaque ids.
-                ImageSource::Pixmap(_) => Brush::Solid(peniko::Color::TRANSPARENT),
+                // MUI registers native textures through image() as opaque ids.
+                // Sparse-strip pixmaps/external subregions are not classic brushes.
+                ImageSource::Pixmap(_) | ImageSource::ExternalTexture { .. } => {
+                    Brush::Solid(peniko::Color::TRANSPARENT)
+                }
             },
         };
     }

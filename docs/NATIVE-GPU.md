@@ -211,10 +211,59 @@ unmeasured.
 
 ## Upstream contracts checked
 
-- https://docs.rs/vello/0.10.0/vello/struct.Renderer.html
-- https://docs.rs/vello/0.10.0/vello/struct.Scene.html
+- https://docs.rs/vello/0.11.0/vello/struct.Renderer.html
+- https://docs.rs/vello/0.11.0/vello/struct.Scene.html
 - https://github.com/gfx-rs/wgpu/tree/v30.0.1/wgpu/src/api
 
-`vello` 0.10 is vendored under `vendor/vello`, ported to `wgpu = 30`.
+`vello` 0.11 is vendored under `vendor/vello`, with MUI retained rendering
+patches preserved on upstream wgpu 30. CPU/common use 0.3 and glifo uses 0.4.
+CPU PNG glyph decoding is enabled for bitmap-font parity; fallible glyph draws
+propagate through the additive `Canvas::try_glyphs` path.
 Cargo --locked remains authoritative; do not invent or
 refresh registry checksums.
+
+
+## Custom host startup and transparency
+
+A custom native host first opens `mui_vello::software::Window::new_startup`
+and presents a completed CPU scene. Only after that successful present create
+`GpuInit::new_with_transparency(pin_current_image_for_detached_work(), want)`.
+The opaque compatibility constructor remains `GpuInit::new(pinned)`.
+
+Keep the initializer while the window is open, including CPU recovery. Poll
+with the current physical size and a surface factory that owns that window's
+handle/display. `None` means the job is pending, already installed, minimized,
+or backing off; `Some(Err(error))` records a failure and its retry class;
+`Some(Ok(host))` promotes the window and requires a full redraw plus recreation
+of any device-bound texture producers. `deadline()` describes retry backoff;
+`pending()` allows the native scheduler to poll active initialization.
+
+The surface factory runs on the owning GUI thread only after the compute
+context and per-window resources are ready. Drop the CPU presenter immediately
+before creating the GPU surface (especially before attaching CAMetalLayer).
+On an error after this handover, recreate the CPU presenter. Finish CPU startup
+quality when a permanent GPU failure selects software-only operation.
+
+Translucent Windows sessions select `DxgiFromVisual` before instance creation;
+HWND opaque sessions keep their ordinary swapchain. Their compute devices and
+pipelines are shared within each compatible presentation mode. Other platforms
+share one context across alpha modes and select alpha per surface. Actual
+capability remains available through `Host::translucent()`, including opaque
+fallback where alpha is unavailable. Native OS blur remains the host's policy.
+
+On device loss, drop the Host before destroying its native handle, invalidate
+all device-bound image bindings, call `init.recover(error.failure_class())`,
+reopen CPU presentation and redraw. Shared sessions adopt a new generation;
+`Host::generation()` plus device ownership identifies each promoted producer.
+Do not spin on permanent failures. A caller whose image pin failed receives a
+private synchronous session and cannot inherit another editor's detached-work
+permission. No close joins a detached initializer; its code must remain pinned.
+
+Custom hosts must keep native ownership alive through surface creation and
+configuration in `poll`: pinning the containing image does not preserve a
+native drawable. Baseview's guarded callback lease and handler-before-native
+teardown provide this boundary for its own windows. Keep native close separate
+from detached initialization: workers own only GPU resources and result senders.
+The optional `test-support` feature exposes a hidden `InitGate` that holds actual
+per-window result publication; integration fixtures can close the editor, release
+the late result and verify it was dropped without ever creating a surface.
