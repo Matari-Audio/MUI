@@ -28,12 +28,24 @@ pub mod native;
 /// The baseview this window runs on (moose-baseview), so a consumer names
 /// `Window`, `WindowSettings` and friends without depending on it itself.
 pub use baseview;
+
+/// A drag thumbnail's size in logical pixels, for
+/// [`Requests::drag_out_with_image`].
+pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
+
+mod drag;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
     ScrollDelta, Window, WindowContext, WindowEvent, WindowHandler, WindowSettings, WindowSize,
 };
+pub use drag::DragQueueError;
 use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers, NamedKey};
+/// Drag images and protocol lifecycle values shared by product editors.
+pub use matari_audio_drag_and_drop::{
+    DragImage, DragPreview, FailureStage, LinuxOutcome, Outcome, PreviewImageError, PreviewStatus,
+    SessionEvent,
+};
 /// What a [`KeyHook`] is handed.
 pub use mui::host::KeyEvent;
 use mui::host::{Driver, Modifier, NativeKey, Wheel};
@@ -71,6 +83,7 @@ pub struct Requests {
     size: AtomicU64,
     scale: AtomicU64,
     redraw: AtomicBool,
+    focus: AtomicBool,
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
@@ -80,9 +93,16 @@ pub struct Requests {
     presentation: Mutex<Option<Presentation>>,
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
+    drag: drag::Mailbox,
 }
 
 impl Requests {
+    /// Request native keyboard focus on the window's owning thread.
+    pub fn focus(&self) {
+        self.focus.store(true, Ordering::Release);
+        self.wake();
+    }
+
     /// Coherent presentation evidence; absent until the first successful submit.
     pub fn presentation(&self) -> Option<Presentation> {
         *self
@@ -169,6 +189,54 @@ impl Requests {
     pub fn x11_window(&self) -> Option<u32> {
         let window = self.x11_window.load(Ordering::Acquire);
         (window != 0).then_some(window)
+    }
+    /// Queue an export from the current primary pointer gesture.
+    pub fn drag_out(&self, paths: Vec<std::path::PathBuf>) -> Result<(), DragQueueError> {
+        self.queue_drag(paths, None)
+    }
+    pub fn drag_out_with_waveform(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        buckets: Vec<(f32, f32)>,
+    ) -> Result<(), DragQueueError> {
+        self.drag_out_with_preview(
+            paths,
+            matari_audio_drag_and_drop::DragPreview::Waveform { buckets },
+        )
+    }
+    pub fn drag_out_with_image(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        pixels: Vec<u8>,
+    ) -> Result<(), DragQueueError> {
+        self.drag_out_with_preview(
+            paths,
+            matari_audio_drag_and_drop::DragPreview::Image { pixels },
+        )
+    }
+    pub fn drag_out_with_preview(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        preview: matari_audio_drag_and_drop::DragPreview,
+    ) -> Result<(), DragQueueError> {
+        self.queue_drag(paths, Some(preview))
+    }
+    fn queue_drag(
+        &self,
+        paths: Vec<std::path::PathBuf>,
+        preview: Option<matari_audio_drag_and_drop::DragPreview>,
+    ) -> Result<(), DragQueueError> {
+        self.drag.queue(paths, preview)?;
+        self.redraw();
+        Ok(())
+    }
+    /// Hide the source's drag visual while native ownership is queued or active.
+    pub fn drag_active(&self) -> bool {
+        self.drag.active()
+    }
+    /// Drain this editor's protocol lifecycle events. Transfer success does not certify host import.
+    pub fn take_drag_events(&self) -> Vec<matari_audio_drag_and_drop::SessionEvent> {
+        self.drag.events()
     }
     /// Hand every key event to `hook` first; see [`KeyHook`].
     pub fn on_key(&self, hook: KeyHook) {
@@ -284,12 +352,13 @@ fn settings(title: &str, size: (u32, u32)) -> WindowSettings {
 fn build<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
-    _parented: bool,
+    parented: bool,
 ) -> impl FnOnce(WindowContext) -> Result<Adapter<V>, HandlerError> + Send + 'static {
     move |cx: WindowContext| {
         let size = cx.size();
         let physical = (size.physical.width, size.physical.height);
         let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
+        handler.drag.parented = parented;
         #[cfg(target_os = "linux")]
         {
             handler.x11_window = cx
@@ -336,6 +405,7 @@ fn build<V: View + Send + 'static>(
             handler: RefCell::new(handler),
             pending_resize: Cell::new(None),
             pending_events: RefCell::new(VecDeque::new()),
+            buttons: NativeButtons::default(),
         })
     }
 }
@@ -370,12 +440,15 @@ pub struct Handler<V> {
     pub driver: Driver,
     #[cfg(target_os = "linux")]
     x11_window: u32,
+    /// Outbound drag sessions, and whether the window is a host's child.
+    drag: drag::Host,
     _reporting: mui::diagnostics::ReportingGuard,
 }
 
-#[cfg(target_os = "linux")]
 impl<V> Drop for Handler<V> {
     fn drop(&mut self) {
+        self.drag.close(&self.requests.drag);
+        #[cfg(target_os = "linux")]
         self.clear_x11_window();
     }
 }
@@ -402,6 +475,7 @@ impl<V: View> Handler<V> {
         scale: f64,
     ) -> Self {
         lock(&shared).ui.set_gpu_welding_available(false);
+        let drag = drag::Host::new(&requests);
         Self {
             shared,
             requests,
@@ -423,12 +497,17 @@ impl<V: View> Handler<V> {
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
             #[cfg(target_os = "linux")]
             x11_window: 0,
+            drag,
             _reporting: mui::diagnostics::retain_reporter(),
         }
     }
 
     fn tick(&mut self, window: &WindowContext) {
+        let drag_frame = self.drag.frame_token(&self.requests.drag);
         let requests = &self.requests;
+        if requests.focus.swap(false, Ordering::AcqRel) && !window.has_focus() {
+            let _ = window.focus();
+        }
         let packed = requests.size.swap(0, Ordering::AcqRel);
         let bits = requests.scale.swap(0, Ordering::AcqRel);
         if packed != 0 || bits != 0 {
@@ -486,7 +565,7 @@ impl<V: View> Handler<V> {
             && target_size(size.0, size.1).is_some()
             && self.cpu_retry.ready(now)
         {
-            let open = if self.software_only {
+            let open = if self.software_only || self.gpu_init.is_some() {
                 mui::vello::software::Window::new
             } else {
                 mui::vello::software::Window::new_startup
@@ -546,13 +625,15 @@ impl<V: View> Handler<V> {
                                 ),
                             );
                         }
-                        let mut repaint = false;
+                        // Retry classification controls GPU recovery, not CPU scene quality.
+                        // Transient failure must also leave the startup placeholder behind.
                         if error.failure_class() == FailureClass::Permanent {
                             self.software_only = true;
-                            if let Some(software) = &mut self.software {
-                                repaint = software.finish_startup(size);
-                            }
                         }
+                        let repaint = self
+                            .software
+                            .as_mut()
+                            .is_some_and(|software| software.finish_startup(size));
                         self.presenter_reason = "CPU GPU initialization failed";
                         if repaint {
                             self.driver.redraw();
@@ -630,6 +711,7 @@ impl<V: View> Handler<V> {
             }
             match result {
                 Ok(drew) => {
+                    self.requests.drag.rendered(drag_frame);
                     self.unpainted = false;
                     if drew {
                         let reason = if software.background_only() {
@@ -672,12 +754,14 @@ impl<V: View> Handler<V> {
             }
             match frame {
                 Ok(Frame::Presented(_)) => {
+                    self.requests.drag.rendered(drag_frame);
                     self.gpu_retry.reset();
                     self.unpainted = false;
                     self.requests
                         .presented(gpu.size(), false, self.presenter_reason);
                 }
                 Ok(Frame::Current) => {
+                    self.requests.drag.rendered(drag_frame);
                     self.gpu_retry.reset();
                     self.unpainted = false;
                     if let Some(profiler) = self.driver.profiler_mut() {
@@ -762,6 +846,10 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        self.drag.observe(&self.requests.drag, event);
+        if matches!(event, Event::Window(WindowEvent::WillClose)) {
+            self.drag.close(&self.requests.drag);
+        }
         #[cfg(target_os = "linux")]
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
             self.clear_x11_window();
@@ -881,6 +969,7 @@ struct Adapter<V> {
     cx: WindowContext,
     pending_resize: Cell<Option<WindowSize>>,
     pending_events: RefCell<VecDeque<Event>>,
+    buttons: NativeButtons,
 }
 
 struct NativeClose {
@@ -925,6 +1014,55 @@ impl<V: View> Adapter<V> {
             guard(h, |h| h.on_event_inner(&event));
         });
     }
+}
+
+#[derive(Default)]
+struct NativeButtons(RefCell<Vec<MouseButton>>);
+
+impl NativeButtons {
+    fn observe(&self, event: &Event) {
+        match event {
+            Event::Mouse(MouseEvent::ButtonPressed { button, .. }) => {
+                let mut buttons = self.0.borrow_mut();
+                if !buttons.contains(button) {
+                    buttons.push(*button);
+                }
+            }
+            Event::Mouse(MouseEvent::ButtonReleased { button, .. }) => {
+                self.0.borrow_mut().retain(|held| held != button);
+            }
+            Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose) => {
+                self.0.borrow_mut().clear();
+            }
+            _ => {}
+        }
+    }
+
+    fn held(&self) -> bool {
+        !self.0.borrow().is_empty()
+    }
+}
+
+fn enqueue_event(queue: &mut VecDeque<Event>, event: Event, dragging: bool) {
+    // Only hover is replaceable state. A held gesture needs every position for
+    // Driver's trail, including when its press preceded this inbox/drain.
+    // Never cross a key, IME, button, focus, wheel, drop or accessibility barrier.
+    if let (
+        Some(Event::Mouse(MouseEvent::CursorMoved {
+            modifiers: previous,
+            ..
+        })),
+        Event::Mouse(MouseEvent::CursorMoved { modifiers, .. }),
+    ) = (queue.back(), &event)
+        && !dragging
+        && previous == modifiers
+    {
+        if let Some(last) = queue.back_mut() {
+            *last = event;
+        }
+        return;
+    }
+    queue.push_back(event);
 }
 
 fn drain_events<T>(queue: &RefCell<VecDeque<T>>, mut deliver: impl FnMut(T)) {
@@ -974,6 +1112,9 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
         if let Some(poll) = h.requests.poll_interval() {
             at = at.min(now.checked_add(poll).unwrap_or(now));
         }
+        if h.requests.drag_active() {
+            at = at.min(now + Duration::from_millis(10));
+        }
         if h.requests.redraw.load(Ordering::Acquire) {
             at = now;
         }
@@ -996,6 +1137,13 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
             self.drain(&mut h);
             guard(&mut h, |h| h.tick(&self.cx));
             self.drain(&mut h);
+            guard(&mut h, |h| {
+                if h.drag.drive(&h.requests, &self.cx) {
+                    h.driver.button(Button::Primary, false, Mods::default());
+                    h.driver.pointer_left();
+                    h.requests.redraw();
+                }
+            });
             if let (Some(profiler), Some(start)) = (h.driver.profiler_mut(), wake_start) {
                 profiler.record_since(mui::profiling::Phase::NativeWake, start);
             }
@@ -1018,11 +1166,18 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
     }
 
     fn on_event(&self, event: Event) -> EventStatus {
+        // Observe directly delivered edges too, before the handler borrow can
+        // fail. The button set survives inbox drains and tracks every button.
+        self.buttons.observe(&event);
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
             self.close.fire();
         }
         let Ok(mut h) = self.handler.try_borrow_mut() else {
-            self.pending_events.borrow_mut().push_back(event);
+            enqueue_event(
+                &mut self.pending_events.borrow_mut(),
+                event,
+                self.buttons.held(),
+            );
             return EventStatus::Ignored;
         };
         let status = guard(&mut h, |h| h.on_event_inner(&event)).unwrap_or(EventStatus::Ignored);

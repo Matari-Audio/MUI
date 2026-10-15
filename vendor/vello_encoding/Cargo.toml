@@ -11,9 +11,9 @@
 
 [package]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.89"
 name = "vello_encoding"
-version = "0.10.0"
+version = "0.11.0"
 build = false
 autolib = false
 autobins = false

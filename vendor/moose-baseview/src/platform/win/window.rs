@@ -33,7 +33,7 @@ use crate::wrappers::win32::{
 };
 use crate::{Event, MouseButton, MouseEvent, ScrollDelta, WindowEvent, WindowSize};
 
-fn paint_background(hwnd: HWND, fill: bool) {
+fn paint_background(hwnd: HWND, fill: bool) -> crate::DamageRect {
     use windows_sys::Win32::Graphics::Gdi::*;
     let mut paint = PAINTSTRUCT::default();
     let dc = unsafe { BeginPaint(hwnd, &mut paint) };
@@ -50,6 +50,16 @@ fn paint_background(hwnd: HWND, fill: bool) {
     unsafe {
         EndPaint(hwnd, &paint);
     }
+    crate::DamageRect::new(
+        crate::dpi::PhysicalPosition::new(
+            paint.rcPaint.left.max(0) as u32,
+            paint.rcPaint.top.max(0) as u32,
+        ),
+        crate::dpi::PhysicalSize::new(
+            paint.rcPaint.right.saturating_sub(paint.rcPaint.left).max(0) as u32,
+            paint.rcPaint.bottom.saturating_sub(paint.rcPaint.top).max(0) as u32,
+        ),
+    )
 }
 
 fn hi_word(wparam: WPARAM) -> u16 {
@@ -146,7 +156,9 @@ impl WindowHandle {
         if strategy.should_use_host_suggested_scale_factor {
             self.state.current_dpi.set(Some(dpi));
         }
-        let Some(hwnd) = self.hwnd.get() else { return Ok(()) };
+        let Some(hwnd) = self.hwnd.get() else {
+            return Ok(());
+        };
 
         let current_size = self.state.current_size.get();
         let new_size = self
@@ -199,7 +211,9 @@ impl WindowHandle {
         let hwnd = match self.hwnd.get() {
             Some(hwnd) => hwnd,
             None => {
-                let Some(mut init) = self.init.take() else { return Ok(()) };
+                let Some(mut init) = self.init.take() else {
+                    return Ok(());
+                };
                 init.settings.parent = Some(new_parent.into());
 
                 let window = BaseviewWindow::create(Rc::clone(&self.state), init)?;
@@ -230,7 +244,9 @@ impl WindowHandle {
         let hwnd = match self.hwnd.get() {
             Some(hwnd) => hwnd,
             None => {
-                let Some(init) = self.init.take() else { return Ok(()) };
+                let Some(init) = self.init.take() else {
+                    return Ok(());
+                };
 
                 let window = BaseviewWindow::create(Rc::clone(&self.state), init)?;
                 self.hwnd.set(Some(window));
@@ -255,7 +271,9 @@ impl WindowHandle {
             return Ok(());
         }
         self.state.frame_signal.visible(false);
-        let Some(hwnd) = self.hwnd.get() else { return Ok(()) };
+        let Some(hwnd) = self.hwnd.get() else {
+            return Ok(());
+        };
         hwnd.hide();
 
         Ok(())
@@ -313,6 +331,15 @@ impl BaseviewWindow {
         style.style |= WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
         style.style_ex &= !WS_EX_NOREDIRECTIONBITMAP;
         let parent = init.settings.parent.map(|p| p.inner.handle);
+        let owner = init.settings.owner.map(|owner| {
+            let owner = owner.inner.handle;
+            // SAFETY: owner is an HWND extracted from a valid native handle.
+            let root = unsafe { GetAncestor(owner.as_raw(), GA_ROOT) };
+            std::ptr::NonNull::new(root)
+                // SAFETY: root is the non-null HWND returned by GetAncestor.
+                .map(|root| unsafe { HWnd::from_raw(root) })
+                .unwrap_or(owner)
+        });
 
         let dpi_ctx =
             DpiAwarenessGuard::new(&shared_state.user32, shared_state.dpi_scaling_strategy.get())?;
@@ -360,7 +387,7 @@ impl BaseviewWindow {
             &title,
             style,
             rect.size(),
-            parent,
+            parent.or(owner),
             &shared_state,
             initializer,
         )?;
@@ -369,6 +396,10 @@ impl BaseviewWindow {
     }
 
     fn cleanup_native(&self, window: HWnd) {
+        self.window_state.drag.release();
+        if self.window_state.drag.active.get() {
+            return;
+        }
         if self.cleanup_started.replace(true) {
             return;
         }
@@ -461,11 +492,54 @@ impl BaseviewWindow {
         self.host.request_resize(new_size)
     }
 
+    fn start_pending_drag(&self) {
+        use matari_audio_drag_and_drop::{DragOrigin, NativeRuntime};
+        let state = &self.window_state;
+        let Some(ticket) = state.drag.take() else {
+            return;
+        };
+        if !self.shared_state.is_alive.get() || self.handler.is_closing() {
+            drop(ticket);
+            return;
+        }
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+        // SAFETY: this owning-thread key-state query accesses no Rust memory.
+        if unsafe { GetAsyncKeyState(i32::from(VK_LBUTTON)) } >= 0 {
+            state.drag.release();
+            drop(ticket);
+            return;
+        }
+        let cx = crate::WindowContext::new(Rc::clone(state));
+        let Ok(origin) = DragOrigin::from_window(&cx) else {
+            drop(ticket);
+            return;
+        };
+        let active = state.drag.begin();
+        // DoDragDrop must run outside all product/native handler borrows.
+        super::window_state::release_capture_if_owned(state.hwnd.as_raw());
+        let _ = ticket.start(&mut NativeRuntime, origin);
+        drop(active);
+        state.mouse_button_counter.set(0);
+        super::window_state::release_capture_if_owned(state.hwnd.as_raw());
+        self.handle_event(Event::Mouse(MouseEvent::ButtonReleased {
+            button: MouseButton::Left,
+            modifiers: keyboard_types::Modifiers::empty(),
+        }));
+        self.handle_event(Event::Mouse(MouseEvent::CursorLeft));
+        if self.native_destroying.get() {
+            self.cleanup_native(state.hwnd);
+        }
+    }
+
     pub(crate) fn handle_on_frame(&self) {
         if let Some(result) = self.handler.with(|handler| handler.on_frame()) {
             match result {
-                Ok(()) => self.background_pending.set(false),
+                Ok(()) => {
+                    self.background_pending.set(false);
+                    self.start_pending_drag();
+                }
                 Err(e) => {
+                    self.window_state.drag.cancel_pending();
                     warn!("Error while rendering frame: {}", e);
                     self.window_state.request_close();
                 }
@@ -474,6 +548,14 @@ impl BaseviewWindow {
     }
 
     pub(crate) fn handle_event(&self, event: Event) -> EventStatus {
+        match &event {
+            Event::Mouse(MouseEvent::ButtonPressed { button: MouseButton::Left, .. }) => {
+                self.window_state.drag.press()
+            }
+            Event::Mouse(MouseEvent::ButtonReleased { button: MouseButton::Left, .. })
+            | Event::Window(WindowEvent::WillClose) => self.window_state.drag.release(),
+            _ => {}
+        }
         let status =
             self.handler.with(|handler| handler.on_event(event)).unwrap_or(EventStatus::Ignored);
         // COM drag/drop also invokes this outside a window message. Schedule its
@@ -769,6 +851,9 @@ unsafe fn wnd_proc_inner(
             // Ported from #347. Do NOT ReleaseCapture here: the new owner
             // already holds it, and releasing would steal capture from the DAW.
             if lparam as HWND != window.as_raw() {
+                if !window_state.drag.active.get() {
+                    window_state.drag.release();
+                }
                 let previous = window_state.mouse_button_counter.replace(0);
                 if previous == 0 && !window_state.mouse_was_outside_window.replace(true) {
                     window_bv.handle_event(Event::Mouse(MouseEvent::CursorLeft));
@@ -797,7 +882,8 @@ unsafe fn wnd_proc_inner(
         WM_PAINT => {
             // Validate before calling user code: nested pumps must not repeatedly
             // deliver the same paint. GDI supplies a visible first-open placeholder.
-            paint_background(window.as_raw(), window_bv.background_pending.get());
+            let damage = paint_background(window.as_raw(), window_bv.background_pending.get());
+            window_bv.handler.with(|handler| handler.damage(crate::DamageArea::Rect(damage)));
             window_bv.handle_event(Event::Window(WindowEvent::RedrawRequested));
             Some(0)
         }
@@ -816,7 +902,11 @@ unsafe fn wnd_proc_inner(
             None
         }
         WM_CLOSE => {
-            window_bv.handler.request_close();
+            if window_state.shared.defer_user_close {
+                window_bv.handle_event(Event::Window(WindowEvent::WillClose));
+            } else {
+                window_bv.handler.request_close();
+            }
             Some(0)
         }
         BV_IME_CONFIGURE => {

@@ -61,6 +61,7 @@ impl FrameRequester {
 /// become no-ops. You can use the [`Window::is_open`] method to know if the window has been closed.
 ///
 pub struct Window {
+    work: crate::work::WindowWorkOwner,
     inner: platform::WindowHandle,
     // so that WindowHandle is !Send on all platforms
     phantom: PhantomData<*mut ()>,
@@ -96,16 +97,17 @@ impl Window {
         handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
         host: impl Into<Option<Host>>,
     ) -> Result<Window, Error> {
+        let builder = WindowHandlerBuilder::new(handler);
+        let work = std::sync::Arc::clone(&builder.work);
         let initializer = WindowInitializer {
             settings,
-            builder: WindowHandlerBuilder::new(handler),
+            builder,
             host: host.into().unwrap_or_else(Host::default),
         };
 
-        Ok(Self {
-            inner: platform::WindowHandle::create_window(initializer)?,
-            phantom: PhantomData,
-        })
+        let inner = platform::WindowHandle::create_window(initializer)?;
+        work.bind_wake(inner.frame_requester());
+        Ok(Self { work: crate::work::WindowWorkOwner(work), inner, phantom: PhantomData })
     }
 
     /// Blocks the thread and runs an event loop until the window is closed.
@@ -121,7 +123,32 @@ impl Window {
     /// It is inert after close. `Option` is kept for callers written before every
     /// platform had one; all current platforms return `Some`.
     pub fn frame_requester(&self) -> Option<FrameRequester> {
-        Some(self.inner.frame_requester())
+        let waker = self.waker();
+        Some(FrameRequester::new(move || waker.request_redraw()))
+    }
+
+    /// Returns a weak wake handle that can request polling or drawing from any thread.
+    #[must_use]
+    pub fn waker(&self) -> WindowWaker {
+        self.work.waker()
+    }
+
+    /// Schedules a poll callback without forcing a draw.
+    pub fn request_poll(&self) -> Result<(), Error> {
+        self.work.request_poll()
+    }
+
+    /// Adjusts a candidate size to the window's current size constraints.
+    pub fn adjust_size<S: From<WindowSize> + Into<Size>>(&self, size: S) -> S {
+        let strategy = if self.is_resizable() {
+            crate::utils::SizingStrategy::Resizable {
+                min_size: self.min_size(),
+                max_size: self.max_size(),
+            }
+        } else {
+            crate::utils::SizingStrategy::Fixed
+        };
+        strategy.adjust_size(size.into(), self.size()).into()
     }
 
     /// The current size of the window.
@@ -193,6 +220,7 @@ impl Window {
     /// Calling this method is more explicit, but otherwise identical to just dropping this [`Window`].
     #[inline]
     pub fn close(self) {
+        self.work.close();
         drop(self)
     }
 
@@ -207,6 +235,7 @@ impl Window {
     /// Ordinary [`close`](Self::close) uses the same policy with a 250 ms budget.
     #[cfg(target_os = "linux")]
     pub fn close_bounded(self, timeout: Duration) {
+        self.work.close();
         self.inner.set_close_timeout(timeout);
     }
 
@@ -273,6 +302,10 @@ impl Window {
     #[inline]
     pub fn show(&self) -> Result<(), Error> {
         self.inner.show()?;
+        // X11 Expose and Win32 WM_PAINT already report native restoration.
+        // The retained AppKit CALayer path needs an explicit full redraw.
+        #[cfg(target_os = "macos")]
+        self.work.invalidate();
         Ok(())
     }
 

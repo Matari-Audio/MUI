@@ -17,6 +17,7 @@ use crate::{
 use calloop::generic::Generic;
 use calloop::timer::{TimeoutAction, Timer};
 use calloop::{Interest, LoopHandle, LoopSignal, Mode, PostAction, RegistrationToken};
+use matari_audio_drag_and_drop::{X11DropRouter, X11PointerEvent, X11SessionStatus};
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
@@ -69,10 +70,14 @@ pub(crate) struct EventLoop {
     loop_signal: LoopSignal,
     loop_handle: LoopHandle<'static, Self>,
     frame_timer: Option<RegistrationToken>,
+    drag_timer: Option<RegistrationToken>,
     frame_deadline: Option<Instant>,
     last_frame: Instant,
 
     drag_n_drop: DragNDropState,
+    /// Hyprland's XWayland bridge delivers drops to the host's toplevel;
+    /// this routes them down to the editor window.
+    drop_router: Option<X11DropRouter>,
     xkb_state: Option<XkbcommonState>,
 
     run_error: Option<PlatformError>,
@@ -112,11 +117,19 @@ impl EventLoop {
             .insert_source(request_receiver, |e, _, l| l.handle_main_thread_request(e))
             .map_err(|e| e.error)?;
 
+        let drop_router =
+            X11DropRouter::install(window.connection.conn.xcb_connection(), window.raw_id())
+                .unwrap_or_else(|error| {
+                    warn!("Could not install the X11 drop router: {}", error);
+                    None
+                });
+
         Ok(Self {
             loop_signal: inner.get_signal(),
             loop_handle,
             frame_timer: None,
             frame_deadline: None,
+            drag_timer: None,
             last_frame: Instant::now(),
             handler,
             new_size: None,
@@ -126,6 +139,7 @@ impl EventLoop {
             refresh_rate_stale: false,
             refresh_rate_queried_at: Instant::now(),
             drag_n_drop: DragNDropState::NoCurrentSession,
+            drop_router,
             xkb_state: XkbcommonState::new(&window.connection),
             run_error: None,
             main_thread,
@@ -275,7 +289,9 @@ impl EventLoop {
             }
         }
 
-        let Some(new_size) = self.new_size.take() else { return Ok(()) };
+        let Some(new_size) = self.new_size.take() else {
+            return Ok(());
+        };
         let previous = self.window.store_size(new_size);
 
         if previous == new_size {
@@ -424,6 +440,7 @@ impl EventLoop {
         }
 
         self.schedule_frame()?;
+        self.schedule_drag_poll()?;
         self.window.connection.conn.flush()?;
         // Only take_frame_request at the beginning of an idle pass clears the
         // latch. A producer racing demand query/timer re-arm keeps its request
@@ -444,6 +461,8 @@ impl EventLoop {
             inner.run(None, &mut self, Self::handle_idle)?;
         }
 
+        self.cancel_matari_drag();
+        self.uninstall_drop_router();
         if !self.window.main_thread_shared.callbacks_revoked() {
             if !self.window.xcb_window.is_destroyed() {
                 self.release_forwarded_keys();
@@ -499,6 +518,108 @@ impl EventLoop {
         }
     }
 
+    /// Tracks the primary button and the newest pointer event: an outbound
+    /// drag may only start from a live press.
+    fn update_pointer_authority(&self, event: &XEvent) {
+        let pointer = match event {
+            XEvent::MotionNotify(e) => {
+                self.window
+                    .primary_pointer_down
+                    .set(e.state.contains(x11rb::protocol::xproto::KeyButMask::BUTTON1));
+                X11PointerEvent { root: e.root, root_x: e.root_x, root_y: e.root_y, time: e.time }
+            }
+            XEvent::ButtonPress(e) => {
+                if e.detail == 1 {
+                    self.window.primary_pointer_down.set(true);
+                }
+                X11PointerEvent { root: e.root, root_x: e.root_x, root_y: e.root_y, time: e.time }
+            }
+            XEvent::ButtonRelease(e) => {
+                X11PointerEvent { root: e.root, root_x: e.root_x, root_y: e.root_y, time: e.time }
+            }
+            _ => return,
+        };
+        self.window.last_pointer_event.set(Some(pointer));
+    }
+
+    fn forward_matari_drag_event(&self, event: &XEvent) {
+        let released = matches!(event, XEvent::ButtonRelease(e) if e.detail == 1);
+        let connection = self.window.connection.conn.xcb_connection();
+        let session = self.window.external_drag_session.borrow_mut().take();
+        if let Some(mut session) = session {
+            match session.handle_event(connection, event) {
+                Ok(X11SessionStatus::Active) => {
+                    *self.window.external_drag_session.borrow_mut() = Some(session);
+                }
+                Ok(X11SessionStatus::Finished) => {}
+                Err(_) => {
+                    let _ = session.cancel(connection);
+                }
+            }
+        }
+        if released {
+            self.window.primary_pointer_down.set(false);
+        }
+    }
+
+    fn poll_matari_drag(&self) {
+        let connection = self.window.connection.conn.xcb_connection();
+        let session = self.window.external_drag_session.borrow_mut().take();
+        if let Some(mut session) = session {
+            match session.poll(connection) {
+                Ok(X11SessionStatus::Active) => {
+                    *self.window.external_drag_session.borrow_mut() = Some(session);
+                }
+                Ok(X11SessionStatus::Finished) => {}
+                Err(_) => {
+                    let _ = session.cancel(connection);
+                }
+            }
+        }
+    }
+
+    fn schedule_drag_poll(&mut self) -> Result<(), calloop::Error> {
+        if self.window.external_drag_session.borrow().is_none() {
+            if let Some(timer) = self.drag_timer.take() {
+                self.loop_handle.remove(timer);
+            }
+        } else if self.drag_timer.is_none() {
+            self.drag_timer = Some(
+                self.loop_handle
+                    .insert_source(
+                        Timer::from_duration(Duration::from_millis(100)),
+                        |_, _, event_loop| {
+                            event_loop.poll_matari_drag();
+                            if event_loop.window.external_drag_session.borrow().is_some() {
+                                TimeoutAction::ToDuration(Duration::from_millis(100))
+                            } else {
+                                event_loop.drag_timer = None;
+                                TimeoutAction::Drop
+                            }
+                        },
+                    )
+                    .map_err(|error| error.error)?,
+            );
+        }
+        Ok(())
+    }
+
+    fn uninstall_drop_router(&mut self) {
+        if let Some(router) = self.drop_router.take() {
+            if let Err(error) = router.uninstall(self.window.connection.conn.xcb_connection()) {
+                warn!("Could not uninstall the X11 drop router: {}", error);
+            }
+        }
+    }
+
+    fn cancel_matari_drag(&self) {
+        let connection = self.window.connection.conn.xcb_connection();
+        let session = self.window.external_drag_session.borrow_mut().take();
+        if let Some(session) = session {
+            let _ = session.cancel(connection);
+        }
+    }
+
     fn handle_xcb_event(&mut self, event: XEvent) -> Result<(), ConnectionError> {
         let filtered = self.window.ime.borrow_mut().as_mut().is_some_and(|ime| ime.filter(&event));
         self.drain_ime();
@@ -538,6 +659,21 @@ impl EventLoop {
         //   the keyboard modifier keys at the time of the event.
         //   http://rtbo.github.io/rust-xcb/src/xcb/ffi/xproto.rs.html#445
 
+        let routed = self.drop_router.as_mut().map(|router| {
+            router.handle_event(self.window.connection.conn.xcb_connection(), &event)
+        });
+        match routed {
+            Some(Ok(true)) => return Ok(()),
+            Some(Err(error)) => {
+                warn!("X11 drop router event failed: {}", error);
+                self.uninstall_drop_router();
+            }
+            Some(Ok(false)) | None => {}
+        }
+
+        self.update_pointer_authority(&event);
+        self.forward_matari_drag_event(&event);
+
         match event {
             ////
             // window
@@ -548,7 +684,11 @@ impl EventLoop {
                 }
 
                 if event.data.as_data32()[0] == self.window.connection.atoms.WM_DELETE_WINDOW {
-                    self.window.request_close();
+                    if self.window.defer_user_close {
+                        self.handle_event(Event::Window(WindowEvent::WillClose));
+                    } else {
+                        self.window.request_close();
+                    }
                     return Ok(());
                 }
 
@@ -567,7 +707,7 @@ impl EventLoop {
             }
 
             XEvent::SelectionNotify(event) => {
-                if event.property == self.window.connection.atoms.XdndSelection {
+                if event.selection == self.window.connection.atoms.XdndSelection {
                     self.drag_n_drop.handle_selection_notify_event(
                         &self.window,
                         &*self.handler,
@@ -600,6 +740,14 @@ impl EventLoop {
 
             XEvent::Expose(e) if e.window == self.window.raw_id() => {
                 self.exposed = true;
+                if !self.window.main_thread_shared.callbacks_revoked()
+                    && !self.window.main_thread_shared.is_stop_host_requested()
+                {
+                    self.handler.damage(crate::DamageArea::Rect(crate::DamageRect::new(
+                        PhysicalPosition::new(u32::from(e.x), u32::from(e.y)),
+                        PhysicalSize::new(u32::from(e.width), u32::from(e.height)),
+                    )));
+                }
                 self.handle_event(Event::Window(WindowEvent::RedrawRequested));
             }
 
@@ -767,6 +915,11 @@ impl EventLoop {
                 && !matches!(event, Event::Window(WindowEvent::WillClose)))
         {
             return EventStatus::Ignored;
+        }
+        if matches!(&event, Event::Window(WindowEvent::WillClose)) {
+            self.window.primary_pointer_down.set(false);
+            self.window.last_pointer_event.set(None);
+            self.cancel_matari_drag();
         }
         self.exposed = true;
         self.handler.on_event(event)

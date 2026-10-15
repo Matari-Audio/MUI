@@ -1,0 +1,39 @@
+   Compiling mui-text v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-text)
+   Compiling mui-style v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-style)
+   Compiling mui-scene v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-scene)
+   Compiling mui-vello v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-vello)
+   Compiling mui-material v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-material)
+   Compiling mui v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui)
+    Finished `test` profile [optimized] target(s) in 5.73s
+     Running unittests src/lib.rs (/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/deps/mui-c2dab46e16de25ec)
+
+running 26 tests
+test host::tests::a_view_that_draws_the_pointer_rebuilds_on_an_inert_hover ... ok
+test host::tests::a_delivered_edge_gets_the_tree_that_dispatches_it_and_an_inert_hover_none ... ok
+test host::tests::animation_spacing_never_delays_input_redraw_or_due_deadlines ... ok
+test host::tests::a_minimised_window_holds_its_input_until_it_has_a_size ... ok
+test host::tests::a_press_and_release_between_two_ticks_are_two_frames ... ok
+test host::tests::each_resize_extends_quiet_but_due_repaints_bypass_it ... ok
+test host::tests::an_idle_tick_builds_nothing_until_something_changes ... ok
+test host::tests::drag_samples_between_two_edges_are_one_frame_with_a_trail ... ok
+test host::tests::hover_bursts_coalesce_but_drag_samples_and_modifier_changes_survive ... ok
+test host::tests::focus_loss_queues_a_cancel_after_the_pressed_snapshot ... ok
+test host::tests::a_refused_layout_does_not_replay_the_keys_it_took ... ok
+test host::tests::keyboard_modifiers_track_their_own_edges ... ok
+test host::tests::initially_refused_layout_waits_for_a_real_retry_even_without_a_scene ... ok
+test host::tests::keys_route_to_the_host_unless_focus_or_a_shortcut_claims_them ... ok
+test host::tests::profiling_tracks_invalidation_skips_coalescing_and_clock_regressions ... ok
+test host::tests::layout_is_logical_when_the_surface_is_physical ... ok
+test host::tests::queued_pointer_edges_keep_their_order ... ok
+test host::tests::queued_ime_edges_survive_throttling_minimize_and_clock_regression ... ok
+test host::tests::shared_state_with_canvas_caches_is_send ... ok
+test host::tests::semantic_input_followup_bypasses_animation_and_resize_spacing ... ok
+test host::tests::space_is_a_key_and_text_but_a_shortcut_is_only_a_key ... ok
+test host::tests::refused_layout_stops_unchanged_retries_and_retries_real_changes ... ok
+test host::tests::resize_quiet_window_defers_live_work_but_preserves_input_and_final_frame ... ok
+test host::tests::zoom_reads_the_logical_window_size ... ok
+test host::tests::zoom_scales_the_paint_and_divides_the_pointer_and_pixel_wheel ... ok
+test host::tests::ime_configuration_uses_utf8_boundaries_and_disables_after_blur ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 128 filtered out; finished in 0.00s
+

@@ -19,6 +19,9 @@ use crate::kurbo::Affine;
 
 mod initialization;
 pub use initialization::GpuInit;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub use initialization::InitGate;
 pub(crate) mod pipeline_cache;
 
 /// A failed device rebuild waits this long before the next attempt, so a

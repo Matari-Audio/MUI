@@ -740,3 +740,19 @@ fn a_due_tip_paints_an_opaque_box_at_once() {
             .any(|p| matches!(p.layer, mui_scene::Layer::Blend { .. }))
     );
 }
+
+/// Four quick clicks are two double-clicks: a spent pair does not lend its
+/// second press to a third.
+#[test]
+fn four_quick_clicks_are_two_doubles() {
+    let mut ui = Ui::default();
+    let tree = || block(30., 20.).id("pad");
+    ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+    let mut doubles = Vec::new();
+    for _ in 0..4 {
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        doubles.push(ui.get("pad").double_clicked);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+    }
+    assert_eq!(doubles, [false, true, false, true]);
+}

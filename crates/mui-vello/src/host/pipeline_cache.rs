@@ -38,7 +38,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<Cache> {
     let key = wgpu::util::pipeline_cache_key(&device.adapter_info())?;
     let path = directory().map(|p| {
         p.join(format!(
-            "{key}-wgpu30-vello0.10-mui{}.bin",
+            "{key}-wgpu30-vello0.11-mui{}.bin",
             env!("CARGO_PKG_VERSION")
         ))
     });

@@ -1,0 +1,5 @@
+    Blocking waiting for file lock on build directory
+   Compiling mui v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui)
+    Finished `dev` profile [optimized] target(s) in 47.16s
+     Running `/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/examples/resize_schedule`
+resize_frames=200 live_frames=0 input_frames=20 final_frame=true driver_cpu_ms=190.699 builds=221 resolve_samples=221 build_p50_us=107.752 build_p95_us=166.623

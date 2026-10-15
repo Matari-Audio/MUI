@@ -7,6 +7,8 @@ license.workspace = true
 
 [features]
 default = []
+# Hidden integration-fixture hooks; absent from ordinary shipping builds.
+test-support = []
 reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
@@ -35,9 +37,9 @@ vello = { path = "../../vendor/vello", default-features = false, features = ["wg
 pollster = { workspace = true, optional = true }
 # `Glyph` is the one glyph type `vello_cpu` does not re-export, so it comes
 # straight from the crate it builds on.
-glifo = { version = "0.3", default-features = false, optional = true }
+glifo = { version = "0.4", default-features = false, optional = true }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
-vello_common = { version = "0.2", default-features = false, features = ["std"] }
+vello_common = { version = "0.3", default-features = false, features = ["std"] }
 # Types only (`Device`, `Queue`) for the image atlas upload; still no backend.
 wgpu.workspace = true
 vello_cpu = { workspace = true, optional = true }

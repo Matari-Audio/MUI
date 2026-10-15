@@ -114,6 +114,24 @@ impl XcbWindow {
         stale_echo(&mut self.requested.borrow_mut(), size)
     }
 
+    pub fn move_to(
+        &self, x: i32, y: i32,
+    ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
+        self.connection.conn.configure_window(self.id().get(), &ConfigureWindowAux::new().x(x).y(y))
+    }
+
+    pub fn set_transient_for(
+        &self, owner: NonZeroU32,
+    ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
+        self.connection.conn.change_property32(
+            PropMode::REPLACE,
+            self.window_id.get(),
+            AtomEnum::WM_TRANSIENT_FOR,
+            AtomEnum::WINDOW,
+            &[owner.get()],
+        )
+    }
+
     pub fn reparent(
         &self, parent: Option<NonZeroU32>,
     ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
@@ -193,7 +211,9 @@ impl Drop for XcbWindow {
 }
 
 fn stale_echo(requested: &mut VecDeque<(u32, u32)>, size: (u32, u32)) -> bool {
-    let Some(i) = requested.iter().position(|r| *r == size) else { return false };
+    let Some(i) = requested.iter().position(|r| *r == size) else {
+        return false;
+    };
     requested.drain(..=i);
     !requested.is_empty()
 }

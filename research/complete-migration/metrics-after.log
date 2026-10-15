@@ -1,0 +1,56 @@
+    Blocking waiting for file lock on build directory
+   Compiling mui-text v0.4.0 (/mnt/Windows11/DEV_PROJECTS/Repos/mui-complete-migration-20261012/crates/mui-text)
+    Finished `test` profile [optimized] target(s) in 1m 04s
+     Running unittests src/lib.rs (/home/derpcat/.t3/targets/mui-complete-migration-20261012/debug/deps/mui_text-13593cd75741b70c)
+
+running 47 tests
+test error::tests::geometry_errors_preserve_their_source_chain ... ok
+test font::tests::a_bad_font_keeps_its_skrifa_cause ... ok
+test font::tests::opsz_follows_the_size_unless_set_and_coords_are_quantised ... ok
+test font::tests::a_static_font_declares_no_axes ... ok
+test caret::tests::a_non_finite_click_does_not_snap_to_the_start ... ok
+test caret::tests::fallback_caret_round_trips_across_a_missing_glyph ... ok
+test lines::tests::a_newline_breaks_whatever_fits ... ok
+test lines::tests::a_line_breaks_at_the_last_space_that_fits ... ok
+test lines::tests::a_cluster_wider_than_the_line_is_not_split ... ok
+test offsets::tests::native_ranges_never_slice_surrogates_or_utf8_scalars ... ok
+test lines::tests::fallback_wrap_breaks_before_a_glyph_cluster ... ok
+test lines::tests::wrapping_does_not_split_a_combining_cluster ... ok
+test outline::tests::a_collapsed_fill_contour_is_dropped_not_an_error ... ok
+test caret::tests::a_click_left_of_a_rtl_run_lands_at_its_end ... ok
+test caret::editing_tests::grapheme_stops_and_mixed_direction_selection_use_shaped_clusters ... ok
+test outline::tests::a_glyph_counter_winds_as_a_hole ... ok
+test lines::tests::min_content_is_the_widest_word ... ok
+test lines::tests::a_word_wider_than_the_line_breaks_mid_word ... ok
+test outline::tests::a_missing_glyph_is_reported_not_drawn_blank ... ok
+test outline::tests::a_counter_is_its_own_contour ... ok
+test lines::tests::uax14_says_where_a_line_may_start ... ok
+test outline::tests::an_axis_a_static_font_lacks_is_ignored_not_an_error ... ok
+test caret::tests::a_caret_round_trips_through_its_x ... ok
+test outline::tests::baseline_sits_at_zero_and_the_glyph_grows_upward ... ok
+test caret::tests::caret_follows_the_weight_it_is_drawn_at ... ok
+test outline::tests::outline_scales_with_em_size ... ok
+test outline::tests::overlapping_glyphs_fill_rather_than_cancel ... ok
+test shape::tests::a_glyph_the_face_lacks_does_not_blank_the_label ... ok
+test outline::tests::tolerance_buys_vertices ... ok
+test shape::tests::bidi_reorders_a_rtl_run_in_visual_order ... ok
+test shape::tests::a_space_advances_without_ink ... ok
+test shape::tests::a_run_is_its_glyphs_side_by_side ... ok
+test shape::tests::fallback_keeps_joiners_and_variation_selectors_in_the_emoji_face ... ok
+test shape::tests::metrics_are_y_down_and_positive_both_ways ... ok
+test shape::tests::fallback_selects_a_face_per_grapheme_cluster ... ok
+test shape::tests::the_plan_cache_evicts_the_least_recently_used ... ok
+test shape::tests::size_conversion_rejects_underflow_overflow_and_invalid_derived_values ... ok
+test shape::tests::the_shaper_applies_feature_variations_at_the_fill_extreme ... ok
+test shape::tests::combining_marks_keep_their_position_offsets_for_renderers ... ok
+test shape::tests::contributing_fallback_faces_keep_their_line_metrics ... ok
+test font::tests::collection_faces_keep_their_index_for_shaping_and_outlines ... ok
+test outline::tests::a_large_glyph_stays_within_tolerance ... ok
+test shape::tests::shape_run_is_text_run_without_the_ink ... ok
+test shape::tests::unused_fallback_faces_do_not_change_primary_line_metrics ... ok
+test shape::tests::open_type_shaping_applies_kerning_and_combining_substitution ... ok
+test shape::tests::variable_weight_reaches_the_shaper_and_outline ... ok
+test shape::tests::animating_an_axis_keeps_the_plan_cache_bounded ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -196,7 +196,8 @@ impl Canvas for SparseCanvas<'_> {
                     sampler: i.sampler,
                 }),
                 // `image` below only hands out ids.
-                mui_paint::ImageSource::Pixmap(_) => {
+                mui_paint::ImageSource::Pixmap(_)
+                | mui_paint::ImageSource::ExternalTexture { .. } => {
                     Brush::Solid(peniko::color::palette::css::TRANSPARENT)
                 }
             },
