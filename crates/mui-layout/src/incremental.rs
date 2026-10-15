@@ -1231,10 +1231,12 @@ mod tests {
             assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
             assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
             let stamp = cache.stamp(&root.children()[0].children()[0]).unwrap();
-            assert_eq!(
-                stamp.measured.len(),
-                1,
-                "inherited shutter height is not consumed by this natural subtree"
+            assert!(
+                stamp
+                    .measured
+                    .iter()
+                    .all(|(input, _)| input.container == [None; 2]),
+                "neither the initial pass nor the flex remeasure consumes the inherited shutter height"
             );
         }
     }
@@ -1251,6 +1253,7 @@ mod tests {
                 };
                 let root = Node::col([Node::col([Node::block(32., length).id("control")])
                     .w(180.)
+                    .h(Len::Pct(100.))
                     .shrink(0.)
                     .id("natural")])
                 .size(320., height)
@@ -1266,7 +1269,14 @@ mod tests {
                 );
                 assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
                 if !use_container {
-                    assert_eq!(cache.stamp(&root.children()[0]).unwrap().measured.len(), 1);
+                    assert!(
+                        cache
+                            .stamp(&root.children()[0])
+                            .unwrap()
+                            .measured
+                            .iter()
+                            .all(|(input, _)| input.container == [None; 2])
+                    );
                 }
             }
         }
