@@ -15,6 +15,11 @@ use std::{collections::BTreeMap, sync::Arc};
 
 mod incremental;
 pub use incremental::{LayoutCache, LayoutStats, resolve_cached_with};
+mod diagnostics;
+pub use diagnostics::{
+    LayoutRequestDepth, LayoutRequestInput, LayoutRequestNode, LayoutRequestRevision,
+    LayoutRequestTrace, LayoutRequestVariant,
+};
 mod arrange;
 mod grid;
 mod id;
@@ -101,6 +106,9 @@ pub struct Layout {
     /// declaration order). A walk of the same tree indexes straight into it,
     /// so nothing needs a name to be found.
     order: Arc<Vec<Frame>>,
+    /// Authoritative measured floors in the same declaration order as the
+    /// frames. Cached Layout clones share these receipts without analysis.
+    minima: Arc<Vec<Size>>,
 }
 impl Layout {
     /// The smallest this tree can be squeezed to: every `minimum`, padding and
@@ -121,6 +129,18 @@ impl Layout {
     pub fn min_size(&self) -> Size {
         self.min
     }
+    /// The named node's minimum from its last intrinsic measurement. This
+    /// differs from its allocated frame: flex surplus, scrolling, and paint
+    /// contours do not become minimums. Hidden `fits` candidates retain their
+    /// measured minimum even when their arranged frame is empty.
+    ///
+    /// [`Layout::reframe`] preserves the original measurement in declaration
+    /// order. It rebinds names and frames, without remeasuring a replacement
+    /// tree or deriving a minimum from its new contours.
+    pub fn min_size_of(&self, key: &str) -> Option<Size> {
+        let (_, at) = self.named.iter().find(|(id, _)| id.as_str() == key)?;
+        self.minima.get(*at as usize).copied()
+    }
     pub fn frame(&self, key: &str) -> Option<Frame> {
         let (_, at) = self.named.iter().find(|(id, _)| id.as_str() == key)?;
         Some(self.order[*at as usize])
@@ -128,9 +148,12 @@ impl Layout {
     pub fn all(&self) -> &[Frame] {
         &self.order
     }
-    /// Publish contour-derived frames in the same tree order, keeping named lookup consistent.
+    /// Publish contour-derived frames in the same declaration order, keeping
+    /// named lookup consistent. Original measured minimums are preserved by
+    /// declaration index; this does not remeasure the replacement tree.
     pub fn reframe<P>(mut self, root: &Node<P>, frames: Vec<Frame>) -> Result<Self, Error> {
         if frames.len() != self.order.len()
+            || frames.len() != self.minima.len()
             || frames.iter().any(|f| {
                 ![f.x, f.y, f.size.width, f.size.height]
                     .iter()
@@ -205,6 +228,15 @@ impl Default for Limits {
         }
     }
 }
+impl Limits {
+    /// Validate a layout budget before any traversal uses its recursion bound.
+    pub fn validate(self) -> Result<(), Error> {
+        if !self.extent.is_finite() || self.extent <= 0.0 || self.nodes == 0 || self.depth > 256 {
+            return Err(Error::InvalidValue);
+        }
+        Ok(())
+    }
+}
 
 /// `None` means hug intrinsic content. `Some` is an exact offered parent size.
 /// Content leaves measure as empty; use [`resolve_with`] to size them.
@@ -276,12 +308,8 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
     cache: Option<&mut LayoutCache>,
     boxed: Option<Insets>,
 ) -> Result<Layout, Error> {
-    if !limits.extent.is_finite()
-        || limits.extent <= 0.0
-        || limits.nodes == 0
-        || limits.depth > 256
-        || !scale.is_valid()
-    {
+    limits.validate()?;
+    if !scale.is_valid() {
         return Err(Error::InvalidValue);
     }
     let mut measurer = crate::measure::intrinsic(measurer);
@@ -313,7 +341,11 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         Size::new(size.width.min(max.width), size.height.min(max.height))
     });
     // Every measured node produces at most one frame.
-    let mut out = (Vec::new(), Vec::with_capacity(limits.nodes - pass.left));
+    let mut out = (
+        Vec::new(),
+        Vec::with_capacity(limits.nodes - pass.left),
+        Vec::with_capacity(limits.nodes - pass.left),
+    );
     let empty = BTreeMap::new();
     let pins = |anchors| Pins {
         anchors,
@@ -331,8 +363,11 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         min: m.floor,
         named: Arc::new(out.0),
         order: Arc::new(out.1),
+        minima: Arc::new(out.2),
     })
 }
 
+#[cfg(test)]
+mod minima_tests;
 #[cfg(test)]
 mod tests;

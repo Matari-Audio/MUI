@@ -417,6 +417,211 @@ fn tree_budgets_are_checked_before_ui_recursion_and_keep_the_previous_scene() {
     assert!(ui.scene().unwrap().surface("previous").is_some());
 }
 
+fn budget_tree(nodes: usize) -> El {
+    col((1..nodes).map(|_| block(1.0, 1.0)))
+}
+
+#[test]
+fn default_ui_limits_keep_the_exact_node_boundary() {
+    let mut ui = Ui::default();
+    assert_eq!(ui.layout_limits(), mui_layout::Limits::default());
+    resolve(&mut ui, budget_tree(4096));
+    assert!(matches!(
+        ui.frame(budget_tree(4097), None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+}
+
+#[test]
+fn per_ui_node_limits_allow_larger_bounded_trees_without_changing_other_windows() {
+    let mut ui = Ui::default();
+    let limits = mui_layout::Limits {
+        nodes: 8192,
+        ..ui.layout_limits()
+    };
+    ui.set_layout_limits(limits).unwrap();
+    let frame = ui
+        .frame(budget_tree(6234), None, Input::default(), 0.016)
+        .unwrap();
+    assert_eq!(frame.scene.layout.all().len(), 6234);
+    assert_eq!(Ui::default().layout_limits(), mui_layout::Limits::default());
+    assert!(matches!(
+        ui.frame(budget_tree(8193), None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+}
+
+#[test]
+fn smaller_node_limits_are_enforced_at_the_exact_boundary() {
+    let mut ui = Ui::default();
+    ui.set_layout_limits(mui_layout::Limits {
+        nodes: 3,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    resolve(&mut ui, budget_tree(3));
+    let previous = ui.scene_snapshot().unwrap();
+    assert!(matches!(
+        ui.frame(budget_tree(4), None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &previous,
+        &ui.scene_snapshot().unwrap()
+    ));
+}
+
+#[test]
+fn raised_node_limits_cover_cold_and_reused_memo_trees() {
+    let mut ui = Ui::default();
+    ui.set_layout_limits(mui_layout::Limits {
+        nodes: 8192,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    let mut calls = 0;
+    for _ in 0..3 {
+        let tree = ui.memo("large", (), |_| {
+            calls += 1;
+            budget_tree(6234)
+        });
+        resolve(&mut ui, tree);
+    }
+    assert_eq!(calls, 1, "retained expansion uses the same raised budget");
+}
+
+#[test]
+fn lowering_node_limits_rejects_an_already_retained_memo() {
+    let mut ui = Ui::default();
+    let mut calls = 0;
+    for _ in 0..2 {
+        let tree = ui.memo("panel", (), |_| {
+            calls += 1;
+            budget_tree(65)
+        });
+        resolve(&mut ui, tree);
+    }
+    let previous = ui.scene_snapshot().unwrap();
+    ui.set_layout_limits(mui_layout::Limits {
+        nodes: 32,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    let tree = ui.memo("panel", (), |_| {
+        calls += 1;
+        budget_tree(65)
+    });
+    assert!(matches!(
+        ui.frame(tree, None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+    assert_eq!(calls, 1, "the warm memo itself must be budget checked");
+    assert!(std::sync::Arc::ptr_eq(
+        &previous,
+        &ui.scene_snapshot().unwrap()
+    ));
+}
+
+#[test]
+fn node_and_depth_limits_remain_independent() {
+    let deep = || {
+        let mut tree = block(1.0, 1.0);
+        for _ in 0..65 {
+            tree = col([tree]);
+        }
+        tree
+    };
+    let mut ui = Ui::default();
+    ui.set_layout_limits(mui_layout::Limits {
+        nodes: 8192,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    assert!(matches!(
+        ui.frame(deep(), None, Input::default(), 0.016),
+        Err(mui_scene::SceneError::Layout(
+            mui_layout::Error::BudgetExceeded
+        ))
+    ));
+    ui.set_layout_limits(mui_layout::Limits {
+        depth: 66,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    resolve(&mut ui, deep());
+}
+
+#[test]
+fn changed_extent_limits_reach_scene_resolution_on_a_warm_ui() {
+    let mut ui = Ui::default();
+    resolve(&mut ui, block(60.0, 10.0).id("width"));
+    ui.set_layout_limits(mui_layout::Limits {
+        extent: 50.0,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    assert!(
+        ui.frame(block(60.0, 10.0).id("width"), None, Input::default(), 0.016)
+            .is_err()
+    );
+    ui.set_layout_limits(mui_layout::Limits {
+        extent: 200.0,
+        ..ui.layout_limits()
+    })
+    .unwrap();
+    resolve(&mut ui, block(60.0, 10.0).id("width"));
+}
+
+#[test]
+fn invalid_layout_limits_leave_the_current_budget_and_scene_unchanged() {
+    let mut ui = Ui::default();
+    resolve(&mut ui, block(10.0, 10.0).id("previous"));
+    let previous = ui.scene_snapshot().unwrap();
+    let limits = ui.layout_limits();
+    let invalid = [
+        mui_layout::Limits { nodes: 0, ..limits },
+        mui_layout::Limits {
+            depth: 257,
+            ..limits
+        },
+        mui_layout::Limits {
+            extent: 0.0,
+            ..limits
+        },
+        mui_layout::Limits {
+            extent: -1.0,
+            ..limits
+        },
+        mui_layout::Limits {
+            extent: f64::NAN,
+            ..limits
+        },
+        mui_layout::Limits {
+            extent: f64::INFINITY,
+            ..limits
+        },
+    ];
+    for invalid in invalid {
+        assert!(matches!(
+            ui.set_layout_limits(invalid),
+            Err(mui_layout::Error::InvalidValue)
+        ));
+        assert_eq!(ui.layout_limits(), limits);
+        assert!(std::sync::Arc::ptr_eq(
+            &previous,
+            &ui.scene_snapshot().unwrap()
+        ));
+    }
+}
+
 #[test]
 fn retained_memos_cannot_expand_beyond_the_frame_depth_budget() {
     let mut ui = Ui::default();

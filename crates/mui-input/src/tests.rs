@@ -531,6 +531,22 @@ fn shift_drags_fine_and_a_drag_locks_to_its_longest_axis() {
 }
 
 #[test]
+fn releasing_shift_mid_drag_keeps_the_fine_travel_already_made() {
+    let (hit, mut i) = (one_square(), Interaction::new());
+    i.update(&hit, with(down(10., 50.), Button::Primary, Mods::default()));
+    i.update(&hit, with(down(40., 50.), Button::Primary, Mods::default()));
+    i.update(&hit, with(down(60., 50.), Button::Primary, shift()));
+    let fine = i.get("a").drag_travel(FINE_DRAG).x;
+    assert_eq!(fine, 30.0 + 20.0 * FINE_DRAG, "only the Shift stretch is fine");
+    i.update(&hit, with(down(60., 50.), Button::Primary, Mods::default()));
+    assert_eq!(
+        i.get("a").drag_travel(FINE_DRAG).x,
+        fine,
+        "letting go of Shift does not rescale what was already travelled"
+    );
+}
+
+#[test]
 fn a_capture_follows_its_target_through_a_rename() {
     let mut i = Interaction::new();
     i.update(&one_square(), down(10., 10.));

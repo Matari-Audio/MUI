@@ -146,6 +146,8 @@ pub struct Ui {
     identities: HashMap<u64, (Option<String>, String)>,
     /// The runtime clock at which the last playing key lands.
     play_until: f64,
+    /// The per-window budget used before traversal and during scene resolution.
+    layout_limits: mui_layout::Limits,
     resolver: Resolver,
     /// Scratch for the tree path of the node a walk is on: an unnamed node's
     /// key, built without a heap copy per node.
@@ -289,6 +291,7 @@ impl Ui {
             ghosts: Vec::new(),
             identities: HashMap::new(),
             play_until: 0.0,
+            layout_limits: mui_layout::Limits::default(),
             resolver: Resolver::default(),
             path: String::new(),
             pasted: None,
@@ -336,6 +339,29 @@ impl Ui {
     /// control size.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+    }
+    /// The budget used for this UI's trees, including expanded memo subtrees.
+    /// New UIs use [`mui_layout::Limits::default`].
+    pub fn layout_limits(&self) -> mui_layout::Limits {
+        self.layout_limits
+    }
+    /// Resolve subsequent frames with this per-window layout budget.
+    ///
+    /// A larger node budget permits larger bounded interfaces; it does not
+    /// reduce their construction or rendering cost. Depth remains independently
+    /// bounded, and virtual collections keep their declared content allowance.
+    /// Invalid budgets leave the current limits and last scene unchanged.
+    /// A host changing the limits should request a redraw.
+    pub fn set_layout_limits(
+        &mut self,
+        limits: mui_layout::Limits,
+    ) -> Result<(), mui_layout::Error> {
+        limits.validate()?;
+        if self.layout_limits != limits {
+            self.layout_limits = limits;
+            self.resolved = false;
+        }
+        Ok(())
     }
     /// Swap the primary font after construction; `None` measures with the
     /// 0.6em guess. [`Ui::font`] is the builder form.
@@ -454,6 +480,14 @@ impl Ui {
 
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
         self.resolver.layout_stats()
+    }
+    /// Opt-in exact layout work tracing. Keep disabled for latency measurements.
+    pub fn trace_layout_requests(&mut self, enabled: bool) {
+        self.resolver.trace_layout_requests(enabled);
+    }
+    /// Export bounded owned work records and stop tracing.
+    pub fn take_layout_request_trace(&mut self) -> Option<mui_layout::LayoutRequestTrace> {
+        self.resolver.take_layout_request_trace()
     }
     /// Borrow the last successfully resolved scene.
     pub fn scene(&self) -> Option<&ResolvedScene> {
@@ -581,6 +615,7 @@ impl Ui {
         {
             response.drag_delta = pose.delta(response.drag_delta);
             response.drag_total = pose.delta(response.drag_total);
+            response.drag_shifted = pose.delta(response.drag_shifted);
         }
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
@@ -848,7 +883,7 @@ impl Ui {
             Self::discard_tree(root);
             return Err(SceneError::InvalidFrameDelta);
         }
-        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default())
+        if let Err(error) = Self::validate_tree_budget(&root, self.layout_limits)
             .and_then(|()| self.validate_expanded_tree_budget(&root))
         {
             Self::discard_tree(root);
@@ -904,7 +939,7 @@ impl Ui {
         // the whole tree.
         let mut root = root;
         let mut memos = self.splice(&mut root);
-        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default()) {
+        if let Err(error) = Self::validate_tree_budget(&root, self.layout_limits) {
             Self::discard_tree(root);
             return Err(error);
         }
@@ -940,7 +975,7 @@ impl Ui {
             memos.iter_mut().for_each(|(p, _)| p.insert(0, 0));
         }
         let mut root = Self::wrap_tip(root, tip.as_ref());
-        if let Err(error) = Self::validate_tree_budget(&root, mui_layout::Limits::default()) {
+        if let Err(error) = Self::validate_tree_budget(&root, self.layout_limits) {
             Self::discard_tree(root);
             return Err(error);
         }
@@ -1157,6 +1192,7 @@ impl Ui {
         heats: rustc_hash::FxHashMap<Id, f64>,
     ) -> Result<(ResolvedScene, bool, El), SceneError> {
         let mut spec = SceneSpec::new(root).theme(self.theme.clone());
+        spec.limits = self.layout_limits;
         spec.limits.extent = Self::virtual_scroll_extent(&mut spec.root, spec.limits, self.scale)?;
         spec.offered = offered;
         spec.font = self.font.clone();

@@ -33,3 +33,33 @@ fn live_text_updates_preserve_frames_and_explicit_labels() {
         Some("Gain readout")
     );
 }
+
+#[test]
+fn a_stand_in_measured_value_changes_without_relayout() {
+    let tree = |value: &str| {
+        row![
+            text("GAIN").id("name"),
+            text(value).measure_as("-88.8 dB").id("readout"),
+        ]
+    };
+    let (font, mut cache) = (font(), Resolver::default());
+    let first = cache
+        .resolve(&SceneSpec::new(tree("0.0 dB")).font(font.clone()))
+        .unwrap()
+        .surface("readout")
+        .unwrap()
+        .frame;
+    // The first resolve at a size solves bare; the second fills the cache.
+    cache
+        .resolve(&SceneSpec::new(tree("0.0 dB")).font(font.clone()))
+        .unwrap();
+    for value in ["-12.4 dB", "-88.8 dB", "3 dB"] {
+        let scene = cache
+            .resolve(&SceneSpec::new(tree(value)).font(font.clone()))
+            .unwrap();
+        let readout = scene.surface("readout").unwrap();
+        assert_eq!(readout.frame, first);
+        assert_eq!(readout.text_value.as_deref(), Some(value));
+        assert_eq!(cache.layout_stats().measured_nodes, 0, "{value}");
+    }
+}

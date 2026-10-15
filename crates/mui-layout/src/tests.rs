@@ -1605,3 +1605,132 @@ fn equal_intrinsic_vertical_share_still_settles_percentage_grid_height() {
         assert_eq!(cached, fresh);
     }
 }
+
+#[test]
+fn empty_wrapping_rows_keep_zero_intrinsic_geometry_under_available_room() {
+    let empty = || row([]).wrap().gap(8.).line_gap(6.).id("empty");
+    for offered in [None, Some(Size::ZERO), Some(Size::new(80., 20.))] {
+        let layout = resolve(&empty(), offered, Limits::default()).unwrap();
+        assert_eq!(layout.size, offered.unwrap_or(Size::ZERO));
+        assert_eq!(layout.min_size(), Size::ZERO);
+    }
+    // The row has room for wrapping, but no definite main offer. Its one
+    // empty line must not invent an inter-item gap or move either sibling.
+    let tree = col([
+        block(80., 16.).id("before"),
+        empty(),
+        block(80., 16.).id("after"),
+    ])
+    .align(Align::Start)
+    .gap(4.)
+    .w(120.);
+    let fresh = resolve(&tree, None, Limits::default()).unwrap();
+    assert_eq!(fresh.size, Size::new(120., 40.));
+    assert_eq!(fresh.frame("empty").unwrap().size, Size::ZERO);
+    assert_eq!(fresh.frame("empty").unwrap().y, 20.);
+    assert_eq!(fresh.frame("after").unwrap().y, 24.);
+    let mut cache = LayoutCache::default();
+    for _ in 0..3 {
+        let cached = resolve_cached_with(
+            &tree,
+            None,
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            &mut cache,
+            |_, _| {},
+            |_, _| Size::ZERO,
+        )
+        .unwrap();
+        assert_eq!(cached, fresh);
+    }
+    let nonempty = col([row([block(20., 10.).id("a"), block(20., 10.).id("b")])
+        .wrap()
+        .gap(8.)
+        .id("line")])
+    .align(Align::Start)
+    .w(80.);
+    let layout = resolve(&nonempty, None, Limits::default()).unwrap();
+    assert_eq!(layout.frame("line").unwrap().size, Size::new(48., 10.));
+    assert_eq!(layout.frame("b").unwrap().x, 28.);
+}
+
+#[test]
+fn empty_wrapping_rows_preserve_nested_grid_and_hidden_candidate_geometry() {
+    let empty = || row([]).wrap().gap(8.).id("empty");
+    let grid = grid(
+        2,
+        [
+            col([empty(), block(20., 16.).id("item")])
+                .align(Align::Start)
+                .pad(4.)
+                .id("panel"),
+            block(30., 20.).id("other"),
+        ],
+    )
+    .gap(6.)
+    .w(100.);
+    let fresh = resolve(&grid, None, Limits::default()).unwrap();
+    assert_eq!(fresh.size, Size::new(100., 24.));
+    assert_eq!(fresh.frame("empty").unwrap().size, Size::ZERO);
+    assert_eq!(fresh.frame("item").unwrap().y, 4.);
+    assert_eq!(fresh.min_size_of("empty"), Some(Size::ZERO));
+
+    let wide = col([block(200., 20.).id("wide-child"), empty()])
+        .align(Align::Start)
+        .id("wide");
+    let wide_oracle = resolve(&wide, None, Limits::default()).unwrap();
+    assert_eq!(wide_oracle.size, Size::new(200., 20.));
+    let choice = fits([wide, block(40., 12.).id("thin")]).size(80., 40.);
+    let hidden = resolve(&choice, None, Limits::default()).unwrap();
+    for id in ["wide", "wide-child", "empty"] {
+        assert_eq!(hidden.frame(id).unwrap().size, Size::ZERO);
+    }
+    assert_eq!(hidden.frame("thin").unwrap().size, Size::new(40., 12.));
+    assert_eq!(hidden.min_size_of("wide"), Some(wide_oracle.min_size()));
+
+    for (tree, oracle) in [(&grid, &fresh), (&choice, &hidden)] {
+        let mut cache = LayoutCache::default();
+        for _ in 0..3 {
+            let cached = resolve_cached_with(
+                tree,
+                None,
+                Limits::default(),
+                SpacingScale::DEFAULT,
+                &mut cache,
+                |_, _| {},
+                |_, _| Size::ZERO,
+            )
+            .unwrap();
+            assert_eq!(&cached, oracle);
+        }
+    }
+}
+
+#[test]
+fn empty_wrapping_rows_still_validate_authored_values_and_tree_budgets() {
+    let tree = col([row([]).wrap().gap(8.)]).align(Align::Start).w(80.);
+    let limits = Limits {
+        nodes: 2,
+        depth: 1,
+        extent: 100.,
+    };
+    assert_eq!(resolve(&tree, None, limits).unwrap().all().len(), 2);
+    for limits in [Limits { nodes: 1, ..limits }, Limits { depth: 0, ..limits }] {
+        assert_eq!(resolve(&tree, None, limits), Err(Error::BudgetExceeded));
+    }
+    assert_eq!(
+        resolve(
+            &tree,
+            None,
+            Limits {
+                extent: 50.,
+                ..limits
+            }
+        ),
+        Err(Error::InvalidValue)
+    );
+    for gap in [f64::NAN, f64::INFINITY, -1.] {
+        let invalid = col([row([]).wrap().gap(gap)]).w(80.);
+        assert_eq!(resolve(&invalid, None, limits), Err(Error::InvalidValue));
+    }
+}

@@ -185,7 +185,7 @@ pub(crate) fn resolve_pins<P>(
     root: &Measured<'_, P>,
     size: Size,
     scale: SpacingScale,
-    out: &mut (Vec<(Id, u32)>, Vec<Frame>),
+    out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) -> Result<(), Error> {
     struct Pending<'a, 'n, P> {
         node: &'a Measured<'n, P>,
@@ -284,7 +284,11 @@ pub(crate) fn resolve_pins<P>(
         };
         let extent = pin.sized(anchor, frame.size);
         let origin = pin.place(anchor, extent, size, scale);
-        let mut resolved = (Vec::new(), Vec::with_capacity(p.end - p.at));
+        let mut resolved = (
+            Vec::new(),
+            Vec::with_capacity(p.end - p.at),
+            Vec::with_capacity(p.end - p.at),
+        );
         arrange(
             p.node,
             "root",
@@ -299,6 +303,7 @@ pub(crate) fn resolve_pins<P>(
             &mut resolved,
         )?;
         out.1[p.at..p.end].copy_from_slice(&resolved.1);
+        out.2[p.at..p.end].copy_from_slice(&resolved.2);
         for (id, at) in resolved.0 {
             anchors.insert(id, resolved.1[at as usize]);
         }

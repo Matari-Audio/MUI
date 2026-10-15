@@ -438,11 +438,14 @@ pub(super) fn layout_key(e: &Element, th: &Theme, scale: Option<f64>, out: &mut 
     let Content::Text(t) = &e.content else {
         return;
     };
+    // Laid out as its stand-in: what it says is paint, not layout.
+    out.push(u8::from(e.extras().measure_as.is_some()));
+    let measured = e.extras().measure_as.as_deref().unwrap_or(t);
     let mut bytes = |b: &[u8]| {
         out.extend_from_slice(&b.len().to_le_bytes());
         out.extend_from_slice(b);
     };
-    bytes(t.as_bytes());
+    bytes(measured.as_bytes());
     match &e.extras().reserve {
         Some(r) => bytes(r.as_bytes()),
         None => out.extend_from_slice(&u64::MAX.to_le_bytes()),
@@ -476,7 +479,17 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
     let Content::Text(t) = &e.content else {
         return Size::ZERO.into();
     };
-    let (t, face) = (&**t, Face::of(e, th));
+    let face = Face::of(e, th);
+    // A stand-in is a one-line box, squeezable like a reservation: its size
+    // and floor never depend on what the text says, so neither does layout.
+    if let Some(stand_in) = &e.extras().measure_as {
+        let (one_line, _) = runs.measured(stand_in, face);
+        let width = room.map_or(one_line.width, |room| one_line.width.min(room.max(0.0)));
+        return Intrinsic {
+            size: Size::new(width, one_line.height),
+            min_width: 0.0,
+        };
+    }
     let (one_line, word) = runs.measured(t, face);
     if e.extras().editable_text.is_some() {
         return Intrinsic {

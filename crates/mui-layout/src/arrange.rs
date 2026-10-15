@@ -139,7 +139,7 @@ pub(crate) fn cell<P>(
 pub(crate) fn hide<P>(
     m: &Measured<'_, P>,
     origin: [f64; 2],
-    out: &mut (Vec<(Id, u32)>, Vec<Frame>),
+    out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) {
     let frame = Frame {
         x: origin[0],
@@ -150,6 +150,7 @@ pub(crate) fn hide<P>(
         out.0.push((id, out.1.len() as u32));
     }
     out.1.push(frame);
+    out.2.push(m.floor);
     for c in &m.children {
         hide(c, origin, out);
     }
@@ -162,7 +163,7 @@ pub(crate) fn arrange<P>(
     size: Size,
     pins: &Pins<'_>,
     viewport: Option<Viewport>,
-    out: &mut (Vec<(Id, u32)>, Vec<Frame>),
+    out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) -> Result<(), Error> {
     let n = m.node;
     if !size.valid(m.extent_limit) || !origin.iter().all(|v| v.is_finite()) {
@@ -180,6 +181,7 @@ pub(crate) fn arrange<P>(
         out.0.push((id, out.1.len() as u32));
     }
     out.1.push(frame);
+    out.2.push(m.floor);
     let inner = Size::new(
         (size.width - m.padding.horizontal()).max(0.0),
         (size.height - m.padding.vertical()).max(0.0),

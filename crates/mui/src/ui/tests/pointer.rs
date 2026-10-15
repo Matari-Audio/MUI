@@ -502,6 +502,10 @@ fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
             ..at(10., 10., true)
         };
         ui.frame(tree(), None, press, 0.016).unwrap();
+        assert!(
+            !ui.double_click("b"),
+            "a previous completed drag must not reset the next immediate drag"
+        );
         let moved = PointerInput {
             mods,
             ..at(90., 10., true)
@@ -544,6 +548,115 @@ fn a_cancelled_gesture_still_ends() {
     ui.cancel();
     let f = ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
     assert_eq!(f.edits, vec![("b".to_owned(), Edit::End)]);
+}
+
+#[test]
+fn a_held_or_threshold_only_press_still_allows_a_genuine_double_click() {
+    for travel in [0., mui_input::DRAG_THRESHOLD] {
+        let mut ui = Ui::default();
+        let tree = || block(40., 40.).fill(Role::Raised).focusable().id("value");
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        assert!(!ui.double_click("value"));
+        ui.frame(tree(), None, at(10. + travel, 10., true), 0.016)
+            .unwrap();
+        assert!(ui.get("value").held);
+        assert!(!ui.get("value").dragged);
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(ui.get("value").clicked_with(Button::Primary));
+        ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+        assert!(ui.double_click("value"));
+        assert!(ui.get("value").double_clicked);
+        assert!(ui.focused("value"));
+        let mut value = 0.7;
+        if ui.double_click("value") {
+            value = 0.5;
+        }
+        assert_eq!(value, 0.5, "the genuine second press still resets");
+        ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+        assert!(!ui.double_click("value"), "double-click is an edge");
+    }
+}
+
+#[test]
+fn actual_drag_then_cancel_or_release_disqualifies_only_that_press() {
+    for button in [Button::Primary, Button::Secondary] {
+        for cancel in [false, true] {
+            let mut ui = Ui::default();
+            let tree = || block(40., 40.).fill(Role::Raised).focusable().id("value");
+            let pointer = |x, down| PointerInput {
+                pos: Some(Point::new(x, 10.)),
+                buttons: Buttons::default().set(button, down),
+                ..Default::default()
+            };
+            ui.frame(tree(), None, pointer(10., false), 0.016).unwrap();
+            let frame = ui.frame(tree(), None, pointer(10., true), 0.016).unwrap();
+            assert_eq!(frame.edits, vec![("value".to_owned(), Edit::Begin)]);
+            assert!(ui.focused("value"));
+            ui.frame(
+                tree(),
+                None,
+                pointer(10. + mui_input::DRAG_THRESHOLD + 1., true),
+                0.016,
+            )
+            .unwrap();
+            assert!(ui.get("value").dragged);
+            // Returning to the press and holding without motion must not
+            // turn an already recognized drag back into an eligible click.
+            ui.frame(tree(), None, pointer(10., true), 0.016).unwrap();
+            ui.frame(tree(), None, pointer(10., true), 0.016).unwrap();
+            assert_eq!(ui.get("value").drag_delta, Vec2::ZERO);
+            if cancel {
+                ui.cancel();
+            }
+            let frame = ui.frame(tree(), None, pointer(10., false), 0.016).unwrap();
+            assert_eq!(frame.edits, vec![("value".to_owned(), Edit::End)]);
+            assert!(!ui.get("value").clicked);
+            ui.frame(tree(), None, pointer(10., true), 0.016).unwrap();
+            assert_eq!(ui.get("value").button, Some(button));
+            assert!(!ui.double_click("value"));
+            assert!(ui.focused("value"));
+            ui.frame(tree(), None, pointer(10., false), 0.016).unwrap();
+            assert!(ui.get("value").clicked_with(button));
+            ui.frame(tree(), None, pointer(10., true), 0.016).unwrap();
+            assert!(
+                ui.double_click("value"),
+                "a subsequent real click starts a fresh pair"
+            );
+        }
+    }
+}
+
+#[test]
+fn double_click_still_respects_target_and_time_after_a_drag() {
+    let mut ui = Ui::default();
+    let tree = || row![block(40., 40.).id("first"), block(40., 40.).id("second")];
+    ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+    ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+    ui.frame(tree(), None, at(20., 10., true), 0.016).unwrap();
+    assert!(ui.get("first").dragged);
+    ui.frame(tree(), None, at(20., 10., false), 0.016).unwrap();
+    ui.frame(tree(), None, at(10., 10., true), 0.016).unwrap();
+    assert!(!ui.double_click("first"));
+    ui.frame(tree(), None, at(10., 10., false), 0.016).unwrap();
+    ui.frame(tree(), None, at(50., 10., true), 0.016).unwrap();
+    assert!(
+        !ui.double_click("second"),
+        "another target starts a fresh pair"
+    );
+    ui.frame(tree(), None, at(50., 10., false), 0.016).unwrap();
+    ui.frame(
+        tree(),
+        None,
+        at(50., 10., false),
+        super::super::DOUBLE_CLICK + 0.016,
+    )
+    .unwrap();
+    ui.frame(tree(), None, at(50., 10., true), 0.016).unwrap();
+    assert!(
+        !ui.double_click("second"),
+        "a click outside the configured time starts a fresh pair"
+    );
 }
 
 #[test]

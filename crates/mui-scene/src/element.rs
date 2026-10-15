@@ -363,6 +363,9 @@ pub struct Extras {
     pub value_description: Option<Arc<str>>,
     /// Explicit minimum keyboard/accessibility step for a numeric control.
     pub numeric_step: Option<f64>,
+    /// The string this text node is laid out as, whatever it says. See
+    /// [`Styled::measure_as`].
+    pub measure_as: Option<String>,
     /// Shown after the pointer rests on the node.
     pub tip: Option<Arc<str>>,
     /// The spring this node's paint chases when its declared style changes.
@@ -423,6 +426,7 @@ impl Extras {
         description: None,
         value_description: None,
         numeric_step: None,
+        measure_as: None,
         tip: None,
         transition: None,
         layout_transition: None,
@@ -1027,6 +1031,25 @@ pub trait Styled: Paints {
     fn numeric_step(mut self, step: f64) -> Self {
         self.element_mut().extras_mut().numeric_step =
             (step.is_finite() && step > 0.0).then_some(step);
+        self
+    }
+    /// Lay this text node out exactly as if it said `s`, whatever it says:
+    /// the text it shows is paint, so a live readout changing every frame
+    /// re-lays out nothing. One line that a flex row may squeeze like a
+    /// [`Styled::reserve`]; a longer value than `s` overflows its box.
+    ///
+    /// Give it the widest string the node can show. [`Styled::reserve`] is
+    /// the floor-only variant that still measures a longer value.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let spec = |value: &str| SceneSpec::new(row![text(value).measure_as("-88.8 dB").id("gain")]);
+    /// let a = resolve(&spec("0.0 dB")).unwrap().surface("gain").unwrap().frame;
+    /// let b = resolve(&spec("-12.4 dB")).unwrap().surface("gain").unwrap().frame;
+    /// assert_eq!(a, b);
+    /// ```
+    fn measure_as(mut self, s: impl Into<String>) -> Self {
+        self.element_mut().extras_mut().measure_as = Some(s.into());
         self
     }
     /// Declare what this node looks like while hovered, pressed or focused,
