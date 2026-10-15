@@ -994,8 +994,8 @@ pub trait Styled: Paints {
     }
     /// Lay this text node out exactly as if it said `s`, whatever it says:
     /// the text it shows is paint, so a live readout changing every frame
-    /// re-lays out nothing. It wraps where `s` would; a longer value than
-    /// `s` overflows its box rather than widening it.
+    /// re-lays out nothing. One line that a flex row may squeeze like a
+    /// [`Styled::reserve`]; a longer value than `s` overflows its box.
     ///
     /// Give it the widest string the node can show. [`Styled::reserve`] is
     /// the floor-only variant that still measures a longer value.
