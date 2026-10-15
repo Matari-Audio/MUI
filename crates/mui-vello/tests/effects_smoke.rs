@@ -962,7 +962,7 @@ fn sparse_changes_render_disjoint_regions_and_match_a_full_frame() {
     let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
         return;
     };
-    assert_eq!(stats.renders, 2);
+    assert_eq!(stats.renders, 1);
     assert!(stats.rendered_pixels < AREA / 8);
     same_pixels(&part, &whole);
 }

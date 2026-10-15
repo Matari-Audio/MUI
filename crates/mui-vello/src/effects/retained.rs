@@ -64,6 +64,7 @@ pub struct GpuRenderer {
     queue: wgpu::Queue,
     vello: SharedVello,
     scene: vello::Scene,
+    damage_scene: vello::Scene,
     /// A backdrop's prefix, encoded apart so it can be rendered first.
     prefix: vello::Scene,
     cache: Cache,
@@ -465,6 +466,52 @@ impl Regions {
     }
 }
 
+/// Shelf packing is bounded by 16 regions, with tile-aligned placements so
+/// the rasterizer sees the same coordinates modulo whole tiles.
+struct PackedRegions {
+    offsets: [[u32; 2]; 16],
+    size: [u32; 2],
+}
+impl Regions {
+    fn packed(&self, limit: u32) -> Option<PackedRegions> {
+        let mut order = std::array::from_fn::<_, 16, _>(|i| i);
+        order[..self.len].sort_unstable_by_key(|&i| std::cmp::Reverse(self.rects[i][3]));
+        let widest = self.rects[..self.len]
+            .iter()
+            .map(|r| r[2].next_multiple_of(16))
+            .max()?;
+        let mut best: Option<PackedRegions> = None;
+        let mut width = 0;
+        for &i in &order[..self.len] {
+            width += self.rects[i][2].next_multiple_of(16);
+            if width < widest || width > limit {
+                continue;
+            }
+            let mut offsets = [[0; 2]; 16];
+            let (mut x, mut y, mut row) = (0, 0, 0);
+            for &j in &order[..self.len] {
+                let r = self.rects[j];
+                let w = r[2].next_multiple_of(16);
+                let h = r[3].next_multiple_of(16);
+                if x + w > width {
+                    y += row;
+                    x = 0;
+                    row = 0;
+                }
+                offsets[j] = [x, y];
+                x += w;
+                row = row.max(h);
+            }
+            let size = [width, y + row];
+            let pixels = |s: [u32; 2]| u64::from(s[0]) * u64::from(s[1]);
+            if size[1] <= limit && best.as_ref().is_none_or(|b| pixels(size) < pixels(b.size)) {
+                best = Some(PackedRegions { offsets, size });
+            }
+        }
+        best
+    }
+}
+
 /// A change past this share of the target renders the whole frame: the
 /// render is mostly per pixel, and the copy would come on top.
 const PARTIAL: f64 = 0.5;
@@ -614,6 +661,7 @@ impl GpuRenderer {
             queue: queue.clone(),
             vello,
             scene: vello::Scene::new(),
+            damage_scene: vello::Scene::new(),
             prefix: vello::Scene::new(),
             cache: Cache::default(),
             effects,
@@ -950,7 +998,7 @@ impl GpuRenderer {
         }
 
         let mapping = (self.effects.mapping_revision(), self.local_mapping);
-        let change = if overlay.is_some()
+        let mut change = if overlay.is_some()
             || !self.valid
             || self.transform != Some(xf)
             || self.mapping != mapping
@@ -973,6 +1021,23 @@ impl GpuRenderer {
                 c => c,
             }
         };
+        let packed = if let Change::Parts(regions) = change {
+            regions
+                .packed(self.device.limits().max_texture_dimension_2d)
+                .filter(|p| {
+                    f64::from(p.size[0]) * f64::from(p.size[1])
+                        <= PARTIAL * f64::from(size[0]) * f64::from(size[1])
+                })
+        } else {
+            None
+        };
+        if matches!(change, Change::Parts(_)) && packed.is_none() {
+            change = Change::Full;
+        }
+        if !matches!(change, Change::None) {
+            self.paths.tick();
+            self.cache.tick();
+        }
         match change {
             Change::Full => {
                 self.valid = false; // a partial encoding must never be reused
@@ -988,9 +1053,13 @@ impl GpuRenderer {
                 self.render_region::<F>(resolved, xf, r, stats)?;
             }
             Change::Parts(regions) => {
-                for r in &regions.rects[..regions.len] {
-                    self.render_region::<F>(resolved, xf, *r, stats)?;
-                }
+                self.render_regions::<F>(
+                    resolved,
+                    xf,
+                    &regions,
+                    packed.expect("checked above"),
+                    stats,
+                )?;
             }
             Change::None => {}
         }
@@ -1027,6 +1096,89 @@ impl GpuRenderer {
             }
         }
         std::mem::swap(&mut self.retained_external, &mut self.external);
+        Ok(())
+    }
+
+    /// One raster submission for all sparse edits. Each clipped region is
+    /// translated to a compact atlas, then copied back to its original tile.
+    fn render_regions<F: FnOnce(&mut Classic<'_>)>(
+        &mut self,
+        resolved: &ResolvedScene,
+        xf: Affine,
+        regions: &Regions,
+        packed: PackedRegions,
+        stats: &mut EffectStats,
+    ) -> Result<(), Error> {
+        self.damage_scene.reset();
+        self.presented = None;
+        for (i, r) in regions.rects[..regions.len].iter().enumerate() {
+            self.valid = false;
+            self.encode::<F>(resolved, xf, None, Some(*r))?;
+            stats.encoded_scenes += 1;
+            let [x, y] = packed.offsets[i].map(f64::from);
+            self.damage_scene.push_layer(
+                crate::peniko::Fill::NonZero,
+                crate::peniko::BlendMode::default(),
+                1.,
+                Affine::IDENTITY,
+                &Rect::new(x, y, x + f64::from(r[2]), y + f64::from(r[3])),
+            );
+            self.damage_scene
+                .append(&self.scene, Some(Affine::translate((x, y))));
+            self.damage_scene.pop_layer();
+        }
+        let have = self
+            .patch
+            .as_ref()
+            .map_or([0, 0], |p| [p.width(), p.height()]);
+        let limit = self.device.limits().max_texture_dimension_2d;
+        let wanted = packed.size.map(|v| v.next_multiple_of(256).min(limit));
+        let capacity = retained_target_size(have, wanted);
+        if capacity != have {
+            use wgpu::TextureUsages as U;
+            self.patch = Some(texture(
+                &self.device,
+                "MUI damage atlas",
+                capacity,
+                U::STORAGE_BINDING | U::COPY_SRC,
+            ));
+        }
+        let patch = self.patch.as_ref().expect("allocated above");
+        let view = patch.create_view(&wgpu::TextureViewDescriptor::default());
+        render(
+            &mut self.vello,
+            &self.device,
+            &self.queue,
+            &self.damage_scene,
+            &view,
+            packed.size,
+        )?;
+        stats.renders += 1;
+        stats.rendered_pixels += u64::from(packed.size[0]) * u64::from(packed.size[1]);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MUI damage atlas copies"),
+            });
+        for (i, &[x, y, w, h]) in regions.rects[..regions.len].iter().enumerate() {
+            let [sx, sy] = packed.offsets[i];
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x: sx, y: sy, z: 0 },
+                    ..patch.as_image_copy()
+                },
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    ..self.target.texture.as_image_copy()
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.queue.submit([encoder.finish()]);
         Ok(())
     }
 
@@ -1115,7 +1267,6 @@ impl GpuRenderer {
         part: Option<[u32; 4]>,
     ) -> Result<(), Error> {
         let size = self.size;
-        self.paths.tick();
         // Backdrops first: each is a render of its own that the frame samples.
         let mut blurred = Vec::new();
         let mut k = 0;
@@ -1170,10 +1321,6 @@ impl GpuRenderer {
         };
         self.scene.reset();
         let mut canvas = Classic::new(&mut self.scene, &mut self.cache, &self.textures, size);
-        // A part is no frame: what it culled must not age out of the cache.
-        if part.is_none() {
-            canvas.begin_frame();
-        }
         let mut blurred = blurred.into_iter();
         for p in &resolved.paint {
             canvas.set_transform(crate::placed(draw, p));
