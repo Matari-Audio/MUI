@@ -117,6 +117,7 @@ impl Ui {
     /// callers to scroll into content inserted during this build. This is useful
     /// for virtual lists, whose constructed rows must match the drawn offset.
     pub fn set_scroll(&mut self, id: impl Into<Id>, offset: [f64; 2]) -> bool {
+        self.retained_root = None;
         if !offset.iter().all(|v| v.is_finite()) {
             return false;
         }

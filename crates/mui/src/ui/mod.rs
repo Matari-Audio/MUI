@@ -225,6 +225,9 @@ pub struct Ui {
     building: Vec<(u64, usize, bool)>,
     /// The tween and play ids the running closures read.
     read: Vec<String>,
+    // A fully settled, whole-root memo can keep the scene allocation too.
+    retained_root: Option<(u64, Option<Size>)>,
+    retained_frame: bool,
 }
 
 fn same_hit_geometry(a: &ResolvedScene, b: &ResolvedScene) -> bool {
@@ -329,6 +332,8 @@ impl Ui {
             issued: 0,
             building: Vec::new(),
             read: Vec::new(),
+            retained_root: None,
+            retained_frame: false,
         }
     }
     /// The theme every frame resolves with.
@@ -338,6 +343,9 @@ impl Ui {
     /// Resolve the next frame with `theme`: a light/dark switch, a new
     /// control size.
     pub fn set_theme(&mut self, theme: Theme) {
+        if self.theme != theme {
+            self.retained_root = None;
+        }
         self.theme = theme;
     }
     /// The budget used for this UI's trees, including expanded memo subtrees.
@@ -358,6 +366,7 @@ impl Ui {
     ) -> Result<(), mui_layout::Error> {
         limits.validate()?;
         if self.layout_limits != limits {
+            self.retained_root = None;
             self.layout_limits = limits;
             self.resolved = false;
         }
@@ -366,6 +375,9 @@ impl Ui {
     /// Swap the primary font after construction; `None` measures with the
     /// 0.6em guess. [`Ui::font`] is the builder form.
     pub fn set_font(&mut self, font: Option<Font>) {
+        if self.font != font {
+            self.retained_root = None;
+        }
         self.font = font;
     }
     /// The window's device pixels per logical unit, if the host set one.
@@ -382,6 +394,9 @@ impl Ui {
     /// assert_eq!(ui.scale(), Some(2.0));
     /// ```
     pub fn set_scale(&mut self, scale: Option<f64>) {
+        if self.scale != scale {
+            self.retained_root = None;
+        }
         self.scale = scale;
     }
     /// Seconds between two presses on one target that still make a double
@@ -398,6 +413,7 @@ impl Ui {
     }
     /// Set the font.
     pub fn font(mut self, font: Font) -> Self {
+        self.retained_root = None;
         self.font = Some(font);
         self
     }
@@ -405,6 +421,7 @@ impl Ui {
     /// The selected face is retained in the scene text payload, so CPU and
     /// GPU renderers use the same fallback choice.
     pub fn fallback_font(mut self, font: Font) -> Self {
+        self.retained_root = None;
         self.fallback_fonts.push(font);
         self.runs.set_fallbacks(self.fallback_fonts.clone());
         self
@@ -412,6 +429,7 @@ impl Ui {
     /// Run `.weld(..)` / `weld!` on the analytic GPU backend: this `Ui`'s
     /// [`SceneSpec::weld_backend`](mui_scene::SceneSpec::weld_backend).
     pub fn gpu_welding(mut self) -> Self {
+        self.retained_root = None;
         self.weld_backend = mui_scene::WeldBackend::AnalyticGpu;
         self
     }
@@ -420,6 +438,7 @@ impl Ui {
     /// Rebuild cached material scenes without changing the application's preference.
     pub fn set_gpu_welding_available(&mut self, available: bool) {
         if self.gpu_welding_available != available {
+            self.retained_root = None;
             self.gpu_welding_available = available;
             self.scene = None;
             self.resolver = Resolver::default();
@@ -430,6 +449,7 @@ impl Ui {
     /// Input reads the live scene's analytic predicate, so no hit-mask or closure
     /// has to be recreated on every animation tick.
     pub fn set_weld_morph(&mut self, id: impl Into<Id>, progress: f64) -> Result<bool, SceneError> {
+        self.retained_root = None;
         let id: Id = id.into();
         let id = id.as_str();
         self.scene
@@ -446,6 +466,7 @@ impl Ui {
         border: Option<Color>,
         width: f64,
     ) -> Result<bool, SceneError> {
+        self.retained_root = None;
         let id: Id = id.into();
         let id = id.as_str();
         self.scene
@@ -459,6 +480,7 @@ impl Ui {
         id: impl Into<Id>,
         blend: f64,
     ) -> Result<bool, SceneError> {
+        self.retained_root = None;
         let id: Id = id.into();
         let id = id.as_str();
         self.scene
@@ -479,7 +501,11 @@ impl Ui {
     }
 
     pub fn layout_stats(&self) -> mui_layout::LayoutStats {
-        self.resolver.layout_stats()
+        if self.retained_frame {
+            mui_layout::LayoutStats::default()
+        } else {
+            self.resolver.layout_stats()
+        }
     }
     /// Opt-in exact layout work tracing. Keep disabled for latency measurements.
     pub fn trace_layout_requests(&mut self, enabled: bool) {
@@ -532,6 +558,7 @@ impl Ui {
         id: impl Into<Id>,
         s: impl AsRef<str>,
     ) -> Result<(), mui_scene::SceneError> {
+        self.retained_root = None;
         let id: Id = id.into();
         let id = id.as_str();
         self.scene
@@ -883,6 +910,47 @@ impl Ui {
             Self::discard_tree(root);
             return Err(SceneError::InvalidFrameDelta);
         }
+        let input = input.into();
+        let memo = root
+            .payload()
+            .extras()
+            .memo
+            .as_ref()
+            .map(|m| (m.id, m.reused));
+        let previous_root = self.retained_root.take();
+        self.retained_frame = false;
+        let quiet = input.pointer == self.pointer
+            && input.pointer.buttons.is_empty()
+            && input.wheel == Vec2::ZERO
+            && input.keys.is_empty()
+            && input.text.is_empty()
+            && input.ime.is_empty()
+            && input.trail.is_empty()
+            && input.clipboard.is_none()
+            && self.focus.is_none()
+            && self.interaction.held().is_none()
+            && self.interaction.hovered().is_none()
+            && self.tagged.is_none()
+            && self.actions.is_empty()
+            && self.edits.is_empty()
+            && self.delivered.is_empty()
+            && self.cancelled.is_none()
+            && self.ime_caret.is_none();
+        if quiet
+            && memo.is_some_and(|(id, reused)| reused && previous_root == Some((id, offered)))
+            && let Some(scene) = self.scene.as_ref().map(Arc::clone)
+        {
+            let previous_blink = self.blink();
+            self.time += dt;
+            self.play_until = self.time;
+            self.issued = 0;
+            // This root owns every retained subtree. No new build ran, so
+            // consume liveness without discarding nested retained declarations.
+            self.kept.values_mut().for_each(|k| k.live = false);
+            self.retained_root = previous_root;
+            self.retained_frame = true;
+            return Ok(self.commit(scene, None, None, previous_blink, false, true));
+        }
         if let Err(error) = Self::validate_tree_budget(&root, self.layout_limits)
             .and_then(|()| self.validate_expanded_tree_budget(&root))
         {
@@ -900,7 +968,7 @@ impl Ui {
             ime,
             // The view's, read in its build; the `Ui` hit-tests the newest.
             trail: _,
-        } = input.into();
+        } = input;
         let previous_pointer = std::mem::replace(&mut self.pointer, pointer);
         let was = previous_pointer.buttons;
         let was_buttons = was;
@@ -992,7 +1060,22 @@ impl Ui {
         animating |= !self.keys.is_empty() || !self.typed.is_empty();
         self.wheel_claims.clear();
         self.heat(&scene, &before, self.pointer.buttons != was_buttons);
-        Ok(self.commit(scene, hovered.as_deref(), tip, previous_blink, animating))
+        if !animating
+            && self.focus.is_none()
+            && self.interaction.held().is_none()
+            && self.interaction.hovered().is_none()
+            && self.tagged.is_none()
+        {
+            self.retained_root = memo.map(|(id, _)| (id, offered));
+        }
+        Ok(self.commit(
+            Arc::new(scene),
+            hovered.as_deref(),
+            tip,
+            previous_blink,
+            animating,
+            false,
+        ))
     }
 
     /// The caller has now built its tree and consumed these commands. Drain
@@ -1287,11 +1370,12 @@ impl Ui {
     /// to schedule another frame.
     fn commit(
         &mut self,
-        scene: ResolvedScene,
+        scene: Arc<ResolvedScene>,
         hovered: Option<&str>,
         tip: Option<(Arc<str>, String)>,
         previous_blink: bool,
         mut animating: bool,
+        retained_root: bool,
     ) -> Frame<'_> {
         let held = self.interaction.held();
         let cursor = held
@@ -1331,12 +1415,12 @@ impl Ui {
         // A reused memo's nodes were not visited, and are still there.
         self.nodes.retain(|k, n| {
             n.prune(
-                || scene.memos_at(k).any(|(_, reused)| reused),
+                || retained_root || scene.memos_at(k).any(|(_, reused)| reused),
                 scene.surface(k).is_some(),
             )
         });
         self.delivered = std::mem::take(&mut self.edits);
-        if let Some(old) = self.scene.replace(Arc::new(scene))
+        if let Some(old) = self.scene.replace(scene)
             && let Ok(old) = Arc::try_unwrap(old)
         {
             // A host retaining the previous frame still owns its buffers.

@@ -885,6 +885,7 @@ fn bounded_weld(role: Role, x: f64) -> ResolvedScene {
         .gap(4.)
         .weld(Weld::all().reach(8.).blend(8.))
         .id("bounded.weld")
+        .float()
         .offset(x, 24.)
         .anchor(Align::Start, Align::Start);
     resolve(
@@ -901,7 +902,7 @@ fn bounded_weld_changes_and_moves_match_full_renders() {
         for (before, after) in [
             (
                 bounded_weld(Role::Primary, 32.),
-                bounded_weld(Role::Secondary, 32.),
+                bounded_weld(Role::Danger, 32.),
             ),
             (
                 bounded_weld(Role::Primary, 32.),
