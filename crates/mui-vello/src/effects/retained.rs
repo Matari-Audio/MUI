@@ -1708,7 +1708,8 @@ fn paint_damage(
         let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
         [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32)
     };
-    if dirty != NOTHING && !regions.add(tile(dirty)) {
+    let max_damage = PARTIAL * f64::from(size[0]) * f64::from(size[1]);
+    if dirty != NOTHING && (!regions.add(tile(dirty)) || regions.pixels() as f64 > max_damage) {
         return Change::Full;
     }
     if !changed_paint(old, paint, |new, i| {
@@ -1749,12 +1750,14 @@ fn paint_damage(
                 }
             }
         }
-        true
+        // Once damage already requires a full raster, do not compare and
+        // accumulate the rest of a scrolling surface's paint stream.
+        regions.pixels() as f64 <= max_damage
     }) {
         return Change::Full;
     }
     regions.coalesce();
-    if regions.pixels() as f64 > PARTIAL * f64::from(size[0]) * f64::from(size[1]) {
+    if regions.pixels() as f64 > max_damage {
         return Change::Full;
     }
     match regions.len {
