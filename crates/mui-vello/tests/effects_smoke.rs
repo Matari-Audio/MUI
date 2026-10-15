@@ -966,3 +966,62 @@ fn sparse_changes_render_disjoint_regions_and_match_a_full_frame() {
     assert!(stats.rendered_pixels < AREA / 8);
     same_pixels(&part, &whole);
 }
+
+#[test]
+fn inserted_canvas_draws_do_not_damage_unchanged_siblings() {
+    let scene = |extra| {
+        let canvas = canvas(move |_| {
+            let mut draws = vec![Draw::fill(
+                Path::polyline(
+                    [
+                        Point::new(5., 5.),
+                        Point::new(20., 5.),
+                        Point::new(20., 20.),
+                    ],
+                    true,
+                ),
+                Role::Primary,
+            )];
+            if extra {
+                draws.push(Draw::fill(
+                    Path::polyline(
+                        [
+                            Point::new(5., 25.),
+                            Point::new(20., 25.),
+                            Point::new(20., 40.),
+                        ],
+                        true,
+                    ),
+                    Role::Danger,
+                ));
+            }
+            draws
+        })
+        .size(40., 50.)
+        .id("canvas");
+        resolve(
+            &SceneSpec::new(
+                stack([
+                    canvas,
+                    block(100., 100.)
+                        .float()
+                        .offset(200., 80.)
+                        .fill(Role::Warning)
+                        .id("far"),
+                ])
+                .fill(Role::Background),
+            )
+            .offered(Size::new(320., 200.)),
+        )
+        .unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
+        return;
+    };
+    assert!(
+        stats.rendered_pixels < AREA / 8,
+        "{}",
+        stats.rendered_pixels
+    );
+    same_pixels(&part, &whole);
+}

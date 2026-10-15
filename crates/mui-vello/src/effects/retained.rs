@@ -1410,6 +1410,67 @@ impl GpuRenderer {
     }
 }
 
+/// A bounded merge of paint streams. Inserted/deleted canvas draws must not
+/// turn every following, unchanged sibling into damage. Exact equality is the
+/// only reason to skip an entry; the small lookahead keeps this linear.
+fn changed_paint(
+    old: &[Painted],
+    new: &[Painted],
+    mut visit: impl FnMut(bool, usize) -> bool,
+) -> bool {
+    let (mut i, mut j) = (0, 0);
+    while i < old.len() || j < new.len() {
+        if i < old.len() && j < new.len() && old[i] == new[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        let same_slot = i < old.len()
+            && j < new.len()
+            && old[i].key == new[j].key
+            && std::mem::discriminant(&old[i].layer) == std::mem::discriminant(&new[j].layer);
+        if !same_slot && i < old.len() && j < new.len() {
+            let a = old[i + 1..(i + 17).min(old.len())]
+                .iter()
+                .position(|p| p == &new[j]);
+            let b = new[j + 1..(j + 17).min(new.len())]
+                .iter()
+                .position(|p| p == &old[i]);
+            if let Some(n) = a.filter(|a| b.is_none_or(|b| *a <= b)) {
+                for k in i..i + n + 1 {
+                    if !visit(false, k) {
+                        return false;
+                    }
+                }
+                i += n + 1;
+                continue;
+            }
+            if let Some(n) = b {
+                for k in j..j + n + 1 {
+                    if !visit(true, k) {
+                        return false;
+                    }
+                }
+                j += n + 1;
+                continue;
+            }
+        }
+        if i < old.len() {
+            if !visit(false, i) {
+                return false;
+            }
+            i += 1;
+        }
+        if j < new.len() {
+            if !visit(true, j) {
+                return false;
+            }
+            j += 1;
+        }
+    }
+    true
+}
+
 fn paint_damage(
     old: &[Painted],
     paint: &[Painted],
@@ -1447,16 +1508,6 @@ fn paint_damage(
     {
         return Change::Full;
     }
-    let tail = old[head..]
-        .iter()
-        .rev()
-        .zip(paint[head..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    // Lists of one length line up entry for entry: one that is the same
-    // at the same place paints the same, so only the ones that differ
-    // count. Otherwise every entry between the shared ends does.
-    let aligned = old.len() == paint.len();
     let mut regions = Regions::new();
     let tile = |r: Rect| {
         let d = xf.transform_rect_bbox(r).inflate(2., 2.);
@@ -1472,43 +1523,47 @@ fn paint_damage(
     if dirty != NOTHING && !regions.add(tile(dirty)) {
         return Change::Full;
     }
-    for (list, external) in [(old, old_external), (paint, new_external)] {
-        for (i, p) in list.iter().enumerate().take(list.len() - tail).skip(head) {
-            if aligned && old[i] == paint[i] {
-                continue;
-            }
-            if p.layer == Layer::Backdrop || crate::path_shadow(p) {
-                return Change::Full;
-            }
-            let Some(b) = reach(p, external) else {
-                return Change::Full;
-            };
-            if b != NOTHING && !regions.add(tile(b)) {
-                return Change::Full;
-            }
-            // A layer's blend or opacity reaches everything inside it.
-            if matches!(p.layer, Layer::Blend { .. }) {
-                let mut depth = 0;
-                for q in &list[i..] {
-                    let Some(b) = reach(q, external) else {
-                        return Change::Full;
-                    };
-                    if b != NOTHING && !regions.add(tile(b)) {
-                        return Change::Full;
-                    }
-                    match q.layer {
-                        Layer::Blend { .. } => depth += 1,
-                        Layer::Unblend => {
-                            depth -= 1;
-                            if depth == 0 {
-                                break;
-                            }
+    if !changed_paint(old, paint, |new, i| {
+        let (list, external) = if new {
+            (paint, new_external)
+        } else {
+            (old, old_external)
+        };
+        let p = &list[i];
+        if p.layer == Layer::Backdrop || crate::path_shadow(p) {
+            return false;
+        }
+        let Some(b) = reach(p, external) else {
+            return false;
+        };
+        if b != NOTHING && !regions.add(tile(b)) {
+            return false;
+        }
+        // A layer's blend or opacity reaches everything inside it.
+        if matches!(p.layer, Layer::Blend { .. }) {
+            let mut depth = 0;
+            for q in &list[i..] {
+                let Some(b) = reach(q, external) else {
+                    return false;
+                };
+                if b != NOTHING && !regions.add(tile(b)) {
+                    return false;
+                }
+                match q.layer {
+                    Layer::Blend { .. } => depth += 1,
+                    Layer::Unblend => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
                         }
-                        _ => {}
                     }
+                    _ => {}
                 }
             }
         }
+        true
+    }) {
+        return Change::Full;
     }
     if regions.pixels() as f64 > PARTIAL * f64::from(size[0]) * f64::from(size[1]) {
         return Change::Full;
