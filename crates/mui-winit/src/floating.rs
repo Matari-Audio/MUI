@@ -137,10 +137,10 @@ impl<V: View + 'static> Native for Hosted<V> {
         let before = self.app.presentations;
         self.app.window_event(event_loop, id, event);
         self.update_status();
-        if self.app.presentations != before {
-            if let (Some(hook), Some(gpu)) = (&mut self.hooks.presented, &self.app.gpu) {
-                hook(gpu.size(), gpu.rendering_mode() != "gpu");
-            }
+        if self.app.presentations != before
+            && let (Some(hook), Some(gpu)) = (&mut self.hooks.presented, &self.app.gpu)
+        {
+            hook(gpu.size(), gpu.rendering_mode() != "gpu");
         }
     }
     fn access(&mut self, event_loop: &ActiveEventLoop, event: AccessEvent) {
@@ -262,8 +262,8 @@ pub fn open<V: View + Send + 'static>(
     options: Options,
     hooks: Hooks,
 ) -> Result<FloatingWindow, String> {
-    validate_options(&options)?;
     static NEXT: AtomicU64 = AtomicU64::new(1);
+    validate_options(&options)?;
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let proxy = proxy()?;
     let native_proxy = proxy.clone();
