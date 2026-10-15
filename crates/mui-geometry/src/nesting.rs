@@ -119,7 +119,9 @@ impl RoundedRect {
             Point::new(b.x0 + r, b.y1),
             Point::new(b.x0, b.y0 + r),
         ];
-        let mut commands = vec![PathCommand::MoveTo(Point::new(b.x0 + r, b.y0))];
+        // One move, four line/arc pairs and the closing command.
+        let mut commands = Vec::with_capacity(10);
+        commands.push(PathCommand::MoveTo(Point::new(b.x0 + r, b.y0)));
         for i in 0..4 {
             commands.push(PathCommand::LineTo(tangent_starts[i]));
             commands.push(PathCommand::ArcTo(Arc {
