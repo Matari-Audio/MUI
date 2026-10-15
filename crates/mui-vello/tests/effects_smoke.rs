@@ -939,3 +939,30 @@ fn unchanged_welds_skip_encoding_raster_and_presentation() {
     assert_eq!(stats.boundary_upload_bytes, 0);
     assert_eq!(stats.texture_allocations, 0);
 }
+
+/// Distant edits retain the pixels between them instead of repainting their hull.
+#[test]
+fn sparse_changes_render_disjoint_regions_and_match_a_full_frame() {
+    let scene = |hot| {
+        let chip = |x, y, id| {
+            block(20., 20.)
+                .fill(if hot { Role::Danger } else { Role::Primary })
+                .float()
+                .offset(x, y)
+                .id(id)
+        };
+        resolve(
+            &SceneSpec::new(
+                stack([chip(10., 10., "a"), chip(275., 165., "b")]).fill(Role::Background),
+            )
+            .offered(Size::new(320., 200.)),
+        )
+        .unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
+        return;
+    };
+    assert_eq!(stats.renders, 2);
+    assert!(stats.rendered_pixels < AREA / 8);
+    same_pixels(&part, &whole);
+}
