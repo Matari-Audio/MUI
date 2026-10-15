@@ -149,6 +149,16 @@ impl<V: View + 'static> Native for Hosted<V> {
         {
             hook(gpu.window(), driver);
         }
+        // Wayland request_inner_size may apply synchronously without a
+        // Resized event. Reconcile both the presenter and the shared status.
+        if let Some(gpu) = &self.app.gpu {
+            let size = gpu.window().inner_size();
+            let scale = gpu.window().scale_factor();
+            if self.app.state.size != (size.width, size.height) || self.app.state.scale != scale {
+                self.app.update_size((size.width, size.height), scale);
+            }
+        }
+        self.update_status();
         self.app.poll(now)
     }
     fn title(&self, title: &str) {

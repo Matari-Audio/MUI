@@ -17,9 +17,13 @@ pub fn open<V: View + Send + 'static>(
     let key_shared = shared.clone();
     let status = requests.clone();
     let closing = requests.clone();
+    let mut constrained = false;
     let hooks = mui_winit::floating::Hooks {
         poll: Some(Box::new(move |window, driver| {
-            window.set_min_inner_size(Some(winit::dpi::LogicalSize::new(minimum.0, minimum.1)));
+            if !constrained {
+                window.set_min_inner_size(Some(winit::dpi::LogicalSize::new(minimum.0, minimum.1)));
+                constrained = true;
+            }
             let packed = poll.size.swap(0, Ordering::AcqRel);
             // On Wayland the compositor owns content scale. CLAP set_scale is
             // ignored, rather than multiplying the compositor's scale twice.
@@ -126,13 +130,20 @@ mod tests {
             assert!(Instant::now() < deadline, "Wayland editors did not present");
             std::thread::sleep(Duration::from_millis(20));
         }
+        // Give a tiling compositor's test driver time to float these owned
+        // probe windows. Client sizes are advisory until its policy allows it.
+        std::thread::sleep(Duration::from_millis(500));
         requests.resize(480, 300);
         let deadline = Instant::now() + Duration::from_secs(5);
+        let controlled = std::env::var_os("MUI_WAYLAND_TEST_RESIZE").is_some();
         loop {
             let ((width, height), scale) = first.size();
-            if (f64::from(width) / scale).round() == 480.
-                && (f64::from(height) / scale).round() == 300.
-            {
+            let request_drained = requests.size.load(Ordering::Acquire) == 0;
+            let configured = (f64::from(width) / scale).round() == 480.
+                && (f64::from(height) / scale).round() == 300.;
+            // Client resize is advisory. With a controlled compositor driver,
+            // additionally verify a real 480x300 configure reached the renderer.
+            if request_drained && (!controlled || configured) {
                 break;
             }
             assert!(
