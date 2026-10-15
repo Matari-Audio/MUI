@@ -110,18 +110,13 @@ pub(crate) fn decorate(
         let left = tab.x - ramp.width(tab.x, anchor)?;
         let right = tab.x + tab.size.width;
         let right = right + ramp.width(right, anchor)?;
-        band.commands.extend(
-            Path::polyline(
-                [
-                    Point::new(left, tab.y - shoulder),
-                    Point::new(right, tab.y - shoulder),
-                    Point::new(right, tab.y + tab.size.height + shoulder),
-                    Point::new(left, tab.y + tab.size.height + shoulder),
-                ],
-                true,
-            )
-            .commands,
-        );
+        band.commands.extend([
+            PathCommand::MoveTo(Point::new(left, tab.y - shoulder)),
+            PathCommand::LineTo(Point::new(right, tab.y - shoulder)),
+            PathCommand::LineTo(Point::new(right, tab.y + tab.size.height + shoulder)),
+            PathCommand::LineTo(Point::new(left, tab.y + tab.size.height + shoulder)),
+            PathCommand::Close,
+        ]);
     }
     // Shared internal boundaries use the very same paint and width ramp.
     for id in &ramp.dividers {
@@ -129,29 +124,26 @@ pub(crate) fn decorate(
         let left = divider.x;
         let right = divider.x + divider.size.width;
         let y = divider.y;
-        let mut cuts = vec![left, right];
+        let mut cuts = [left, right, 0., 0.];
+        let mut count = 2;
         for t in [ramp.start, ramp.end] {
             let x = anchor.x + anchor.size.width * t;
             if x > left && x < right {
-                cuts.push(x);
+                cuts[count] = x;
+                count += 1;
             }
         }
-        cuts.sort_by(f64::total_cmp);
-        for pair in cuts.windows(2) {
+        cuts[..count].sort_by(f64::total_cmp);
+        for pair in cuts[..count].windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let (wa, wb) = (ramp.width(a, anchor)? * 0.5, ramp.width(b, anchor)? * 0.5);
-            band.commands.extend(
-                Path::polyline(
-                    [
-                        Point::new(a, y - wa),
-                        Point::new(b, y - wb),
-                        Point::new(b, y + wb),
-                        Point::new(a, y + wa),
-                    ],
-                    true,
-                )
-                .commands,
-            );
+            band.commands.extend([
+                PathCommand::MoveTo(Point::new(a, y - wa)),
+                PathCommand::LineTo(Point::new(b, y - wb)),
+                PathCommand::LineTo(Point::new(b, y + wb)),
+                PathCommand::LineTo(Point::new(a, y + wa)),
+                PathCommand::Close,
+            ]);
         }
     }
     Ok(())
@@ -284,22 +276,6 @@ impl BorderCache {
                 entry.seen = self.generation;
                 entry.source.clone_from(outline);
                 return Ok((entry.path.clone(), entry.bounds));
-            }
-            // Temporary diagnostic: removed before shipping.
-            static DIAGNOSTICS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-            static PRINTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-            if self.generation > 240
-                && *DIAGNOSTICS.get_or_init(|| std::env::var_os("MUI_BORDER_DIAGNOSTICS").is_some())
-                && let Some(old) = self.geometry.get(id)
-                && PRINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 32
-            {
-                let key_diff = old.key.iter().zip(&key).enumerate()
-                    .find(|(_, (a, b))| a != b)
-                    .map(|(i, (a, b))| (i, a, b, f64::from_bits(*a), f64::from_bits(*b)));
-                let path_diff = old.source.commands.iter().zip(&outline.commands).enumerate()
-                    .find(|(_, (a, b))| a != b);
-                eprintln!("BORDER_MISS id={id:?} origin={origin:?} key_lengths={:?} key_diff={key_diff:?} path_lengths={:?} path_diff={path_diff:?}",
-                    (old.key.len(), key.len()), (old.source.commands.len(), outline.commands.len()));
             }
             let mut sweep = ramp.clone();
             if ramp.align == crate::BorderAlign::Center {
