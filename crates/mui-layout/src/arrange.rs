@@ -141,8 +141,7 @@ pub(crate) fn hide<P>(
     origin: [f64; 2],
     out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) {
-    let expanded = crate::incremental::Frozen::expand(m);
-    let m = expanded.as_ref().unwrap_or(m);
+    let children = crate::incremental::Frozen::children(m);
     let frame = Frame {
         x: origin[0],
         y: origin[1],
@@ -153,7 +152,7 @@ pub(crate) fn hide<P>(
     }
     out.1.push(frame);
     out.2.push(m.floor);
-    for c in &m.children {
+    for c in children.iter() {
         hide(c, origin, out);
     }
 }
@@ -167,8 +166,7 @@ pub(crate) fn arrange<P>(
     viewport: Option<Viewport>,
     out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) -> Result<(), Error> {
-    let expanded = crate::incremental::Frozen::expand(m);
-    let m = expanded.as_ref().unwrap_or(m);
+    let children = crate::incremental::Frozen::children(m);
     let n = m.node;
     if !size.valid(m.extent_limit) || !origin.iter().all(|v| v.is_finite()) {
         return Err(Error::BudgetExceeded);
@@ -197,7 +195,7 @@ pub(crate) fn arrange<P>(
         ]
     };
     let default = cell_default(n);
-    let flow = m.flow();
+    let flow = super::measure::flow_of(&children);
     // The box a sticky child travels in -- this node's content box, which for
     // a scroll node is the whole extent its children were laid into.
     let mut section = inner;
@@ -213,7 +211,7 @@ pub(crate) fn arrange<P>(
     // so frames stay in tree order; a float sits in the padding box like an
     // overlay child, unscrolled.
     let mut placed: smallvec::SmallVec<[Option<([f64; 2], Size)>; 8]> =
-        smallvec::smallvec![None; m.children.len()];
+        smallvec::smallvec![None; children.len()];
     match &n.kind {
         Kind::Leaf => {}
         Kind::Overlay(_) | Kind::Content(_) => {
@@ -233,7 +231,7 @@ pub(crate) fn arrange<P>(
             }
         }
         Kind::Fits(_) => {
-            for (i, c) in m.children.iter().enumerate() {
+            for (i, c) in children.iter().enumerate() {
                 if i == m.pick && !c.node.float {
                     let (p, s) = cell(c, inner, default);
                     placed[i] = Some((at(p[0], p[1]), s));
@@ -244,7 +242,7 @@ pub(crate) fn arrange<P>(
         }
         Kind::Grid { .. } if !m.columns.is_empty() => {
             for p in crate::grid::placements(&flow, m.cols, usize::MAX)? {
-                let child = &m.children[p.index];
+                let child = &children[p.index];
                 let width = m.columns[p.column..p.column + p.column_span]
                     .iter()
                     .sum::<f64>()
@@ -407,7 +405,7 @@ pub(crate) fn arrange<P>(
             }
         }
     }
-    for (i, c) in m.children.iter().enumerate() {
+    for (i, c) in children.iter().enumerate() {
         // A candidate that lost keeps its place in the frame list, empty, so
         // a walk of the tree still lines up with it.
         if matches!(n.kind, Kind::Fits(_)) && i != m.pick && !c.node.float {

@@ -110,18 +110,13 @@ pub(crate) fn decorate(
         let left = tab.x - ramp.width(tab.x, anchor)?;
         let right = tab.x + tab.size.width;
         let right = right + ramp.width(right, anchor)?;
-        band.commands.extend(
-            Path::polyline(
-                [
-                    Point::new(left, tab.y - shoulder),
-                    Point::new(right, tab.y - shoulder),
-                    Point::new(right, tab.y + tab.size.height + shoulder),
-                    Point::new(left, tab.y + tab.size.height + shoulder),
-                ],
-                true,
-            )
-            .commands,
-        );
+        band.commands.extend([
+            PathCommand::MoveTo(Point::new(left, tab.y - shoulder)),
+            PathCommand::LineTo(Point::new(right, tab.y - shoulder)),
+            PathCommand::LineTo(Point::new(right, tab.y + tab.size.height + shoulder)),
+            PathCommand::LineTo(Point::new(left, tab.y + tab.size.height + shoulder)),
+            PathCommand::Close,
+        ]);
     }
     // Shared internal boundaries use the very same paint and width ramp.
     for id in &ramp.dividers {
@@ -129,29 +124,26 @@ pub(crate) fn decorate(
         let left = divider.x;
         let right = divider.x + divider.size.width;
         let y = divider.y;
-        let mut cuts = vec![left, right];
+        let mut cuts = [left, right, 0., 0.];
+        let mut count = 2;
         for t in [ramp.start, ramp.end] {
             let x = anchor.x + anchor.size.width * t;
             if x > left && x < right {
-                cuts.push(x);
+                cuts[count] = x;
+                count += 1;
             }
         }
-        cuts.sort_by(f64::total_cmp);
-        for pair in cuts.windows(2) {
+        cuts[..count].sort_by(f64::total_cmp);
+        for pair in cuts[..count].windows(2) {
             let (a, b) = (pair[0], pair[1]);
             let (wa, wb) = (ramp.width(a, anchor)? * 0.5, ramp.width(b, anchor)? * 0.5);
-            band.commands.extend(
-                Path::polyline(
-                    [
-                        Point::new(a, y - wa),
-                        Point::new(b, y - wb),
-                        Point::new(b, y + wb),
-                        Point::new(a, y + wa),
-                    ],
-                    true,
-                )
-                .commands,
-            );
+            band.commands.extend([
+                PathCommand::MoveTo(Point::new(a, y - wa)),
+                PathCommand::LineTo(Point::new(b, y - wb)),
+                PathCommand::LineTo(Point::new(b, y + wb)),
+                PathCommand::LineTo(Point::new(a, y + wa)),
+                PathCommand::Close,
+            ]);
         }
     }
     Ok(())
@@ -181,6 +173,18 @@ struct GeometryEntry {
     seen: u64,
 }
 
+// Retain the base prefix of a completed band; its decorations may change
+// independently. Sharing the completed path avoids a second copy on misses.
+#[derive(Debug)]
+struct BaseEntry {
+    key: [u64; 8],
+    source: Arc<Path>,
+    path: Arc<Path>,
+    prefix: usize,
+    seen: u64,
+}
+const BASE_VARIANTS: usize = 2;
+
 pub(crate) struct GeometryInput<'a> {
     pub outline: &'a Arc<Path>,
     pub joins: Option<&'a Path>,
@@ -194,6 +198,9 @@ pub(crate) struct GeometryInput<'a> {
 #[derive(Debug, Default)]
 pub(crate) struct BorderCache {
     geometry: HashMap<Id, GeometryEntry>,
+    bases: HashMap<Id, Vec<BaseEntry>>,
+    #[cfg(test)]
+    base_builds: usize,
     scratch: Vec<u64>,
     entries: HashMap<String, Entry>,
     generation: u64,
@@ -285,12 +292,41 @@ impl BorderCache {
                 entry.source.clone_from(outline);
                 return Ok((entry.path.clone(), entry.bounds));
             }
-            let mut sweep = ramp.clone();
-            if ramp.align == crate::BorderAlign::Center {
-                sweep.from.1 *= 0.5;
-                sweep.to.1 *= 0.5;
-            }
-            let mut path = band(outline, &sweep, anchor, tolerance)?;
+            let base_key = [
+                anchor.x.to_bits(),
+                anchor.size.width.to_bits(),
+                tolerance.to_bits(),
+                ramp.from.1.to_bits(),
+                ramp.to.1.to_bits(),
+                ramp.start.to_bits(),
+                ramp.end.to_bits(),
+                ramp.align as u64,
+            ];
+            let base_slot = self.bases.get(id).and_then(|versions| {
+                versions.iter().position(|entry| {
+                    entry.key == base_key
+                        && (Arc::ptr_eq(&entry.source, outline)
+                            || entry.source.as_ref() == outline.as_ref())
+                })
+            });
+            let mut path = if let Some(slot) = base_slot {
+                let entry = &self.bases[id][slot];
+                let mut path = entry.path.as_ref().clone();
+                path.commands.truncate(entry.prefix);
+                path
+            } else {
+                #[cfg(test)]
+                {
+                    self.base_builds += 1;
+                }
+                let mut sweep = ramp.clone();
+                if ramp.align == crate::BorderAlign::Center {
+                    sweep.from.1 *= 0.5;
+                    sweep.to.1 *= 0.5;
+                }
+                band(outline, &sweep, anchor, tolerance)?
+            };
+            let prefix = path.commands.len();
             decorate(&mut path, ramp, anchor, shoulder, |id| {
                 named_frame(id).map(local)
             })?;
@@ -301,6 +337,32 @@ impl BorderCache {
             }
             let bounds = mui_geometry::bounds(path.flatten(0.1, 250_000)?.concat());
             let path = Arc::new(path);
+            let generation = self.generation;
+            let versions = self
+                .bases
+                .entry(id.clone())
+                .or_insert_with(|| Vec::with_capacity(BASE_VARIANTS));
+            let base = BaseEntry {
+                key: base_key,
+                source: outline.clone(),
+                path: path.clone(),
+                prefix,
+                seen: self.generation,
+            };
+            if let Some(slot) = base_slot {
+                versions[slot] = base;
+            } else if versions.len() < BASE_VARIANTS {
+                versions.push(base);
+            } else {
+                let oldest = versions
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, entry)| generation.wrapping_sub(entry.seen))
+                    .unwrap()
+                    .0;
+                versions[oldest] = base;
+            }
+
             let old = self.geometry.insert(
                 id.clone(),
                 GeometryEntry {
@@ -371,6 +433,10 @@ impl BorderCache {
             .retain(|_, e| generation.wrapping_sub(e.seen) <= age);
         self.geometry
             .retain(|_, e| generation.wrapping_sub(e.seen) <= age);
+        self.bases.retain(|_, versions| {
+            versions.retain(|entry| generation.wrapping_sub(entry.seen) <= age.max(2));
+            !versions.is_empty()
+        });
         self.generation = generation.wrapping_add(1);
     }
 }
@@ -396,6 +462,79 @@ pub(crate) fn band(
 mod tests {
     use super::*;
     use crate::prelude::*;
+
+    #[test]
+    fn moving_tabs_reuse_the_exact_base_band_with_bounded_variants() {
+        let outline = |radius| {
+            Arc::new(
+                RoundedRect::new(Rect::new(0., 0., 120., 40.), radius)
+                    .unwrap()
+                    .path(),
+            )
+        };
+        let mut ramp = BorderRamp::horizontal((Role::Primary, 3.), (Role::Dim, 1.))
+            .tabs(["tab"])
+            .dividers(["divider"]);
+        let mut cache = BorderCache::default();
+        let id = Id::of("moving-decorations");
+        let get = |cache: &mut BorderCache, outline: &Arc<Path>, ramp: &BorderRamp, y| {
+            let anchor = Frame {
+                x: 0.,
+                y: 0.,
+                size: Size::new(120., 40.),
+            };
+            let named = |_: &Id| {
+                Ok(Frame {
+                    x: 10.,
+                    y,
+                    size: Size::new(20., 8.),
+                })
+            };
+            let actual = cache
+                .geometry(
+                    &id,
+                    GeometryInput {
+                        outline,
+                        ramp,
+                        anchor,
+                        origin: Point::ZERO,
+                        joins: None,
+                        shoulder: 4.,
+                        tolerance: 0.1,
+                    },
+                    named,
+                )
+                .unwrap();
+            let mut fresh = band(outline, ramp, anchor, 0.1).unwrap();
+            decorate(&mut fresh, ramp, anchor, 4., named).unwrap();
+            let bounds = mui_geometry::bounds(fresh.flatten(0.1, 250_000).unwrap().concat());
+            assert_eq!(*actual.0, fresh);
+            assert_eq!(actual.1, bounds);
+        };
+        for y in [8.1, 8.2, 8.3] {
+            get(&mut cache, &outline(4.), &ramp, y);
+        }
+        assert_eq!(
+            cache.base_builds, 1,
+            "tab/divider motion cannot rebuild the base"
+        );
+        cache.sweep(8);
+        get(&mut cache, &outline(6.), &ramp, 8.4);
+        assert_eq!(cache.base_builds, 2, "changed contour must rebuild");
+        cache.sweep(8);
+        ramp.from.1 = 5.;
+        get(&mut cache, &outline(4.), &ramp, 8.5);
+        assert_eq!(cache.base_builds, 3, "changed width must rebuild");
+        assert_eq!(cache.bases[&id].len(), BASE_VARIANTS);
+        cache.sweep(8);
+        ramp.from.1 = 3.;
+        get(&mut cache, &outline(4.), &ramp, 8.6);
+        assert_eq!(cache.base_builds, 4, "the oldest variant was evicted");
+        for _ in 0..4 {
+            cache.sweep(0);
+        }
+        assert!(cache.bases.is_empty(), "unused base paths expire");
+    }
 
     #[test]
     fn decorated_geometry_reuses_paths_when_scrolled_and_invalidates_real_inputs() {
