@@ -118,7 +118,7 @@ impl Ui {
     /// will still be true next frame.
     pub(super) fn reads(&mut self, id: &str, rest: bool) {
         if !self.building.is_empty() {
-            self.read.push(id.to_owned());
+            self.read.push(mui_scene::Id::runtime(id));
             for b in &mut self.building {
                 b.2 &= rest;
             }

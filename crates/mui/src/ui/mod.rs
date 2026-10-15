@@ -224,7 +224,7 @@ pub struct Ui {
     /// its reads start in `read`, and whether all it read was at rest.
     building: Vec<(u64, usize, bool)>,
     /// The tween and play ids the running closures read.
-    read: Vec<String>,
+    read: Vec<mui_scene::Id>,
     // A fully settled, whole-root memo can keep the scene allocation too.
     retained_root: Option<(u64, Option<Size>)>,
     retained_frame: bool,
