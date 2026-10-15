@@ -97,6 +97,7 @@ impl Contour {
 pub(super) struct OutlineCache {
     /// Last rigid placement per surface/hit shape; swept with outlines.
     rotated: HashMap<(crate::Id, usize), RotatedPath>,
+    path_bounds: HashMap<usize, (Arc<Path>, Option<Rect>, u64)>,
     pub(super) entries: HashMap<Vec<u64>, Entry>,
     /// A key buffer, handed back after a hit so a warm frame builds keys
     /// without allocating.
@@ -119,7 +120,7 @@ pub(super) struct OutlineCache {
 /// The outline a stroke ran along, its width and alignment, the band, and
 /// the resolve that last used it.
 pub(super) type Band = (Arc<Path>, f64, crate::BorderAlign, Arc<Path>, u64);
-pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Vec<Arc<Path>>, u64);
+pub(super) type PlacedDraws = (Arc<[crate::Draw]>, Arc<[Arc<Path>]>, u64);
 type RotatedPath = (Arc<Path>, mui_geometry::kurbo::Affine, Arc<Path>, u64);
 
 #[derive(Debug)]
@@ -130,6 +131,25 @@ pub(super) struct Entry {
 }
 
 impl OutlineCache {
+    pub(super) fn bounds(&mut self, contour: &Contour) -> Result<Option<Rect>, SceneError> {
+        if contour.rect.is_some()
+            || contour.known_bounds.is_some()
+            || contour.path.commands.is_empty()
+        {
+            return contour.bounds();
+        }
+        let key = Arc::as_ptr(&contour.path) as usize;
+        if let Some((_, bounds, seen)) = self.path_bounds.get_mut(&key) {
+            *seen = self.generation;
+            return Ok(*bounds);
+        }
+        let bounds = contour.bounds()?;
+        // Holding the source prevents pointer reuse from aliasing another path.
+        self.path_bounds
+            .insert(key, (contour.path.clone(), bounds, self.generation));
+        Ok(bounds)
+    }
+
     pub(super) fn rotated(
         &mut self,
         key: (crate::Id, usize),
@@ -198,6 +218,7 @@ impl OutlineCache {
         self.rects.retain(|_, r| live(r.1));
         self.bands.retain(|_, b| live(b.4));
         self.rotated.retain(|_, entry| live(entry.3));
+        self.path_bounds.retain(|_, entry| live(entry.2));
         self.generation = generation.wrapping_add(1);
     }
 }

@@ -238,6 +238,10 @@ impl LayoutCache {
     /// a couple of sizes to go back to. Fewer trades hit rate for memory,
     /// never correctness.
     const VARIANTS: usize = 4;
+    // Nested Fits/flex branches can visit dozens of exact offers in one
+    // solve. Retain that bounded working set instead of evicting each pass's
+    // inputs before the next pass. Leaves keep their small four-entry cache.
+    const BRANCH_VARIANTS: usize = 64;
     /// Validates the tree and returns its measurement and placement revisions.
     fn prepare<P>(
         &mut self,
@@ -606,8 +610,13 @@ pub(crate) fn measure_cached<'a, P>(
     if let Some(cache) = pass.cache.as_deref_mut() {
         let mut evicted = false;
         if let Some(stamp) = cache.stamp(node) {
+            let limit = if stamp.children.is_empty() {
+                LayoutCache::VARIANTS
+            } else {
+                LayoutCache::BRANCH_VARIANTS
+            };
             let measured = &mut stamp.measured;
-            if measured.len() >= LayoutCache::VARIANTS {
+            if measured.len() >= limit {
                 measured.remove(0);
                 evicted = true;
             }
@@ -1093,6 +1102,31 @@ mod tests {
             totals.measure_variant_evictions += cache.stats.measure_variant_evictions;
         }
         totals
+    }
+
+    #[test]
+    fn branch_working_set_survives_nested_flex_offers() {
+        let n = Node::row([Node::block(24., 16.).shrink(0.).with(Text {
+            value: String::new(),
+            colour: 0,
+        })])
+        .id("branch");
+        let widths: Vec<_> = (0..24).map(|i| Size::new(100. + i as f64, 80.)).collect();
+        let once = offer_oracle(&n, &widths, None);
+        let twice = offer_oracle(
+            &n,
+            &widths.iter().chain(&widths).copied().collect::<Vec<_>>(),
+            None,
+        );
+        assert_eq!(
+            twice.measured_nodes, once.measured_nodes,
+            "a repeated branch offer must not rebuild the measured subtree"
+        );
+        assert!(twice.measure_hits >= once.measure_hits + widths.len());
+        assert_eq!(
+            twice.measure_variant_evictions,
+            once.measure_variant_evictions
+        );
     }
 
     #[test]

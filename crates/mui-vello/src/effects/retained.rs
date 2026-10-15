@@ -6,7 +6,7 @@ use crate::{
 };
 use mui_geometry::PathCommand;
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// Vello's compute pipelines and atlas are device-wide; retained encodings and
@@ -77,6 +77,12 @@ pub struct GpuRenderer {
     backdrops: Vec<Backdrop>,
     size: [u32; 2],
     retained: Vec<Painted>,
+    // External paint entries are stable while their material changes. Keep
+    // both placements so damage includes pixels vacated by a moving weld.
+    retained_external: HashMap<mui_scene::Id, Rect>,
+    external: HashMap<mui_scene::Id, Rect>,
+    drawn: Vec<ImageData>,
+    live_welds: HashSet<u64>,
     paths: Converted,
     /// Where a short canvas path is converted on its way into the scene.
     short: crate::kurbo::BezPath,
@@ -561,6 +567,10 @@ impl GpuRenderer {
             backdrops: Vec::new(),
             size,
             retained: Vec::new(),
+            retained_external: HashMap::new(),
+            external: HashMap::new(),
+            drawn: Vec::new(),
+            live_welds: HashSet::new(),
             paths: Converted::default(),
             short: crate::kurbo::BezPath::default(),
             transform: None,
@@ -688,8 +698,23 @@ impl GpuRenderer {
             && !self.stale
             && self.transform == Some(xf)
             && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
-            && resolved.external_welds().next().is_none()
             && self.retained == resolved.paint
+            && resolved
+                .external_welds()
+                .filter(|(k, e)| external_visible(resolved, k, e, xf, self.size))
+                .all(|(key, e)| self.effects.is_current(key, &e.material))
+            && resolved
+                .paint
+                .iter()
+                .filter(|p| p.layer == Layer::External)
+                .all(|p| {
+                    resolved.external_weld(&p.key).is_some_and(|e| {
+                        self.retained_external.get(&p.key)
+                            == Some(&p.transform.transform_rect_bbox(
+                                e.bounds() + crate::kurbo::Vec2::new(p.offset.x, p.offset.y),
+                            ))
+                    })
+                })
     }
 
     pub fn render(
@@ -757,11 +782,41 @@ impl GpuRenderer {
         // submits as it goes, and copies from these textures when it does.
         // No welds, no encoder.
         let mut encoder = None;
-        let mut drawn = Vec::new();
+        self.drawn.clear();
+        self.external.clear();
+        let mut weld_damage = NOTHING;
+        for p in resolved.paint.iter().filter(|p| p.layer == Layer::External) {
+            let e = resolved
+                .external_weld(&p.key)
+                .ok_or_else(|| Error::Missing(p.key.to_string()))?;
+            let b = p
+                .transform
+                .transform_rect_bbox(e.bounds() + crate::kurbo::Vec2::new(p.offset.x, p.offset.y));
+            self.external.insert(p.key.clone(), b);
+            if self.retained_external.get(&p.key) != Some(&b) {
+                weld_damage = weld_damage.union(b);
+                if let Some(old) = self.retained_external.get(&p.key) {
+                    weld_damage = weld_damage.union(*old);
+                }
+            }
+        }
+        for (key, b) in &self.retained_external {
+            if !self.external.contains_key(key) {
+                weld_damage = weld_damage.union(*b);
+            }
+        }
         for (key, e) in resolved
             .external_welds()
             .filter(|(k, e)| external_visible(resolved, k, e, xf, size))
         {
+            if self.effects.is_current(key, &e.material)
+                && self
+                    .effects
+                    .texture(key)
+                    .is_some_and(|(id, ..)| self.welds.contains_key(&id))
+            {
+                continue;
+            }
             let before = stats.effect_draws;
             let encoder = encoder.get_or_insert_with(|| {
                 self.device
@@ -774,10 +829,18 @@ impl GpuRenderer {
                 .effects
                 .texture(key)
                 .ok_or_else(|| Error::Missing(key.to_string()))?;
+            if stats.effect_draws != before {
+                if let Some(b) = self.external.get(key) {
+                    weld_damage = weld_damage.union(*b);
+                }
+                if let Some(b) = self.retained_external.get(key) {
+                    weld_damage = weld_damage.union(*b);
+                }
+            }
             match self.welds.get(&id) {
                 Some(image) if [image.width, image.height] == used => {
                     if stats.effect_draws != before {
-                        drawn.push(image.clone());
+                        self.drawn.push(image.clone());
                     }
                 }
                 _ => {
@@ -794,16 +857,18 @@ impl GpuRenderer {
         }
         if let Some(encoder) = encoder.filter(|_| stats.effect_draws > 0) {
             self.queue.submit([encoder.finish()]);
-            for image in &drawn {
+            for image in &self.drawn {
                 self.vello.mark_override_image_dirty(image);
             }
-            self.stale = true;
         }
         // A weld whose slot went: its stand-in goes too.
-        let live: Vec<u64> = resolved
-            .external_welds()
-            .filter_map(|(k, _)| self.effects.texture(k).map(|t| t.0))
-            .collect();
+        self.live_welds.clear();
+        self.live_welds.extend(
+            resolved
+                .external_welds()
+                .filter_map(|(k, _)| self.effects.texture(k).map(|t| t.0)),
+        );
+        let live = &self.live_welds;
         let vello = &mut self.vello;
         let before = self.welds.len();
         self.welds.retain(|id, image| {
@@ -825,7 +890,15 @@ impl GpuRenderer {
         {
             Change::Full
         } else {
-            match self.damage(&resolved.paint, xf) {
+            match paint_damage(
+                &self.retained,
+                &resolved.paint,
+                &self.retained_external,
+                &self.external,
+                weld_damage,
+                xf,
+                self.size,
+            ) {
                 // A host texture that changed may be sampled anywhere, and
                 // a partial encoding cannot render the frame again.
                 Change::Part(_) if self.stale => Change::Full,
@@ -932,6 +1005,7 @@ impl GpuRenderer {
                 self.presented = Some(target.clone());
             }
         }
+        std::mem::swap(&mut self.retained_external, &mut self.external);
         Ok(())
     }
 
@@ -940,80 +1014,6 @@ impl GpuRenderer {
     /// the back, old and new, as the device box they can paint on -- padded
     /// past the anti-aliasing and out to Vello's 16 px tiles, so each tile
     /// covers what it did in the whole frame.
-    fn damage(&self, paint: &[Painted], xf: Affine) -> Change {
-        let old = &self.retained[..];
-        let head = old.iter().zip(paint).take_while(|(a, b)| a == b).count();
-        if head == old.len() && head == paint.len() {
-            return Change::None;
-        }
-        // A changed backdrop (or anything below one) needs a fresh whole
-        // frame. Unchanged backdrops and path shadows can be reused in a
-        // partial render.
-        if old[head..]
-            .iter()
-            .chain(&paint[head..])
-            .any(|p| p.layer == Layer::Backdrop || crate::path_shadow(p))
-        {
-            return Change::Full;
-        }
-        let tail = old[head..]
-            .iter()
-            .rev()
-            .zip(paint[head..].iter().rev())
-            .take_while(|(a, b)| a == b)
-            .count();
-        // Lists of one length line up entry for entry: one that is the same
-        // at the same place paints the same, so only the ones that differ
-        // count. Otherwise every entry between the shared ends does.
-        let aligned = old.len() == paint.len();
-        let mut r = NOTHING;
-        for list in [old, paint] {
-            for (i, p) in list.iter().enumerate().take(list.len() - tail).skip(head) {
-                if aligned && old[i] == paint[i] {
-                    continue;
-                }
-                let Some(b) = reach(p) else {
-                    return Change::Full;
-                };
-                r = r.union(b);
-                // A layer's blend or opacity reaches everything inside it.
-                if matches!(p.layer, Layer::Blend { .. }) {
-                    let mut depth = 0;
-                    for q in &list[i..] {
-                        let Some(b) = reach(q) else {
-                            return Change::Full;
-                        };
-                        r = r.union(b);
-                        match q.layer {
-                            Layer::Blend { .. } => depth += 1,
-                            Layer::Unblend => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-        if !(r.x0 < r.x1 && r.y0 < r.y1) {
-            return Change::Part([0; 4]);
-        }
-        let d = xf.transform_rect_bbox(r).inflate(2., 2.);
-        let [w, h] = self.size.map(f64::from);
-        let snap = |v: f64, up: bool, max: f64| {
-            let t = v / 16.;
-            (if up { t.ceil() } else { t.floor() } * 16.).clamp(0., max)
-        };
-        let (x0, y0) = (snap(d.x0, false, w), snap(d.y0, false, h));
-        let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
-        if (x1 - x0) * (y1 - y0) > PARTIAL * w * h {
-            return Change::Full;
-        }
-        Change::Part([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
-    }
 
     /// The frame, or with `part` only what reaches `[x, y, w, h]` of it.
     /// A part never holds a backdrop or a weld.
@@ -1330,10 +1330,131 @@ impl GpuRenderer {
     }
 }
 
+fn paint_damage(
+    old: &[Painted],
+    paint: &[Painted],
+    old_external: &HashMap<mui_scene::Id, Rect>,
+    new_external: &HashMap<mui_scene::Id, Rect>,
+    dirty: Rect,
+    xf: Affine,
+    size: [u32; 2],
+) -> Change {
+    let reach = |p: &Painted, external: &HashMap<mui_scene::Id, Rect>| {
+        if p.layer == Layer::External {
+            external.get(&p.key).copied()
+        } else {
+            reach(p)
+        }
+    };
+    if dirty != NOTHING && old.iter().chain(paint).any(|p| p.layer == Layer::Backdrop) {
+        return Change::Full;
+    }
+    let head = old.iter().zip(paint).take_while(|(a, b)| a == b).count();
+    if head == old.len() && head == paint.len() {
+        if dirty == NOTHING {
+            return Change::None;
+        }
+        if paint.iter().any(|p| p.layer == Layer::Backdrop) {
+            return Change::Full;
+        }
+    }
+    // A changed backdrop (or anything below one) needs a fresh whole
+    // frame. Unchanged backdrops and path shadows can be reused in a
+    // partial render.
+    if old[head..]
+        .iter()
+        .chain(&paint[head..])
+        .any(|p| p.layer == Layer::Backdrop || crate::path_shadow(p))
+    {
+        return Change::Full;
+    }
+    let tail = old[head..]
+        .iter()
+        .rev()
+        .zip(paint[head..].iter().rev())
+        .take_while(|(a, b)| a == b)
+        .count();
+    // Lists of one length line up entry for entry: one that is the same
+    // at the same place paints the same, so only the ones that differ
+    // count. Otherwise every entry between the shared ends does.
+    let aligned = old.len() == paint.len();
+    let mut r = dirty;
+    for (list, external) in [(old, old_external), (paint, new_external)] {
+        for (i, p) in list.iter().enumerate().take(list.len() - tail).skip(head) {
+            if aligned && old[i] == paint[i] {
+                continue;
+            }
+            let Some(b) = reach(p, external) else {
+                return Change::Full;
+            };
+            r = r.union(b);
+            // A layer's blend or opacity reaches everything inside it.
+            if matches!(p.layer, Layer::Blend { .. }) {
+                let mut depth = 0;
+                for q in &list[i..] {
+                    let Some(b) = reach(q, external) else {
+                        return Change::Full;
+                    };
+                    r = r.union(b);
+                    match q.layer {
+                        Layer::Blend { .. } => depth += 1,
+                        Layer::Unblend => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    if !(r.x0 < r.x1 && r.y0 < r.y1) {
+        return Change::Part([0; 4]);
+    }
+    let d = xf.transform_rect_bbox(r).inflate(2., 2.);
+    let [w, h] = size.map(f64::from);
+    let snap = |v: f64, up: bool, max: f64| {
+        let t = v / 16.;
+        (if up { t.ceil() } else { t.floor() } * 16.).clamp(0., max)
+    };
+    let (x0, y0) = (snap(d.x0, false, w), snap(d.y0, false, h));
+    let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
+    if (x1 - x0) * (y1 - y0) > PARTIAL * w * h {
+        return Change::Full;
+    }
+    Change::Part([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
+}
+
 #[cfg(test)]
 mod rotation_tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn unchanged_and_bounded_weld_damage_preserve_retained_pixels() {
+        let external = HashMap::new();
+        let classify = |r, xf| paint_damage(&[], &[], &external, &external, r, xf, [1000, 800]);
+        assert!(matches!(classify(NOTHING, Affine::IDENTITY), Change::None));
+        let old = Rect::new(20., 30., 40., 50.);
+        let new = Rect::new(90., 70., 120., 100.);
+        let xf = Affine::scale(1.5);
+        let Change::Part([x, y, w, h]) = classify(old.union(new), xf) else {
+            panic!("a bounded material change must not repaint the surface");
+        };
+        let changed = Rect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64);
+        for r in [old, new] {
+            let transformed = xf.transform_rect_bbox(r);
+            assert!(changed.contains(transformed.origin()));
+            assert!(changed.x1 >= transformed.x1 && changed.y1 >= transformed.y1);
+        }
+        assert!((w as u64) * (h as u64) < 800_000 / 10);
+        assert!(matches!(
+            classify(Rect::new(-100., -100., -50., -50.), xf),
+            Change::Part([_, _, 0, 0])
+        ));
+    }
 
     #[test]
     fn resizing_does_not_retain_the_product_of_previous_axis_maxima() {

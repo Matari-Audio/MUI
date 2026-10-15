@@ -289,7 +289,11 @@ impl<'a> Walk<'a> {
     ) -> Result<(Option<Rect>, Size), SceneError> {
         let e = n.payload();
         let content = self.content_size(n, at, frame);
-        let bounds = contour.bounds()?.map(|b| b + contour.offset.to_vec2());
+        let bounds = self
+            .caches
+            .outlines
+            .bounds(contour)?
+            .map(|b| b + contour.offset.to_vec2());
         let (hit_path, hit_offset) = self.caches.outlines.rotated(
             (key.clone(), 0),
             &contour.path,
@@ -421,11 +425,11 @@ impl<'a> Walk<'a> {
             // The plates painted inside this node, so only its entries are
             // scanned, not everything painted before it.
             let start = o.start;
-            let own = self.out.paint.split_off(start);
-            let all = own.len();
+            let all = self.out.paint.len() - start;
             self.out
                 .paint
-                .extend(own.into_iter().filter(|p| !m.consumes(&p.key, p.layer)));
+                .extract_if(start.., |p| m.consumes(&p.key, p.layer))
+                .for_each(drop);
             if self.out.paint.len() - start != all {
                 // What a memo inside painted has been thinned: not copyable.
                 for s in self
@@ -657,7 +661,7 @@ impl<'a> Walk<'a> {
                                 draw.path.validate(100_000)?;
                                 Ok(draw.path.clone())
                             })
-                            .collect::<Result<Vec<_>, SceneError>>()?;
+                            .collect::<Result<Arc<[_]>, SceneError>>()?;
                         self.caches
                             .outlines
                             .canvases
@@ -667,7 +671,7 @@ impl<'a> Walk<'a> {
                 };
                 // Hits are local to the surface's offset, the outline's.
                 let d = origin - contour.offset;
-                for ((k, draw), local) in draws.iter().enumerate().zip(paths) {
+                for ((k, draw), local) in draws.iter().enumerate().zip(paths.iter()) {
                     let d = d + draw.at.to_vec2();
                     if let Some(tag) = &draw.tag {
                         let hit = if d == Vec2::ZERO {
@@ -679,7 +683,8 @@ impl<'a> Walk<'a> {
                         };
                         hits.push((Arc::clone(tag), hit));
                     }
-                    if let Some(p) = self.push(Layer::Draw(k), local, None, &draw.fill, *bg) {
+                    if let Some(p) = self.push(Layer::Draw(k), local.clone(), None, &draw.fill, *bg)
+                    {
                         p.width = draw.width;
                         p.offset = origin + draw.at.to_vec2();
                     }

@@ -10,6 +10,20 @@ use super::outline::OutlineCache;
 use super::{SceneError, SceneSpec, TextGlyph};
 use crate::{Content, Element, Theme};
 
+pub(super) enum Lines<'t> {
+    One([Cow<'t, str>; 1]),
+    Many(Vec<Cow<'t, str>>),
+}
+impl<'t> std::ops::Deref for Lines<'t> {
+    type Target = [Cow<'t, str>];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::One(line) => line,
+            Self::Many(lines) => lines,
+        }
+    }
+}
+
 /// One shaped string, kept in [`TextState`] while the font stays the same.
 #[derive(Debug, Clone)]
 pub(super) struct CachedRun {
@@ -330,8 +344,8 @@ impl<'a> Runs<'a> {
         face: Face<'_>,
         max: f64,
         cap: Option<usize>,
-    ) -> Vec<Cow<'t, str>> {
-        let one = || vec![Cow::Borrowed(text)];
+    ) -> Lines<'t> {
+        let one = || Lines::One([Cow::Borrowed(text)]);
         if max.is_nan()
             || max <= 0.0
             || (self.measure(text, face).width <= max + 0.5 && !text.contains('\n'))
@@ -389,7 +403,7 @@ impl<'a> Runs<'a> {
         if out.is_empty() {
             out.push(Cow::Borrowed(""));
         }
-        out
+        Lines::Many(out)
     }
     /// A wrapped label's height. Every line has the one pitch its face sets,
     /// whatever its text, so no line is shaped to find it.
