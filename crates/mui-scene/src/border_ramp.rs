@@ -409,6 +409,7 @@ mod tests {
                     &id,
                     GeometryInput {
                         outline: &outline,
+                        joins: None,
                         origin,
                         ramp: &ramp,
                         anchor: Frame {
