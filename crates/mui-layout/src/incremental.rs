@@ -119,14 +119,19 @@ pub(crate) struct Frozen {
     fluid: [bool; 2],
     definite_height: bool,
     cols: usize,
-    columns: Vec<f64>,
-    rows: Vec<f64>,
+    columns: measure::Tracks,
+    rows: measure::Tracks,
     pick: usize,
     container: [Option<f64>; 2],
     children: Vec<Arc<Frozen>>,
 }
 impl Frozen {
-    fn bind<'a, P>(this: &Arc<Self>, n: &'a Node<P>, stats: &mut LayoutStats) -> Measured<'a, P> {
+    fn bind<'a, P>(
+        this: &Arc<Self>,
+        n: &'a Node<P>,
+        stats: &mut LayoutStats,
+        deep: bool,
+    ) -> Measured<'a, P> {
         stats.rebound_nodes += 1;
         Measured {
             node: n,
@@ -146,19 +151,48 @@ impl Frozen {
             rows: this.rows.clone(),
             pick: this.pick,
             container: this.container,
-            children: this
-                .children
-                .iter()
-                .zip(n.children())
-                .enumerate()
-                .map(|(i, (c, n))| {
-                    let mut m = Self::bind(c, n, stats);
-                    m.index = i;
-                    m
-                })
-                .collect(),
+            children: if deep {
+                this.children
+                    .iter()
+                    .zip(n.children())
+                    .enumerate()
+                    .map(|(i, (c, n))| {
+                        let mut m = Self::bind(c, n, stats, true);
+                        m.index = i;
+                        m
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         }
     }
+    /// A cache hit binds only its root during measurement. Arrange expands
+    /// one level at a time, once, rather than allocating the entire subtree
+    /// for every speculative flex/Fits measurement that reads its metrics.
+    /// Pin replay keeps eager binding because it borrows measured descendants.
+    pub(crate) fn expand<'a, P>(m: &Measured<'a, P>) -> Option<Measured<'a, P>> {
+        if !m.children.is_empty() || m.node.children().is_empty() {
+            return None;
+        }
+        let frozen = m.frozen.as_ref()?;
+        let mut ignored = LayoutStats::default();
+        let mut expanded = Self::bind(frozen, m.node, &mut ignored, false);
+        expanded.index = m.index;
+        expanded.children = frozen
+            .children
+            .iter()
+            .zip(m.node.children())
+            .enumerate()
+            .map(|(index, (f, n))| {
+                let mut child = Self::bind(f, n, &mut ignored, false);
+                child.index = index;
+                child
+            })
+            .collect();
+        Some(expanded)
+    }
+
     fn freeze<P>(m: &Measured<'_, P>, cost: usize) -> Arc<Self> {
         Arc::new(Self {
             cost,
@@ -593,7 +627,7 @@ pub(crate) fn measure_cached<'a, P>(
         }
         pass.pinned |= cache.pinned;
         cache.stats.measure_hits += 1;
-        let bound = Frozen::bind(&snapshot, node, &mut cache.stats);
+        let bound = Frozen::bind(&snapshot, node, &mut cache.stats, cache.pinned);
         finish_request(cache, traced, false, false);
         return Ok(bound);
     }
@@ -1643,6 +1677,27 @@ mod tests {
         ])
         .pad(SpacingToken::Xs)
         .id("root")
+    }
+
+    #[test]
+    fn cached_scroll_binds_the_requested_root_without_rebuilding_descendant_measurements() {
+        let mut n =
+            Node::col((0..128).map(|i| label(&format!("row/{i}"), "Stable row").shrink(0.)))
+                .size(240., 100.)
+                .scroll()
+                .id("scroll");
+        let mut cache = LayoutCache::default();
+        prime(&n, 400., &mut cache);
+        for offset in [1., 17., 64., 120.] {
+            n.scrolled = [0., offset];
+            assert_eq!(cached(&n, 400., &mut cache), oracle(&n, 400.));
+            assert_eq!(cache.stats().measured_nodes, 0);
+            assert_eq!(
+                cache.stats().rebound_nodes,
+                1,
+                "a root cache hit must not allocate and rebind the entire measured descendant tree"
+            );
+        }
     }
 
     #[test]

@@ -47,6 +47,30 @@ impl Ui {
         deps: impl std::hash::Hash,
         build: impl FnOnce(&mut Self) -> El,
     ) -> El {
+        self.memo_impl(id.into(), deps, build, false)
+    }
+
+    /// Retain layout-positioned floating children along with this subtree.
+    /// Unlike `memo`, a float alone does not force another build. Floats are
+    /// still resolved and hit-tested each frame; their deferred paint is never
+    /// spliced from a stale memo span. Use layout anchors/pins, or include any
+    /// manually computed floating positions in `deps`.
+    pub fn memo_with_layout_floats(
+        &mut self,
+        id: impl Into<Id>,
+        deps: impl std::hash::Hash,
+        build: impl FnOnce(&mut Self) -> El,
+    ) -> El {
+        self.memo_impl(id.into(), deps, build, true)
+    }
+
+    fn memo_impl(
+        &mut self,
+        id: Id,
+        deps: impl std::hash::Hash,
+        build: impl FnOnce(&mut Self) -> El,
+        layout_floats: bool,
+    ) -> El {
         let id: Id = id.into();
         let id = id.as_str();
         // ponytail: `deps` compares by its SipHash, so two deps that collide
@@ -70,7 +94,7 @@ impl Ui {
         if let Some(k) = self.kept.get_mut(&key) {
             let me = self.me;
             let kept = TREES.with(|t| t.borrow().contains_key(&(me, key)));
-            if !cold && k.deps == deps && k.still && kept {
+            if !cold && k.deps == deps && k.still && k.layout_floats == layout_floats && kept {
                 k.live = true;
                 let read = std::mem::take(&mut k.read);
                 // What it read is still read, as the closure would have.
@@ -110,6 +134,7 @@ impl Ui {
             Kept {
                 id: mui_scene::Id::runtime(id),
                 deps,
+                layout_floats,
                 nested: Vec::new(),
                 read,
                 still,
@@ -288,6 +313,7 @@ pub(super) struct Kept {
     /// The id it was built under, whose number it holds in `memo_ids`.
     pub(super) id: mui_scene::Id,
     pub(super) deps: u64,
+    pub(super) layout_floats: bool,
     /// Its styled subtree, last frame's, sits in [`TREES`] while it is out
     /// of the tree. Memos nested in it are kept on their own, and it holds
     /// placeholders where they go: their paths below it, and ids.

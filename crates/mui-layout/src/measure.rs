@@ -6,6 +6,32 @@
 
 use super::*;
 
+/// Grid tracks are empty for ordinary nodes and shared by cached grids.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum Tracks {
+    #[default]
+    Empty,
+    Shared(std::sync::Arc<[f64]>),
+}
+impl std::ops::Deref for Tracks {
+    type Target = [f64];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Empty => &[],
+            Self::Shared(values) => values,
+        }
+    }
+}
+impl From<Vec<f64>> for Tracks {
+    fn from(values: Vec<f64>) -> Self {
+        if values.is_empty() {
+            Self::Empty
+        } else {
+            Self::Shared(values.into())
+        }
+    }
+}
+
 pub(crate) struct Measured<'a, P> {
     pub(crate) node: &'a Node<P>,
     /// What the layout cache holds for this subtree; `None` without one.
@@ -35,8 +61,8 @@ pub(crate) struct Measured<'a, P> {
     /// Measured once so arrange cannot re-derive a different one.
     pub(crate) cols: usize,
     /// Explicit column widths settled during measure and reused by arrange.
-    pub(crate) columns: Vec<f64>,
-    pub(crate) rows: Vec<f64>,
+    pub(crate) columns: Tracks,
+    pub(crate) rows: Tracks,
     /// A `Fits` node's chosen candidate; 0 for anything else. Picked once, at
     /// measure, for the same reason as `cols`.
     pub(crate) pick: usize,
@@ -1117,8 +1143,8 @@ pub(crate) fn measure_uncached<'a, P>(
         floor,
         content,
         cols,
-        columns,
-        rows,
+        columns: columns.into(),
+        rows: rows.into(),
         pick,
         container,
         children,

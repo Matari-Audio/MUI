@@ -225,3 +225,51 @@ fn text_runs_handle_is_shared_and_bounded() {
         assert!(runs.len() <= 2048);
     }
 }
+
+#[test]
+fn retained_layout_floats_reposition_and_rebuild_only_for_dependencies() {
+    let mut ui = Ui::default();
+    let mut built = 0;
+    for width in [100., 100., 180., 180.] {
+        let root = ui.memo_with_layout_floats("root", 0, |_| {
+            built += 1;
+            stack([block(12., 10.)
+                .id("float")
+                .float()
+                .anchor(Align::End, Align::End)])
+        });
+        let scene = ui
+            .frame(
+                root,
+                Some(Size::new(width, 80.)),
+                PointerInput::default(),
+                0.,
+            )
+            .unwrap()
+            .scene;
+        assert_eq!(scene.surface("float").unwrap().frame.x, width - 12.);
+        assert_eq!(scene.surface("float").unwrap().frame.y, 70.);
+    }
+    assert_eq!(
+        built, 1,
+        "layout floats keep their owned declaration but still resolve new offers"
+    );
+    let root = ui.memo_with_layout_floats("root", 1, |_| {
+        built += 1;
+        stack([block(16., 10.)
+            .id("float")
+            .float()
+            .anchor(Align::End, Align::End)])
+    });
+    let scene = ui
+        .frame(
+            root,
+            Some(Size::new(180., 80.)),
+            PointerInput::default(),
+            0.,
+        )
+        .unwrap()
+        .scene;
+    assert_eq!(scene.surface("float").unwrap().frame.x, 164.);
+    assert_eq!(built, 2);
+}

@@ -141,6 +141,8 @@ pub(crate) fn hide<P>(
     origin: [f64; 2],
     out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) {
+    let expanded = crate::incremental::Frozen::expand(m);
+    let m = expanded.as_ref().unwrap_or(m);
     let frame = Frame {
         x: origin[0],
         y: origin[1],
@@ -165,6 +167,8 @@ pub(crate) fn arrange<P>(
     viewport: Option<Viewport>,
     out: &mut (Vec<(Id, u32)>, Vec<Frame>, Vec<Size>),
 ) -> Result<(), Error> {
+    let expanded = crate::incremental::Frozen::expand(m);
+    let m = expanded.as_ref().unwrap_or(m);
     let n = m.node;
     if !size.valid(m.extent_limit) || !origin.iter().all(|v| v.is_finite()) {
         return Err(Error::BudgetExceeded);
@@ -264,10 +268,10 @@ pub(crate) fn arrange<P>(
             let grid = grid_rows(&flow, cols);
             let col_w =
                 (inner.width - m.gap * cols.saturating_sub(1) as f64).max(0.0) / cols as f64;
-            let columns = if m.columns.is_empty() {
-                vec![col_w; cols]
+            let columns: std::borrow::Cow<'_, [f64]> = if m.columns.is_empty() {
+                std::borrow::Cow::Owned(vec![col_w; cols])
             } else {
-                m.columns.clone()
+                std::borrow::Cow::Borrowed(&m.columns)
             };
             let heights: Vec<f64> = grid
                 .iter()
