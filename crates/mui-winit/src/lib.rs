@@ -145,6 +145,7 @@ struct App<V, T: 'static = AccessEvent> {
     next_model_poll: Instant,
     error: Option<String>,
     presentations: u64,
+    exit_on_error: bool,
 }
 
 impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
@@ -170,6 +171,7 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
             next_model_poll: Instant::now(),
             error: None,
             presentations: 0,
+            exit_on_error: true,
         }
     }
     fn update_size(&mut self, size: (u32, u32), scale: f64) {
@@ -400,7 +402,7 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
             }
             Err(error) => {
                 self.error = Some(error);
-                event_loop.exit();
+                if self.exit_on_error { event_loop.exit(); }
             }
         }
     }
@@ -728,3 +730,6 @@ impl mui::Clipboard for Clipboard {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(target_os = "linux")]
+pub mod floating;

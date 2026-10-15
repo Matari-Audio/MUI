@@ -29,6 +29,8 @@ accesskit_macos = { path = "../../vendor/accesskit_macos" }
 
 # baseview does not own an X11 selection; arboard keeps one alive.
 [target.'cfg(target_os = "linux")'.dependencies]
+mui-winit = { path = "../mui-winit" }
+winit = "0.30"
 arboard = { version = "3.6", default-features = false }
 # AT-SPI; screen bounds borrow baseview's original X11 connection below.
 accesskit_unix = { path = "../../vendor/accesskit_unix" }

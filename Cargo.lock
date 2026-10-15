@@ -2066,9 +2066,11 @@ dependencies = [
  "moose-baseview",
  "mui",
  "mui-access",
+ "mui-winit",
  "objc",
  "raw-window-handle",
  "wgpu",
+ "winit",
  "x11-dl",
  "x11rb",
 ]
