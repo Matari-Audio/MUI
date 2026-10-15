@@ -556,13 +556,13 @@ pub(crate) fn measure_cached<'a, P>(
         s.measured[at..].rotate_left(1);
         Some(snapshot)
     });
-    let traced = if cache.trace.is_some() {
+    let traced = if let Some(trace) = &mut cache.trace {
         let stamp = cache
             .pointers
             .get(&(node as *const Node<P> as usize))
             .and_then(|&address| cache.stamps.get(&address).map(|s| (address, s.revision)));
         let started = (cache.stats.measured_nodes, cache.stats.rebound_nodes);
-        let ticket = cache.trace.as_mut().unwrap().begin(
+        let ticket = trace.begin(
             stamp,
             node.id.as_ref(),
             ancestor,
@@ -660,7 +660,7 @@ mod tests {
             left: limits.nodes,
             limits,
             scale: SpacingScale::DEFAULT,
-            keys: Default::default(),
+            keys: rustc_hash::FxHashSet::default(),
             redo: false,
             pinned: false,
             measurer: &mut measurer,
@@ -715,7 +715,7 @@ mod tests {
             left: limits.nodes,
             limits,
             scale: SpacingScale::DEFAULT,
-            keys: Default::default(),
+            keys: rustc_hash::FxHashSet::default(),
             redo: false,
             pinned: false,
             measurer: &mut measurer,
@@ -899,7 +899,7 @@ mod tests {
             left: limits.nodes,
             limits,
             scale: SpacingScale::DEFAULT,
-            keys: Default::default(),
+            keys: rustc_hash::FxHashSet::default(),
             redo: false,
             pinned: false,
             measurer: &mut measurer,

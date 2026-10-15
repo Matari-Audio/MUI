@@ -1034,7 +1034,7 @@ impl Interaction {
             if let (Some(now), Some(before)) = (input.pos, self.last_pos) {
                 self.drag_delta = now - before;
                 if input.mods.shift {
-                    self.shifted = self.shifted + self.drag_delta;
+                    self.shifted += self.drag_delta;
                 }
             }
             if let (Some(now), Some(origin)) = (input.pos, self.press_pos) {

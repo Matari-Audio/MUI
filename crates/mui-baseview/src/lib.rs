@@ -84,6 +84,8 @@ pub struct Requests {
     scale: AtomicU64,
     redraw: AtomicBool,
     focus: AtomicBool,
+    #[cfg(target_os = "linux")]
+    wayland_open: AtomicBool,
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
@@ -180,6 +182,12 @@ impl Requests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
     }
+    /// Whether a floating Wayland editor currently owns this request queue.
+    #[cfg(target_os = "linux")]
+    pub fn wayland_open(&self) -> bool {
+        self.wayland_open.load(Ordering::Acquire)
+    }
+
     /// The editor's X11 window identifier, for parenting desktop portal dialogs.
     ///
     /// Available after native creation and cleared on close. This is an owned
@@ -1445,3 +1453,7 @@ mod gpu_policy_tests {
         assert!(called.load(Ordering::Acquire));
     }
 }
+
+/// Native floating Wayland editors; embedded X11 windows still use `open`.
+#[cfg(target_os = "linux")]
+pub mod wayland;
