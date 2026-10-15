@@ -458,6 +458,37 @@ impl Regions {
         self.len += 1;
         true
     }
+    /// Encoding has a fixed per-region cost too. Two conservative clusters
+    /// bound scene/layer replay instead of paying for a dozen tiny rectangles.
+    fn coalesce(&mut self) {
+        let pixels = |r: [u32; 4]| u64::from(r[2]) * u64::from(r[3]);
+        while self.len > 2 {
+            let mut best = (u64::MAX, 0, 1, [0; 4]);
+            for i in 0..self.len {
+                for j in i + 1..self.len {
+                    let (a, b) = (self.rects[i], self.rects[j]);
+                    let (x, y) = (a[0].min(b[0]), a[1].min(b[1]));
+                    let r = [
+                        x,
+                        y,
+                        (a[0] + a[2]).max(b[0] + b[2]) - x,
+                        (a[1] + a[3]).max(b[1] + b[3]) - y,
+                    ];
+                    let extra = pixels(r) - pixels(a) - pixels(b);
+                    if extra < best.0 {
+                        best = (extra, i, j, r);
+                    }
+                }
+            }
+            let (_, i, j, r) = best;
+            self.len -= 1;
+            self.rects[j] = self.rects[self.len];
+            self.len -= 1;
+            self.rects[i] = self.rects[self.len];
+            assert!(self.add(r));
+        }
+    }
+
     fn pixels(&self) -> u64 {
         self.rects[..self.len]
             .iter()
@@ -1722,6 +1753,7 @@ fn paint_damage(
     }) {
         return Change::Full;
     }
+    regions.coalesce();
     if regions.pixels() as f64 > PARTIAL * f64::from(size[0]) * f64::from(size[1]) {
         return Change::Full;
     }
