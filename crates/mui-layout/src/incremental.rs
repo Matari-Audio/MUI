@@ -125,6 +125,22 @@ pub(crate) struct Frozen {
     container: [Option<f64>; 2],
     children: Vec<Arc<Frozen>>,
 }
+/// This is local arrange scratch, not a recursively inline field of Measured.
+/// Four slots bound recursive stack use; larger branches spill without a cap.
+pub(crate) enum BoundChildren<'m, 'a, P> {
+    Borrowed(&'m [Measured<'a, P>]),
+    Bound(smallvec::SmallVec<[Measured<'a, P>; 4]>),
+}
+impl<'a, P> std::ops::Deref for BoundChildren<'_, 'a, P> {
+    type Target = [Measured<'a, P>];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(children) => children,
+            Self::Bound(children) => children,
+        }
+    }
+}
+
 impl Frozen {
     fn bind<'a, P>(
         this: &Arc<Self>,
@@ -167,30 +183,31 @@ impl Frozen {
             },
         }
     }
-    /// A cache hit binds only its root during measurement. Arrange expands
-    /// one level at a time, once, rather than allocating the entire subtree
-    /// for every speculative flex/Fits measurement that reads its metrics.
-    /// Pin replay keeps eager binding because it borrows measured descendants.
-    pub(crate) fn expand<'a, P>(m: &Measured<'a, P>) -> Option<Measured<'a, P>> {
+    /// Borrow eager bindings, or bind only the cached branch's immediate
+    /// children. Small control rows stay inline during arrange; no temporary
+    /// measured root or heap child buffer is needed for them.
+    /// Pin replay continues to use its eager measured descendants.
+    pub(crate) fn children<'m, 'a, P>(m: &'m Measured<'a, P>) -> BoundChildren<'m, 'a, P> {
         if !m.children.is_empty() || m.node.children().is_empty() {
-            return None;
+            return BoundChildren::Borrowed(&m.children);
         }
-        let frozen = m.frozen.as_ref()?;
+        let Some(frozen) = &m.frozen else {
+            return BoundChildren::Borrowed(&m.children);
+        };
         let mut ignored = LayoutStats::default();
-        let mut expanded = Self::bind(frozen, m.node, &mut ignored, false);
-        expanded.index = m.index;
-        expanded.children = frozen
-            .children
-            .iter()
-            .zip(m.node.children())
-            .enumerate()
-            .map(|(index, (f, n))| {
-                let mut child = Self::bind(f, n, &mut ignored, false);
-                child.index = index;
-                child
-            })
-            .collect();
-        Some(expanded)
+        BoundChildren::Bound(
+            frozen
+                .children
+                .iter()
+                .zip(m.node.children())
+                .enumerate()
+                .map(|(index, (f, n))| {
+                    let mut child = Self::bind(f, n, &mut ignored, false);
+                    child.index = index;
+                    child
+                })
+                .collect(),
+        )
     }
 
     fn freeze<P>(m: &Measured<'_, P>, cost: usize) -> Arc<Self> {
