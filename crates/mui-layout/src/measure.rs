@@ -1064,6 +1064,7 @@ pub(crate) fn measure_uncached<'a, P>(
         ),
         None => (size, floor),
     };
+    drop(flow);
     // Decorations receive the real foreground-derived box, never an
     // intrinsic offer that could make them size their own foreground.
     let decoration_box = [
