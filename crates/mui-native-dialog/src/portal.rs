@@ -189,6 +189,22 @@ impl DialogJob {
         self.cancel.cancel();
     }
 
+    /// Wait on an owned processing worker, without periodic polling. Never call
+    /// this on the GUI thread. Cancellation closes the result sender after the
+    /// portal's bounded cleanup; shutdown still joins the service workers.
+    /// A locally cancelled job suppresses delivery, including a queued answer.
+    pub fn wait_result(&self) -> Option<DialogResult> {
+        if self.is_cancelled() {
+            return None;
+        }
+        let result = self.result.recv();
+        if self.is_cancelled() {
+            None
+        } else {
+            Some(result.unwrap_or_else(|_| Err("File dialog worker disconnected".into())))
+        }
+    }
+
     /// Poll once per GUI tick. None means pending or locally cancelled; check
     /// is_cancelled/is_finished when polling from another owned worker.
     pub fn try_result(&self) -> Option<DialogResult> {
