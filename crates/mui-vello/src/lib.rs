@@ -1899,3 +1899,10 @@ mod snapshot {
         }
     }
 }
+
+// Reuse the adapter/pixel contracts in targeted --lib validation too.
+#[cfg(all(test, feature = "gpu-effects"))]
+extern crate self as mui_vello;
+#[cfg(all(test, feature = "gpu-effects"))]
+#[path = "../tests/effects_smoke.rs"]
+mod retained_gpu_contract;

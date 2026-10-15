@@ -879,3 +879,62 @@ fn non_apple_bitmap_glyph_bearings_match_cpu_and_gpu() {
         "GPU retains bitmap frame"
     );
 }
+
+fn bounded_weld(role: Role, x: f64) -> ResolvedScene {
+    let plates = row([block(20., 20.).fill(role), block(20., 20.).fill(role)])
+        .gap(4.)
+        .weld(Weld::all().reach(8.).blend(8.))
+        .id("bounded.weld")
+        .offset(x, 24.)
+        .anchor(Align::Start, Align::Start);
+    resolve(
+        &SceneSpec::new(stack([block(320., 200.).fill(Role::Background), plates]))
+            .offered(Size::new(320., 200.))
+            .weld_backend(WeldBackend::AnalyticGpu),
+    )
+    .unwrap()
+}
+
+#[test]
+fn bounded_weld_changes_and_moves_match_full_renders() {
+    for scale in [1., 2.] {
+        for (before, after) in [
+            (
+                bounded_weld(Role::Primary, 32.),
+                bounded_weld(Role::Secondary, 32.),
+            ),
+            (
+                bounded_weld(Role::Primary, 32.),
+                bounded_weld(Role::Primary, 80.),
+            ),
+        ] {
+            let (part, whole, stats) = damaged_at(&before, &after, Affine::scale(scale))
+                .expect("GPU adapter required for weld damage validation");
+            same_pixels(&part, &whole);
+            assert_eq!(stats.renders, 1);
+            assert!(
+                stats.rendered_pixels < AREA / 2,
+                "bounded weld repainted {} pixels",
+                stats.rendered_pixels
+            );
+            assert_eq!(stats.texture_allocations, 0);
+        }
+    }
+}
+
+#[test]
+fn unchanged_welds_skip_encoding_raster_and_presentation() {
+    let (device, queue) = device().expect("GPU adapter required for weld reuse validation");
+    let scene = bounded_weld(Role::Primary, 32.);
+    let out = target(&device);
+    let mut renderer = pollster::block_on(hybrid(&device, &queue));
+    renderer.render(&scene, Affine::IDENTITY, &out).unwrap();
+    assert!(renderer.is_current(&scene, Affine::IDENTITY));
+    let stats = renderer.render(&scene, Affine::IDENTITY, &out).unwrap();
+    assert_eq!(stats.renders, 0);
+    assert_eq!(stats.encoded_scenes, 0);
+    assert_eq!(stats.effect_draws, 0);
+    assert_eq!(stats.uniform_upload_bytes, 0);
+    assert_eq!(stats.boundary_upload_bytes, 0);
+    assert_eq!(stats.texture_allocations, 0);
+}

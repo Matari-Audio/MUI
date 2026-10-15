@@ -143,3 +143,10 @@ pub mod prelude {
         }
     }
 }
+
+// Keep the named live-text contract runnable with targeted --lib validation.
+#[cfg(test)]
+extern crate self as mui_scene;
+#[cfg(test)]
+#[path = "../tests/text_cache_hardening.rs"]
+mod text_cache_contract;
