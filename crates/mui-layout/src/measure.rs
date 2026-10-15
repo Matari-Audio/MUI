@@ -794,6 +794,12 @@ pub(crate) fn measure_uncached<'a, P>(
                 let slot = &mut children[index];
                 *slot = m?;
                 let m = slot;
+                // This remeasure is about to detach its cached metrics. Keep
+                // the immediate child receipts before dropping the lazy root;
+                // their own descendants can remain lazily bound for arrange.
+                if let Some(expanded) = crate::incremental::Frozen::expand(m) {
+                    *m = expanded;
+                }
                 (m.size, m.index) = (Size::axes(basis, m.size.cross(vertical), vertical), index);
                 // The cached snapshot is the re-measure's own; this one differs.
                 m.frozen = None;
