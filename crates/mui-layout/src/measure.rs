@@ -130,9 +130,6 @@ pub(crate) fn wrap_lines<P>(
 }
 
 impl<'a, P> Measured<'a, P> {
-    pub(crate) fn flow(&self) -> smallvec::SmallVec<[&Measured<'a, P>; 8]> {
-        flow_of(&self.children)
-    }
     /// Where this child starts before growth or shrink: a percentage of the
     /// parent, a height derived from its aspect, its declared `basis`, or what
     /// it measured. `inner` is `None` while the parent is still hugging.
