@@ -364,6 +364,49 @@ impl Walk<'_> {
                 mui_geometry::Error::InvalidOptions("border ramp anchor has no width").into(),
             );
         }
+        let shoulder = match n.payload().style.radius.unwrap_or_default() {
+            Radius::Pair(_, concave) => concave,
+            Radius::Scale(k) => th.corners.concave * k,
+            _ => th.corners.concave,
+        };
+        if ramp.align != crate::BorderAlign::Outside && !self.plan.surface_joins.contains(at) {
+            let (band, bounds) = self.caches.borders.geometry(
+                &self.key,
+                crate::border_ramp::GeometryInput {
+                    outline: &contour.path,
+                    origin: contour.offset,
+                    ramp,
+                    anchor,
+                    shoulder,
+                    tolerance: 0.1 / self.spec.device_scale.unwrap_or(1.0),
+                },
+                named_frame,
+            )?;
+            let Some(bounds) = bounds else {
+                return Ok(());
+            };
+            let start = self.out.paint.len();
+            if ramp.align == crate::BorderAlign::Inside {
+                self.mark_on(Layer::Clip, contour);
+            }
+            if let Some(p) = self.push(
+                Layer::Stroke,
+                band,
+                None,
+                &ramp.fill(anchor, bounds + contour.offset.to_vec2()),
+                bg,
+            ) {
+                p.offset = contour.offset;
+            }
+            if ramp.align == crate::BorderAlign::Inside {
+                self.mark(Layer::Unclip, empty(), None);
+            }
+            if !ramp.tabs.is_empty() {
+                let len = self.out.paint.len() - start;
+                self.out.paint[border_background..].rotate_right(len);
+            }
+            return Ok(());
+        }
         let mut sweep = ramp.clone();
         if ramp.align == crate::BorderAlign::Center {
             sweep.from.1 *= 0.5;
