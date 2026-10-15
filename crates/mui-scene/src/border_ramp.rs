@@ -1,8 +1,8 @@
 //! A spatial border material on a fixed outline. Geometry is independent of paint.
 use crate::{Fill, Gradient, SceneError};
-use mui_geometry::{Path, Point, Rect};
 #[cfg(test)]
-use mui_geometry::{PathCommand, RoundedRect};
+use mui_geometry::RoundedRect;
+use mui_geometry::{Path, PathCommand, Point, Rect};
 use mui_layout::{Frame, Id};
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
@@ -182,6 +182,7 @@ struct GeometryEntry {
 
 pub(crate) struct GeometryInput<'a> {
     pub outline: &'a Arc<Path>,
+    pub joins: Option<&'a Path>,
     pub origin: Point,
     pub ramp: &'a BorderRamp,
     pub anchor: Frame,
@@ -207,6 +208,7 @@ impl BorderCache {
     ) -> Result<(Arc<Path>, Option<Rect>), SceneError> {
         let GeometryInput {
             outline,
+            joins,
             origin,
             ramp,
             anchor,
@@ -244,6 +246,37 @@ impl BorderCache {
                     key.extend([f.x, f.y, f.size.width, f.size.height].map(f64::to_bits));
                 }
             }
+            key.push(joins.map_or(0, |p| p.commands.len()) as u64);
+            if let Some(joins) = joins {
+                let point = |key: &mut Vec<u64>, p: Point| {
+                    key.extend([(p.x - origin.x).to_bits(), (p.y - origin.y).to_bits()]);
+                };
+                for command in &joins.commands {
+                    match *command {
+                        PathCommand::MoveTo(p) => {
+                            key.push(0);
+                            point(&mut key, p);
+                        }
+                        PathCommand::LineTo(p) => {
+                            key.push(1);
+                            point(&mut key, p);
+                        }
+                        PathCommand::CubicTo(a, b, c) => {
+                            key.push(2);
+                            for p in [a, b, c] {
+                                point(&mut key, p);
+                            }
+                        }
+                        PathCommand::ArcTo(a) => {
+                            key.push(3);
+                            point(&mut key, a.center);
+                            point(&mut key, a.to);
+                            key.extend([a.radius, a.start_angle, a.sweep].map(f64::to_bits));
+                        }
+                        PathCommand::Close => key.push(4),
+                    }
+                }
+            }
             if let Some(entry) = self.geometry.get_mut(id).filter(|e| e.key == key) {
                 entry.seen = self.generation;
                 return Ok((entry.path.clone(), entry.bounds));
@@ -257,6 +290,11 @@ impl BorderCache {
             decorate(&mut path, ramp, anchor, shoulder, |id| {
                 named_frame(id).map(local)
             })?;
+            if let Some(joins) = joins {
+                let mut joins = joins.clone();
+                joins.translate(-origin.to_vec2());
+                path.commands.extend(joins.commands);
+            }
             let bounds = mui_geometry::bounds(path.flatten(0.1, 250_000)?.concat());
             let path = Arc::new(path);
             let old = self.geometry.insert(

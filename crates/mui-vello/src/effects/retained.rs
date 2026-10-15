@@ -702,6 +702,16 @@ impl GpuRenderer {
             // An allocation panic must leave the old size intact so a caught
             // failure cannot make the next resize skip the required allocation.
             self.size = size;
+            // Scratch belongs to this viewport too; an earlier giant or wide
+            // window must not pin a mostly unused damage texture indefinitely.
+            if self.patch.as_ref().is_some_and(|p| {
+                p.width() > capacity[0]
+                    || p.height() > capacity[1]
+                    || u64::from(p.width()) * u64::from(p.height())
+                        > 2 * u64::from(size[0]) * u64::from(size[1])
+            }) {
+                self.patch = None;
+            }
             self.write_frame();
             self.invalidate();
         }

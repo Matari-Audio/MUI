@@ -369,11 +369,12 @@ impl Walk<'_> {
             Radius::Scale(k) => th.corners.concave * k,
             _ => th.corners.concave,
         };
-        if ramp.align != crate::BorderAlign::Outside && !self.plan.surface_joins.contains(at) {
+        if ramp.align != crate::BorderAlign::Outside {
             let (band, bounds) = self.caches.borders.geometry(
                 &self.key,
                 crate::border_ramp::GeometryInput {
                     outline: &contour.path,
+                    joins: self.plan.surface_joins.get(at),
                     origin: contour.offset,
                     ramp,
                     anchor,
@@ -401,7 +402,7 @@ impl Walk<'_> {
             if ramp.align == crate::BorderAlign::Inside {
                 self.mark(Layer::Unclip, empty(), None);
             }
-            if !ramp.tabs.is_empty() {
+            if !ramp.tabs.is_empty() || self.plan.surface_joins.contains(at) {
                 let len = self.out.paint.len() - start;
                 self.out.paint[border_background..].rotate_right(len);
             }
