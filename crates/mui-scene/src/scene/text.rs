@@ -474,14 +474,8 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
         return Size::ZERO.into();
     };
     let face = Face::of(e, th);
-    if let Some(stand_in) = &e.extras().measure_as {
-        let (one_line, word) = runs.measured(stand_in, face);
-        return Intrinsic {
-            size: one_line,
-            min_width: word,
-        };
-    }
-    let t = &**t;
+    // A stand-in is laid out exactly as if it were the text.
+    let t = e.extras().measure_as.as_deref().unwrap_or(t);
     let (one_line, word) = runs.measured(t, face);
     if e.extras().editable_text.is_some() {
         return Intrinsic {

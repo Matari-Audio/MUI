@@ -708,13 +708,7 @@ impl<'a> Walk<'a> {
             _ => Fill::Role(crate::Role::Ink),
         };
         let face = Face::of(e, th);
-        // A stand-in-measured value is one line in the box its stand-in set.
-        let room = if e.extras().measure_as.is_some() {
-            f64::INFINITY
-        } else {
-            frame.size.width
-        };
-        let lines = self.runs.lines(t, face, room, e.lines);
+        let lines = self.runs.lines(t, face, frame.size.width, e.lines);
         let fonts = self.runs.fonts_for(face);
         let font_coords = self.runs.coords(&fonts, face);
         // An icon font's Private Use Area glyphs have no stems worth
