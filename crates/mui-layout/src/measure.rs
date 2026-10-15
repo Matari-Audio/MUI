@@ -74,8 +74,11 @@ pub(crate) struct Measured<'a, P> {
 
 /// The in-flow children -- everything but the floats -- in placement order.
 /// The sort is stable, so `order` only moves what asked to be moved.
-pub(crate) fn flow_of<'a, 'm, P>(children: &'m [Measured<'a, P>]) -> Vec<&'m Measured<'a, P>> {
-    let mut flow: Vec<_> = children.iter().filter(|c| !c.node.float).collect();
+/// Ordinary control rows stay inline; larger containers spill without a limit.
+pub(crate) fn flow_of<'a, 'm, P>(
+    children: &'m [Measured<'a, P>],
+) -> smallvec::SmallVec<[&'m Measured<'a, P>; 8]> {
+    let mut flow: smallvec::SmallVec<[_; 8]> = children.iter().filter(|c| !c.node.float).collect();
     if !flow.is_sorted_by_key(|c| c.node.order) {
         flow.sort_by_key(|c| c.node.order);
     }
@@ -110,8 +113,8 @@ pub(crate) fn wrap_lines<P>(
     gap: f64,
     vertical: bool,
     avail: f64,
-) -> Vec<(usize, usize)> {
-    let mut lines = Vec::new();
+) -> smallvec::SmallVec<[(usize, usize); 4]> {
+    let mut lines = smallvec::SmallVec::new();
     let (mut start, mut used) = (0, 0.0);
     for (i, c) in flow.iter().enumerate() {
         let w = c.base(vertical, None);
@@ -127,7 +130,7 @@ pub(crate) fn wrap_lines<P>(
 }
 
 impl<'a, P> Measured<'a, P> {
-    pub(crate) fn flow(&self) -> Vec<&Measured<'a, P>> {
+    pub(crate) fn flow(&self) -> smallvec::SmallVec<[&Measured<'a, P>; 8]> {
         flow_of(&self.children)
     }
     /// Where this child starts before growth or shrink: a percentage of the
@@ -729,7 +732,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     let lines = if node.wrap {
                         wrap_lines(&flow, gap, vertical, avail)
                     } else {
-                        vec![(0, flow.len())]
+                        smallvec::smallvec![(0, flow.len())]
                     };
                     lines
                         .into_iter()

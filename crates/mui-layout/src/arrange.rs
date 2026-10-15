@@ -14,13 +14,13 @@ pub(crate) fn distribute<P>(
     gap: f64,
     vertical: bool,
     inner: Size,
-) -> Vec<f64> {
+) -> smallvec::SmallVec<[f64; 8]> {
     let available = inner.main(vertical) - gap * children.len().saturating_sub(1) as f64;
-    let bases: Vec<_> = children
+    let bases: smallvec::SmallVec<[_; 8]> = children
         .iter()
         .map(|c| c.flex_basis(vertical, Some(inner)))
         .collect();
-    let hypothetical: Vec<_> = children
+    let hypothetical: smallvec::SmallVec<[_; 8]> = children
         .iter()
         .map(|c| c.base(vertical, Some(inner)))
         .collect();
@@ -34,7 +34,7 @@ pub(crate) fn distribute<P>(
     };
     let weight = |i: usize| factor(i) * if growing { 1.0 } else { bases[i] };
     let mut sizes = hypothetical.clone();
-    let mut frozen: Vec<_> = (0..children.len())
+    let mut frozen: smallvec::SmallVec<[_; 8]> = (0..children.len())
         .map(|i| {
             factor(i) == 0.0
                 || if growing {
@@ -54,7 +54,7 @@ pub(crate) fn distribute<P>(
     // ponytail: CSS's freeze loop is O(n²) in the worst case (one bound per
     // round). Keep this direct algorithm until large constrained rows warrant
     // a sorted solver that also handles mixed min/max violations.
-    let mut violations = vec![0.0; children.len()];
+    let mut violations: smallvec::SmallVec<[f64; 8]> = smallvec::smallvec![0.0; children.len()];
     while frozen.iter().any(|f| !f) {
         let mut free = remaining(&sizes, &frozen);
         let factors: f64 = (0..children.len())
@@ -212,7 +212,8 @@ pub(crate) fn arrange<P>(
     // Where each in-flow child goes, then every child in declaration order
     // so frames stay in tree order; a float sits in the padding box like an
     // overlay child, unscrolled.
-    let mut placed: Vec<Option<([f64; 2], Size)>> = vec![None; m.children.len()];
+    let mut placed: smallvec::SmallVec<[Option<([f64; 2], Size)>; 8]> =
+        smallvec::smallvec![None; m.children.len()];
     match &n.kind {
         Kind::Leaf => {}
         Kind::Overlay(_) | Kind::Content(_) => {
@@ -327,7 +328,7 @@ pub(crate) fn arrange<P>(
             let lines = if n.wrap {
                 wrap_lines(&flow, m.gap, v, inner.main(v))
             } else {
-                vec![(0, flow.len())]
+                smallvec::smallvec![(0, flow.len())]
             };
             let line_cross = |(a, b): (usize, usize)| {
                 flow[a..b]
