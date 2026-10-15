@@ -605,6 +605,7 @@ impl Ui {
         {
             response.drag_delta = pose.delta(response.drag_delta);
             response.drag_total = pose.delta(response.drag_total);
+            response.drag_shifted = pose.delta(response.drag_shifted);
         }
         response.double_clicked = self.double.as_deref() == Some(id);
         response.key_activated = self
