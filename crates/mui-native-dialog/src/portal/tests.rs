@@ -473,3 +473,66 @@ fn locally_cancelled_jobs_discard_queued_success() {
     assert!(job.is_cancelled());
     assert!(job.try_result().is_none());
 }
+
+#[test]
+fn blocking_result_preserves_early_responses_and_worker_disconnects() {
+    let portal = Portal::new();
+    let job = portal.start(request(DialogKind::OpenFile { multiple: false }));
+    assert_eq!(
+        job.wait_result().unwrap().unwrap(),
+        Some(vec![PathBuf::from("/tmp/test file.wav")])
+    );
+    let (send, _) = async_channel::bounded(1);
+    let (result, answer) = mpsc::channel();
+    drop(result);
+    let disconnected = DialogJob {
+        cancel: CancelHandle {
+            cancelled: Arc::default(),
+            send,
+        },
+        result: answer,
+        finished: Arc::new(AtomicBool::new(true)),
+    };
+    assert!(disconnected.wait_result().unwrap().is_err());
+}
+
+#[test]
+fn blocking_result_wakes_after_cancel_and_suppresses_delivery() {
+    let portal = Portal::new();
+    portal.mode.store(6, Ordering::Release);
+    let job = portal.start(request(DialogKind::OpenFile { multiple: false }));
+    let cancel = job.cancel_handle();
+    let waiter = std::thread::spawn(move || job.wait_result());
+    portal.opened.recv_timeout(Duration::from_secs(2)).unwrap();
+    cancel.cancel();
+    assert!(waiter.join().unwrap().is_none());
+}
+
+#[test]
+#[ignore = "manual pending-dialog wakeup comparison; private portal only"]
+fn pending_dialog_wait_report() {
+    let portal = Portal::new();
+    portal.mode.store(6, Ordering::Release);
+    let job = portal.start(request(DialogKind::OpenFile { multiple: false }));
+    let cancel = job.cancel_handle();
+    let poll = std::env::var_os("MUI_DIALOG_AUDIT_POLL").is_some();
+    let waiter = std::thread::Builder::new()
+        .name("dialog-audit-wait".into())
+        .spawn(move || {
+            if poll {
+                while !job.is_cancelled() && !job.is_finished() {
+                    if job.try_result().is_some() {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            } else {
+                assert!(job.wait_result().is_none());
+            }
+        })
+        .unwrap();
+    portal.opened.recv_timeout(Duration::from_secs(2)).unwrap();
+    std::thread::sleep(Duration::from_secs(3));
+    cancel.cancel();
+    waiter.join().unwrap();
+}
