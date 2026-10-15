@@ -173,8 +173,9 @@ struct Entry {
 #[derive(Debug)]
 struct GeometryEntry {
     key: Vec<u64>,
-    // Retaining the source makes the pointer in the exact key ABA-safe.
-    _source: Arc<Path>,
+    // Producers may rebuild an identical contour. Identity is a fast path;
+    // the exact immutable geometry is what determines the cached band.
+    source: Arc<Path>,
     path: Arc<Path>,
     bounds: Option<Rect>,
     seen: u64,
@@ -223,7 +224,6 @@ impl BorderCache {
         let anchor = local(anchor);
         let mut key = std::mem::take(&mut self.scratch);
         key.clear();
-        key.push(Arc::as_ptr(outline) as usize as u64);
         key.extend(
             [
                 anchor.x,
@@ -277,8 +277,12 @@ impl BorderCache {
                     }
                 }
             }
-            if let Some(entry) = self.geometry.get_mut(id).filter(|e| e.key == key) {
+            if let Some(entry) = self.geometry.get_mut(id).filter(|e| {
+                e.key == key
+                    && (Arc::ptr_eq(&e.source, outline) || e.source.as_ref() == outline.as_ref())
+            }) {
                 entry.seen = self.generation;
+                entry.source.clone_from(outline);
                 return Ok((entry.path.clone(), entry.bounds));
             }
             let mut sweep = ramp.clone();
@@ -301,7 +305,7 @@ impl BorderCache {
                 id.clone(),
                 GeometryEntry {
                     key: std::mem::take(&mut key),
-                    _source: outline.clone(),
+                    source: outline.clone(),
                     path: path.clone(),
                     bounds,
                     seen: self.generation,
@@ -433,6 +437,47 @@ mod tests {
         cache.sweep(0);
         cache.sweep(0);
         assert!(cache.geometry.is_empty());
+    }
+
+    #[test]
+    fn rebuilt_equal_contours_reuse_bands_but_changed_geometry_does_not() {
+        let ramp = BorderRamp::horizontal((crate::Role::Primary, 3.), (crate::Role::Dim, 1.));
+        let mut cache = BorderCache::default();
+        let id = Id::of("rebuilt-band");
+        let mut get = |radius, origin: Point| {
+            // An outline producer may return a fresh allocation every frame.
+            let outline = Arc::new(
+                RoundedRect::new(Rect::new(0., 0., 120., 40.), radius)
+                    .unwrap()
+                    .path(),
+            );
+            cache
+                .geometry(
+                    &id,
+                    GeometryInput {
+                        outline: &outline,
+                        joins: None,
+                        origin,
+                        ramp: &ramp,
+                        anchor: Frame {
+                            x: origin.x,
+                            y: origin.y,
+                            size: crate::Size::new(120., 40.),
+                        },
+                        shoulder: 4.,
+                        tolerance: 0.1,
+                    },
+                    |_| unreachable!(),
+                )
+                .unwrap()
+        };
+        let first = get(4., Point::ZERO);
+        let rebuilt = get(4., Point::new(10., -80.));
+        assert!(Arc::ptr_eq(&first.0, &rebuilt.0));
+        assert_eq!(first.1, rebuilt.1);
+        let changed = get(6., Point::new(10., -80.));
+        assert!(!Arc::ptr_eq(&first.0, &changed.0));
+        assert_ne!(first.0, changed.0);
     }
 
     #[test]
