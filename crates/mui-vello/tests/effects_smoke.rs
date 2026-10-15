@@ -1025,3 +1025,34 @@ fn inserted_canvas_draws_do_not_damage_unchanged_siblings() {
     );
     same_pixels(&part, &whole);
 }
+
+#[test]
+fn packed_text_regions_match_fresh_glyph_rendering() {
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let scene = |hot| {
+        let label = |x, y, id| {
+            text("12.3")
+                .text_size(12.)
+                .fill(if hot { Role::Danger } else { Role::Ink })
+                .float()
+                .offset(x, y)
+                .id(id)
+        };
+        resolve(
+            &SceneSpec::new(
+                stack([label(5., 10., "a"), label(125., 75., "b")]).fill(Role::Background),
+            )
+            .font(font.clone())
+            .offered(Size::new(320., 200.)),
+        )
+        .unwrap()
+    };
+    for xf in [Affine::IDENTITY, Affine::scale(2.)] {
+        let Some((part, whole, stats)) = damaged_at(&scene(false), &scene(true), xf) else {
+            return;
+        };
+        assert_eq!(stats.renders, 1);
+        assert!(stats.rendered_pixels < AREA);
+        same_pixels(&part, &whole);
+    }
+}
