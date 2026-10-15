@@ -66,7 +66,7 @@ pub fn open<V: View + Send + 'static>(
             closed();
         })),
         presented: Some(Box::new(move |size, software| {
-            status.presented(size, software, "Wayland")
+            status.presented(size, software, "Wayland");
         })),
     };
     let window = mui_winit::floating::open(
@@ -80,6 +80,7 @@ pub fn open<V: View + Send + 'static>(
     )?;
     requests.wayland_open.store(true, Ordering::Release);
     requests.bind_requester(Some(baseview::FrameRequester::new(window.wake())));
+    drop(requests);
     Ok(window)
 }
 
