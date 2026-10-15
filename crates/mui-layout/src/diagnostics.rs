@@ -249,7 +249,7 @@ impl Recorder {
                 nodes: Vec::with_capacity(NODES),
                 ..Default::default()
             },
-            slots: FxHashMap::with_capacity_and_hasher(NODES, Default::default()),
+            slots: FxHashMap::with_capacity_and_hasher(NODES, rustc_hash::FxBuildHasher),
             states: Vec::with_capacity(NODES),
             epoch: 0,
         }

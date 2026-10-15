@@ -537,7 +537,11 @@ fn releasing_shift_mid_drag_keeps_the_fine_travel_already_made() {
     i.update(&hit, with(down(40., 50.), Button::Primary, Mods::default()));
     i.update(&hit, with(down(60., 50.), Button::Primary, shift()));
     let fine = i.get("a").drag_travel(FINE_DRAG).x;
-    assert_eq!(fine, 30.0 + 20.0 * FINE_DRAG, "only the Shift stretch is fine");
+    assert_eq!(
+        fine,
+        30.0 + 20.0 * FINE_DRAG,
+        "only the Shift stretch is fine"
+    );
     i.update(&hit, with(down(60., 50.), Button::Primary, Mods::default()));
     assert_eq!(
         i.get("a").drag_travel(FINE_DRAG).x,

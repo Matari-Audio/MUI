@@ -402,7 +402,9 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
             }
             Err(error) => {
                 self.error = Some(error);
-                if self.exit_on_error { event_loop.exit(); }
+                if self.exit_on_error {
+                    event_loop.exit();
+                }
             }
         }
     }

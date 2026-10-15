@@ -184,7 +184,9 @@ impl Requests {
     }
     /// Whether a floating Wayland editor currently owns this request queue.
     #[cfg(target_os = "linux")]
-    pub fn wayland_open(&self) -> bool { self.wayland_open.load(Ordering::Acquire) }
+    pub fn wayland_open(&self) -> bool {
+        self.wayland_open.load(Ordering::Acquire)
+    }
 
     /// The editor's X11 window identifier, for parenting desktop portal dialogs.
     ///

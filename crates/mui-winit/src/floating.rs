@@ -6,13 +6,16 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{OnceLock, mpsc};
 use winit::platform::wayland::EventLoopBuilderExtWayland;
 
+type PollHook = Box<dyn FnMut(&Window, &mut Driver) + Send>;
+type KeyHook = Box<dyn FnMut(&KeyEvent) -> bool + Send>;
+type PresentedHook = Box<dyn FnMut((u32, u32), bool) + Send>;
 /// Hooks run on the native thread, outside the model lock.
 #[derive(Default)]
 pub struct Hooks {
-    pub poll: Option<Box<dyn FnMut(&Window, &mut Driver) + Send>>,
-    pub key: Option<Box<dyn FnMut(&KeyEvent) -> bool + Send>>,
+    pub poll: Option<PollHook>,
+    pub key: Option<KeyHook>,
     pub closed: Option<Box<dyn FnMut() + Send>>,
-    pub presented: Option<Box<dyn FnMut((u32, u32), bool) + Send>>,
+    pub presented: Option<PresentedHook>,
 }
 struct Status {
     open: AtomicBool,
