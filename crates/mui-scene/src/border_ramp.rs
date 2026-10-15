@@ -285,6 +285,22 @@ impl BorderCache {
                 entry.source.clone_from(outline);
                 return Ok((entry.path.clone(), entry.bounds));
             }
+            // Temporary diagnostic: removed before shipping.
+            static DIAGNOSTICS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            static PRINTED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            if self.generation > 240
+                && *DIAGNOSTICS.get_or_init(|| std::env::var_os("MUI_BORDER_DIAGNOSTICS").is_some())
+                && let Some(old) = self.geometry.get(id)
+                && PRINTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed) < 32
+            {
+                let key_diff = old.key.iter().zip(&key).enumerate()
+                    .find(|(_, (a, b))| a != b)
+                    .map(|(i, (a, b))| (i, a, b, f64::from_bits(*a), f64::from_bits(*b)));
+                let path_diff = old.source.commands.iter().zip(&outline.commands).enumerate()
+                    .find(|(_, (a, b))| a != b);
+                eprintln!("BORDER_MISS id={id:?} origin={origin:?} key_lengths={:?} key_diff={key_diff:?} path_lengths={:?} path_diff={path_diff:?}",
+                    (old.key.len(), key.len()), (old.source.commands.len(), outline.commands.len()));
+            }
             let mut sweep = ramp.clone();
             if ramp.align == crate::BorderAlign::Center {
                 sweep.from.1 *= 0.5;
