@@ -879,3 +879,180 @@ fn non_apple_bitmap_glyph_bearings_match_cpu_and_gpu() {
         "GPU retains bitmap frame"
     );
 }
+
+fn bounded_weld(role: Role, x: f64) -> ResolvedScene {
+    let plates = row([block(20., 20.).fill(role), block(20., 20.).fill(role)])
+        .gap(4.)
+        .weld(Weld::all().reach(8.).blend(8.))
+        .id("bounded.weld")
+        .float()
+        .offset(x, 24.)
+        .anchor(Align::Start, Align::Start);
+    resolve(
+        &SceneSpec::new(stack([block(320., 200.).fill(Role::Background), plates]))
+            .offered(Size::new(320., 200.))
+            .weld_backend(WeldBackend::AnalyticGpu),
+    )
+    .unwrap()
+}
+
+#[test]
+fn bounded_weld_changes_and_moves_match_full_renders() {
+    for scale in [1., 2.] {
+        for (before, after) in [
+            (
+                bounded_weld(Role::Primary, 32.),
+                bounded_weld(Role::Danger, 32.),
+            ),
+            (
+                bounded_weld(Role::Primary, 32.),
+                bounded_weld(Role::Primary, 80.),
+            ),
+        ] {
+            let (part, whole, stats) = damaged_at(&before, &after, Affine::scale(scale))
+                .expect("GPU adapter required for weld damage validation");
+            same_pixels(&part, &whole);
+            assert_eq!(stats.renders, 1);
+            assert!(
+                stats.rendered_pixels < AREA / 2,
+                "bounded weld repainted {} pixels",
+                stats.rendered_pixels
+            );
+            assert_eq!(stats.texture_allocations, 0);
+        }
+    }
+}
+
+#[test]
+fn unchanged_welds_skip_encoding_raster_and_presentation() {
+    let (device, queue) = device().expect("GPU adapter required for weld reuse validation");
+    let scene = bounded_weld(Role::Primary, 32.);
+    let out = target(&device);
+    let mut renderer = pollster::block_on(hybrid(&device, &queue));
+    renderer.render(&scene, Affine::IDENTITY, &out).unwrap();
+    assert!(renderer.is_current(&scene, Affine::IDENTITY));
+    let stats = renderer.render(&scene, Affine::IDENTITY, &out).unwrap();
+    assert_eq!(stats.renders, 0);
+    assert_eq!(stats.encoded_scenes, 0);
+    assert_eq!(stats.effect_draws, 0);
+    assert_eq!(stats.uniform_upload_bytes, 0);
+    assert_eq!(stats.boundary_upload_bytes, 0);
+    assert_eq!(stats.texture_allocations, 0);
+}
+
+/// Distant edits retain the pixels between them instead of repainting their hull.
+#[test]
+fn sparse_changes_render_disjoint_regions_and_match_a_full_frame() {
+    let scene = |hot| {
+        let chip = |x, y, id| {
+            block(20., 20.)
+                .fill(if hot { Role::Danger } else { Role::Primary })
+                .float()
+                .offset(x, y)
+                .id(id)
+        };
+        resolve(
+            &SceneSpec::new(
+                stack([chip(10., 10., "a"), chip(275., 165., "b")]).fill(Role::Background),
+            )
+            .offered(Size::new(320., 200.)),
+        )
+        .unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
+        return;
+    };
+    assert_eq!(stats.renders, 1);
+    assert!(stats.rendered_pixels < AREA / 8);
+    same_pixels(&part, &whole);
+}
+
+#[test]
+fn inserted_canvas_draws_do_not_damage_unchanged_siblings() {
+    let scene = |extra| {
+        let canvas = canvas(move |_| {
+            let mut draws = vec![Draw::fill(
+                Path::polyline(
+                    [
+                        Point::new(5., 5.),
+                        Point::new(20., 5.),
+                        Point::new(20., 20.),
+                    ],
+                    true,
+                ),
+                Role::Primary,
+            )];
+            if extra {
+                draws.push(Draw::fill(
+                    Path::polyline(
+                        [
+                            Point::new(5., 25.),
+                            Point::new(20., 25.),
+                            Point::new(20., 40.),
+                        ],
+                        true,
+                    ),
+                    Role::Danger,
+                ));
+            }
+            draws
+        })
+        .size(40., 50.)
+        .id("canvas");
+        resolve(
+            &SceneSpec::new(
+                stack([
+                    canvas,
+                    block(100., 100.)
+                        .float()
+                        .offset(200., 80.)
+                        .fill(Role::Warning)
+                        .id("far"),
+                ])
+                .fill(Role::Background),
+            )
+            .offered(Size::new(320., 200.)),
+        )
+        .unwrap()
+    };
+    let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
+        return;
+    };
+    assert!(
+        stats.rendered_pixels < AREA / 8,
+        "{}",
+        stats.rendered_pixels
+    );
+    same_pixels(&part, &whole);
+}
+
+#[test]
+fn packed_text_regions_match_fresh_glyph_rendering() {
+    let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    let scene = |hot| {
+        let label = |x, y, id| {
+            text("12.3")
+                .text_size(12.)
+                .fill(if hot { Role::Danger } else { Role::Ink })
+                .float()
+                .offset(x, y)
+                .id(id)
+        };
+        resolve(
+            &SceneSpec::new(
+                stack([label(5., 10., "a"), label(125., 75., "b")]).fill(Role::Background),
+            )
+            .font(font.clone())
+            .offered(Size::new(320., 200.)),
+        )
+        .unwrap()
+    };
+    for xf in [Affine::IDENTITY, Affine::scale(2.)] {
+        let Some((part, whole, stats)) = damaged_at(&scene(false), &scene(true), xf) else {
+            return;
+        };
+        assert_eq!(stats.renders, 1);
+        assert!(stats.rendered_pixels < AREA);
+        same_pixels(&part, &whole);
+    }
+}

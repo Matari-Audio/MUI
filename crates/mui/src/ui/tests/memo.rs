@@ -225,3 +225,138 @@ fn text_runs_handle_is_shared_and_bounded() {
         assert!(runs.len() <= 2048);
     }
 }
+
+#[test]
+fn retained_layout_floats_reposition_and_rebuild_only_for_dependencies() {
+    let mut ui = Ui::default();
+    let mut built = 0;
+    for width in [100., 100., 180., 180.] {
+        let root = ui.memo_with_layout_floats("root", 0, |_| {
+            built += 1;
+            stack([block(12., 10.)
+                .id("float")
+                .float()
+                .anchor(Align::End, Align::End)])
+        });
+        let scene = ui
+            .frame(
+                root,
+                Some(Size::new(width, 80.)),
+                PointerInput::default(),
+                0.,
+            )
+            .unwrap()
+            .scene;
+        assert_eq!(scene.surface("float").unwrap().frame.x, width - 12.);
+        assert_eq!(scene.surface("float").unwrap().frame.y, 70.);
+    }
+    assert_eq!(
+        built, 1,
+        "layout floats keep their owned declaration but still resolve new offers"
+    );
+    let root = ui.memo_with_layout_floats("root", 1, |_| {
+        built += 1;
+        stack([block(16., 10.)
+            .id("float")
+            .float()
+            .anchor(Align::End, Align::End)])
+    });
+    let scene = ui
+        .frame(
+            root,
+            Some(Size::new(180., 80.)),
+            PointerInput::default(),
+            0.,
+        )
+        .unwrap()
+        .scene;
+    assert_eq!(scene.surface("float").unwrap().frame.x, 164.);
+    assert_eq!(built, 2);
+}
+
+#[test]
+fn settled_root_memo_reuses_scene_but_configuration_and_input_resolve_again() {
+    use std::sync::Arc;
+    let mut ui = Ui::default();
+    let build = |ui: &mut Ui| {
+        ui.memo_with_layout_floats("root", 0, |_| {
+            stack([block(12., 10.)
+                .id("float")
+                .float()
+                .anchor(Align::End, Align::End)])
+        })
+    };
+    let root = build(&mut ui);
+    ui.frame(
+        root,
+        Some(Size::new(100., 80.)),
+        PointerInput::default(),
+        0.,
+    )
+    .unwrap();
+    let first = ui.scene_snapshot().unwrap();
+    for _ in 0..4 {
+        let root = build(&mut ui);
+        let frame = ui
+            .frame(
+                root,
+                Some(Size::new(100., 80.)),
+                PointerInput::default(),
+                0.016,
+            )
+            .unwrap();
+        assert!(!frame.animating);
+        assert!(frame.edits.is_empty());
+        assert!(Arc::ptr_eq(&first, &ui.scene_snapshot().unwrap()));
+        assert_eq!(ui.layout_stats().validated_nodes, 0);
+    }
+    ui.set_scale(Some(2.));
+    let root = build(&mut ui);
+    ui.frame(
+        root,
+        Some(Size::new(100., 80.)),
+        PointerInput::default(),
+        0.016,
+    )
+    .unwrap();
+    let scaled = ui.scene_snapshot().unwrap();
+    assert!(!Arc::ptr_eq(&first, &scaled));
+    let root = build(&mut ui);
+    ui.frame(
+        root,
+        Some(Size::new(140., 80.)),
+        PointerInput::default(),
+        0.016,
+    )
+    .unwrap();
+    let resized = ui.scene_snapshot().unwrap();
+    assert!(!Arc::ptr_eq(&scaled, &resized));
+    assert_eq!(resized.surface("float").unwrap().frame.x, 128.);
+    let root = build(&mut ui);
+    ui.frame(
+        root,
+        Some(Size::new(140., 80.)),
+        PointerInput {
+            pos: Some(Point::new(134., 75.)),
+            ..Default::default()
+        },
+        0.016,
+    )
+    .unwrap();
+    assert!(!Arc::ptr_eq(&resized, &ui.scene_snapshot().unwrap()));
+    ui.set_layout_limits(mui_layout::Limits {
+        nodes: 1,
+        ..Default::default()
+    })
+    .unwrap();
+    let root = build(&mut ui);
+    assert!(
+        ui.frame(
+            root,
+            Some(Size::new(140., 80.)),
+            PointerInput::default(),
+            0.016
+        )
+        .is_err()
+    );
+}

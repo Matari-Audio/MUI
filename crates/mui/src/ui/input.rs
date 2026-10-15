@@ -710,7 +710,11 @@ impl Ui {
         for k in keys {
             self.hot.extend(scene.memos_at(k).map(|(id, _)| id));
         }
-        self.hot.extend(scene.memos_floating());
+        self.hot.extend(
+            scene
+                .memos_floating()
+                .filter(|id| self.kept.get(id).is_none_or(|k| !k.layout_floats)),
+        );
     }
 
     /// Focus follows a press on a focusable surface, and a press on anything

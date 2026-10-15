@@ -119,14 +119,19 @@ pub(crate) struct Frozen {
     fluid: [bool; 2],
     definite_height: bool,
     cols: usize,
-    columns: Vec<f64>,
-    rows: Vec<f64>,
+    columns: measure::Tracks,
+    rows: measure::Tracks,
     pick: usize,
     container: [Option<f64>; 2],
     children: Vec<Arc<Frozen>>,
 }
 impl Frozen {
-    fn bind<'a, P>(this: &Arc<Self>, n: &'a Node<P>, stats: &mut LayoutStats) -> Measured<'a, P> {
+    fn bind<'a, P>(
+        this: &Arc<Self>,
+        n: &'a Node<P>,
+        stats: &mut LayoutStats,
+        deep: bool,
+    ) -> Measured<'a, P> {
         stats.rebound_nodes += 1;
         Measured {
             node: n,
@@ -146,19 +151,48 @@ impl Frozen {
             rows: this.rows.clone(),
             pick: this.pick,
             container: this.container,
-            children: this
-                .children
-                .iter()
-                .zip(n.children())
-                .enumerate()
-                .map(|(i, (c, n))| {
-                    let mut m = Self::bind(c, n, stats);
-                    m.index = i;
-                    m
-                })
-                .collect(),
+            children: if deep {
+                this.children
+                    .iter()
+                    .zip(n.children())
+                    .enumerate()
+                    .map(|(i, (c, n))| {
+                        let mut m = Self::bind(c, n, stats, true);
+                        m.index = i;
+                        m
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
         }
     }
+    /// A cache hit binds only its root during measurement. Arrange expands
+    /// one level at a time, once, rather than allocating the entire subtree
+    /// for every speculative flex/Fits measurement that reads its metrics.
+    /// Pin replay keeps eager binding because it borrows measured descendants.
+    pub(crate) fn expand<'a, P>(m: &Measured<'a, P>) -> Option<Measured<'a, P>> {
+        if !m.children.is_empty() || m.node.children().is_empty() {
+            return None;
+        }
+        let frozen = m.frozen.as_ref()?;
+        let mut ignored = LayoutStats::default();
+        let mut expanded = Self::bind(frozen, m.node, &mut ignored, false);
+        expanded.index = m.index;
+        expanded.children = frozen
+            .children
+            .iter()
+            .zip(m.node.children())
+            .enumerate()
+            .map(|(index, (f, n))| {
+                let mut child = Self::bind(f, n, &mut ignored, false);
+                child.index = index;
+                child
+            })
+            .collect();
+        Some(expanded)
+    }
+
     fn freeze<P>(m: &Measured<'_, P>, cost: usize) -> Arc<Self> {
         Arc::new(Self {
             cost,
@@ -238,6 +272,10 @@ impl LayoutCache {
     /// a couple of sizes to go back to. Fewer trades hit rate for memory,
     /// never correctness.
     const VARIANTS: usize = 4;
+    // Nested Fits/flex branches can visit dozens of exact offers in one
+    // solve. Retain that bounded working set instead of evicting each pass's
+    // inputs before the next pass. Leaves keep their small four-entry cache.
+    const BRANCH_VARIANTS: usize = 64;
     /// Validates the tree and returns its measurement and placement revisions.
     fn prepare<P>(
         &mut self,
@@ -589,7 +627,7 @@ pub(crate) fn measure_cached<'a, P>(
         }
         pass.pinned |= cache.pinned;
         cache.stats.measure_hits += 1;
-        let bound = Frozen::bind(&snapshot, node, &mut cache.stats);
+        let bound = Frozen::bind(&snapshot, node, &mut cache.stats, cache.pinned);
         finish_request(cache, traced, false, false);
         return Ok(bound);
     }
@@ -606,8 +644,13 @@ pub(crate) fn measure_cached<'a, P>(
     if let Some(cache) = pass.cache.as_deref_mut() {
         let mut evicted = false;
         if let Some(stamp) = cache.stamp(node) {
+            let limit = if stamp.children.is_empty() {
+                LayoutCache::VARIANTS
+            } else {
+                LayoutCache::BRANCH_VARIANTS
+            };
             let measured = &mut stamp.measured;
-            if measured.len() >= LayoutCache::VARIANTS {
+            if measured.len() >= limit {
                 measured.remove(0);
                 evicted = true;
             }
@@ -1093,6 +1136,31 @@ mod tests {
             totals.measure_variant_evictions += cache.stats.measure_variant_evictions;
         }
         totals
+    }
+
+    #[test]
+    fn branch_working_set_survives_nested_flex_offers() {
+        let n = Node::row([Node::block(24., 16.).shrink(0.).with(Text {
+            value: String::new(),
+            colour: 0,
+        })])
+        .id("branch");
+        let widths: Vec<_> = (0..24).map(|i| Size::new(100. + i as f64, 80.)).collect();
+        let once = offer_oracle(&n, &widths, None);
+        let twice = offer_oracle(
+            &n,
+            &widths.iter().chain(&widths).copied().collect::<Vec<_>>(),
+            None,
+        );
+        assert_eq!(
+            twice.measured_nodes, once.measured_nodes,
+            "a repeated branch offer must not rebuild the measured subtree"
+        );
+        assert!(twice.measure_hits >= once.measure_hits + widths.len());
+        assert_eq!(
+            twice.measure_variant_evictions,
+            once.measure_variant_evictions
+        );
     }
 
     #[test]
@@ -1609,6 +1677,27 @@ mod tests {
         ])
         .pad(SpacingToken::Xs)
         .id("root")
+    }
+
+    #[test]
+    fn cached_scroll_binds_the_requested_root_without_rebuilding_descendant_measurements() {
+        let mut n =
+            Node::col((0..128).map(|i| label(&format!("row/{i}"), "Stable row").shrink(0.)))
+                .size(240., 100.)
+                .scroll()
+                .id("scroll");
+        let mut cache = LayoutCache::default();
+        prime(&n, 400., &mut cache);
+        for offset in [1., 17., 64., 120.] {
+            n.scrolled = [0., offset];
+            assert_eq!(cached(&n, 400., &mut cache), oracle(&n, 400.));
+            assert_eq!(cache.stats().measured_nodes, 0);
+            assert_eq!(
+                cache.stats().rebound_nodes,
+                1,
+                "a root cache hit must not allocate and rebind the entire measured descendant tree"
+            );
+        }
     }
 
     #[test]

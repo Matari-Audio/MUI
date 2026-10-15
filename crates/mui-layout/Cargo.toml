@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 # Hot maps keyed by addresses and hashes, not attacker input.
 rustc-hash.workspace = true
+smallvec = "1.16"
 
 [lints]
 workspace = true

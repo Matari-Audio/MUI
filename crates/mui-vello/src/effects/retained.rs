@@ -6,7 +6,7 @@ use crate::{
 };
 use mui_geometry::PathCommand;
 use mui_scene::{ExternalWeld, Layer, Painted, ResolvedScene, ShadowKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// Vello's compute pipelines and atlas are device-wide; retained encodings and
@@ -64,6 +64,7 @@ pub struct GpuRenderer {
     queue: wgpu::Queue,
     vello: SharedVello,
     scene: vello::Scene,
+    damage_scene: vello::Scene,
     /// A backdrop's prefix, encoded apart so it can be rendered first.
     prefix: vello::Scene,
     cache: Cache,
@@ -77,6 +78,12 @@ pub struct GpuRenderer {
     backdrops: Vec<Backdrop>,
     size: [u32; 2],
     retained: Vec<Painted>,
+    // External paint entries are stable while their material changes. Keep
+    // both placements so damage includes pixels vacated by a moving weld.
+    retained_external: HashMap<mui_scene::Id, Rect>,
+    external: HashMap<mui_scene::Id, Rect>,
+    drawn: Vec<ImageData>,
+    live_welds: HashSet<u64>,
     paths: Converted,
     /// Where a short canvas path is converted on its way into the scene.
     short: crate::kurbo::BezPath,
@@ -399,7 +406,141 @@ enum Change {
     None,
     /// Only `[x, y, w, h]`, in device pixels.
     Part([u32; 4]),
+    Parts(Regions),
     Full,
+}
+
+/// A fixed set of disjoint tile boxes. Sparse changes must not repaint the
+/// empty space between them; overflow falls back to the existing full render.
+#[derive(Clone, Copy)]
+struct Regions {
+    rects: [[u32; 4]; 16],
+    len: usize,
+}
+impl Regions {
+    fn new() -> Self {
+        Self {
+            rects: [[0; 4]; 16],
+            len: 0,
+        }
+    }
+    fn add(&mut self, mut r: [u32; 4]) -> bool {
+        if r[2] == 0 || r[3] == 0 {
+            return true;
+        }
+        let mut i = 0;
+        while i < self.len {
+            let a = self.rects[i];
+            if r[0] <= a[0] + a[2]
+                && a[0] <= r[0] + r[2]
+                && r[1] <= a[1] + a[3]
+                && a[1] <= r[1] + r[3]
+            {
+                let x = r[0].min(a[0]);
+                let y = r[1].min(a[1]);
+                r = [
+                    x,
+                    y,
+                    (r[0] + r[2]).max(a[0] + a[2]) - x,
+                    (r[1] + r[3]).max(a[1] + a[3]) - y,
+                ];
+                self.len -= 1;
+                self.rects[i] = self.rects[self.len];
+                i = 0;
+            } else {
+                i += 1;
+            }
+        }
+        if self.len == self.rects.len() {
+            return false;
+        }
+        self.rects[self.len] = r;
+        self.len += 1;
+        true
+    }
+    /// Encoding has a fixed per-region cost too. Two conservative clusters
+    /// bound scene/layer replay instead of paying for a dozen tiny rectangles.
+    fn coalesce(&mut self) {
+        let pixels = |r: [u32; 4]| u64::from(r[2]) * u64::from(r[3]);
+        while self.len > 2 {
+            let mut best = (u64::MAX, 0, 1, [0; 4]);
+            for i in 0..self.len {
+                for j in i + 1..self.len {
+                    let (a, b) = (self.rects[i], self.rects[j]);
+                    let (x, y) = (a[0].min(b[0]), a[1].min(b[1]));
+                    let r = [
+                        x,
+                        y,
+                        (a[0] + a[2]).max(b[0] + b[2]) - x,
+                        (a[1] + a[3]).max(b[1] + b[3]) - y,
+                    ];
+                    let extra = pixels(r) - pixels(a) - pixels(b);
+                    if extra < best.0 {
+                        best = (extra, i, j, r);
+                    }
+                }
+            }
+            let (_, i, j, r) = best;
+            self.len -= 1;
+            self.rects[j] = self.rects[self.len];
+            self.len -= 1;
+            self.rects[i] = self.rects[self.len];
+            assert!(self.add(r));
+        }
+    }
+
+    fn pixels(&self) -> u64 {
+        self.rects[..self.len]
+            .iter()
+            .map(|r| u64::from(r[2]) * u64::from(r[3]))
+            .sum()
+    }
+}
+
+/// Shelf packing is bounded by 16 regions, with tile-aligned placements so
+/// the rasterizer sees the same coordinates modulo whole tiles.
+struct PackedRegions {
+    offsets: [[u32; 2]; 16],
+    size: [u32; 2],
+}
+impl Regions {
+    fn packed(&self, limit: u32) -> Option<PackedRegions> {
+        let mut order = std::array::from_fn::<_, 16, _>(|i| i);
+        order[..self.len].sort_unstable_by_key(|&i| std::cmp::Reverse(self.rects[i][3]));
+        let widest = self.rects[..self.len]
+            .iter()
+            .map(|r| r[2].next_multiple_of(16))
+            .max()?;
+        let mut best: Option<PackedRegions> = None;
+        let mut width = 0;
+        for &i in &order[..self.len] {
+            width += self.rects[i][2].next_multiple_of(16);
+            if width < widest || width > limit {
+                continue;
+            }
+            let mut offsets = [[0; 2]; 16];
+            let (mut x, mut y, mut row) = (0, 0, 0);
+            for &j in &order[..self.len] {
+                let r = self.rects[j];
+                let w = r[2].next_multiple_of(16);
+                let h = r[3].next_multiple_of(16);
+                if x + w > width {
+                    y += row;
+                    x = 0;
+                    row = 0;
+                }
+                offsets[j] = [x, y];
+                x += w;
+                row = row.max(h);
+            }
+            let size = [width, y + row];
+            let pixels = |s: [u32; 2]| u64::from(s[0]) * u64::from(s[1]);
+            if size[1] <= limit && best.as_ref().is_none_or(|b| pixels(size) < pixels(b.size)) {
+                best = Some(PackedRegions { offsets, size });
+            }
+        }
+        best
+    }
 }
 
 /// A change past this share of the target renders the whole frame: the
@@ -551,6 +692,7 @@ impl GpuRenderer {
             queue: queue.clone(),
             vello,
             scene: vello::Scene::new(),
+            damage_scene: vello::Scene::new(),
             prefix: vello::Scene::new(),
             cache: Cache::default(),
             effects,
@@ -561,6 +703,10 @@ impl GpuRenderer {
             backdrops: Vec::new(),
             size,
             retained: Vec::new(),
+            retained_external: HashMap::new(),
+            external: HashMap::new(),
+            drawn: Vec::new(),
+            live_welds: HashSet::new(),
             paths: Converted::default(),
             short: crate::kurbo::BezPath::default(),
             transform: None,
@@ -635,6 +781,16 @@ impl GpuRenderer {
             // An allocation panic must leave the old size intact so a caught
             // failure cannot make the next resize skip the required allocation.
             self.size = size;
+            // Scratch belongs to this viewport too; an earlier giant or wide
+            // window must not pin a mostly unused damage texture indefinitely.
+            if self.patch.as_ref().is_some_and(|p| {
+                p.width() > capacity[0]
+                    || p.height() > capacity[1]
+                    || u64::from(p.width()) * u64::from(p.height())
+                        > 2 * u64::from(size[0]) * u64::from(size[1])
+            }) {
+                self.patch = None;
+            }
             self.write_frame();
             self.invalidate();
         }
@@ -688,8 +844,23 @@ impl GpuRenderer {
             && !self.stale
             && self.transform == Some(xf)
             && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
-            && resolved.external_welds().next().is_none()
             && self.retained == resolved.paint
+            && resolved
+                .external_welds()
+                .filter(|(k, e)| external_visible(resolved, k, e, xf, self.size))
+                .all(|(key, e)| self.effects.is_current(key, &e.material))
+            && resolved
+                .paint
+                .iter()
+                .filter(|p| p.layer == Layer::External)
+                .all(|p| {
+                    resolved.external_weld(&p.key).is_some_and(|e| {
+                        self.retained_external.get(&p.key)
+                            == Some(&p.transform.transform_rect_bbox(
+                                e.bounds() + crate::kurbo::Vec2::new(p.offset.x, p.offset.y),
+                            ))
+                    })
+                })
     }
 
     pub fn render(
@@ -757,11 +928,41 @@ impl GpuRenderer {
         // submits as it goes, and copies from these textures when it does.
         // No welds, no encoder.
         let mut encoder = None;
-        let mut drawn = Vec::new();
+        self.drawn.clear();
+        self.external.clear();
+        let mut weld_damage = NOTHING;
+        for p in resolved.paint.iter().filter(|p| p.layer == Layer::External) {
+            let e = resolved
+                .external_weld(&p.key)
+                .ok_or_else(|| Error::Missing(p.key.to_string()))?;
+            let b = p
+                .transform
+                .transform_rect_bbox(e.bounds() + crate::kurbo::Vec2::new(p.offset.x, p.offset.y));
+            self.external.insert(p.key.clone(), b);
+            if self.retained_external.get(&p.key) != Some(&b) {
+                weld_damage = weld_damage.union(b);
+                if let Some(old) = self.retained_external.get(&p.key) {
+                    weld_damage = weld_damage.union(*old);
+                }
+            }
+        }
+        for (key, b) in &self.retained_external {
+            if !self.external.contains_key(key) {
+                weld_damage = weld_damage.union(*b);
+            }
+        }
         for (key, e) in resolved
             .external_welds()
             .filter(|(k, e)| external_visible(resolved, k, e, xf, size))
         {
+            if self.effects.is_current(key, &e.material)
+                && self
+                    .effects
+                    .texture(key)
+                    .is_some_and(|(id, ..)| self.welds.contains_key(&id))
+            {
+                continue;
+            }
             let before = stats.effect_draws;
             let encoder = encoder.get_or_insert_with(|| {
                 self.device
@@ -774,10 +975,18 @@ impl GpuRenderer {
                 .effects
                 .texture(key)
                 .ok_or_else(|| Error::Missing(key.to_string()))?;
+            if stats.effect_draws != before {
+                if let Some(b) = self.external.get(key) {
+                    weld_damage = weld_damage.union(*b);
+                }
+                if let Some(b) = self.retained_external.get(key) {
+                    weld_damage = weld_damage.union(*b);
+                }
+            }
             match self.welds.get(&id) {
                 Some(image) if [image.width, image.height] == used => {
                     if stats.effect_draws != before {
-                        drawn.push(image.clone());
+                        self.drawn.push(image.clone());
                     }
                 }
                 _ => {
@@ -794,16 +1003,18 @@ impl GpuRenderer {
         }
         if let Some(encoder) = encoder.filter(|_| stats.effect_draws > 0) {
             self.queue.submit([encoder.finish()]);
-            for image in &drawn {
+            for image in &self.drawn {
                 self.vello.mark_override_image_dirty(image);
             }
-            self.stale = true;
         }
         // A weld whose slot went: its stand-in goes too.
-        let live: Vec<u64> = resolved
-            .external_welds()
-            .filter_map(|(k, _)| self.effects.texture(k).map(|t| t.0))
-            .collect();
+        self.live_welds.clear();
+        self.live_welds.extend(
+            resolved
+                .external_welds()
+                .filter_map(|(k, _)| self.effects.texture(k).map(|t| t.0)),
+        );
+        let live = &self.live_welds;
         let vello = &mut self.vello;
         let before = self.welds.len();
         self.welds.retain(|id, image| {
@@ -818,22 +1029,46 @@ impl GpuRenderer {
         }
 
         let mapping = (self.effects.mapping_revision(), self.local_mapping);
-        let change = if overlay.is_some()
+        let mut change = if overlay.is_some()
             || !self.valid
             || self.transform != Some(xf)
             || self.mapping != mapping
         {
             Change::Full
         } else {
-            match self.damage(&resolved.paint, xf) {
+            match paint_damage(
+                &self.retained,
+                &resolved.paint,
+                &self.retained_external,
+                &self.external,
+                weld_damage,
+                xf,
+                self.size,
+            ) {
                 // A host texture that changed may be sampled anywhere, and
                 // a partial encoding cannot render the frame again.
-                Change::Part(_) if self.stale => Change::Full,
+                Change::Part(_) | Change::Parts(_) if self.stale => Change::Full,
                 Change::None if self.stale && !self.whole => Change::Full,
                 c => c,
             }
         };
-        let mut copy = None;
+        let packed = if let Change::Parts(regions) = change {
+            regions
+                .packed(self.device.limits().max_texture_dimension_2d)
+                .filter(|p| {
+                    f64::from(p.size[0]) * f64::from(p.size[1])
+                        <= PARTIAL * f64::from(size[0]) * f64::from(size[1])
+                })
+        } else {
+            None
+        };
+        if matches!(change, Change::Parts(_)) && packed.is_none() {
+            change = Change::Full;
+        }
+        if !matches!(change, Change::None) {
+            self.paths.tick();
+            self.cache.tick();
+        }
         match change {
             Change::Full => {
                 self.valid = false; // a partial encoding must never be reused
@@ -845,48 +1080,21 @@ impl GpuRenderer {
                 // Changed only off the target.
                 self.retained.clone_from(&resolved.paint);
             }
-            Change::Part(r @ [.., w, h]) => {
-                self.valid = false;
-                self.presented = None;
-                self.encode(resolved, xf, overlay, Some(r))?;
-                stats.encoded_scenes += 1;
-                let limit = self.target.size;
-                if self
-                    .patch
-                    .as_ref()
-                    .is_none_or(|t| t.width() < w || t.height() < h)
-                {
-                    use wgpu::TextureUsages as U;
-                    let have = self
-                        .patch
-                        .as_ref()
-                        .map_or([0, 0], |t| [t.width(), t.height()]);
-                    let grown =
-                        [0, 1].map(|i| [w, h][i].max(have[i]).next_multiple_of(256).min(limit[i]));
-                    self.patch = Some(texture(
-                        &self.device,
-                        "MUI damage",
-                        grown,
-                        U::STORAGE_BINDING | U::COPY_SRC,
-                    ));
-                }
-                let patch = self.patch.as_ref().expect("allocated above");
-                let view = patch.create_view(&wgpu::TextureViewDescriptor::default());
-                render(
-                    &mut self.vello,
-                    &self.device,
-                    &self.queue,
-                    &self.scene,
-                    &view,
-                    [w, h],
+            Change::Part(r) => {
+                self.render_region::<F>(resolved, xf, r, stats)?;
+            }
+            Change::Parts(regions) => {
+                self.render_regions::<F>(
+                    resolved,
+                    xf,
+                    &regions,
+                    packed.expect("checked above"),
+                    stats,
                 )?;
-                stats.renders += 1;
-                stats.rendered_pixels += u64::from(r[2]) * u64::from(r[3]);
-                copy = Some(r);
             }
             Change::None => {}
         }
-        if matches!(change, Change::Full) || (self.stale && copy.is_none()) {
+        if matches!(change, Change::Full) || self.stale {
             render(
                 &mut self.vello,
                 &self.device,
@@ -906,20 +1114,6 @@ impl GpuRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("MUI present"),
                 });
-            if let (Some([x, y, w, h]), Some(patch)) = (copy, &self.patch) {
-                encoder.copy_texture_to_texture(
-                    patch.as_image_copy(),
-                    wgpu::TexelCopyTextureInfo {
-                        origin: wgpu::Origin3d { x, y, z: 0 },
-                        ..self.target.texture.as_image_copy()
-                    },
-                    wgpu::Extent3d {
-                        width: w,
-                        height: h,
-                        depth_or_array_layers: 1,
-                    },
-                );
-            }
             let present = if self.straight {
                 &self.passes.present_straight
             } else {
@@ -932,6 +1126,159 @@ impl GpuRenderer {
                 self.presented = Some(target.clone());
             }
         }
+        std::mem::swap(&mut self.retained_external, &mut self.external);
+        Ok(())
+    }
+
+    /// One raster submission for all sparse edits. Each clipped region is
+    /// translated to a compact atlas, then copied back to its original tile.
+    fn render_regions<F: FnOnce(&mut Classic<'_>)>(
+        &mut self,
+        resolved: &ResolvedScene,
+        xf: Affine,
+        regions: &Regions,
+        packed: PackedRegions,
+        stats: &mut EffectStats,
+    ) -> Result<(), Error> {
+        self.damage_scene.reset();
+        self.presented = None;
+        for (i, r) in regions.rects[..regions.len].iter().enumerate() {
+            self.valid = false;
+            self.encode::<F>(resolved, xf, None, Some(*r))?;
+            stats.encoded_scenes += 1;
+            let [x, y] = packed.offsets[i].map(f64::from);
+            self.damage_scene.push_layer(
+                crate::peniko::Fill::NonZero,
+                crate::peniko::BlendMode::default(),
+                1.,
+                Affine::IDENTITY,
+                &Rect::new(x, y, x + f64::from(r[2]), y + f64::from(r[3])),
+            );
+            self.damage_scene
+                .append(&self.scene, Some(Affine::translate((x, y))));
+            self.damage_scene.pop_layer();
+        }
+        let have = self
+            .patch
+            .as_ref()
+            .map_or([0, 0], |p| [p.width(), p.height()]);
+        let limit = self.device.limits().max_texture_dimension_2d;
+        let wanted = packed.size.map(|v| v.next_multiple_of(256).min(limit));
+        let capacity = retained_target_size(have, wanted);
+        if capacity != have {
+            use wgpu::TextureUsages as U;
+            self.patch = Some(texture(
+                &self.device,
+                "MUI damage atlas",
+                capacity,
+                U::STORAGE_BINDING | U::COPY_SRC,
+            ));
+        }
+        let patch = self.patch.as_ref().expect("allocated above");
+        let view = patch.create_view(&wgpu::TextureViewDescriptor::default());
+        render(
+            &mut self.vello,
+            &self.device,
+            &self.queue,
+            &self.damage_scene,
+            &view,
+            packed.size,
+        )?;
+        stats.renders += 1;
+        stats.rendered_pixels += u64::from(packed.size[0]) * u64::from(packed.size[1]);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MUI damage atlas copies"),
+            });
+        for (i, &[x, y, w, h]) in regions.rects[..regions.len].iter().enumerate() {
+            let [sx, sy] = packed.offsets[i];
+            encoder.copy_texture_to_texture(
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x: sx, y: sy, z: 0 },
+                    ..patch.as_image_copy()
+                },
+                wgpu::TexelCopyTextureInfo {
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    ..self.target.texture.as_image_copy()
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.queue.submit([encoder.finish()]);
+        Ok(())
+    }
+
+    /// Render and copy immediately: a following damage region can reuse the
+    /// same scratch texture, while queue ordering preserves the prior pixels.
+    fn render_region<F: FnOnce(&mut Classic<'_>)>(
+        &mut self,
+        resolved: &ResolvedScene,
+        xf: Affine,
+        r @ [x, y, w, h]: [u32; 4],
+        stats: &mut EffectStats,
+    ) -> Result<(), Error> {
+        self.valid = false;
+        self.presented = None;
+        self.encode::<F>(resolved, xf, None, Some(r))?;
+        stats.encoded_scenes += 1;
+        if self
+            .patch
+            .as_ref()
+            .is_none_or(|t| t.width() < w || t.height() < h)
+        {
+            use wgpu::TextureUsages as U;
+            let have = self
+                .patch
+                .as_ref()
+                .map_or([0, 0], |t| [t.width(), t.height()]);
+            let grown = [0, 1].map(|i| {
+                [w, h][i]
+                    .max(have[i])
+                    .next_multiple_of(256)
+                    .min(self.target.size[i])
+            });
+            self.patch = Some(texture(
+                &self.device,
+                "MUI damage",
+                grown,
+                U::STORAGE_BINDING | U::COPY_SRC,
+            ));
+        }
+        let patch = self.patch.as_ref().expect("allocated above");
+        let view = patch.create_view(&wgpu::TextureViewDescriptor::default());
+        render(
+            &mut self.vello,
+            &self.device,
+            &self.queue,
+            &self.scene,
+            &view,
+            [w, h],
+        )?;
+        stats.renders += 1;
+        stats.rendered_pixels += u64::from(w) * u64::from(h);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("MUI damage copy"),
+            });
+        encoder.copy_texture_to_texture(
+            patch.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                origin: wgpu::Origin3d { x, y, z: 0 },
+                ..self.target.texture.as_image_copy()
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit([encoder.finish()]);
         Ok(())
     }
 
@@ -940,80 +1287,6 @@ impl GpuRenderer {
     /// the back, old and new, as the device box they can paint on -- padded
     /// past the anti-aliasing and out to Vello's 16 px tiles, so each tile
     /// covers what it did in the whole frame.
-    fn damage(&self, paint: &[Painted], xf: Affine) -> Change {
-        let old = &self.retained[..];
-        let head = old.iter().zip(paint).take_while(|(a, b)| a == b).count();
-        if head == old.len() && head == paint.len() {
-            return Change::None;
-        }
-        // A changed backdrop (or anything below one) needs a fresh whole
-        // frame. Unchanged backdrops and path shadows can be reused in a
-        // partial render.
-        if old[head..]
-            .iter()
-            .chain(&paint[head..])
-            .any(|p| p.layer == Layer::Backdrop || crate::path_shadow(p))
-        {
-            return Change::Full;
-        }
-        let tail = old[head..]
-            .iter()
-            .rev()
-            .zip(paint[head..].iter().rev())
-            .take_while(|(a, b)| a == b)
-            .count();
-        // Lists of one length line up entry for entry: one that is the same
-        // at the same place paints the same, so only the ones that differ
-        // count. Otherwise every entry between the shared ends does.
-        let aligned = old.len() == paint.len();
-        let mut r = NOTHING;
-        for list in [old, paint] {
-            for (i, p) in list.iter().enumerate().take(list.len() - tail).skip(head) {
-                if aligned && old[i] == paint[i] {
-                    continue;
-                }
-                let Some(b) = reach(p) else {
-                    return Change::Full;
-                };
-                r = r.union(b);
-                // A layer's blend or opacity reaches everything inside it.
-                if matches!(p.layer, Layer::Blend { .. }) {
-                    let mut depth = 0;
-                    for q in &list[i..] {
-                        let Some(b) = reach(q) else {
-                            return Change::Full;
-                        };
-                        r = r.union(b);
-                        match q.layer {
-                            Layer::Blend { .. } => depth += 1,
-                            Layer::Unblend => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-        if !(r.x0 < r.x1 && r.y0 < r.y1) {
-            return Change::Part([0; 4]);
-        }
-        let d = xf.transform_rect_bbox(r).inflate(2., 2.);
-        let [w, h] = self.size.map(f64::from);
-        let snap = |v: f64, up: bool, max: f64| {
-            let t = v / 16.;
-            (if up { t.ceil() } else { t.floor() } * 16.).clamp(0., max)
-        };
-        let (x0, y0) = (snap(d.x0, false, w), snap(d.y0, false, h));
-        let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
-        if (x1 - x0) * (y1 - y0) > PARTIAL * w * h {
-            return Change::Full;
-        }
-        Change::Part([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
-    }
 
     /// The frame, or with `part` only what reaches `[x, y, w, h]` of it.
     /// A part never holds a backdrop or a weld.
@@ -1025,7 +1298,6 @@ impl GpuRenderer {
         part: Option<[u32; 4]>,
     ) -> Result<(), Error> {
         let size = self.size;
-        self.paths.tick();
         // Backdrops first: each is a render of its own that the frame samples.
         let mut blurred = Vec::new();
         let mut k = 0;
@@ -1080,10 +1352,6 @@ impl GpuRenderer {
         };
         self.scene.reset();
         let mut canvas = Classic::new(&mut self.scene, &mut self.cache, &self.textures, size);
-        // A part is no frame: what it culled must not age out of the cache.
-        if part.is_none() {
-            canvas.begin_frame();
-        }
         let mut blurred = blurred.into_iter();
         for p in &resolved.paint {
             canvas.set_transform(crate::placed(draw, p));
@@ -1330,10 +1598,203 @@ impl GpuRenderer {
     }
 }
 
+/// A bounded merge of paint streams. Inserted/deleted canvas draws must not
+/// turn every following, unchanged sibling into damage. Exact equality is the
+/// only reason to skip an entry; the small lookahead keeps this linear.
+fn changed_paint(
+    old: &[Painted],
+    new: &[Painted],
+    mut visit: impl FnMut(bool, usize) -> bool,
+) -> bool {
+    let (mut i, mut j) = (0, 0);
+    while i < old.len() || j < new.len() {
+        if i < old.len() && j < new.len() && old[i] == new[j] {
+            i += 1;
+            j += 1;
+            continue;
+        }
+        let same_slot = i < old.len()
+            && j < new.len()
+            && old[i].key == new[j].key
+            && std::mem::discriminant(&old[i].layer) == std::mem::discriminant(&new[j].layer);
+        if !same_slot && i < old.len() && j < new.len() {
+            let a = old[i + 1..(i + 17).min(old.len())]
+                .iter()
+                .position(|p| p == &new[j]);
+            let b = new[j + 1..(j + 17).min(new.len())]
+                .iter()
+                .position(|p| p == &old[i]);
+            if let Some(n) = a.filter(|a| b.is_none_or(|b| *a <= b)) {
+                for k in i..i + n + 1 {
+                    if !visit(false, k) {
+                        return false;
+                    }
+                }
+                i += n + 1;
+                continue;
+            }
+            if let Some(n) = b {
+                for k in j..j + n + 1 {
+                    if !visit(true, k) {
+                        return false;
+                    }
+                }
+                j += n + 1;
+                continue;
+            }
+        }
+        if i < old.len() {
+            if !visit(false, i) {
+                return false;
+            }
+            i += 1;
+        }
+        if j < new.len() {
+            if !visit(true, j) {
+                return false;
+            }
+            j += 1;
+        }
+    }
+    true
+}
+
+fn paint_damage(
+    old: &[Painted],
+    paint: &[Painted],
+    old_external: &HashMap<mui_scene::Id, Rect>,
+    new_external: &HashMap<mui_scene::Id, Rect>,
+    dirty: Rect,
+    xf: Affine,
+    size: [u32; 2],
+) -> Change {
+    let reach = |p: &Painted, external: &HashMap<mui_scene::Id, Rect>| {
+        if p.layer == Layer::External {
+            external.get(&p.key).copied()
+        } else {
+            reach(p)
+        }
+    };
+    if dirty != NOTHING && old.iter().chain(paint).any(|p| p.layer == Layer::Backdrop) {
+        return Change::Full;
+    }
+    let head = old.iter().zip(paint).take_while(|(a, b)| a == b).count();
+    if head == old.len() && head == paint.len() {
+        if dirty == NOTHING {
+            return Change::None;
+        }
+        if paint.iter().any(|p| p.layer == Layer::Backdrop) {
+            return Change::Full;
+        }
+    }
+    // A backdrop can sample a changed entry below it even when its own
+    // declaration stayed equal. Keep the conservative full-frame fallback.
+    if old[head..]
+        .iter()
+        .chain(&paint[head..])
+        .any(|p| p.layer == Layer::Backdrop)
+    {
+        return Change::Full;
+    }
+    let mut regions = Regions::new();
+    let tile = |r: Rect| {
+        let d = xf.transform_rect_bbox(r).inflate(2., 2.);
+        let [w, h] = size.map(f64::from);
+        let snap = |v: f64, up: bool, max: f64| {
+            let t = v / 16.;
+            (if up { t.ceil() } else { t.floor() } * 16.).clamp(0., max)
+        };
+        let (x0, y0) = (snap(d.x0, false, w), snap(d.y0, false, h));
+        let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
+        [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32)
+    };
+    let max_damage = PARTIAL * f64::from(size[0]) * f64::from(size[1]);
+    if dirty != NOTHING && (!regions.add(tile(dirty)) || regions.pixels() as f64 > max_damage) {
+        return Change::Full;
+    }
+    if !changed_paint(old, paint, |new, i| {
+        let (list, external) = if new {
+            (paint, new_external)
+        } else {
+            (old, old_external)
+        };
+        let p = &list[i];
+        if p.layer == Layer::Backdrop || crate::path_shadow(p) {
+            return false;
+        }
+        let Some(b) = reach(p, external) else {
+            return false;
+        };
+        if b != NOTHING && !regions.add(tile(b)) {
+            return false;
+        }
+        // A layer's blend or opacity reaches everything inside it.
+        if matches!(p.layer, Layer::Blend { .. }) {
+            let mut depth = 0;
+            for q in &list[i..] {
+                let Some(b) = reach(q, external) else {
+                    return false;
+                };
+                if b != NOTHING && !regions.add(tile(b)) {
+                    return false;
+                }
+                match q.layer {
+                    Layer::Blend { .. } => depth += 1,
+                    Layer::Unblend => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Once damage already requires a full raster, do not compare and
+        // accumulate the rest of a scrolling surface's paint stream.
+        regions.pixels() as f64 <= max_damage
+    }) {
+        return Change::Full;
+    }
+    regions.coalesce();
+    if regions.pixels() as f64 > max_damage {
+        return Change::Full;
+    }
+    match regions.len {
+        0 => Change::Part([0; 4]),
+        1 => Change::Part(regions.rects[0]),
+        _ => Change::Parts(regions),
+    }
+}
+
 #[cfg(test)]
 mod rotation_tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn unchanged_and_bounded_weld_damage_preserve_retained_pixels() {
+        let external = HashMap::new();
+        let classify = |r, xf| paint_damage(&[], &[], &external, &external, r, xf, [1000, 800]);
+        assert!(matches!(classify(NOTHING, Affine::IDENTITY), Change::None));
+        let old = Rect::new(20., 30., 40., 50.);
+        let new = Rect::new(90., 70., 120., 100.);
+        let xf = Affine::scale(1.5);
+        let Change::Part([x, y, w, h]) = classify(old.union(new), xf) else {
+            panic!("a bounded material change must not repaint the surface");
+        };
+        let changed = Rect::new(x as f64, y as f64, (x + w) as f64, (y + h) as f64);
+        for r in [old, new] {
+            let transformed = xf.transform_rect_bbox(r);
+            assert!(changed.contains(transformed.origin()));
+            assert!(changed.x1 >= transformed.x1 && changed.y1 >= transformed.y1);
+        }
+        assert!((w as u64) * (h as u64) < 800_000 / 10);
+        assert!(matches!(
+            classify(Rect::new(-100., -100., -50., -50.), xf),
+            Change::Part([_, _, 0, 0])
+        ));
+    }
 
     #[test]
     fn resizing_does_not_retain_the_product_of_previous_axis_maxima() {

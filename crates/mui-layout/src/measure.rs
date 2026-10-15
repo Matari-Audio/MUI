@@ -6,6 +6,32 @@
 
 use super::*;
 
+/// Grid tracks are empty for ordinary nodes and shared by cached grids.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) enum Tracks {
+    #[default]
+    Empty,
+    Shared(std::sync::Arc<[f64]>),
+}
+impl std::ops::Deref for Tracks {
+    type Target = [f64];
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Empty => &[],
+            Self::Shared(values) => values,
+        }
+    }
+}
+impl From<Vec<f64>> for Tracks {
+    fn from(values: Vec<f64>) -> Self {
+        if values.is_empty() {
+            Self::Empty
+        } else {
+            Self::Shared(values.into())
+        }
+    }
+}
+
 pub(crate) struct Measured<'a, P> {
     pub(crate) node: &'a Node<P>,
     /// What the layout cache holds for this subtree; `None` without one.
@@ -35,8 +61,8 @@ pub(crate) struct Measured<'a, P> {
     /// Measured once so arrange cannot re-derive a different one.
     pub(crate) cols: usize,
     /// Explicit column widths settled during measure and reused by arrange.
-    pub(crate) columns: Vec<f64>,
-    pub(crate) rows: Vec<f64>,
+    pub(crate) columns: Tracks,
+    pub(crate) rows: Tracks,
     /// A `Fits` node's chosen candidate; 0 for anything else. Picked once, at
     /// measure, for the same reason as `cols`.
     pub(crate) pick: usize,
@@ -48,8 +74,11 @@ pub(crate) struct Measured<'a, P> {
 
 /// The in-flow children -- everything but the floats -- in placement order.
 /// The sort is stable, so `order` only moves what asked to be moved.
-pub(crate) fn flow_of<'a, 'm, P>(children: &'m [Measured<'a, P>]) -> Vec<&'m Measured<'a, P>> {
-    let mut flow: Vec<_> = children.iter().filter(|c| !c.node.float).collect();
+/// Ordinary control rows stay inline; larger containers spill without a limit.
+pub(crate) fn flow_of<'a, 'm, P>(
+    children: &'m [Measured<'a, P>],
+) -> smallvec::SmallVec<[&'m Measured<'a, P>; 8]> {
+    let mut flow: smallvec::SmallVec<[_; 8]> = children.iter().filter(|c| !c.node.float).collect();
     if !flow.is_sorted_by_key(|c| c.node.order) {
         flow.sort_by_key(|c| c.node.order);
     }
@@ -84,8 +113,8 @@ pub(crate) fn wrap_lines<P>(
     gap: f64,
     vertical: bool,
     avail: f64,
-) -> Vec<(usize, usize)> {
-    let mut lines = Vec::new();
+) -> smallvec::SmallVec<[(usize, usize); 4]> {
+    let mut lines = smallvec::SmallVec::new();
     let (mut start, mut used) = (0, 0.0);
     for (i, c) in flow.iter().enumerate() {
         let w = c.base(vertical, None);
@@ -101,7 +130,7 @@ pub(crate) fn wrap_lines<P>(
 }
 
 impl<'a, P> Measured<'a, P> {
-    pub(crate) fn flow(&self) -> Vec<&Measured<'a, P>> {
+    pub(crate) fn flow(&self) -> smallvec::SmallVec<[&Measured<'a, P>; 8]> {
         flow_of(&self.children)
     }
     /// Where this child starts before growth or shrink: a percentage of the
@@ -703,7 +732,7 @@ pub(crate) fn measure_uncached<'a, P>(
                     let lines = if node.wrap {
                         wrap_lines(&flow, gap, vertical, avail)
                     } else {
-                        vec![(0, flow.len())]
+                        smallvec::smallvec![(0, flow.len())]
                     };
                     lines
                         .into_iter()
@@ -768,6 +797,12 @@ pub(crate) fn measure_uncached<'a, P>(
                 let slot = &mut children[index];
                 *slot = m?;
                 let m = slot;
+                // This remeasure is about to detach its cached metrics. Keep
+                // the immediate child receipts before dropping the lazy root;
+                // their own descendants can remain lazily bound for arrange.
+                if let Some(expanded) = crate::incremental::Frozen::expand(m) {
+                    *m = expanded;
+                }
                 (m.size, m.index) = (Size::axes(basis, m.size.cross(vertical), vertical), index);
                 // The cached snapshot is the re-measure's own; this one differs.
                 m.frozen = None;
@@ -1029,6 +1064,7 @@ pub(crate) fn measure_uncached<'a, P>(
         ),
         None => (size, floor),
     };
+    drop(flow);
     // Decorations receive the real foreground-derived box, never an
     // intrinsic offer that could make them size their own foreground.
     let decoration_box = [
@@ -1117,8 +1153,8 @@ pub(crate) fn measure_uncached<'a, P>(
         floor,
         content,
         cols,
-        columns,
-        rows,
+        columns: columns.into(),
+        rows: rows.into(),
         pick,
         container,
         children,

@@ -1,10 +1,11 @@
 //! A spatial border material on a fixed outline. Geometry is independent of paint.
 use crate::{Fill, Gradient, SceneError};
-use mui_geometry::{Path, Point, Rect};
 #[cfg(test)]
-use mui_geometry::{PathCommand, RoundedRect};
+use mui_geometry::RoundedRect;
+use mui_geometry::{Path, PathCommand, Point, Rect};
 use mui_layout::{Frame, Id};
 use rustc_hash::FxHashMap as HashMap;
+use std::sync::Arc;
 
 /// One border, interpolated horizontally across a component's frame.
 /// Both width and paint use the same clamped linear ramp. This never changes
@@ -169,12 +170,152 @@ struct Entry {
 /// Geometry only: theme/color changes reuse the vector band. Bounded independently
 /// of card area; a tall card never allocates a full-surface raster texture.
 /// A band the last resolve did not use is swept at its end.
+#[derive(Debug)]
+struct GeometryEntry {
+    key: Vec<u64>,
+    // Retaining the source makes the pointer in the exact key ABA-safe.
+    _source: Arc<Path>,
+    path: Arc<Path>,
+    bounds: Option<Rect>,
+    seen: u64,
+}
+
+pub(crate) struct GeometryInput<'a> {
+    pub outline: &'a Arc<Path>,
+    pub joins: Option<&'a Path>,
+    pub origin: Point,
+    pub ramp: &'a BorderRamp,
+    pub anchor: Frame,
+    pub shoulder: f64,
+    pub tolerance: f64,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct BorderCache {
+    geometry: HashMap<Id, GeometryEntry>,
+    scratch: Vec<u64>,
     entries: HashMap<String, Entry>,
     generation: u64,
 }
 impl BorderCache {
+    /// Retain the complete decorated band in contour-local space. Paint-only
+    /// changes and scrolling reuse its path and flattened bounds without copies.
+    pub(crate) fn geometry(
+        &mut self,
+        id: &Id,
+        input: GeometryInput<'_>,
+        named_frame: impl Fn(&Id) -> Result<Frame, SceneError>,
+    ) -> Result<(Arc<Path>, Option<Rect>), SceneError> {
+        let GeometryInput {
+            outline,
+            joins,
+            origin,
+            ramp,
+            anchor,
+            shoulder,
+            tolerance,
+        } = input;
+        let local = |f: Frame| Frame {
+            x: f.x - origin.x,
+            y: f.y - origin.y,
+            ..f
+        };
+        let anchor = local(anchor);
+        let mut key = std::mem::take(&mut self.scratch);
+        key.clear();
+        key.push(Arc::as_ptr(outline) as usize as u64);
+        key.extend(
+            [
+                anchor.x,
+                anchor.size.width,
+                shoulder,
+                tolerance,
+                ramp.from.1,
+                ramp.to.1,
+                ramp.start,
+                ramp.end,
+            ]
+            .map(f64::to_bits),
+        );
+        key.push(ramp.align as u64);
+        let built = (|| {
+            for list in [&ramp.tabs, &ramp.dividers] {
+                key.push(list.len() as u64);
+                for id in list {
+                    let f = local(named_frame(id)?);
+                    key.extend([f.x, f.y, f.size.width, f.size.height].map(f64::to_bits));
+                }
+            }
+            key.push(joins.map_or(0, |p| p.commands.len()) as u64);
+            if let Some(joins) = joins {
+                let point = |key: &mut Vec<u64>, p: Point| {
+                    key.extend([(p.x - origin.x).to_bits(), (p.y - origin.y).to_bits()]);
+                };
+                for command in &joins.commands {
+                    match *command {
+                        PathCommand::MoveTo(p) => {
+                            key.push(0);
+                            point(&mut key, p);
+                        }
+                        PathCommand::LineTo(p) => {
+                            key.push(1);
+                            point(&mut key, p);
+                        }
+                        PathCommand::CubicTo(a, b, c) => {
+                            key.push(2);
+                            for p in [a, b, c] {
+                                point(&mut key, p);
+                            }
+                        }
+                        PathCommand::ArcTo(a) => {
+                            key.push(3);
+                            point(&mut key, a.center);
+                            point(&mut key, a.to);
+                            key.extend([a.radius, a.start_angle, a.sweep].map(f64::to_bits));
+                        }
+                        PathCommand::Close => key.push(4),
+                    }
+                }
+            }
+            if let Some(entry) = self.geometry.get_mut(id).filter(|e| e.key == key) {
+                entry.seen = self.generation;
+                return Ok((entry.path.clone(), entry.bounds));
+            }
+            let mut sweep = ramp.clone();
+            if ramp.align == crate::BorderAlign::Center {
+                sweep.from.1 *= 0.5;
+                sweep.to.1 *= 0.5;
+            }
+            let mut path = band(outline, &sweep, anchor, tolerance)?;
+            decorate(&mut path, ramp, anchor, shoulder, |id| {
+                named_frame(id).map(local)
+            })?;
+            if let Some(joins) = joins {
+                let mut joins = joins.clone();
+                joins.translate(-origin.to_vec2());
+                path.commands.extend(joins.commands);
+            }
+            let bounds = mui_geometry::bounds(path.flatten(0.1, 250_000)?.concat());
+            let path = Arc::new(path);
+            let old = self.geometry.insert(
+                id.clone(),
+                GeometryEntry {
+                    key: std::mem::take(&mut key),
+                    _source: outline.clone(),
+                    path: path.clone(),
+                    bounds,
+                    seen: self.generation,
+                },
+            );
+            if let Some(old) = old {
+                key = old.key;
+            }
+            Ok((path, bounds))
+        })();
+        self.scratch = key;
+        built
+    }
+
     pub(crate) fn band(
         &mut self,
         key: &str,
@@ -224,6 +365,8 @@ impl BorderCache {
         let generation = self.generation;
         self.entries
             .retain(|_, e| generation.wrapping_sub(e.seen) <= age);
+        self.geometry
+            .retain(|_, e| generation.wrapping_sub(e.seen) <= age);
         self.generation = generation.wrapping_add(1);
     }
 }
@@ -249,6 +392,48 @@ pub(crate) fn band(
 mod tests {
     use super::*;
     use crate::prelude::*;
+
+    #[test]
+    fn decorated_geometry_reuses_paths_when_scrolled_and_invalidates_real_inputs() {
+        let outline = Arc::new(
+            RoundedRect::new(Rect::new(0., 0., 120., 40.), 4.)
+                .unwrap()
+                .path(),
+        );
+        let ramp = BorderRamp::horizontal((crate::Role::Primary, 3.), (crate::Role::Dim, 1.));
+        let mut cache = BorderCache::default();
+        let id = Id::of("band");
+        let mut get = |origin: Point, width| {
+            cache
+                .geometry(
+                    &id,
+                    GeometryInput {
+                        outline: &outline,
+                        joins: None,
+                        origin,
+                        ramp: &ramp,
+                        anchor: Frame {
+                            x: origin.x,
+                            y: origin.y,
+                            size: crate::Size::new(width, 40.),
+                        },
+                        shoulder: 4.,
+                        tolerance: 0.1,
+                    },
+                    |_| unreachable!(),
+                )
+                .unwrap()
+        };
+        let first = get(Point::ZERO, 120.);
+        let moved = get(Point::new(10., -80.), 120.);
+        assert!(Arc::ptr_eq(&first.0, &moved.0));
+        assert_eq!(first.1, moved.1);
+        let resized = get(Point::new(10., -80.), 140.);
+        assert!(!Arc::ptr_eq(&first.0, &resized.0));
+        cache.sweep(0);
+        cache.sweep(0);
+        assert!(cache.geometry.is_empty());
+    }
 
     #[test]
     fn internal_divider_shares_the_outer_border_material_and_width() {

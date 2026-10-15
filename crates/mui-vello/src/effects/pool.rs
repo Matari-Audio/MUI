@@ -339,6 +339,19 @@ impl WeldTextures {
             self.mapping_revision = self.mapping_revision.wrapping_add(1);
         }
     }
+    /// Whether the committed texture already contains this exact material.
+    /// This check performs no uploads, allocations or encoder creation.
+    pub(crate) fn is_current(&self, key: &str, material: &AnalyticWeld) -> bool {
+        self.slots.get(key).is_some_and(|slot| {
+            slot.used == material.pixels()
+                && slot.state.rendered.as_ref() == Some(&material.uniform_bytes())
+                && slot.boundary_rendered.as_ref().is_some_and(|old| {
+                    Arc::ptr_eq(old, material.boundary_bytes())
+                        || old.as_ref() == material.boundary_bytes().as_ref()
+                })
+        })
+    }
+
     pub fn encode(
         &mut self,
         key: &str,
