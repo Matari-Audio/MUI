@@ -81,11 +81,14 @@ impl Default for Weight {
 /// assert_eq!(a.get("FILL"), Some(1.));
 /// assert_eq!(a.to_vec(), [("FILL", 1.), ("wght", 700.)]);
 /// ```
+// Match a Vec's footprint: two settings on 64-bit hosts, one on 32-bit.
+const INLINE_AXES: usize = 2 * std::mem::size_of::<usize>() / std::mem::size_of::<([u8; 4], u32)>();
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Axes(Vec<([u8; 4], u32)>);
+pub struct Axes(smallvec::SmallVec<[([u8; 4], u32); INLINE_AXES]>);
 impl Axes {
     pub const fn new() -> Self {
-        Self(Vec::new())
+        Self(smallvec::SmallVec::new_const())
     }
     pub fn with(mut self, tag: &str, value: f32) -> Self {
         self.set(tag, value);
@@ -316,6 +319,40 @@ pub(crate) fn location(
 mod tests {
     use super::*;
     use crate::test_fonts::{hack, symbols};
+
+    #[test]
+    fn common_axis_pairs_stay_inline_and_spilled_settings_keep_value_semantics() {
+        use std::collections::hash_map::DefaultHasher;
+        const EMPTY: Axes = Axes::new();
+        assert!(EMPTY.is_empty());
+        assert!(std::mem::size_of::<Axes>() <= std::mem::size_of::<Vec<([u8; 4], u32)>>());
+        let single = Axes::from(Weight::BOLD);
+        assert!(!single.0.spilled());
+        assert!(!single.clone().0.spilled());
+        let pair = single.with("FILL", 1.);
+        assert_eq!(pair.0.spilled(), INLINE_AXES < 2);
+        assert_eq!(pair.clone().0.spilled(), INLINE_AXES < 2);
+        let mut spilled = pair.clone().with("GRAD", 25.);
+        assert!(spilled.0.spilled());
+        spilled.set("FILL", 0.5);
+        spilled.set("bad", 1.);
+        spilled.set("wdth", f32::NAN);
+        let reversed = Axes::new()
+            .with("wght", 700.)
+            .with("GRAD", 25.)
+            .with("FILL", 0.5);
+        assert_eq!(spilled, reversed);
+        assert_eq!(
+            spilled.to_vec(),
+            [("FILL", 0.5), ("GRAD", 25.), ("wght", 700.)]
+        );
+        let hash = |axes: &Axes| {
+            let mut state = DefaultHasher::new();
+            axes.hash(&mut state);
+            state.finish()
+        };
+        assert_eq!(hash(&spilled), hash(&reversed));
+    }
 
     #[test]
     fn opsz_follows_the_size_unless_set_and_coords_are_quantised() {
