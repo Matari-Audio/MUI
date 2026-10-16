@@ -128,7 +128,10 @@ impl Ui {
             reused: false,
         });
         let me = self.me;
-        TREES.with(|t| t.borrow_mut().remove(&(me, key)));
+        let old = TREES.with(|t| t.borrow_mut().remove(&(me, key)));
+        if let Some(old) = old {
+            Self::retire_tree(old);
+        }
         self.kept.insert(
             key,
             Kept {
@@ -221,7 +224,7 @@ impl Ui {
         };
         k.live = true;
         let nested = std::mem::take(&mut k.nested);
-        *n = tree;
+        Self::retire_tree(std::mem::replace(n, tree));
         if let Some(m) = &mut n.payload_mut().extras_mut().memo {
             m.reused = true;
         }
@@ -257,9 +260,13 @@ impl Ui {
                 .collect();
             if let Some(k) = self.kept.get_mut(id) {
                 k.nested = nested;
-                TREES.with(|t| t.borrow_mut().insert((self.me, *id), tree));
+                let old = TREES.with(|t| t.borrow_mut().insert((self.me, *id), tree));
+                if let Some(old) = old {
+                    Self::retire_tree(old);
+                }
             }
         }
+        Self::retire_tree(root);
     }
 }
 
@@ -298,7 +305,12 @@ impl Ui {
         });
         // Captured destructors can re-enter the memo table (or drop a UI).
         // Never execute them while holding its RefCell borrow.
-        drop(removed);
+        if let Ok(removed) = removed {
+            for root in removed {
+                Self::discard_tree(root);
+            }
+        }
+        mui_scene::clear_declaration_storage();
     }
 }
 
@@ -344,6 +356,69 @@ mod lifetime_tests {
     use super::*;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    fn captured(dropped: Rc<Cell<usize>>) -> El {
+        struct Capture(Rc<Cell<usize>>);
+        impl Drop for Capture {
+            fn drop(&mut self) {
+                TREES.with(|trees| assert!(trees.try_borrow_mut().is_ok()));
+                let mut element = Element::default();
+                element.extras_mut().memo = None;
+                self.0.set(self.0.get() + 1);
+            }
+        }
+        let capture = Capture(dropped);
+        mui_scene::canvas(move |_| {
+            let _ = &capture;
+            Vec::new()
+        })
+    }
+
+    #[test]
+    fn replaced_memos_release_captures_outside_the_table_borrow() {
+        let mut ui = Ui::default();
+        let dropped = Rc::new(Cell::new(0));
+        for generation in 0..3 {
+            let root = ui.memo("owner", generation, |_| captured(dropped.clone()));
+            assert_eq!(dropped.get(), generation);
+            ui.frame(root, Some(Size::new(30., 30.)), Input::default(), 0.016)
+                .unwrap();
+        }
+        ui.release_thread_memos();
+        assert_eq!(dropped.get(), 3);
+    }
+
+    #[test]
+    fn omitted_memos_release_captures_outside_the_table_borrow() {
+        let mut ui = Ui::default();
+        let dropped = Rc::new(Cell::new(0));
+        let root = ui.memo("owner", 0, |_| captured(dropped.clone()));
+        ui.frame(root, Some(Size::new(30., 30.)), Input::default(), 0.016)
+            .unwrap();
+        ui.frame(mui_scene::block(30., 30.), None, Input::default(), 0.016)
+            .unwrap();
+        assert_eq!(dropped.get(), 1);
+    }
+
+    #[test]
+    fn quiet_memo_placeholders_reuse_their_rare_field_box() {
+        let mut ui = Ui::default();
+        let root = ui.memo("root", 0, |_| mui_scene::block(30., 30.));
+        let offered = Some(Size::new(30., 30.));
+        ui.frame(root, offered, Input::default(), 0.016).unwrap();
+        mui_scene::clear_declaration_storage();
+        let mut address = None;
+        for _ in 0..4 {
+            let root = ui.memo("root", 0, |_| panic!("unchanged root rebuilt"));
+            let current = &**root.payload().extras.as_ref().unwrap() as *const mui_scene::Extras;
+            if let Some(previous) = address {
+                assert_eq!(current, previous);
+            }
+            address = Some(current);
+            ui.frame(root, offered, Input::default(), 0.016).unwrap();
+            assert!(ui.retained_frame);
+        }
+    }
 
     #[test]
     fn releasing_memos_drops_captures_outside_the_thread_local_borrow() {

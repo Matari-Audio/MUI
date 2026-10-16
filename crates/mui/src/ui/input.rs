@@ -660,7 +660,10 @@ impl Ui {
         self.kept.retain(|id, k| {
             let live = std::mem::take(&mut k.live);
             if !live {
-                TREES.with(|t| t.borrow_mut().remove(&(me, *id)));
+                let old = TREES.with(|t| t.borrow_mut().remove(&(me, *id)));
+                if let Some(old) = old {
+                    Self::retire_tree(old);
+                }
                 ids.remove(&k.id);
             }
             live

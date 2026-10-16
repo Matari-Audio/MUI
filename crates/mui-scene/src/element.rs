@@ -507,7 +507,15 @@ impl Element {
         self.extras.as_deref().unwrap_or(&Extras::NONE)
     }
     pub fn extras_mut(&mut self) -> &mut Extras {
-        self.extras.get_or_insert_default()
+        self.extras.get_or_insert_with(crate::declaration::extras)
+    }
+
+    /// Retire this payload's declaration storage before discarding its tree.
+    /// Only empty, bounded buffers are kept; captured values are dropped now.
+    /// The payload must not be resolved or retained after this call.
+    #[doc(hidden)]
+    pub fn recycle_declaration_storage(&mut self) {
+        crate::declaration::recycle(self);
     }
 }
 
@@ -1068,9 +1076,11 @@ pub trait Styled: Paints {
     /// assert_eq!(el.element_mut().states.len(), 1);
     /// ```
     fn on(mut self, state: State, f: impl Fn(Style) -> Style + 'static) -> Self {
-        self.element_mut()
-            .states
-            .push((state, StateStyle(Arc::new(f))));
+        let element = self.element_mut();
+        if element.states.capacity() == 0 {
+            element.states = crate::declaration::states();
+        }
+        element.states.push((state, StateStyle(Arc::new(f))));
         self
     }
     fn tip(mut self, s: impl Into<Arc<str>>) -> Self {

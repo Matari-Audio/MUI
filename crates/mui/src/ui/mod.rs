@@ -949,6 +949,9 @@ impl Ui {
             self.kept.values_mut().for_each(|k| k.live = false);
             self.retained_root = previous_root;
             self.retained_frame = true;
+            // The issued placeholder is not the retained declaration tree.
+            // Return its rare-field box even on the no-resolve fast path.
+            Self::discard_tree(root);
             return Ok(self.commit(scene, None, None, previous_blink, false, true));
         }
         if let Err(error) = Self::validate_tree_budget(&root, self.layout_limits)
