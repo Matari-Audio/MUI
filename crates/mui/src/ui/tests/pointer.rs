@@ -756,3 +756,140 @@ fn four_quick_clicks_are_two_doubles() {
     }
     assert_eq!(doubles, [false, true, false, true]);
 }
+
+/// Explicit timestamps exercise both sides of the 400ms window. Reads remain
+/// latched for one frame (several consumers may inspect the same response),
+/// but a consumed pair cannot lend either press to click three.
+#[test]
+fn timestamped_click_pairs_are_disjoint_and_expire() {
+    let mut ui = Ui::default();
+    let tree = || block(80., 40.).id("graph");
+    let mut clock = 0.;
+    let mut tick = |ui: &mut Ui, time: f64, down| {
+        ui.frame(tree(), None, at(10., 10., down), time - clock)
+            .unwrap();
+        clock = time;
+    };
+    tick(&mut ui, 0., false);
+    for (time, expected) in [
+        (1., false),
+        (1.1, true),
+        (1.2, false),
+        (1.3, true),
+        (2., false),
+        (2.401, false),
+        (2.5, true),
+    ] {
+        tick(&mut ui, time, true);
+        assert_eq!(ui.double_click("graph"), expected);
+        assert_eq!(ui.get("graph").double_clicked, expected);
+        assert_eq!(
+            ui.double_click("graph"),
+            expected,
+            "read order must not consume an edge"
+        );
+        tick(&mut ui, time + 0.01, false);
+        assert!(!ui.double_click("graph"));
+    }
+}
+
+#[test]
+fn a_double_click_requires_a_completed_click_on_the_same_button_and_position() {
+    let mut ui = Ui::default();
+    let tree = || block(120., 40.).id("value");
+    let pointer = |x, button, down| PointerInput {
+        pos: Some(Point::new(x, 10.)),
+        buttons: Buttons::default().set(button, down),
+        ..Default::default()
+    };
+    let mut clock = 0.;
+    let mut tick = |ui: &mut Ui, time: f64, x, button, down| {
+        ui.frame(tree(), None, pointer(x, button, down), time - clock)
+            .unwrap();
+        clock = time;
+    };
+    tick(&mut ui, 0., 10., Button::Primary, false);
+    tick(&mut ui, 1., 10., Button::Secondary, true);
+    tick(&mut ui, 1.01, 10., Button::Secondary, false);
+    tick(&mut ui, 1.1, 10., Button::Primary, true);
+    assert!(
+        !ui.double_click("value"),
+        "secondary then primary is not a double"
+    );
+    tick(&mut ui, 1.11, 10., Button::Primary, false);
+    tick(&mut ui, 1.2, 90., Button::Primary, true);
+    assert!(
+        !ui.double_click("value"),
+        "distant presses on one canvas are not a pair"
+    );
+    // Release outside the target: it did not complete a click.
+    tick(&mut ui, 1.21, 200., Button::Primary, false);
+    tick(&mut ui, 1.3, 90., Button::Primary, true);
+    assert!(!ui.double_click("value"));
+    tick(&mut ui, 1.31, 90., Button::Primary, false);
+    tick(&mut ui, 1.4, 90., Button::Primary, true);
+    assert!(ui.double_click("value"), "a new complete pair still works");
+}
+
+#[test]
+fn button_to_slider_transition_keeps_capture_but_starts_a_new_click_pair() {
+    let mut ui = Ui::default();
+    let tree = |slider| {
+        block(40., 40.).id("slot").a11y(if slider {
+            A11y::Slider {
+                value: 0.5,
+                min: 0.,
+                max: 1.,
+            }
+        } else {
+            A11y::Button
+        })
+    };
+    ui.frame(tree(false), None, at(10., 10., false), 0.)
+        .unwrap();
+    ui.frame(tree(false), None, at(10., 10., true), 1.).unwrap();
+    // A + became a pie while its first press is still held.
+    ui.frame(tree(true), None, at(10., 10., true), 0.01)
+        .unwrap();
+    assert!(ui.get("slot").held);
+    assert!(!ui.get("slot").pressed);
+    ui.frame(tree(true), None, at(10., 10., false), 0.01)
+        .unwrap();
+    ui.frame(tree(true), None, at(10., 10., true), 0.08)
+        .unwrap();
+    assert!(
+        !ui.double_click("slot"),
+        "the + click cannot be a first pie click"
+    );
+    ui.frame(tree(true), None, at(10., 10., false), 0.01)
+        .unwrap();
+    ui.frame(tree(true), None, at(10., 10., true), 0.09)
+        .unwrap();
+    assert!(ui.double_click("slot"));
+}
+
+#[test]
+fn removing_a_pressed_surface_cannot_press_its_replacement_until_release() {
+    let mut ui = Ui::default();
+    let tree = |pie| block(40., 40.).id(if pie { "pie" } else { "plus" });
+    ui.frame(tree(true), None, at(10., 10., false), 0.).unwrap();
+    for (dt, down) in [(1., true), (0.01, false), (0.09, true)] {
+        ui.frame(tree(true), None, at(10., 10., down), dt).unwrap();
+    }
+    assert!(ui.double_click("pie"));
+    // The next tree consumes removal; several held frames follow it.
+    ui.frame(tree(false), None, at(10., 10., true), 0.01)
+        .unwrap();
+    for _ in 0..4 {
+        ui.frame(tree(false), None, at(10., 10., true), 0.01)
+            .unwrap();
+        assert!(!ui.get("plus").pressed && !ui.get("plus").held);
+        assert!(!ui.double_click("plus"));
+    }
+    ui.frame(tree(false), None, at(10., 10., false), 0.01)
+        .unwrap();
+    ui.frame(tree(false), None, at(10., 10., true), 0.01)
+        .unwrap();
+    assert!(ui.get("plus").pressed);
+    assert!(!ui.double_click("plus"));
+}

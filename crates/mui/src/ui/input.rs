@@ -12,7 +12,43 @@ pub struct TextInputState {
     pub marked: Option<std::ops::Range<usize>>,
 }
 
+// A first press becomes a double-click candidate only after an actual click
+// release. A paired second press never seeds the next pair on release.
+pub(super) struct ClickPress {
+    pub(super) id: String,
+    button: Button,
+    at: Point,
+    time: ClickTime,
+    role: Option<std::mem::Discriminant<A11y>>,
+    paired: bool,
+}
+
+#[derive(Clone, Copy)]
+enum ClickTime {
+    Frame(f64),
+    Host(std::time::Instant),
+}
+
+impl ClickTime {
+    fn within(self, previous: Self, window: f64) -> bool {
+        let elapsed = match (self, previous) {
+            (Self::Frame(now), Self::Frame(before)) => Some(now - before),
+            (Self::Host(now), Self::Host(before)) => now
+                .checked_duration_since(before)
+                .map(|elapsed| elapsed.as_secs_f64()),
+            _ => None,
+        };
+        elapsed.is_some_and(|elapsed| elapsed >= 0. && elapsed < window)
+    }
+}
+
 impl Ui {
+    // Driver batches advance animation time on their LAST event. Clicks
+    // need the real tick timestamp even on the FIRST queued press after idle.
+    pub(crate) fn set_pointer_time(&mut self, time: std::time::Instant) {
+        self.pointer_time = Some(time);
+    }
+
     /// The displayed focused edit buffer, including marked composition. Its
     /// selection and geometry come from the same resolved frame as `Frame::ime`.
     pub fn text_input_state(&self) -> Option<TextInputState> {
@@ -543,6 +579,30 @@ impl Ui {
         let id = id.as_str();
         self.double.as_deref() == Some(id)
     }
+    pub(super) fn retire_clicks(&mut self, scene: &ResolvedScene) {
+        let live = |press: &ClickPress| {
+            scene.surface(&press.id).is_some_and(|surface| {
+                !surface.disabled
+                    && surface
+                        .semantics
+                        .as_ref()
+                        .map(|s| std::mem::discriminant(&s.role))
+                        == press.role
+            })
+        };
+        if self.last_click.as_ref().is_some_and(|press| !live(press)) {
+            self.last_click = None;
+        }
+        if self
+            .pending_click
+            .as_ref()
+            .is_some_and(|press| !live(press))
+        {
+            self.pending_click = None;
+            self.double = None;
+        }
+    }
+
     /// The text the input method is composing, for the focused field to
     /// paint. It is never part of a value.
     pub fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
@@ -732,33 +792,62 @@ impl Ui {
         ime: Vec<Ime>,
     ) {
         self.double = None;
-        // A press becomes ineligible for the next double click once the
-        // existing pointer machine recognizes its drag. Merely holding,
-        // or moving within the click threshold, still permits two clicks.
+        let click_time = self
+            .pointer_time
+            .map_or(ClickTime::Frame(self.time), ClickTime::Host);
         if self
-            .last_press
+            .last_click
             .as_ref()
-            .is_some_and(|(id, _)| self.interaction.get(id).dragged)
+            .is_some_and(|press| !click_time.within(press.time, self.double_click))
         {
-            self.last_press = None;
+            self.last_click = None;
+        }
+        if let Some(press) = self.pending_click.as_ref() {
+            let response = self.interaction.get(&press.id);
+            if response.dragged {
+                self.pending_click = None;
+            } else if response.released
+                && let Some(press) = self.pending_click.take()
+            {
+                self.last_click = (response.clicked && !press.paired).then_some(press);
+            }
         }
         let went_down = [Button::Primary, Button::Secondary, Button::Middle]
             .into_iter()
             .any(|b| self.pointer.buttons.contains(b) && !was.contains(b));
         if went_down && self.interaction.held().is_none() {
             self.focus = None;
+            self.last_click = None;
         }
         self.press_at = self.pointer.pos.filter(|_| went_down);
         if let Some(id) = self.interaction.pressed().map(str::to_owned) {
-            if let Some((prev, t)) = self.last_press.take()
-                && prev == id
-                && self.time - t < self.double_click
-            {
-                // A pair is spent: the next press starts a new one, so four
-                // quick clicks are two doubles, not three.
-                self.double = Some(id.clone());
-            } else {
-                self.last_press = Some((id.clone(), self.time));
+            let response = self.interaction.get(&id);
+            if let (Some(button), Some(at)) = (response.button, self.pointer.pos) {
+                let role = self
+                    .scene
+                    .as_ref()
+                    .and_then(|s| s.surface(&id))
+                    .and_then(|s| s.semantics.as_ref())
+                    .map(|s| std::mem::discriminant(&s.role));
+                let time = click_time;
+                let paired = self.last_click.take().is_some_and(|previous| {
+                    previous.id == id
+                        && previous.button == button
+                        && previous.role == role
+                        && time.within(previous.time, self.double_click)
+                        && at.distance(previous.at) <= mui_input::DRAG_THRESHOLD
+                });
+                if paired {
+                    self.double = Some(id.clone());
+                }
+                self.pending_click = Some(ClickPress {
+                    id: id.clone(),
+                    button,
+                    at,
+                    time,
+                    role,
+                    paired,
+                });
             }
             let keeps = self
                 .scene

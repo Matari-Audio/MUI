@@ -793,3 +793,39 @@ fn semantic_input_followup_bypasses_animation_and_resize_spacing() {
     assert!(!r.d.followup);
     assert!(!r.d.advance(&mut r.s, now + Duration::from_millis(3)));
 }
+
+#[test]
+fn queued_clicks_after_idle_use_host_time_not_the_last_events_animation_delta() {
+    struct Clicks(Vec<bool>);
+    impl View for Clicks {
+        fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+            if ui.get("click-clock").pressed {
+                self.0.push(ui.double_click("click-clock"));
+            }
+            crate::prelude::block(40., 40.).id("click-clock")
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+    let mut rig = Rig::new(Clicks(Vec::new()), (100, 100), 1.);
+    let start = rig.d.last_frame();
+    rig.d.pointer_moved(at(10., 10.), Mods::default());
+    assert!(rig.d.advance(&mut rig.s, start + Duration::from_millis(16)));
+    for milliseconds in [100, 2100, 2200, 2300, 2400] {
+        // Press and release arrive in one native batch. Its press resolves
+        // with dt=0; the release carries the animation delta.
+        rig.d.button(Button::Primary, true, Mods::default());
+        rig.d.button(Button::Primary, false, Mods::default());
+        assert!(
+            rig.d
+                .advance(&mut rig.s, start + Duration::from_millis(milliseconds))
+        );
+        rig.d
+            .advance(&mut rig.s, start + Duration::from_millis(milliseconds + 16));
+    }
+    assert_eq!(rig.s.view.0, [false, false, true, false, true]);
+}
