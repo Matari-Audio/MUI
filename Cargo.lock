@@ -2214,6 +2214,7 @@ dependencies = [
  "harfrust",
  "mui-geometry",
  "skrifa 0.46.2",
+ "smallvec",
  "ttf-inter",
  "unicode-bidi",
  "unicode-linebreak",
