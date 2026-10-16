@@ -560,3 +560,28 @@ fn a_capture_follows_its_target_through_a_rename() {
     assert!(i.get("slot/1").held && !i.get("a").held);
     assert_eq!(i.held(), Some("slot/1"));
 }
+
+#[test]
+fn cancelled_capture_waits_for_a_real_release_before_recapturing() {
+    let hit = one_square();
+    for button in [Button::Primary, Button::Secondary, Button::Middle] {
+        let mut interaction = Interaction::new();
+        let pointer = |held| PointerInput {
+            pos: Some(Point::new(50., 50.)),
+            buttons: Buttons::default().set(button, held),
+            ..Default::default()
+        };
+        interaction.update(&hit, pointer(true));
+        assert!(interaction.get("a").pressed);
+        interaction.cancel();
+        for _ in 0..4 {
+            interaction.update(&hit, pointer(true));
+            let response = interaction.get("a");
+            assert!(!response.pressed && !response.held && !response.clicked);
+        }
+        interaction.update(&hit, pointer(false));
+        assert!(!interaction.get("a").clicked);
+        interaction.update(&hit, pointer(true));
+        assert!(interaction.get("a").pressed && interaction.get("a").held);
+    }
+}

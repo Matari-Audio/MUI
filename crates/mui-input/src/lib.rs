@@ -965,8 +965,13 @@ impl Interaction {
     /// capture without changing the interaction policy.
     pub fn cancel(&mut self) {
         let threshold = self.threshold;
+        let was = self.was;
         *self = Self {
             threshold,
+            // Cancelling a capture is not a physical button release. A
+            // disappearing target must not turn a still-held button into
+            // a new press on the replacement beneath it.
+            was,
             ..Self::default()
         };
     }

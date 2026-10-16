@@ -704,6 +704,7 @@ impl Driver {
         dt: f64,
         now: Instant,
     ) -> Result<(), ()> {
+        s.ui.set_pointer_time(now);
         s.ui.set_scale(Some(self.ui_scale()));
         self.line = s.ui.theme().text;
         let weld_before = self.profiler().map(|_| s.ui.weld_cache_stats());

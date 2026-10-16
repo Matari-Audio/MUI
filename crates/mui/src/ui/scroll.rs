@@ -171,6 +171,7 @@ impl Ui {
     /// selections of vanished fields drop, and the wheel lands. Returns
     /// whether an offset moved.
     pub(super) fn settle(&mut self, scene: &ResolvedScene, wheel: Vec2) -> bool {
+        self.retire_clicks(scene);
         let live = |id: &str| scene.surface(id).is_some_and(|s| !s.disabled);
         if self.interaction.held().is_some_and(|id| !live(id)) {
             self.cancel();

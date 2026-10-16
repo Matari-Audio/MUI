@@ -170,7 +170,10 @@ pub struct Ui {
     drag: Option<(String, Box<dyn Any + Send>)>,
     /// A press that landed on the same target within [`DOUBLE_CLICK`].
     double: Option<String>,
-    last_press: Option<(String, f64)>,
+    last_click: Option<ClickPress>,
+    pending_click: Option<ClickPress>,
+    /// Host timestamps are independent of per-frame animation delta.
+    pointer_time: Option<std::time::Instant>,
     /// This frame's wheel, for [`Response::wheel`].
     wheel: Vec2,
     /// Ids that read [`Ui::wheel`] while the tree now being handed in was
@@ -307,7 +310,9 @@ impl Ui {
             wheel: Vec2::ZERO,
             wheel_claims: Vec::new(),
             press_at: None,
-            last_press: None,
+            last_click: None,
+            pending_click: None,
+            pointer_time: None,
             focus: None,
             focus_visible: false,
             edits: Vec::new(),
@@ -580,6 +585,9 @@ impl Ui {
         self.preedit = None;
         self.drag = None;
         self.tagged = None;
+        self.double = None;
+        self.last_click = None;
+        self.pending_click = None;
         self.interaction.cancel();
     }
 
@@ -1256,7 +1264,8 @@ impl Ui {
             self.hover.as_mut().map(|h| &mut h.0),
             self.tagged.as_mut().map(|t| &mut t.0),
             self.drag.as_mut().map(|d| &mut d.0),
-            self.last_press.as_mut().map(|p| &mut p.0),
+            self.last_click.as_mut().map(|p| &mut p.id),
+            self.pending_click.as_mut().map(|p| &mut p.id),
         ]
         .into_iter()
         .flatten()
