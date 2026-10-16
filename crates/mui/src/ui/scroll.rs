@@ -3,14 +3,31 @@ use super::*;
 use mui_scene::Id;
 
 impl Ui {
+    /// A validated tree can be walked without an allocated traversal stack.
+    /// Only call outside TREES borrows: payload destructors can re-enter Ui.
+    pub(super) fn retire_tree(mut root: El) {
+        fn recycle(node: &mut El) {
+            node.payload_mut().recycle_declaration_storage();
+            for child in node.children_mut() {
+                recycle(child);
+            }
+        }
+        recycle(&mut root);
+    }
+
     /// Rejected input can itself be too deep for Rust's recursive field drop.
     /// Detach children before dropping each parent, without cloning payloads.
-    pub(super) fn discard_tree(root: El) {
+    pub(super) fn discard_tree(mut root: El) {
+        if root.children().is_empty() {
+            root.payload_mut().recycle_declaration_storage();
+            return;
+        }
         let mut pending = vec![root];
         while let Some(mut node) = pending.pop() {
             for child in node.children_mut() {
                 pending.push(std::mem::replace(child, mui_scene::block(0.0, 0.0)));
             }
+            node.payload_mut().recycle_declaration_storage();
         }
     }
 

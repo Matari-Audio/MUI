@@ -33,7 +33,10 @@ pub use mui_geometry::BorderAlign;
 pub use regions::ShapeLayout;
 mod border_ramp;
 pub use border_ramp::BorderRamp;
+mod declaration;
 mod dsl;
+#[doc(hidden)]
+pub use declaration::clear_declaration_storage;
 mod editable;
 mod element;
 pub use editable::{EditableText, TextGeometry, TextLineGeometry};
