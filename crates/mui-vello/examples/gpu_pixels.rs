@@ -126,8 +126,9 @@ fn compare(
     let mean = diff.iter().map(|v| f64::from(*v)).sum::<f64>() / diff.len() as f64;
     gpu_support::save(&dir.join(format!("gpu-{scale}.png")), size, actual)?;
     gpu_support::save(&dir.join(format!("cpu-{scale}.png")), size, reference)?;
-    let visible_diff: Vec<u8> = diff
-        .chunks_exact(4)
+    let (channels, _) = diff.as_chunks::<4>();
+    let visible_diff: Vec<u8> = channels
+        .iter()
         .flat_map(|p| {
             [
                 p[0].saturating_mul(8),
