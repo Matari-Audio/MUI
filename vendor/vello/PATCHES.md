@@ -103,3 +103,52 @@ shares plain buffer types with it, never glyph caches.
 Explicit 8 MiB stacks for shader initialization workers, matching MUI's GPU
 initialization and editor render workers. Native shader compilers and Naga must
 not inherit Windows' smaller default thread stack.
+
+## 7. Checked shaders and integrated GPU startup
+
+`src/wgpu_engine.rs` uses the safe `create_shader_module` API (all wgpu runtime
+checks), and explicitly initializes compute workgroup memory. This deliberately
+reverses upstream's unchecked shader optimization for every adapter: unknown
+adapter classification must not disable safety. No unchecked opt-out is added.
+The host pipeline-cache namespace changes to `checked2`.
+
+`src/robustness.rs` derives area-AA workgroup/binding limits from the locked
+`vello_shaders` metadata, exported to MUI's host for validation before requesting
+a device. Current coarse needs eight storage bindings, 256 invocations and
+16 KiB of workgroup storage. Buffer sizes retain wgpu's default floor with
+adapter-supported headroom; scene-dependent exhaustion still returns through
+wgpu error handling.
+
+DX12 pipeline creation is serialized through one shared gate, including MUI's
+present/weld pipelines and Vello's optional debug render pipelines. Vello also
+uses one shader compiler lane on DX12, retaining a dedicated 8 MiB worker
+unless the caller explicitly requested inline initialization. This
+works with FXC and DXC; the gate is startup/configuration work, not submission
+or per-frame rendering. It addresses the cache's non-atomic FXC blob lifetimes
+reported for exactly wgpu 30.0.1 in
+<https://github.com/gfx-rs/wgpu/issues/10547>.
+
+The registry shaders remain unmodified on disk. The generated WGSL for
+`vello.tile_alloc` is patched once before module creation: all APIs get a
+workgroup barrier beside the storage barriers to order `sh_tile_count`;
+DX12 additionally broadcasts via the existing workgroup scalar, avoiding the
+FXC storage-buffer broadcast hang in
+<https://github.com/linebender/vello/issues/1991>. Metal/Vulkan retain the
+historical storage broadcast because its replacement previously miscompiled on
+Metal (Vello#199). Exact occurrence assertions require revisiting this patch
+when shader sources change; the headless regression uses the actual locked
+shader source. This is a downstream mitigation, not a claim of upstream or
+real-device qualification. See `docs/igpu-robustness.md` for evidence, costs and
+the coordinator's validation scope.
+
+
+DX12 zeroing uses explicit bounded WGSL loops (`src/robustness/zero_init.rs`),
+including `atomicStore` for atomic arrays and a uniform workgroup barrier before
+any original shader operation. This retains zero-initialization semantics while
+avoiding Naga 30.0.1's HLSL single-lane aggregate assignments, which cause the
+first WARP draw to stall with both FXC and StaticDxc in hosted qualification.
+Other backends retain automatic wgpu zeroing; safe shader runtime checks stay on
+all backends. The initializer handles the locked Vello scalar/struct/fixed-array
+declarations, checks source assumptions, and validates every shipped area/MSAA
+shader through Naga in the workspace suite. Custom non-Vello shaders retain
+wgpu's automatic initializer. `MUI_GPU_DEBUG` opts into pipeline-stage tracing.

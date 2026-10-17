@@ -114,7 +114,11 @@
 mod debug;
 mod recording;
 mod render;
+#[cfg(feature = "wgpu")]
+mod robustness;
 mod scene;
+#[cfg(feature = "wgpu")]
+pub use robustness::{required_limits, with_pipeline_creation};
 mod shaders;
 
 #[cfg(feature = "wgpu")]
@@ -436,14 +440,22 @@ impl Renderer {
     /// Creates a new renderer for the specified device.
     pub fn new(device: &Device, options: RendererOptions) -> Result<Self> {
         let mut engine = WgpuEngine::new(options.use_cpu, options.pipeline_cache.clone());
-        // If we are running in parallel (i.e. the number of threads is not 1)
+        // MUI: FXC's shared blob cache is not safe for parallel creation.
+        let num_init_threads = if device.adapter_info().backend == wgpu::Backend::Dx12 {
+            NonZeroUsize::new(1)
+        } else {
+            options.num_init_threads
+        };
+        // Keep the dedicated 8 MiB worker even when DX12 reduces concurrency
+        // to one. Only an explicit caller request for inline initialization may
+        // compile on the calling thread (whose stack size the caller owns).
         if options.num_init_threads != NonZeroUsize::new(1) {
             #[cfg(not(target_arch = "wasm32"))]
             engine.use_parallel_initialisation();
         }
         let shaders = shaders::full_shaders(device, &mut engine, &options)?;
         #[cfg(not(target_arch = "wasm32"))]
-        engine.build_shaders_if_needed(device, options.num_init_threads);
+        engine.build_shaders_if_needed(device, num_init_threads);
         #[cfg(feature = "debug_layers")]
         let debug = debug::DebugRenderer::new(device, wgpu::TextureFormat::Rgba8Unorm, &mut engine);
 

@@ -31,6 +31,7 @@ async fn run() -> gpu_support::Result<()> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     // The production renderer uses area AA only. This additional renderer
     // compiles every vendored Vello pipeline, including both MSAA variants.
+    eprintln!("STAGE all_pipelines_begin");
     let _all_pipelines = mui_vello::vello::Renderer::new(
         &device,
         mui_vello::vello::RendererOptions {
@@ -38,6 +39,7 @@ async fn run() -> gpu_support::Result<()> {
             ..Default::default()
         },
     )?;
+    eprintln!("STAGE all_pipelines_ready");
     for scale in [1., 1.5, 2.] {
         let size = [
             (f64::from(gpu_support::W) * scale) as u32,
@@ -71,6 +73,7 @@ async fn run() -> gpu_support::Result<()> {
         ))?;
         let texture = gpu_support::target(&device, size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        eprintln!("STAGE renderer_begin scale={scale}");
         let mut gpu = GpuRenderer::new(
             &device,
             &queue,
@@ -80,6 +83,7 @@ async fn run() -> gpu_support::Result<()> {
         )
         .await?;
         // Bgra targets construct the other set of MUI present/blur pipelines.
+        eprintln!("STAGE rgba_renderer_ready scale={scale}");
         let _bgra = GpuRenderer::new(
             &device,
             &queue,

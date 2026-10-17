@@ -27,6 +27,7 @@ async fn run() -> gpu_support::Result<()> {
         let paint = scene.paint.clone();
         let texture = gpu_support::target(&device, size);
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        eprintln!("STAGE renderer_begin scale={scale}");
         let mut renderer = GpuRenderer::new(
             &device,
             &queue,
@@ -35,12 +36,15 @@ async fn run() -> gpu_support::Result<()> {
             Budget::default(),
         )
         .await?;
+        eprintln!("STAGE renderer_ready scale={scale}");
         let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let first = renderer.render(&scene, Affine::scale(scale), &view)?;
         assert_eq!(first.effect_draws, 1);
         assert_eq!(first.texture_allocations, 1);
         assert_eq!(first.encoded_scenes, 1);
+        eprintln!("STAGE render_submitted scale={scale}");
         let a = gpu_support::readback(&device, &queue, &texture, size)?;
+        eprintln!("STAGE readback_ready scale={scale}");
         let second = renderer.render(&scene, Affine::scale(scale), &view)?;
         assert_eq!(second.effect_draws, 0);
         assert_eq!(second.uniform_upload_bytes, 0);

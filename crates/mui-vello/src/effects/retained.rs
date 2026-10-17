@@ -221,6 +221,10 @@ fn uniform(device: &wgpu::Device) -> wgpu::Buffer {
 
 impl Passes {
     fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        vello::with_pipeline_creation(device, || Self::new_serial(device, format))
+    }
+
+    fn new_serial(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MUI present"),
             source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),

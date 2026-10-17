@@ -26,7 +26,8 @@ races. Readers and close/unlink transactions use the same registry lock.
 Unsupported locking or filesystem errors reject GPU initialization safely.
 
 Native APIs are created separately, preserving `WGPU_BACKEND` as an allowlist:
-Metal, Vulkan, DX12, browser WebGPU, GL, and the explicit test/noop backend.
+Metal, DX12/Vulkan (DX12 first on Windows), browser WebGPU, GL, and the
+explicit test/noop backend. See [integrated GPU robustness](igpu-robustness.md).
 Compute-only shared sessions exclude GL/noop.
 Before instance creation/enumeration there is no adapter identity available, so
 that short phase uses a **backend-only** key. Once enumeration and adapter-info

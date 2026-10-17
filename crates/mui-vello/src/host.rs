@@ -19,10 +19,12 @@ use crate::kurbo::Affine;
 
 mod crash_guard;
 mod initialization;
+mod selection;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use initialization::InitGate;
 pub use initialization::{BitmapPatch, GpuInit, Offscreen};
+use selection::{adapter_rank, requested_limits, validate_renderer_requirements};
 pub(crate) mod pipeline_cache;
 
 /// A failed device rebuild waits this long before the next attempt, so a
@@ -72,6 +74,17 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromHwnd;
     descriptor.backend_options.dx12.latency_waitable_object =
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
+    crate::diagnostics::breadcrumb(
+        "mui-vello",
+        "backend_policy",
+        &format!(
+            "enabled={:?}; dx12_compiler={:?}; flags={:?}; windows_dx12_first={}",
+            descriptor.backends,
+            descriptor.backend_options.dx12.shader_compiler,
+            descriptor.flags,
+            cfg!(windows),
+        ),
+    );
     descriptor
 }
 
@@ -150,20 +163,6 @@ fn plugin_directory() -> Option<std::path::PathBuf> {
     path.parent().map(std::path::Path::to_path_buf)
 }
 
-fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
-    let mut requested = wgpu::Limits::default()
-        .using_resolution(supported.clone())
-        .using_alignment(supported.clone());
-    requested.max_storage_buffers_per_shader_stage = supported
-        .max_storage_buffers_per_shader_stage
-        .max(requested.max_storage_buffers_per_shader_stage);
-    requested.max_storage_buffer_binding_size = supported
-        .max_storage_buffer_binding_size
-        .max(requested.max_storage_buffer_binding_size);
-    requested.max_buffer_size = supported.max_buffer_size.max(requested.max_buffer_size);
-    requested
-}
-
 // Opening every API eagerly loads GL/EGL even when Vulkan/Metal/DX12 succeeds.
 // Keep the caller's enabled backends, but pay for the secondary APIs only on failure.
 fn try_backends<T>(
@@ -172,7 +171,7 @@ fn try_backends<T>(
 ) -> Result<T, String> {
     let mut errors = Vec::new();
     // One API at a time: even Instance::new may fault in a native loader.
-    // Vulkan precedes DX12 on Windows; Metal remains first on macOS.
+    // Prefer Windows' native DX12 path before loading Vulkan; Metal stays first on macOS.
     for backends in backend_order().into_iter().filter(|b| enabled.contains(*b)) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| open(backends)));
         match result {
@@ -198,11 +197,15 @@ fn try_backends<T>(
 }
 
 fn backend_order() -> [wgpu::Backends; 6] {
+    backend_order_for(cfg!(windows))
+}
+
+fn backend_order_for(windows: bool) -> [wgpu::Backends; 6] {
     use wgpu::Backends as B;
     [
         B::METAL,
-        B::VULKAN,
-        B::DX12,
+        if windows { B::DX12 } else { B::VULKAN },
+        if windows { B::VULKAN } else { B::DX12 },
         B::BROWSER_WEBGPU,
         B::GL,
         B::NOOP,
@@ -228,18 +231,14 @@ pub fn surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFo
     })
 }
 
-/// The present mode for a window surface. Windows: `AutoNoVsync`, because
-/// an embedded editor presents on the DAW's GUI thread and a backed-up
-/// Fifo blocks it. Elsewhere the first of Mailbox, FifoRelaxed, Fifo.
+/// Prefer an offered nonblocking mode; use FIFO when it is the only choice.
+/// The native host owns display pacing. No application frame cap is introduced.
 fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
     use wgpu::PresentMode as P;
-    if cfg!(windows) {
-        return P::AutoNoVsync;
-    }
-    [P::Mailbox, P::Immediate, P::FifoRelaxed]
+    [P::Mailbox, P::Immediate, P::FifoRelaxed, P::Fifo]
         .into_iter()
         .find(|m| modes.contains(m))
-        .unwrap_or(P::Fifo)
+        .unwrap_or(P::AutoVsync)
 }
 
 /// Whether a window shows what is behind it where the scene is not opaque.
@@ -256,7 +255,7 @@ pub enum Transparency {
 
 /// The alpha mode a surface offering `offered` is configured with for
 /// `want`: premultiplied (what MUI paints) or else straight alpha when
-/// translucent, and `Auto` -- opaque where offered -- otherwise.
+/// translucent, and an offered opaque/inherited mode otherwise.
 pub fn alpha_mode(
     offered: &[wgpu::CompositeAlphaMode],
     want: Transparency,
@@ -265,10 +264,14 @@ pub fn alpha_mode(
     let translucent = [A::PreMultiplied, A::PostMultiplied]
         .into_iter()
         .find(|m| offered.contains(m));
+    let opaque = [A::Opaque, A::Inherit]
+        .into_iter()
+        .find(|mode| offered.contains(mode))
+        .or_else(|| offered.first().copied())
+        .unwrap_or(A::Auto);
     match want {
-        Transparency::Translucent => translucent.unwrap_or(A::Auto),
-        Transparency::Opaque if offered.contains(&A::Opaque) => A::Opaque,
-        Transparency::Opaque => A::Auto,
+        Transparency::Translucent => translucent.unwrap_or(opaque),
+        Transparency::Opaque => opaque,
     }
 }
 
@@ -357,85 +360,6 @@ impl std::fmt::Display for GpuDiagnostics {
     }
 }
 
-// Adapter type/backend preference adapted from Zed's Apache-2.0
-// crates/gpui_wgpu/src/wgpu_context.rs at
-// a84689073d296dfd39987bc7dd478e43ef76d83a (sort_adapters).
-// Copyright 2022 - 2025 Zed Industries, Inc.
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-// http://www.apache.org/licenses/LICENSE-2.0
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// Adaptation: stable high-performance ranking without Zed-specific overrides;
-// retain CPU fallback and MUI's full compute renderer requirements.
-fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
-    let device = match info.device_type {
-        wgpu::DeviceType::DiscreteGpu => 0,
-        wgpu::DeviceType::IntegratedGpu => 1,
-        wgpu::DeviceType::Other => 2,
-        wgpu::DeviceType::VirtualGpu => 3,
-        wgpu::DeviceType::Cpu => 4,
-    };
-    let backend = match info.backend {
-        wgpu::Backend::Dx12 if cfg!(windows) => 1,
-        wgpu::Backend::Vulkan | wgpu::Backend::Metal | wgpu::Backend::Dx12 => 0,
-        _ => 2,
-    };
-    (device, backend)
-}
-
-fn validate_renderer_requirements(
-    info: &wgpu::AdapterInfo,
-    flags: wgpu::DownlevelFlags,
-    requested: &wgpu::Limits,
-    supported: &wgpu::Limits,
-) -> Result<(), String> {
-    validate_renderer_requirements_with_warp(
-        info,
-        flags,
-        requested,
-        supported,
-        cfg!(feature = "test-support")
-            && std::env::var("MUI_TEST_ALLOW_WARP").is_ok_and(|value| value == "1"),
-    )
-}
-
-fn validate_renderer_requirements_with_warp(
-    info: &wgpu::AdapterInfo,
-    flags: wgpu::DownlevelFlags,
-    requested: &wgpu::Limits,
-    supported: &wgpu::Limits,
-    allow_warp: bool,
-) -> Result<(), String> {
-    // WARP's compute JIT faults outside Rust error handling; see the captured
-    // stack in research/platform-validation-2026-10-08.md.
-    if !allow_warp
-        && info.backend == wgpu::Backend::Dx12
-        && info.device_type == wgpu::DeviceType::Cpu
-        && info.vendor == 0x1414
-    {
-        return Err("WARP compute shader compilation can crash; use CPU rendering".into());
-    }
-    if !flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
-        return Err("Vello requires compute shaders; downlevel GL is unsupported".into());
-    }
-    let mut missing = Vec::new();
-    requested.check_limits_with_fail_fn(supported, false, |name, requested, supported| {
-        missing.push(format!(
-            "{name}: requested {requested}, supported {supported}"
-        ));
-    });
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(format!("renderer limits: {}", missing.join(", ")))
-    }
-}
-
 /// Run the finite candidate list once. The same policy is exercised without a
 /// driver in tests; a failed preferred device must not hide working software.
 fn select_candidate<A, T>(
@@ -444,10 +368,10 @@ fn select_candidate<A, T>(
 ) -> Result<(T, GpuDiagnostics), HostError> {
     let mut diagnostics = GpuDiagnostics::default();
     for (adapter, mut candidate) in candidates {
-        crate::diagnostics::breadcrumb(
-            "mui-vello",
-            "adapter_capabilities",
-            &format!("{candidate:?}"),
+        crate::diagnostics::gpu_candidate(
+            "candidate_considered",
+            "querying capabilities",
+            &candidate.adapter,
         );
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             attempt(adapter, &mut candidate)
@@ -456,7 +380,12 @@ fn select_candidate<A, T>(
             Ok(Ok(selected)) => {
                 candidate.stage = GpuStage::Ready;
                 diagnostics.candidates.push(candidate);
-                crate::diagnostics::breadcrumb("mui-vello", "gpu_ready", &diagnostics.to_string());
+                let chosen = diagnostics.candidates.last().expect("selected candidate");
+                crate::diagnostics::gpu_candidate(
+                    "gpu_ready",
+                    "checked shaders; zeroed workgroups; area AA",
+                    &chosen.adapter,
+                );
                 return Ok((selected, diagnostics));
             }
             Ok(Err(error)) => candidate.failure = Some(error),
@@ -466,7 +395,15 @@ fn select_candidate<A, T>(
                 crate::diagnostics::gpu_error("initialization_panic", message, &candidate.adapter);
             }
         }
-        crate::diagnostics::breadcrumb("mui-vello", "candidate_failed", &format!("{candidate:?}"));
+        crate::diagnostics::gpu_candidate(
+            "candidate_rejected",
+            &format!(
+                "{:?}: {}",
+                candidate.stage,
+                candidate.failure.as_deref().unwrap_or("unknown")
+            ),
+            &candidate.adapter,
+        );
         diagnostics.candidates.push(candidate);
     }
     crate::diagnostics::error(
@@ -674,9 +611,17 @@ impl OnDevice {
         }
         drop(operation);
         adapters.retain(|(_, info)| {
-            !excluded
+            let rejected = excluded
                 .iter()
-                .any(|(name, backend)| name == &info.name && *backend == info.backend)
+                .any(|(name, backend)| name == &info.name && *backend == info.backend);
+            if rejected {
+                crate::diagnostics::gpu_candidate(
+                    "candidate_rejected",
+                    "excluded after incompatible surface",
+                    info,
+                );
+            }
+            !rejected
         });
         adapters.sort_by_key(|(_, info)| adapter_rank(info));
         let candidates = adapters.into_iter().map(|(adapter, info)| {
@@ -719,29 +664,13 @@ impl OnDevice {
             &candidate.requested_limits,
             &candidate.supported_limits,
         )?;
+        selection::validate_texture_formats(adapter)?;
         let limit = candidate.requested_limits.max_texture_dimension_2d;
         let (width, height) = target_size(size.0.min(limit), size.1.min(limit)).unwrap_or((1, 1));
         let config = if let Some(surface) = surface {
             candidate.stage = GpuStage::Surface;
-            let caps = surface.get_capabilities(adapter);
-            if caps.alpha_modes.is_empty()
-                || caps.present_modes.is_empty()
-                || !caps.usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
-            {
-                return Err(
-                    "surface has no usable alpha/present modes or render attachment usage".into(),
-                );
-            }
-            let format = surface_format(&caps.formats).ok_or("no non-sRGB UNORM surface format")?;
-            wgpu::SurfaceConfiguration {
-                format,
-                present_mode: present_mode(&caps.present_modes),
-                alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
-                desired_maximum_frame_latency: 1,
-                ..surface
-                    .get_default_config(adapter, width, height)
-                    .ok_or("no default surface configuration")?
-            }
+            initialization::surface_config(surface, adapter, (width, height), transparency)
+                .map_err(|error| error.to_string())?
         } else {
             wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1431,8 +1360,8 @@ mod tests {
         let dx12_hwnd = [A::Opaque];
         assert_eq!(alpha_mode(&vulkan_x11, Translucent), A::PreMultiplied);
         assert_eq!(alpha_mode(&metal, Translucent), A::PostMultiplied);
-        assert_eq!(alpha_mode(&dx12_hwnd, Translucent), A::Auto);
-        assert_eq!(alpha_mode(&vulkan_x11, Opaque), A::Auto);
+        assert_eq!(alpha_mode(&dx12_hwnd, Translucent), A::Opaque);
+        assert_eq!(alpha_mode(&vulkan_x11, Opaque), A::Inherit);
         assert_eq!(alpha_mode(&metal, Opaque), A::Opaque);
         assert_eq!(alpha_mode(&dx12_hwnd, Opaque), A::Opaque);
         assert!(is_translucent(A::PreMultiplied) && is_translucent(A::PostMultiplied));
@@ -1444,12 +1373,10 @@ mod tests {
     fn present_mode_follows_the_platform() {
         use wgpu::PresentMode as P;
         let mode = present_mode(&[P::Fifo, P::FifoRelaxed]);
-        if cfg!(windows) {
-            assert_eq!(mode, P::AutoNoVsync);
-        } else {
-            assert_eq!(mode, P::FifoRelaxed);
-            assert_eq!(present_mode(&[P::Fifo]), P::Fifo);
-        }
+        assert_eq!(mode, P::FifoRelaxed);
+        assert_eq!(present_mode(&[P::Fifo]), P::Fifo);
+        assert_eq!(present_mode(&[P::Immediate]), P::Immediate);
+        assert_eq!(present_mode(&[]), P::AutoVsync);
     }
 
     fn adapter_info(
@@ -1479,12 +1406,21 @@ mod tests {
             FailureClass::Permanent
         );
     }
-    #[cfg(windows)]
     #[test]
-    fn windows_prefers_vulkan_to_dx12_on_the_same_device_class() {
-        let vk = adapter_info("GPU", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Vulkan);
-        let dx = adapter_info("GPU", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Dx12);
-        assert!(adapter_rank(&vk) < adapter_rank(&dx));
+    fn windows_tries_dx12_before_loading_vulkan_and_honors_backend_override() {
+        use wgpu::Backends as B;
+        assert_eq!(backend_order_for(true)[..3], [B::METAL, B::DX12, B::VULKAN]);
+        assert_eq!(
+            backend_order_for(false)[..3],
+            [B::METAL, B::VULKAN, B::DX12]
+        );
+        // A Vulkan-only allowlist never opens DX12, on any host platform.
+        let mut tried = Vec::new();
+        let _ = try_backends(B::VULKAN, |backend| {
+            tried.push(backend);
+            Ok(())
+        });
+        assert_eq!(tried, [B::VULKAN]);
     }
     #[test]
     fn downlevel_gl_is_rejected_without_weakening_vello_requirements() {
@@ -1520,50 +1456,6 @@ mod tests {
             )
             .is_ok()
         );
-    }
-
-    #[test]
-    fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
-        let limits = wgpu::Limits::default();
-        let validate = |info: &wgpu::AdapterInfo| {
-            validate_renderer_requirements_with_warp(
-                info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
-                &limits,
-                &limits,
-                false,
-            )
-        };
-        let mut info = adapter_info(
-            "Microsoft Basic Render Driver",
-            wgpu::DeviceType::Cpu,
-            wgpu::Backend::Dx12,
-        );
-        info.vendor = 0x1414;
-        info.device = 0x008c;
-        info.driver = "10.0.26100.33438".into();
-        assert!(validate(&info).unwrap_err().contains("WARP"));
-        assert!(
-            validate_renderer_requirements_with_warp(
-                &info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
-                &limits,
-                &limits,
-                true,
-            )
-            .is_ok()
-        );
-        info.backend = wgpu::Backend::Vulkan;
-        assert!(validate(&info).is_ok());
-        info.backend = wgpu::Backend::Dx12;
-        info.device_type = wgpu::DeviceType::DiscreteGpu;
-        for vendor in [0x10de, 0x8086, 0x1002, 0x1414] {
-            info.vendor = vendor;
-            assert!(validate(&info).is_ok());
-        }
-        info.device_type = wgpu::DeviceType::IntegratedGpu;
-        info.vendor = 0x8086;
-        assert!(validate(&info).is_ok());
     }
 
     #[test]

@@ -375,34 +375,36 @@ impl WgpuEngine {
         } else {
             &[]
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module,
-                entry_point: Some(vertex_main),
-                buffers,
-                compilation_options: PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module,
-                entry_point: Some(fragment_main),
-                targets: &[Some(color_attachment)],
-                compilation_options: PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: self.pipeline_cache.as_ref(),
+        let pipeline = crate::with_pipeline_creation(device, || {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module,
+                    entry_point: Some(vertex_main),
+                    buffers,
+                    compilation_options: PipelineCompilationOptions::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module,
+                    entry_point: Some(fragment_main),
+                    targets: &[Some(color_attachment)],
+                    compilation_options: PipelineCompilationOptions::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: self.pipeline_cache.as_ref(),
+            })
         });
         let id = self.shaders.len();
         self.shaders.push(Shader {
@@ -897,41 +899,49 @@ impl WgpuEngine {
         entries: Vec<wgpu::BindGroupLayoutEntry>,
         cache: Option<&PipelineCache>,
     ) -> WgpuShader {
-        // SAFETY: We only call this with trusted shaders (written by Vello developers)
-        let shader_module = unsafe {
-            device.create_shader_module_trusted(
-                wgpu::ShaderModuleDescriptor {
-                    label: Some(label),
-                    source: wgpu::ShaderSource::Wgsl(wgsl),
-                },
-                wgpu::ShaderRuntimeChecks::unchecked(),
-            )
-        };
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &entries,
-        });
-        let compute_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
+        crate::robustness::trace_pipeline(label, "begin");
+        crate::with_pipeline_creation(device, || {
+            let backend = device.adapter_info().backend;
+            let wgsl = crate::robustness::prepare_shader(backend, label, wgsl);
+            // MUI: bounds, loop and integer-div checks on every backend, including
+            // integrated/shared-memory GPUs. Written-by-us does not imply UB-free.
+            let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(wgsl),
             });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label),
-            layout: Some(&compute_pipeline_layout),
-            module: &shader_module,
-            entry_point: None,
-            compilation_options: PipelineCompilationOptions {
-                zero_initialize_workgroup_memory: false,
-                ..Default::default()
-            },
-            cache,
-        });
-        WgpuShader {
-            pipeline: PipelineState::Compute(pipeline),
-            bind_group_layout,
-        }
+            crate::robustness::trace_pipeline(label, "module_ready");
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &entries,
+                });
+            let compute_pipeline_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&bind_group_layout)],
+                    immediate_size: 0,
+                });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&compute_pipeline_layout),
+                module: &shader_module,
+                entry_point: None,
+                compilation_options: PipelineCompilationOptions {
+                    // DX12 clears every workgroup value explicitly in WGSL.
+                    // Naga's HLSL aggregate initializer stalls WARP execution.
+                    // Other APIs retain wgpu's automatic zero initialization.
+                    zero_initialize_workgroup_memory:
+                        !crate::robustness::explicit_workgroup_zeroing(backend, label),
+                    ..Default::default()
+                },
+                cache,
+            });
+            crate::robustness::trace_pipeline(label, "pipeline_ready");
+            WgpuShader {
+                pipeline: PipelineState::Compute(pipeline),
+                bind_group_layout,
+            }
+        })
     }
 }
 
