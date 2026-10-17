@@ -68,9 +68,13 @@ impl Tester {
         if let Err(error) = self.frame(app, event_loop) {
             self.fail(event_loop, error);
         } else {
-            // Ui::frame updates its own wake deadline; traversal needs a tick
-            // even when the current scene is idle or waiting for a capture.
-            app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+            // Active traversal follows the native redraw path without a frame
+            // cap. Screenshot acknowledgement is IPC polling and draws nothing.
+            if self.waiting_capture {
+                app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+            } else if let Some(gpu) = &app.gpu {
+                gpu.window().request_redraw();
+            }
         }
     }
 
@@ -89,7 +93,6 @@ impl Tester {
                 app.gpu.as_ref().map(|gpu| gpu.window().inner_size())
             ));
         }
-        app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
         // CPU-first startup belongs outside the GPU gallery's qualified cases.
         // Every recorded scene/size/input step must use the requested renderer.
         if self.case == 0

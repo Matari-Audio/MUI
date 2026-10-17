@@ -18,7 +18,7 @@ MUI is public. All jobs use standard GitHub-hosted runners; none require a paid 
 | Embedded CPU | windows-2025, macos-15 | Explicit CPU plus automatic fallback and native close/reopen |
 | Renderer measurements | ubuntu-24.04; native GPUI bridge also windows-2025 and macos-15 | Isolated engines and same-host comparison, production editor workloads, native image bridge/input/teardown |
 
-No frame cap is introduced. Production remains damage-driven and display-paced. Timeouts bound test processes, not rendering cadence.
+Gallery traversal follows native redraw requests without a fixed frame cap; only screenshot acknowledgement uses an IPC polling timer. No frame cap is introduced into production. Production remains damage-driven and display-paced. Timeouts bound test processes, not rendering cadence.
 
 ## Local reproduction
 
