@@ -100,7 +100,10 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
         }
         4 => {
             if shared.view.input.clicks == state.input.clicks
-                && state.input.ready.is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+                && state
+                    .input
+                    .ready
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
             {
                 return Ok(false);
             }
