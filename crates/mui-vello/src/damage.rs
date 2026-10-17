@@ -103,11 +103,13 @@ impl Regions {
 
 /// Shelf packing is bounded by 16 regions, with tile-aligned placements so
 /// the rasterizer sees the same coordinates modulo whole tiles.
+#[cfg(feature = "gpu-effects")]
 pub(crate) struct PackedRegions {
     pub(crate) offsets: [[u32; 2]; 16],
     pub(crate) size: [u32; 2],
 }
 impl Regions {
+    #[cfg(feature = "gpu-effects")]
     pub(crate) fn packed(&self, limit: u32) -> Option<PackedRegions> {
         let mut order = std::array::from_fn::<_, 16, _>(|i| i);
         order[..self.len].sort_unstable_by_key(|&i| std::cmp::Reverse(self.rects[i][3]));

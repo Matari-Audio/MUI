@@ -105,7 +105,7 @@ pub(super) fn build<V: View + Send + 'static>(
             ime: RefCell::new(None),
             cursor: Cell::new(None),
             bitmap: RefCell::new(None),
-            expose: Cell::new(false),
+            expose: RefCell::new(Vec::new()),
             input_pending: Cell::new(true),
         })
     }
@@ -149,7 +149,7 @@ pub(super) struct WindowsAdapter {
     ime: RefCell<Option<Option<baseview::ImeConfiguration>>>,
     cursor: Cell<Option<MouseCursor>>,
     bitmap: RefCell<Option<Bitmap>>,
-    expose: Cell<bool>,
+    expose: RefCell<Vec<[u32; 4]>>,
     input_pending: Cell<bool>,
 }
 impl WindowsAdapter {
@@ -159,8 +159,12 @@ impl WindowsAdapter {
                 .render_cancelled
                 .store(true, Ordering::Release);
             self.close.fire();
-            self.native.borrow_mut().take();
-            self.drag.borrow_mut().close(&self.requests.drag);
+            if let Ok(mut native) = self.native.try_borrow_mut() {
+                native.take();
+            }
+            if let Ok(mut drag) = self.drag.try_borrow_mut() {
+                drag.close(&self.requests.drag);
+            }
             let _ = self.send.send(Command::Stop);
             self.requests.bind_requester(None);
         }
@@ -282,13 +286,23 @@ impl WindowHandler for WindowsAdapter {
             let Some(output) = output else { break };
             self.apply(output);
         }
-        if self.expose.replace(false) {
-            if let Some(bitmap) = self.bitmap.borrow().as_ref() {
-                blit(
-                    &self.cx,
-                    [0, 0, bitmap.size.0, bitmap.size.1],
-                    &bitmap.pixels,
-                );
+        let exposed = std::mem::take(&mut *self.expose.borrow_mut());
+        if let Some(bitmap) = self.bitmap.borrow().as_ref() {
+            for [x, y, w, h] in exposed {
+                let x = x.min(bitmap.size.0);
+                let y = y.min(bitmap.size.1);
+                let w = w.min(bitmap.size.0 - x);
+                let h = h.min(bitmap.size.1 - y);
+                if [x, y, w, h] == [0, 0, bitmap.size.0, bitmap.size.1] {
+                    blit(&self.cx, [x, y, w, h], &bitmap.pixels);
+                } else if w > 0 && h > 0 {
+                    let mut pixels = Vec::with_capacity(w as usize * h as usize);
+                    for row in y..y + h {
+                        let start = row as usize * bitmap.size.0 as usize + x as usize;
+                        pixels.extend_from_slice(&bitmap.pixels[start..start + w as usize]);
+                    }
+                    blit(&self.cx, [x, y, w, h], &pixels);
+                }
             }
         }
         let due = match self.demand.get() {
@@ -310,6 +324,26 @@ impl WindowHandler for WindowsAdapter {
         self.requests.idle();
         Ok(())
     }
+    fn damage(&self, area: baseview::DamageArea<'_>) {
+        let mut rects = self.expose.borrow_mut();
+        let mut add = |r: baseview::DamageRect| {
+            let position = r.position();
+            let size = r.size();
+            rects.push([position.x, position.y, size.width, size.height]);
+        };
+        match area {
+            baseview::DamageArea::Rect(rect) => add(rect),
+            baseview::DamageArea::Rects(areas) => {
+                for &area in areas {
+                    add(area);
+                }
+            }
+            _ => {
+                let size = self.cx.size().physical;
+                rects.push([0, 0, size.width, size.height]);
+            }
+        }
+    }
     fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
         self.send(Command::Resize(size));
         self.requests.wake();
@@ -320,9 +354,16 @@ impl WindowHandler for WindowsAdapter {
             self.stop();
             return EventStatus::Captured;
         }
-        self.drag.borrow().observe(&self.requests.drag, &event);
+        if let Ok(drag) = self.drag.try_borrow() {
+            drag.observe(&self.requests.drag, &event);
+        }
         if matches!(event, Event::Window(WindowEvent::RedrawRequested)) {
-            self.expose.set(true);
+            if self.expose.borrow().is_empty() {
+                let size = self.cx.size().physical;
+                self.expose
+                    .borrow_mut()
+                    .push([0, 0, size.width, size.height]);
+            }
         } else {
             self.send(Command::Event(event.clone()));
         }

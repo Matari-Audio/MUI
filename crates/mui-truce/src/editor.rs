@@ -173,8 +173,9 @@ impl<P: Params> MuiEditor<P> {
         self
     }
 
-    /// Select only when the framework drives a main-thread pump outside its
-    /// editor lock. Truce 6.3 CLAP/VST3 do not; leave this off for those wrappers.
+    /// Select when the framework drives a main-thread pump outside its editor
+    /// lock. Windows native editors supply this pump automatically; elsewhere
+    /// truce 6.3 CLAP/VST3 do not, so leave this off for those wrappers.
     #[must_use]
     pub fn with_host_pump(self) -> Self {
         let mut shared = lock(&self.shared);

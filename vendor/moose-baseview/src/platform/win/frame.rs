@@ -197,21 +197,16 @@ impl Drop for FramePacer {
             let finished = unsafe {
                 windows_sys::Win32::System::Threading::WaitForSingleObject(
                     thread.as_raw_handle(),
-                    25,
+                    0,
                 ) == windows_sys::Win32::Foundation::WAIT_OBJECT_0
             };
             if finished {
                 let _ = thread.join();
             } else {
-                // create_window pinned the image before publishing callbacks.
-                // A stuck driver wait may resume, but its target is revoked.
-                super::callback::guard(
-                    "pacer stop diagnostic",
-                    || (),
-                    || {
-                        crate::warn!("Frame pacer stop exceeded 25 ms; detached from pinned image");
-                    },
-                );
+                // create_window pinned the image. Drop only the join handle;
+                // revoke already prevents a late DwmFlush from posting again.
+                // Never wait for compositor completion on the DAW UI thread.
+                drop(thread);
             }
         }
     }
