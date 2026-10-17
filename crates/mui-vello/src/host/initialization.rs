@@ -736,3 +736,133 @@ mod tests {
         assert!(weak.upgrade().is_none());
     }
 }
+
+/// Window-independent renderer for an input-only native window. Construct and
+/// drive this on a render worker; no native handle is borrowed or retained.
+pub struct Offscreen {
+    context: Arc<Context>,
+    renderer: GpuRenderer,
+    target: wgpu::Texture,
+    readback: wgpu::Buffer,
+    size: (u32, u32),
+    stride: u32,
+    error_cursor: u64,
+}
+
+impl GpuInit {
+    /// Poll the shared device and install per-editor offscreen resources on the
+    /// caller's render thread. Unlike `poll`, this never creates a native surface.
+    pub fn poll_offscreen(&mut self, size: (u32, u32)) -> Option<Result<Offscreen, HostError>> {
+        if self.installed || !self.retry.ready(Instant::now()) {
+            return None;
+        }
+        let result = (|| {
+            let Some(context) = self.session.context()? else { return Ok(None) };
+            let size = offscreen_size(&context.device, size)?;
+            let renderer = pollster::block_on(GpuRenderer::new_shared(
+                &context.device,
+                &context.queue,
+                wgpu::TextureFormat::Bgra8Unorm,
+                [size.0, size.1],
+                Budget::default(),
+                Some(context.vello.clone()),
+            )).map_err(HostError::Render)?;
+            let (target, readback, stride) = offscreen_target(&context.device, size);
+            Ok(Some(Offscreen { context, renderer, target, readback, size, stride, error_cursor: 0 }))
+        })();
+        match result {
+            Ok(None) => None,
+            Ok(Some(renderer)) => {
+                self.installed = true;
+                self.retry.reset();
+                Some(Ok(renderer))
+            }
+            Err(error) => {
+                self.failure(&error);
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> Result<(u32, u32), HostError> {
+    let limit = device.limits().max_texture_dimension_2d.min(u32::from(u16::MAX));
+    if size.0 == 0 || size.1 == 0 || size.0 > limit || size.1 > limit
+        || u64::from(size.0) * u64::from(size.1) > 16 * 1024 * 1024
+    {
+        return Err(HostError::Configuration("offscreen bitmap exceeds target budget".into()));
+    }
+    Ok(size)
+}
+fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, wgpu::Buffer, u32) {
+    let stride = (size.0 * 4 + 255) & !255;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("MUI worker bitmap"),
+        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("MUI worker readback"),
+        size: u64::from(stride) * u64::from(size.1),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    (target, readback, stride)
+}
+impl Offscreen {
+    /// Return completed softbuffer-format pixels (0x00RRGGBB). Driver waits,
+    /// mapping and color conversion all happen on the calling render worker.
+    pub fn render(&mut self, scene: &ResolvedScene, transform: Affine, size: (u32, u32)) -> Result<Vec<u32>, HostError> {
+        offscreen_size(&self.context.device, size)?;
+        if self.context.errors.lost.load(Ordering::Acquire) {
+            return Err(HostError::Configuration("offscreen device lost".into()));
+        }
+        if size != self.size {
+            self.renderer.resize([size.0, size.1]).map_err(HostError::Render)?;
+            (self.target, self.readback, self.stride) = offscreen_target(&self.context.device, size);
+            self.size = size;
+        }
+        let view = self.target.create_view(&wgpu::TextureViewDescriptor::default());
+        self.renderer.render(scene, transform, &view).map_err(HostError::Render)?;
+        let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: &self.target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo { buffer: &self.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.stride), rows_per_image: Some(size.1) } },
+            wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        );
+        self.context.queue.submit([encoder.finish()]);
+        let (send, receive) = mpsc::sync_channel(1);
+        self.readback.slice(..).map_async(wgpu::MapMode::Read, move |result| { let _ = send.send(result); });
+        let until = Instant::now() + Duration::from_secs(2);
+        loop {
+            self.context.device.poll(wgpu::PollType::Poll)
+                .map_err(|e| HostError::Configuration(e.to_string()))?;
+            match receive.try_recv() {
+                Ok(result) => { result.map_err(|e| HostError::Configuration(e.to_string()))?; break; }
+                Err(mpsc::TryRecvError::Empty) if Instant::now() < until => {
+                    std::thread::park_timeout(Duration::from_millis(1));
+                }
+                _ => return Err(HostError::Configuration("offscreen readback timed out".into())),
+            }
+        }
+        let mapped = self.readback.slice(..).get_mapped_range()
+            .map_err(|e| HostError::Configuration(e.to_string()))?;
+        let mut pixels = Vec::with_capacity(size.0 as usize * size.1 as usize);
+        for row in mapped.chunks(self.stride as usize).take(size.1 as usize) {
+            pixels.extend(row[..size.0 as usize * 4].as_chunks::<4>().0.iter().map(|bgra| {
+                u32::from_le_bytes(*bgra) & 0x00ff_ffff
+            }));
+        }
+        drop(mapped);
+        self.readback.unmap();
+        if let Some(error) = self.context.errors.observe(&mut self.error_cursor) {
+            return Err(HostError::Configuration(error));
+        }
+        Ok(pixels)
+    }
+}

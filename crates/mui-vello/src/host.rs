@@ -18,7 +18,7 @@ use crate::effects::{Budget, EffectStats, GpuRenderer};
 use crate::kurbo::Affine;
 
 mod initialization;
-pub use initialization::GpuInit;
+pub use initialization::{GpuInit, Offscreen};
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use initialization::InitGate;
