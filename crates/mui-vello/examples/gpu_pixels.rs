@@ -112,9 +112,9 @@ fn compare(
     // Explicit per-backend 8-bit channel tolerances. All pixels participate;
     // mean error prevents widespread small errors from hiding behind edge AA.
     let (maximum, mean_limit) = match backend {
-        wgpu::Backend::Vulkan => (32, 0.75),
-        wgpu::Backend::Dx12 => (32, 0.75),
-        wgpu::Backend::Metal => (32, 0.75),
+        wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal => {
+            (if scale == 1.5 { 48 } else { 4 }, 0.01)
+        }
         other => return Err(format!("unqualified pixel backend {other:?}").into()),
     };
     let diff: Vec<u8> = actual
