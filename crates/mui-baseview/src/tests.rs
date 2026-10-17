@@ -520,8 +520,14 @@ fn native_surface_presents_and_reopens() {
     impl WindowHandler for Probe {
         fn on_frame(&self) -> Result<(), HandlerError> {
             if let Some(send) = self.result.borrow_mut().take() {
+                let started = Instant::now();
+                eprintln!("native_surface stage=callback");
                 let result = (|| {
                     let mut gpu = open_gpu(&self.cx, (240, 200))?;
+                    eprintln!(
+                        "native_surface stage=opened elapsed_ms={:.3}",
+                        started.elapsed().as_secs_f64() * 1000.,
+                    );
                     let shared = Arc::new(Mutex::new(Shared {
                         ui: Ui::default(),
                         view: Green,
@@ -530,6 +536,10 @@ fn native_surface_presents_and_reopens() {
                     h.step();
                     let scene = lock(&h.shared).ui.scene_snapshot().ok_or("no scene")?;
                     for replacement in 0..3 {
+                        eprintln!(
+                            "native_surface stage=replace_begin replacement={replacement} elapsed_ms={:.3}",
+                            started.elapsed().as_secs_f64() * 1000.,
+                        );
                         if replacement != 0 {
                             // SAFETY: cx outlives gpu and the replacement surface.
                             #[expect(unsafe_code, reason = "exercises native surface recovery")]
@@ -548,6 +558,10 @@ fn native_surface_presents_and_reopens() {
                                 "frame after replacement {replacement} was not presented"
                             ));
                         }
+                        eprintln!(
+                            "native_surface stage=presented replacement={replacement} elapsed_ms={:.3}",
+                            started.elapsed().as_secs_f64() * 1000.,
+                        );
                     }
                     // Check actual presented pixels, including the bottom edge.
                     // An oversized GL swapchain previously shifted this image
@@ -640,6 +654,10 @@ fn native_surface_presents_and_reopens() {
                     *self.gpu.borrow_mut() = Some(gpu);
                     Ok(())
                 })();
+                eprintln!(
+                    "native_surface stage=complete elapsed_ms={:.3} result={result:?}",
+                    started.elapsed().as_secs_f64() * 1000.,
+                );
                 let _ = send.send(result);
             }
             Ok(())
@@ -653,7 +671,8 @@ fn native_surface_presents_and_reopens() {
     }
 
     for (parented, map_first) in [(false, false), (true, true), (true, false)] {
-        for _ in 0..2 {
+        for round in 0..2 {
+            eprintln!("native_surface parented={parented} map_first={map_first} round={round}");
             let parent = parented.then(|| {
                 let (send, recv) = channel();
                 let window = Window::create(
@@ -699,7 +718,10 @@ fn native_surface_presents_and_reopens() {
             {
                 window.show().expect("parent mapping after attachment");
             }
-            let result = recv.recv_timeout(Duration::from_secs(30));
+            // This callback initializes three complete renderers, including cold
+            // checked-shader JIT. Bound that work separately from frame pacing;
+            // the CI child deadline still rejects a stalled driver.
+            let result = recv.recv_timeout(Duration::from_secs(120));
             window.close();
             result
                 .expect("first frame callback")

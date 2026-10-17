@@ -70,7 +70,7 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/baseview -- \
-            cargo test -p mui-baseview --lib --locked -- --ignored --skip native_wayland --test-threads=1
+            cargo test -p mui-baseview --lib --locked -- --ignored --skip native_wayland --test-threads=1 --show-output
           test "$WGPU_BACKEND" = gl || rg -q 'native_resize_failure_falls_back_and_presents .*ok' ui-results/baseview/stdout.log
       - name: Multiwindow resize and close
         if: ${{ !cancelled() }}
