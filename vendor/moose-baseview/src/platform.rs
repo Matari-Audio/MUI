@@ -13,3 +13,8 @@ pub use x11::*;
 mod win;
 #[cfg(target_os = "windows")]
 pub use win::*;
+
+// Run the Windows scheduler's pure policy tests on Linux/macOS as well.
+#[cfg(all(test, not(target_os = "windows")))]
+#[path = "platform/win/frame_state.rs"]
+mod windows_frame_state_tests;
