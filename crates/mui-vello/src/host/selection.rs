@@ -248,10 +248,10 @@ mod tests {
             let mut supported = required.clone();
             match field {
                 "max_storage_buffers_per_shader_stage" => {
-                    supported.max_storage_buffers_per_shader_stage -= 1
+                    supported.max_storage_buffers_per_shader_stage -= 1;
                 }
                 "max_compute_workgroup_storage_size" => {
-                    supported.max_compute_workgroup_storage_size -= 1
+                    supported.max_compute_workgroup_storage_size -= 1;
                 }
                 "max_storage_buffer_binding_size" => supported.max_storage_buffer_binding_size -= 1,
                 "max_buffer_size" => supported.max_buffer_size -= 1,
