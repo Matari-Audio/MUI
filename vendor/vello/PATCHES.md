@@ -97,3 +97,9 @@ reconfigured ~56 autohinters a frame for glyphs already cached (2.7 of a
 `[patch]`, so it reaches downstream workspaces that depend on MUI by git.
 `vello_shaders` (its `cpu` feature) still links the registry 0.11 copy; it only
 shares plain buffer types with it, never glyph caches.
+
+## 6. Shader compiler worker stack (`src/wgpu_engine.rs`)
+
+Explicit 8 MiB stacks for shader initialization workers, matching MUI's GPU
+initialization and editor render workers. Native shader compilers and Naga must
+not inherit Windows' smaller default thread stack.
