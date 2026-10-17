@@ -123,7 +123,9 @@ impl Parent {
                     .ok_or("MUI child creation failed")?,
                 );
                 #[cfg(feature = "test-support")]
-                { state.input = input::Script::default(); }
+                {
+                    state.input = input::Script::default();
+                }
                 state.opened = Instant::now();
                 state.phase = Phase::Frame;
             }
@@ -289,9 +291,8 @@ fn run() -> Result<(), String> {
                 state: RefCell::new(State {
                     child: None,
                     shared: Arc::new(Mutex::new(Shared {
-                        ui: Ui::default().font(
-                            Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
-                        ),
+                        ui: Ui::default()
+                            .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
                         view: Green::default(),
                     })),
                     requests: Arc::new(Requests::default()),

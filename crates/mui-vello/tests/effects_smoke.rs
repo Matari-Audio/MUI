@@ -944,7 +944,12 @@ fn bounded_uniform_morph_reuses_encoding_and_matches_a_fresh_frame() {
             assert!(stats.rendered_pixels < AREA / 2);
             fresh.invalidate();
             fresh.render(&scene, xf, &reference).unwrap();
-            near_pixels(&pixels(&device, &queue, &output), &pixels(&device, &queue, &reference), 3, "material replay: ");
+            near_pixels(
+                &pixels(&device, &queue, &output),
+                &pixels(&device, &queue, &reference),
+                3,
+                "material replay: ",
+            );
             assert!(retained.is_current(&scene, xf));
             assert_eq!(retained.render(&scene, xf, &output).unwrap().renders, 0);
         }

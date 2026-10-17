@@ -327,7 +327,10 @@ impl NativeAdapter {
         #[cfg(feature = "test-support")]
         {
             let events = {
-                let mut queued = self.requests.test_events.lock()
+                let mut queued = self
+                    .requests
+                    .test_events
+                    .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 std::mem::take(&mut *queued)
             };

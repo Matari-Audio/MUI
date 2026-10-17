@@ -19,8 +19,10 @@ impl Probe {
         col([
             mui::widgets::text_input(ui, "search", &mut self.text).el,
             block(160., 36.).id("row").focusable(),
-            knob(ui, "drag", "Drag", &mut self.value, 0.0..=1.0).el,
-        ]).size(320., 240.).fill(Color::srgb(0., 1., 0.))
+            knob(ui, "drag", "Drag", &mut self.value, 0.0..=1.0).el.into(),
+        ])
+        .size(320., 240.)
+        .fill(Color::srgb(0., 1., 0.))
     }
 }
 
@@ -51,13 +53,24 @@ fn button(requests: &Requests, down: bool) -> Result<(), String> {
 pub(super) fn advance(state: &mut State) -> Result<bool, String> {
     // Give the native pump time to apply output capture before posting the
     // next edge. This is input ordering, independent of rendering cadence.
-    if state.input.ready.is_some_and(|at| at.elapsed() < Duration::from_millis(60)) {
+    if state
+        .input
+        .ready
+        .is_some_and(|at| at.elapsed() < Duration::from_millis(60))
+    {
         return Ok(false);
     }
     let mut shared = state.shared.lock().map_err(|e| e.to_string())?;
     let center = |ui: &Ui, key: &str| -> Result<Point, String> {
-        let frame = ui.scene().and_then(|s| s.surface(key)).ok_or_else(|| format!("missing input surface {key}"))?.frame;
-        Ok(Point::new(frame.x + frame.size.width / 2., frame.y + frame.size.height / 2.))
+        let frame = ui
+            .scene()
+            .and_then(|s| s.surface(key))
+            .ok_or_else(|| format!("missing input surface {key}"))?
+            .frame;
+        Ok(Point::new(
+            frame.x + frame.size.width / 2.,
+            frame.y + frame.size.height / 2.,
+        ))
     };
     match state.input.step {
         0 => {
@@ -67,19 +80,28 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
             pointer(&state.requests, center(&shared.ui, "search")?)?;
             button(&state.requests, true)?;
         }
-        1 => { button(&state.requests, false)?; }
+        1 => {
+            button(&state.requests, false)?;
+        }
         2 => {
-            if !shared.ui.focus_is_text() { return Ok(false); }
+            if !shared.ui.focus_is_text() {
+                return Ok(false);
+            }
             pointer(&state.requests, center(&shared.ui, "row")?)?;
             button(&state.requests, true)?;
         }
         3 => {
-            if !shared.ui.get("row").held || shared.ui.focus_is_text() { return Ok(false); }
+            if !shared.ui.get("row").held || shared.ui.focus_is_text() {
+                return Ok(false);
+            }
             button(&state.requests, false)?;
         }
         4 => {
             if shared.view.input.clicks != state.input.clicks + 1 {
-                return Err("dropdown row did not activate on its first click after text capture handoff".into());
+                return Err(
+                    "dropdown row did not activate on its first click after text capture handoff"
+                        .into(),
+                );
             }
             pointer(&state.requests, center(&shared.ui, "drag")?)?;
             button(&state.requests, true)?;
@@ -90,7 +112,9 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
                 pointer(&state.requests, Point::new(point.x, point.y - dy))?;
             }
         }
-        6 => { button(&state.requests, false)?; }
+        6 => {
+            button(&state.requests, false)?;
+        }
         7 => {
             if shared.view.input.value == state.input.value {
                 return Err("native adapter drag did not change the control".into());
@@ -100,8 +124,13 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
             state.requests.redraw();
         }
         8 => {
-            if !shared.ui.focus_is_text() { return Ok(false); }
-            eprintln!("PASS native focus/capture handoff, dropdown first-click and drag round={}", state.round + 1);
+            if !shared.ui.focus_is_text() {
+                return Ok(false);
+            }
+            eprintln!(
+                "PASS native focus/capture handoff, dropdown first-click and drag round={}",
+                state.round + 1
+            );
             return Ok(true);
         }
         _ => return Err("invalid native input phase".into()),
