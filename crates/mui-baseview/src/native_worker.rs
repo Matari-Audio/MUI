@@ -48,6 +48,13 @@ pub(super) fn build<V: View + Send + 'static>(
         if !baseview::pin_current_image_for_detached_work() {
             return Err(std::io::Error::other("cannot pin plugin image for editor worker").into());
         }
+        // Bind inside construction, before a worker or reentrant callback can
+        // publish work. Custom Window::create users need the same wake contract
+        // as open/run; the weak waker never extends native window lifetime.
+        let waker = cx.waker();
+        requests.bind_requester(Some(baseview::FrameRequester::new(move || {
+            waker.request_redraw();
+        })));
         let start = requests
             .native_start
             .lock()
@@ -112,8 +119,8 @@ pub(super) fn build<V: View + Send + 'static>(
                         start();
                     }
                     worker(
-                        shared,
-                        wake.clone(),
+                        &shared,
+                        &wake,
                         size,
                         accessibility,
                         WorkerChannels {
@@ -420,6 +427,14 @@ impl Drop for NativeAdapter {
 }
 impl WindowHandler for NativeAdapter {
     fn frame_demand(&self) -> baseview::FrameDemand {
+        // Input can arrive after on_frame queued its tick, including from a
+        // reentrant callback. Keep those FIFO edges due until a later tick
+        // consumes them, while parking if that tick is already queued.
+        if (self.input_pending.get() || self.requests.redraw.load(Ordering::Acquire))
+            && !self.tick_pending.load(Ordering::Acquire)
+        {
+            return baseview::FrameDemand::At(Instant::now());
+        }
         match (self.demand.get(), self.flash_at.get()) {
             (baseview::FrameDemand::Idle, Some(at)) => baseview::FrameDemand::At(at),
             (baseview::FrameDemand::At(at), Some(flash)) => {
@@ -582,8 +597,8 @@ struct WorkerChannels {
 }
 
 fn worker<V: View>(
-    shared: Arc<Mutex<Shared<V>>>,
-    requests: Arc<Requests>,
+    shared: &Arc<Mutex<Shared<V>>>,
+    requests: &Arc<Requests>,
     size: WindowSize,
     mut accessibility: Option<AccessibilityUi>,
     channels: WorkerChannels,
@@ -599,7 +614,7 @@ fn worker<V: View>(
         size.scale_factor,
         Box::new(WorkerClipboard {
             #[cfg(not(target_os = "linux"))]
-            requests: requests.clone(),
+            requests: Arc::clone(requests),
             clipboard: Clipboard::default(),
         }),
     );
@@ -616,7 +631,7 @@ fn worker<V: View>(
     let mut cpu = None::<mui::vello::software::Renderer>;
     let mut retry = Retry::default();
     let mut unpainted = true;
-    lock(&shared).ui.set_gpu_welding_available(false);
+    lock(shared).ui.set_gpu_welding_available(false);
     while let Ok(command) = commands.recv() {
         if stopped.load(Ordering::Acquire) || matches!(command, Command::Stop) {
             break;
@@ -628,7 +643,7 @@ fn worker<V: View>(
                 continue;
             }
             Command::Event(event) => {
-                dispatch(&mut driver, &shared, &requests, scale, event);
+                dispatch(&mut driver, shared, requests, scale, event);
                 continue;
             }
             Command::Tick(drag) => {
@@ -667,13 +682,13 @@ fn worker<V: View>(
                     Ok(renderer) => {
                         gpu = Some(renderer);
                         reason = "GPU ready";
-                        lock(&shared).ui.set_gpu_welding_available(true);
+                        lock(shared).ui.set_gpu_welding_available(true);
                         driver.redraw();
                     }
                     Err(error) => {
                         if reason != "CPU GPU initialization failed" {
                             log(
-                                &shared,
+                                shared,
                                 &format!(
                                     "mui-baseview: GPU unavailable ({error}); using CPU rendering"
                                 ),
@@ -688,7 +703,7 @@ fn worker<V: View>(
             driver.redraw();
         }
         let (scene, capture, ime, update) = {
-            let mut shared = lock(&shared);
+            let mut shared = lock(shared);
             if let Some(a) = &mut accessibility {
                 let requested = a.wants_tree();
                 if a.apply(&mut shared.ui) || requested {
@@ -739,7 +754,7 @@ fn worker<V: View>(
                         if let Some(init) = &mut init {
                             init.recover(class);
                         }
-                        lock(&shared).ui.set_gpu_welding_available(false);
+                        lock(shared).ui.set_gpu_welding_available(false);
                         driver.redraw();
                     }
                 }
@@ -827,7 +842,7 @@ fn worker<V: View>(
         requests.wake();
     }
     // No HWND or host callbacks here. The owner revokes host delivery first.
-    driver.close(&mut lock(&shared));
+    driver.close(&mut lock(shared));
 }
 
 fn dispatch<V: View>(

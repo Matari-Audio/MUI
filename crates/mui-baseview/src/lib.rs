@@ -369,11 +369,8 @@ pub fn open<V: View + Send + 'static>(
         .with_parent(parent)
         .with_scale_factor_override(scale);
     let sink = Arc::clone(&shared);
-    let wake = Arc::clone(&requests);
-    let window = Window::create(settings, build(shared, requests, true)).and_then(|w| {
-        wake.bind_requester(w.frame_requester());
-        w.show().map(|()| w)
-    });
+    let window =
+        Window::create(settings, build(shared, requests, true)).and_then(|w| w.show().map(|()| w));
     window
         .map_err(|e| log(&sink, &format!("mui-baseview: window failed ({e})")))
         .ok()
@@ -395,9 +392,7 @@ pub fn run<V: View + Send + 'static>(
         baseview::assume_standalone_in_process();
     }
     let sink = Arc::clone(&shared);
-    let wake = Arc::clone(&requests);
-    let window = Window::create(settings(title, size), build(shared, requests, false))
-        .inspect(|w| wake.bind_requester(w.frame_requester()));
+    let window = Window::create(settings(title, size), build(shared, requests, false));
     if let Err(e) = window.and_then(Window::run_until_closed) {
         log(&sink, &format!("mui-baseview: window failed ({e})"));
     }
