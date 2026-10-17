@@ -446,8 +446,10 @@ impl Renderer {
         } else {
             options.num_init_threads
         };
-        // If we are running in parallel (i.e. the number of threads is not 1)
-        if num_init_threads != NonZeroUsize::new(1) {
+        // Keep the dedicated 8 MiB worker even when DX12 reduces concurrency
+        // to one. Only an explicit caller request for inline initialization may
+        // compile on the calling thread (whose stack size the caller owns).
+        if options.num_init_threads != NonZeroUsize::new(1) {
             #[cfg(not(target_arch = "wasm32"))]
             engine.use_parallel_initialisation();
         }

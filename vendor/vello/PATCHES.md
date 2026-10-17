@@ -121,7 +121,8 @@ wgpu error handling.
 
 DX12 pipeline creation is serialized through one shared gate, including MUI's
 present/weld pipelines and Vello's optional debug render pipelines. Vello also
-uses one shader compiler lane on DX12, avoiding idle compiler workers. This
+uses one shader compiler lane on DX12, retaining a dedicated 8 MiB worker
+unless the caller explicitly requested inline initialization. This
 works with FXC and DXC; the gate is startup/configuration work, not submission
 or per-frame rendering. It addresses the cache's non-atomic FXC blob lifetimes
 reported for exactly wgpu 30.0.1 in

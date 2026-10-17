@@ -55,7 +55,8 @@ retains automatic damage and existing display pacing; no frame cap is added.
   non-atomic FXC blob reference-count race in wgpu 30.0.1. The locked local
   `wgpu-hal` cache indeed clones shader blobs under its cache lock and returns
   them to pipeline callers. All MUI/Vello DX12 pipeline construction now shares
-  one compilation gate per plugin image, and Vello compiles on one DX12 lane.
+  one compilation gate per plugin image, and Vello compiles on one DX12 lane
+  while preserving the dedicated 8 MiB worker (unless explicitly requested inline).
   [Vello issue 1991](https://github.com/linebender/vello/issues/1991) additionally
   reports an optimized FXC tile-allocation hang. The locked registry shader
   contains both its storage broadcast and a missing workgroup-memory barrier.
