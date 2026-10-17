@@ -388,6 +388,87 @@ fn focus_loss_queues_a_cancel_after_the_pressed_snapshot() {
     assert!(matches!(r.d.pending.get(1), Some(Pending::Cancel(p)) if p.buttons.is_empty()));
 }
 
+mod keyboard_capture_tests {
+    use super::*;
+    use crate::prelude::{Font, Styled, col};
+
+    #[derive(Default)]
+    struct Menu {
+        search: String,
+        clicks: usize,
+    }
+    impl View for Menu {
+        fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+            col([
+                crate::widgets::text_input(ui, "search", &mut self.search).el,
+                block(160., 40.).id("row").focusable(),
+            ])
+        }
+        fn after_frame(&mut self, ui: &mut Ui) {
+            self.clicks += usize::from(ui.get("row").clicked);
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+
+    fn press_row_after_focusing_search() -> Rig<Menu> {
+        let mut r = Rig::new(Menu::default(), (300, 200), 1.);
+        r.s.ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        r.d.focus(true);
+        assert!(r.step());
+        r.s.ui.focus("search");
+        r.d.redraw();
+        assert!(r.step());
+        assert!(
+            r.s.ui.focus_is_text(),
+            "the search field captures native keyboard input"
+        );
+        let row = r.s.ui.scene().unwrap().surface("row").unwrap().frame;
+        r.d.pointer_moved(
+            at(row.x + row.size.width / 2., row.y + row.size.height / 2.),
+            none(),
+        );
+        r.d.button(Button::Primary, true, none());
+        assert!(r.step());
+        assert!(r.s.ui.get("row").held);
+        assert_eq!(r.s.ui.focus_key(), Some("row"));
+        assert!(
+            !r.s.ui.focus_is_text(),
+            "the row surrenders native keyboard capture"
+        );
+        assert_eq!(r.s.view.clicks, 0);
+        r
+    }
+
+    #[test]
+    fn row_click_survives_surrendering_text_keyboard_capture() {
+        let mut r = press_row_after_focusing_search();
+        // Returning native keyboard ownership to the host is not a focus(false)
+        // event: the platform suppresses its synchronous focus-loss callback.
+        assert!(r.d.pointer().pos.is_some());
+        r.d.button(Button::Primary, false, none());
+        assert!(r.step());
+        assert_eq!(r.s.view.clicks, 1, "the first row click must arrive");
+        assert!(!r.s.ui.get("row").held);
+    }
+
+    #[test]
+    fn genuine_focus_loss_between_row_press_and_release_still_cancels() {
+        let mut r = press_row_after_focusing_search();
+        r.d.focus(false);
+        assert_eq!(r.d.pointer().pos, None);
+        r.d.button(Button::Primary, false, none());
+        assert!(r.step());
+        assert_eq!(r.s.view.clicks, 0);
+        assert!(!r.s.ui.get("row").held);
+        assert!(!r.s.ui.get("row").clicked);
+    }
+}
+
 #[test]
 fn an_idle_tick_builds_nothing_until_something_changes() {
     let mut r = Rig::new(Knob::default(), (400, 300), 1.0);

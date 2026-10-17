@@ -979,7 +979,11 @@ unsafe fn wnd_proc_inner(
             None
         }
         WM_KILLFOCUS => {
-            window_bv.handle_event(Event::Window(WindowEvent::Unfocused));
+            if crate::platform::focus_handoff::report_focus_loss(
+                window_state.keyboard_capture_handoff.get(),
+            ) {
+                window_bv.handle_event(Event::Window(WindowEvent::Unfocused));
+            }
 
             None
         }
@@ -1190,6 +1194,12 @@ unsafe fn wnd_proc_inner(
             if wparam == 0 && focused {
                 let parent = GetParent(window.as_raw());
                 if !parent.is_null() {
+                    // SetFocus synchronously sends WM_KILLFOCUS back here.
+                    // Keyboard routing already follows the hook's capture flag;
+                    // this handoff must not cancel the row's in-flight press.
+                    let _handoff = crate::platform::focus_handoff::KeyboardCaptureHandoff::new(
+                        &window_state.keyboard_capture_handoff,
+                    );
                     windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(parent);
                 }
             }

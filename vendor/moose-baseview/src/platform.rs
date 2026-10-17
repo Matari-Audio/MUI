@@ -1,3 +1,5 @@
+#[cfg(any(target_os = "windows", target_os = "macos", test))]
+mod focus_handoff;
 pub(crate) mod frame_rate;
 
 #[cfg(target_os = "macos")]
