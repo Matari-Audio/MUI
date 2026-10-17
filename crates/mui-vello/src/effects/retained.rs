@@ -995,6 +995,9 @@ impl GpuRenderer {
             }
         }
         std::mem::swap(&mut self.retained_external, &mut self.external);
+        // Slot insertions/removals can leave every visible pixel unchanged.
+        // Remember the observed mapping even when no encoding was necessary.
+        self.mapping = (self.effects.mapping_revision(), self.local_mapping);
         Ok(())
     }
 

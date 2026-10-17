@@ -3,10 +3,10 @@
 //! framework's adapter opens the same window with its own [`View`]), and
 //! [`run`] is the same window as a standalone app.
 //!
-//! This crate only translates baseview's events into [`mui::host::Driver`]
-//! calls and presents through `mui::vello::host::Host`; the queue, the
-//! frame schedule, zoom and key routing are `mui::host`'s, so another
-//! window crate hosts the same [`View`] the same way.
+//! Native callbacks queue ordered input to an editor worker. The worker owns
+//! [`mui::host::Driver`], builds and rasters into persistent offscreen targets,
+//! then returns changed bitmap regions for native presentation. Baseview's
+//! display source paces demand; idle content submits no rendering work.
 #![deny(unsafe_code)]
 
 #[cfg(all(panic = "abort", not(feature = "allow-panic-abort")))]

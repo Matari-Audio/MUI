@@ -1,7 +1,7 @@
 //! Per-element damage policy shared by CPU and GPU retained renderers.
 use crate::kurbo::{Affine, Rect};
 use mui_geometry::PathCommand;
-use mui_scene::{Layer, Painted, ShadowKind};
+use mui_scene::{Layer, Painted};
 use std::collections::HashMap;
 
 /// What changed since the frame the target holds.
@@ -15,7 +15,7 @@ pub(crate) enum Change {
 }
 
 /// A fixed set of disjoint tile boxes. Sparse changes must not repaint the
-/// empty space between them; overflow falls back to the existing full render.
+/// empty space between them. At the metadata limit, coalesce affected boxes.
 #[derive(Clone, Copy)]
 pub(crate) struct Regions {
     pub(crate) rects: [[u32; 4]; 16],
@@ -130,8 +130,9 @@ impl Regions {
     }
 }
 
-/// A change past this share of the target renders the whole frame: the
-/// render is mostly per pixel, and the copy would come on top.
+/// Pack sparse patches only when their atlas fits within this share of the
+/// target; otherwise render the same regions separately, never a full frame.
+#[cfg(feature = "gpu-effects")]
 pub(crate) const PARTIAL: f64 = 0.5;
 
 /// The empty box: what `Rect::union` leaves unchanged.
@@ -143,9 +144,9 @@ pub(crate) const NOTHING: Rect = Rect::new(
 );
 
 /// Everything `p` can paint on, in scene units, or `None` when that is not
-/// bounded short of the frame: a backdrop reads all under it, a weld may
-/// animate, and an inset shadow fills its clip, which it does not carry.
-/// Clip and layer bookkeeping paints nothing of its own.
+/// bounded short of the frame. External weld bounds come from their retained
+/// material slots. Backdrop dependencies expand through intersecting regions
+/// in `paint_damage`; bookkeeping paints nothing of its own.
 pub(crate) fn reach(p: &Painted) -> Option<Rect> {
     let path = || {
         let mut r = NOTHING;

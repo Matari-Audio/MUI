@@ -81,6 +81,10 @@ fn make_image(pixels: Vec<u32>, w: u32, h: u32) -> Result<*mut c_void, String> {
             return Err("CGDataProvider creation failed".into());
         }
         let color = CGColorSpaceCreateDeviceRGB();
+        if color.is_null() {
+            CGDataProviderRelease(provider);
+            return Err("CGColorSpace creation failed".into());
+        }
         let image = CGImageCreate(
             w as usize,
             h as usize,

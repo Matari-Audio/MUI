@@ -506,6 +506,10 @@ impl WindowHandler for NativeAdapter {
             && !self.tick_pending.swap(true, Ordering::AcqRel)
         {
             self.input_pending.set(false);
+            // The worker publishes the next deadline with its result. Leaving
+            // an expired demand armed here would wake the native thread at
+            // every refresh while a slow build or GPU completion is pending.
+            self.demand.set(baseview::FrameDemand::Idle);
             let drag = self.drag.borrow().frame_token(&self.requests.drag);
             self.send(Command::Tick(drag));
         }
