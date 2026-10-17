@@ -940,10 +940,23 @@ impl GpuRenderer {
             }
             Change::Parts(regions) => {
                 if let Some(packed) = packed {
-                    self.render_regions::<F>(resolved, xf, regions, &packed, stats, reuse_material_encoding)?;
+                    self.render_regions::<F>(
+                        resolved,
+                        xf,
+                        regions,
+                        &packed,
+                        stats,
+                        reuse_material_encoding,
+                    )?;
                 } else {
                     for &rect in &regions.rects[..regions.len] {
-                        self.render_region::<F>(resolved, xf, rect, stats, reuse_material_encoding)?;
+                        self.render_region::<F>(
+                            resolved,
+                            xf,
+                            rect,
+                            stats,
+                            reuse_material_encoding,
+                        )?;
                     }
                 }
             }
@@ -1050,12 +1063,14 @@ impl GpuRenderer {
                 Affine::IDENTITY,
                 &Rect::new(x, y, x + f64::from(r[2]), y + f64::from(r[3])),
             );
-            self.damage_scene
-                .append(&self.scene, Some(Affine::translate(if reuse {
+            self.damage_scene.append(
+                &self.scene,
+                Some(Affine::translate(if reuse {
                     (x - f64::from(r[0]), y - f64::from(r[1]))
                 } else {
                     (x, y)
-                })));
+                })),
+            );
             self.damage_scene.pop_layer();
         }
         let have = self
@@ -1164,7 +1179,11 @@ impl GpuRenderer {
             &mut self.vello,
             &self.device,
             &self.queue,
-            if reuse { &self.damage_scene } else { &self.scene },
+            if reuse {
+                &self.damage_scene
+            } else {
+                &self.scene
+            },
             &view,
             [w, h],
         )?;

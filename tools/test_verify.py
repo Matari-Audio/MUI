@@ -41,9 +41,16 @@ with tempfile.TemporaryDirectory() as directory:
     assert "CARGO_TARGET_DIR=" not in (ROOT / "tools/verify.sh").read_text()
     assert "RUSTC_WRAPPER=" not in (ROOT / "tools/verify.sh").read_text()
     assert "uses: ./.github/workflows/ui.yml" in workflow
-    assert "needs: [gate, platforms, ui]" in workflow
+    native_ui = (ROOT / ".github/workflows/native-ui.yml").read_text()
+    assert "uses: ./.github/workflows/native-ui.yml" in ui_workflow
+    assert "continue-on-error" not in native_ui
+    assert all(name in native_ui for name in ("ubuntu-24.04", "windows-latest", "macos-latest", "StaticDxc", "Fxc"))
+    assert "MUI_TEST_ALLOW_WARP: '1'" in native_ui
+    assert "--features mui/test-support" in native_ui
+    assert "cargo clippy --workspace --all-features --all-targets --target x86_64-pc-windows-gnu" in workflow
+    assert "needs: [gate, platforms, windows-gnu, ui]" in workflow
     assert 'test "$UI_RESULT" = success' in workflow
-    assert "cargo test -p mui-baseview --lib --locked -- --ignored --test-threads=1" in ui_workflow
+    assert "cargo test -p mui-baseview --lib --locked -- --ignored --skip native_wayland --test-threads=1" in ui_workflow
     assert "--gallery --renderer gpu --record" in ui_workflow
     assert "backend: [vulkan, gl]" in ui_workflow
     embedded = ui_workflow.split("\n  embedded:\n", 1)[1].split("\n  native-probe:\n", 1)[0]
@@ -95,7 +102,7 @@ with tempfile.TemporaryDirectory() as directory:
 # Execute the actual aggregate shell body against every success/skip/failure/
 # cancellation combination. A skipped matrix must never satisfy required work.
 aggregate = workflow.split("\n  linux:\n", 1)[1].split("\n  ui:\n", 1)[0]
-assert "needs: [gate, platforms, ui]" in aggregate and "if: always()" in aggregate
+assert "needs: [gate, platforms, windows-gnu, ui]" in aggregate and "if: always()" in aggregate
 platforms = workflow.split("\n  platforms:\n", 1)[1]
 assert "cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked" in platforms
 assert "cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline" in platforms
@@ -105,8 +112,8 @@ assert "vendor/xim-rs" not in platforms
 assert "    if:" not in platforms.split("    strategy:", 1)[0], "platform jobs must run on every update"
 body = textwrap.dedent(aggregate.split("        run: |\n", 1)[1])
 results = ("success", "skipped", "failure", "cancelled")
-for gate, platform, ui in itertools.product(results, results, results):
-    env = {**os.environ, "GATE_RESULT": gate, "UI_RESULT": ui, "PLATFORM_RESULT": platform}
+for gate, platform, ui, gnu in itertools.product(results, repeat=4):
+    env = {**os.environ, "GATE_RESULT": gate, "UI_RESULT": ui, "PLATFORM_RESULT": platform, "GNU_RESULT": gnu}
     passed = subprocess.run(["bash", "-e", "-c", body], env=env).returncode == 0
-    assert passed == (gate == "success" and ui == "success" and platform == "success"), (gate, platform, ui)
+    assert passed == (gate == "success" and ui == "success" and platform == "success" and gnu == "success"), (gate, platform, ui, gnu)
 print("verify: complete disjoint media coverage, locked/offline commands, aggregate truth table OK")

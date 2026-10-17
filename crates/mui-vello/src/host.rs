@@ -1537,13 +1537,16 @@ mod tests {
         info.device = 0x008c;
         info.driver = "10.0.26100.33438".into();
         assert!(validate(&info).unwrap_err().contains("WARP"));
-        assert!(validate_renderer_requirements_with_warp(
-            &info,
-            wgpu::DownlevelFlags::COMPUTE_SHADERS,
-            &limits,
-            &limits,
-            true,
-        ).is_ok());
+        assert!(
+            validate_renderer_requirements_with_warp(
+                &info,
+                wgpu::DownlevelFlags::COMPUTE_SHADERS,
+                &limits,
+                &limits,
+                true,
+            )
+            .is_ok()
+        );
         info.backend = wgpu::Backend::Vulkan;
         assert!(validate(&info).is_ok());
         info.backend = wgpu::Backend::Dx12;

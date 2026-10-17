@@ -45,9 +45,10 @@ jobs:
       - name: Build production lifecycle hosts and GPU contracts
         run: |
           mkdir -p ui-results
-          cargo build -p mui-baseview --example native_editor --features mui-vello/test-support --locked
-          cargo build -p mui-winit --example native_windows --features mui-vello/test-support --locked
-          cargo build -p mui-preview --bin mui-preview --features mui-vello/test-support --locked
+          exec > >(tee -a ui-results/build.log) 2>&1
+          cargo build -p mui-baseview --example native_editor --features mui/test-support --locked
+          cargo build -p mui-winit --example native_windows --features mui/test-support --locked
+          cargo build -p mui-preview --bin mui-preview --features mui/test-support --locked
           cargo build -p mui-vello --examples --features cpu,gpu-effects,test-support --locked
       - name: All pipelines, retained contract, CPU reference pixels and native lifecycle
         run: |
