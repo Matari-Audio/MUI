@@ -203,6 +203,15 @@ impl Requests {
             requester.request_frame();
         }
     }
+    /// Wake the native window loop to run `on_idle` without invalidating the
+    /// model, scheduling a render-worker tick, or enabling periodic frames.
+    /// This schedules work; it never invokes the hook on the caller's thread.
+    /// The native thread is the opening host thread on Windows, but the X11
+    /// window thread on Linux. Host callbacks must still check thread ownership.
+    pub fn request_native_idle(&self) {
+        self.wake();
+    }
+
     /// Pump deferred host work after a frame has released the shared model lock.
     /// The hook must check the calling thread before invoking host callbacks.
     pub fn on_idle(&self, hook: CloseHook) {
