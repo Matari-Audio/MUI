@@ -43,8 +43,9 @@ an equally nonblocking parent-destruction contract.
   mapped until process exit, so device callbacks and pipeline destructors cannot
   execute unmapped plugin code. This intentionally prevents physical DLL unload;
   it does not retain plugin instances or HWNDs.
-* Frame work has a configurable 16 ms floor (minimum 8 ms); Windows due/input
-  wakes also go through compositor pacing. CPU rasterization has a 100 ms floor.
+* There are no frame caps or CPU throttles. Due/input/animation wakes pass
+  through compositor pacing on the existing pacer thread; no DwmFlush or GPU
+  wait happens on the host. Unchanged paint emits no bitmap and no native blit.
 
 ## Validation required
 

@@ -88,8 +88,6 @@ pub struct Requests {
     wayland_open: AtomicBool,
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
-    /// Microseconds; zero selects the default 16 ms frame floor.
-    frame_interval: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
     close: Mutex<Option<CloseHook>>,
     idle: Mutex<Option<CloseHook>>,
@@ -277,19 +275,6 @@ impl Requests {
     pub fn set_poll_interval(&self, interval: Option<Duration>) {
         let micros = interval.map_or(0, |d| d.as_micros().clamp(1, u64::MAX.into()) as u64);
         self.poll.store(micros, Ordering::Relaxed);
-    }
-    /// Pace model, input and animation frames. Values below 8 ms are clamped;
-    /// `None` restores 16 ms. Native expose blits need not rebuild the UI.
-    pub fn set_min_frame_interval(&self, interval: Option<Duration>) {
-        let micros = interval.map_or(0, |d| d.as_micros().clamp(8_000, u64::MAX.into()) as u64);
-        self.frame_interval.store(micros, Ordering::Relaxed);
-        self.wake();
-    }
-    fn min_frame_interval(&self) -> Duration {
-        match self.frame_interval.load(Ordering::Relaxed) {
-            0 => Duration::from_millis(16),
-            micros => Duration::from_micros(micros),
-        }
     }
     fn poll_interval(&self) -> Option<Duration> {
         match self.poll.load(Ordering::Relaxed) {
@@ -670,7 +655,6 @@ impl<V: View> Handler<V> {
         // The lock covers the frame and a snapshot of its scene, not the
         // present: acquiring a surface texture can wait out a vsync, and a
         // host-thread close() or state load must not wait with it.
-        self.driver.min_interval = Some(self.requests.min_frame_interval());
         let mut accessibility_update = None;
         let ime_configuration;
         let capture;

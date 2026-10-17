@@ -217,6 +217,8 @@ pub struct Driver {
     framed: Option<Point>,
     /// At most one frame per this, when set: events wait for the next.
     pub min_interval: Option<Duration>,
+    /// The native compositor already paces frames; do not add a time-based cap.
+    pub display_paced: bool,
 }
 
 impl Driver {
@@ -246,6 +248,7 @@ impl Driver {
             held: Vec::new(),
             framed: None,
             min_interval: None,
+            display_paced: false,
         }
     }
 
@@ -620,7 +623,8 @@ impl Driver {
         // Automatic work cannot crowd a recent event/resize frame or fill the
         // gaps between native resize samples. Explicit invalidations, due
         // repaint deadlines and ordered input edges bypass both policies.
-        if s.ui.scene().is_some()
+        if !self.display_paced
+            && s.ui.scene().is_some()
             && !self.dirty
             && !self.followup
             && !due
