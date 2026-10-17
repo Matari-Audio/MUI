@@ -297,11 +297,19 @@ impl Driver {
         let deadline = if self.dirty || self.followup || !self.pending.is_empty() {
             Some(self.last_frame)
         } else {
-            let animation = (self.animating || self.live_changed)
-                .then_some(self.last_frame + ANIMATION_INTERVAL);
-            let automatic = self.resize_until.map_or(animation, |quiet| {
-                Some(animation.map_or(quiet, |at| at.max(quiet)))
-            });
+            let animation =
+                (self.animating || self.live_changed).then_some(if self.display_paced {
+                    self.last_frame
+                } else {
+                    self.last_frame + ANIMATION_INTERVAL
+                });
+            let automatic = if self.display_paced {
+                animation
+            } else {
+                self.resize_until.map_or(animation, |quiet| {
+                    Some(animation.map_or(quiet, |at| at.max(quiet)))
+                })
+            };
             match (automatic, self.wake_at) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),

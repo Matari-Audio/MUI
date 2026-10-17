@@ -700,6 +700,24 @@ fn refused_layout_stops_unchanged_retries_and_retries_real_changes() {
 }
 
 #[test]
+fn display_paced_driver_has_no_interval_cap_and_idle_builds_nothing() {
+    let mut r = Rig::new(Pad, (200, 200), 1.0);
+    r.d.display_paced = true;
+    assert!(r.step());
+    for hz in [1000., 360., 240., 144., 60.] {
+        r.d.animating = true;
+        assert_eq!(r.d.next_wake(), Some(r.d.last_frame()));
+        let next_display = r.d.last_frame() + Duration::from_secs_f64(1. / hz);
+        assert!(r.d.advance(&mut r.s, next_display));
+    }
+    r.d.animating = false;
+    let last = r.d.last_frame();
+    assert_eq!(r.d.next_wake(), None);
+    assert!(!r.d.advance(&mut r.s, last + Duration::from_secs(1)));
+    assert_eq!(r.d.last_frame(), last);
+}
+
+#[test]
 fn animation_spacing_never_delays_input_redraw_or_due_deadlines() {
     let mut r = Rig::new(Pad, (200, 200), 1.0);
     assert!(r.step());
