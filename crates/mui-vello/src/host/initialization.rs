@@ -1,13 +1,14 @@
 //! Native initialization without window ownership. A caller must pin its image
 //! before permitting detached work. On close no join occurs: a running driver
-//! call may finish later, drop its unsent result on that thread and exit. Only
-//! that transient result may outlive the last editor; the static registry is Weak.
+//! call may finish later, drop its unsent result on that thread and exit. The
+//! admitted session and its pipelines live until process exit. The caller
+//! pins the image first, including all code used by device callbacks.
 use super::*;
-use std::sync::{Weak, mpsc};
+use std::sync::mpsc;
 
 // DX12 HWND and DirectComposition surfaces require different instance options.
 // Other backends can share one compute context regardless of surface alpha.
-static SHARED: Mutex<[Weak<Session>; 2]> = Mutex::new([Weak::new(), Weak::new()]);
+static SHARED: Mutex<[Option<Arc<Session>>; 2]> = Mutex::new([None, None]);
 
 fn session_slot(transparency: Transparency) -> usize {
     usize::from(cfg!(windows) && transparency == Transparency::Translucent)
@@ -79,14 +80,14 @@ impl Session {
         if !detached {
             return Self::private(detached, transparency, Vec::new());
         }
-        let mut weak = SHARED
+        let mut shared = SHARED
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(session) = weak[session_slot(transparency)].upgrade() {
-            return session;
+        if let Some(session) = &shared[session_slot(transparency)] {
+            return session.clone();
         }
         let session = Self::private(detached, transparency, Vec::new());
-        weak[session_slot(transparency)] = Arc::downgrade(&session);
+        shared[session_slot(transparency)] = Some(session.clone());
         session
     }
     fn private(
@@ -577,6 +578,14 @@ pub(super) fn surface_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pinned_session_survives_the_last_editor_closing() {
+        let init = GpuInit::new(true);
+        let weak = Arc::downgrade(&init.session);
+        drop(init);
+        let reopened = GpuInit::new(true);
+        assert!(Arc::ptr_eq(&weak.upgrade().unwrap(), &reopened.session));
+    }
     #[test]
     fn closing_drops_a_pending_receiver_without_joining_the_initializer() {
         // The test executable cannot unload. Model an admitted, pinned worker
