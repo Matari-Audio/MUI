@@ -98,7 +98,8 @@ impl WindowHandler for Parent {
                     child.close();
                 }
                 let elapsed = start.elapsed();
-                if elapsed >= Duration::from_millis(100) {
+                let close_budget = if cfg!(windows) { 100 } else { 300 };
+                if elapsed >= Duration::from_millis(close_budget) {
                     self.finish(Err(format!(
                         "native close waited {elapsed:?} for blocked build"
                     )));

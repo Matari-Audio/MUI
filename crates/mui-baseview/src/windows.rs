@@ -55,10 +55,12 @@ pub(super) fn build<V: View + Send + 'static>(
                         wake.clone(),
                         size,
                         accessibility,
-                        receive,
-                        publish,
-                        stop,
-                        pending,
+                        WorkerChannels {
+                            commands: receive,
+                            output: publish,
+                            stopped: stop,
+                            tick_pending: pending,
+                        },
                     );
                 }));
                 if let Err(payload) = result {
@@ -374,16 +376,26 @@ impl WindowHandler for WindowsAdapter {
     }
 }
 
+struct WorkerChannels {
+    commands: Receiver<Command>,
+    output: SyncSender<Output>,
+    stopped: Arc<AtomicBool>,
+    tick_pending: Arc<AtomicBool>,
+}
+
 fn worker<V: View>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
     size: WindowSize,
     mut accessibility: Option<AccessibilityUi>,
-    commands: Receiver<Command>,
-    output: SyncSender<Output>,
-    stopped: Arc<AtomicBool>,
-    tick_pending: Arc<AtomicBool>,
+    channels: WorkerChannels,
 ) {
+    let WorkerChannels {
+        commands,
+        output,
+        stopped,
+        tick_pending,
+    } = channels;
     let mut driver = Driver::new(
         (size.physical.width, size.physical.height),
         size.scale_factor,

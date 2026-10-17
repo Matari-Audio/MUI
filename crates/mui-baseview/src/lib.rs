@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 
 use a11y::{AccessibilityUi, NativeAccessibility};
 type A11y = (NativeAccessibility, AccessibilityUi);
+#[cfg(target_os = "windows")]
+type RenderTask = Box<dyn FnOnce() + Send>;
 
 /// Native IME and accessibility bridges for custom baseview hosts.
 pub mod native;
@@ -105,11 +107,11 @@ pub struct Requests {
     #[cfg(target_os = "windows")]
     render_cancelled: AtomicBool,
     #[cfg(target_os = "windows")]
-    render_start: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    render_start: Mutex<Option<RenderTask>>,
     #[cfg(target_os = "windows")]
-    render_stop: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    render_stop: Mutex<Option<RenderTask>>,
     #[cfg(target_os = "windows")]
-    render_work: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
+    render_work: Mutex<VecDeque<RenderTask>>,
 }
 
 impl Requests {
