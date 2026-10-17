@@ -869,6 +869,22 @@ impl GpuRenderer {
             self.local_mapping += 1;
         }
 
+        // Material pixels can change without changing any Vello commands.
+        // Re-rasterize the complete retained encoding in that case. Partial
+        // encodings cannot be replayed as a full frame, and changed mappings
+        // or placements still need fresh commands. Mark stale before checking
+        // backdrop prefixes so a blur sampling the material is rebuilt too.
+        let reuse_material_encoding = weld_damage != NOTHING
+            && self.valid
+            && self.whole
+            && self.transform == Some(xf)
+            && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
+            && self.retained == resolved.paint
+            && self.retained_external == self.external;
+        if reuse_material_encoding {
+            self.stale = true;
+        }
+
         // The retained backdrop cache owns a complete prefix encoding. A
         // changed prefix invalidates that encoding globally (including changes
         // outside the blur footprint); content above it keeps the cached blur.
@@ -878,6 +894,8 @@ impl GpuRenderer {
         let change =
             if overlay.is_some() || !self.valid || self.transform != Some(xf) || backdrop_invalid {
                 Change::Full
+            } else if reuse_material_encoding {
+                Change::None
             } else {
                 match paint_damage(
                     &self.retained,

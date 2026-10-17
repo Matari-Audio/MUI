@@ -394,9 +394,27 @@ fn validate_renderer_requirements(
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
 ) -> Result<(), String> {
+    validate_renderer_requirements_with_warp(
+        info,
+        flags,
+        requested,
+        supported,
+        cfg!(feature = "test-support")
+            && std::env::var("MUI_TEST_ALLOW_WARP").is_ok_and(|value| value == "1"),
+    )
+}
+
+fn validate_renderer_requirements_with_warp(
+    info: &wgpu::AdapterInfo,
+    flags: wgpu::DownlevelFlags,
+    requested: &wgpu::Limits,
+    supported: &wgpu::Limits,
+    allow_warp: bool,
+) -> Result<(), String> {
     // WARP's compute JIT faults outside Rust error handling; see the captured
     // stack in research/platform-validation-2026-10-08.md.
-    if info.backend == wgpu::Backend::Dx12
+    if !allow_warp
+        && info.backend == wgpu::Backend::Dx12
         && info.device_type == wgpu::DeviceType::Cpu
         && info.vendor == 0x1414
     {
@@ -1502,11 +1520,12 @@ mod tests {
     fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
         let limits = wgpu::Limits::default();
         let validate = |info: &wgpu::AdapterInfo| {
-            validate_renderer_requirements(
+            validate_renderer_requirements_with_warp(
                 info,
                 wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &limits,
                 &limits,
+                false,
             )
         };
         let mut info = adapter_info(
@@ -1518,6 +1537,13 @@ mod tests {
         info.device = 0x008c;
         info.driver = "10.0.26100.33438".into();
         assert!(validate(&info).unwrap_err().contains("WARP"));
+        assert!(validate_renderer_requirements_with_warp(
+            &info,
+            wgpu::DownlevelFlags::COMPUTE_SHADERS,
+            &limits,
+            &limits,
+            true,
+        ).is_ok());
         info.backend = wgpu::Backend::Vulkan;
         assert!(validate(&info).is_ok());
         info.backend = wgpu::Backend::Dx12;
