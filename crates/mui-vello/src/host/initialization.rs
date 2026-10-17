@@ -57,6 +57,7 @@ struct Context {
     diagnostics: GpuDiagnostics,
     vello: crate::effects::retained::SharedVello,
     generation: u64,
+    trial: Arc<crash_guard::Attempt>,
 }
 
 fn run(detached: bool, work: impl FnOnce() + Send + 'static) -> bool {
@@ -65,6 +66,7 @@ fn run(detached: bool, work: impl FnOnce() + Send + 'static) -> bool {
         // next poll observes a disconnected result and enters backoff.
         std::thread::Builder::new()
             .name("mui-gpu-init".into())
+            .stack_size(8 * 1024 * 1024)
             .spawn(work)
             .is_ok()
     } else {
@@ -140,22 +142,44 @@ impl Session {
                 let mut descriptor = session_descriptor(transparency);
                 // Vello cannot render through GL. Vulkan WSI accepts each window's
                 // own X connection; no process-wide borrowed display is retained.
-                descriptor.backends &= wgpu::Backends::PRIMARY;
+                descriptor.backends &=
+                    wgpu::Backends::PRIMARY & wgpu::Instance::enabled_backend_features();
                 if descriptor.backends.is_empty() {
                     return Err(HostError::Unavailable {
                         message: "no compute-capable native backend enabled".into(),
                         class: FailureClass::Permanent,
                     });
                 }
-                let instance = wgpu::Instance::new(descriptor);
-                let gpu = OnDevice::open_filtered(
-                    &instance,
-                    None,
-                    (1, 1),
-                    Transparency::Opaque,
-                    &excluded,
-                )?;
+                let mut failure_class = FailureClass::Permanent;
+                let (instance, gpu) = try_backends(descriptor.backends, |backends| {
+                    let trial =
+                        crash_guard::Attempt::begin(&crash_guard::Key::enumeration(backends))?;
+                    trial.phase("enumerate");
+                    let mut descriptor = session_descriptor(transparency);
+                    descriptor.backends = backends;
+                    let instance = wgpu::Instance::new(descriptor);
+                    let gpu = OnDevice::open_filtered(
+                        &instance,
+                        None,
+                        (1, 1),
+                        Transparency::Opaque,
+                        &excluded,
+                        Some(&trial),
+                    )
+                    .map_err(|error| {
+                        if error.failure_class() == FailureClass::Transient {
+                            failure_class = FailureClass::Transient;
+                        }
+                        error.to_string()
+                    })?;
+                    Ok((instance, gpu))
+                })
+                .map_err(|message| HostError::Unavailable {
+                    message,
+                    class: failure_class,
+                })?;
                 Ok(Arc::new(Context {
+                    trial: gpu.trial,
                     instance,
                     adapter: gpu.adapter,
                     device: gpu.device,
@@ -412,6 +436,17 @@ impl GpuInit {
             let completion_gate = self.completion_gate.clone();
             let _ = run(self.session.detached, move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let trial = Arc::new(
+                        crash_guard::Attempt::begin(&crash_guard::Key::adapter(
+                            &context.adapter.get_info(),
+                        ))
+                        .map_err(|message| HostError::Unavailable {
+                            message,
+                            class: FailureClass::Permanent,
+                        })?,
+                    );
+                    context.trial.finish();
+                    trial.phase("create_renderer");
                     let limit = context.device.limits().max_texture_dimension_2d;
                     let (width, height) = (size.0.min(limit), size.1.min(limit));
                     let renderer = pollster::block_on(GpuRenderer::new_shared(
@@ -424,6 +459,7 @@ impl GpuInit {
                     ))
                     .map_err(HostError::Render)?;
                     Ok(OnDevice {
+                        trial,
                         adapter: context.adapter.clone(),
                         device: context.device.clone(),
                         queue: context.queue.clone(),
@@ -573,6 +609,288 @@ pub(super) fn surface_config(
         desired_maximum_frame_latency: 1,
         ..config
     })
+}
+
+/// Window-independent renderer for an input-only native window. Construct and
+/// drive this on a render worker; no native handle is borrowed or retained.
+pub struct Offscreen {
+    first_frame: bool,
+    context: Arc<Context>,
+    renderer: GpuRenderer,
+    target: wgpu::Texture,
+    view: wgpu::TextureView,
+    readback: wgpu::Buffer,
+    size: (u32, u32),
+    error_cursor: u64,
+    trial: Arc<crash_guard::Attempt>,
+}
+
+impl GpuInit {
+    /// Poll the shared device and install per-editor offscreen resources on the
+    /// caller's render thread. Unlike `poll`, this never creates a native surface.
+    pub fn poll_offscreen(&mut self, size: (u32, u32)) -> Option<Result<Offscreen, HostError>> {
+        if self.installed || !self.retry.ready(Instant::now()) {
+            return None;
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let Some(context) = self.session.context()? else {
+                return Ok(None);
+            };
+            let trial = Arc::new(
+                crash_guard::Attempt::begin(&crash_guard::Key::adapter(
+                    &context.adapter.get_info(),
+                ))
+                .map_err(|message| HostError::Unavailable {
+                    message,
+                    class: FailureClass::Permanent,
+                })?,
+            );
+            // Per-editor trials now cover renderer creation/readback, including
+            // concurrent editors sharing the process-lifetime context.
+            context.trial.finish();
+            trial.phase("create_renderer");
+            let size = offscreen_size(&context.device, size)?;
+            let mut renderer = pollster::block_on(GpuRenderer::new_shared(
+                &context.device,
+                &context.queue,
+                wgpu::TextureFormat::Bgra8Unorm,
+                [size.0, size.1],
+                Budget::default(),
+                Some(context.vello.clone()),
+            ))
+            .map_err(HostError::Render)?;
+            renderer.incremental_output();
+            let (target, readback, _) = offscreen_target(&context.device, size);
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            Ok(Some(Offscreen {
+                trial,
+                first_frame: true,
+                context,
+                renderer,
+                target,
+                view,
+                readback,
+                size,
+                error_cursor: 0,
+            }))
+        }))
+        .unwrap_or_else(|payload| {
+            Err(HostError::Unavailable {
+                message: format!(
+                    "offscreen initialization panic: {}",
+                    crate::diagnostics::panic_message(&*payload)
+                ),
+                class: FailureClass::Transient,
+            })
+        });
+        match result {
+            Ok(None) => None,
+            Ok(Some(renderer)) => {
+                self.installed = true;
+                self.retry.reset();
+                Some(Ok(renderer))
+            }
+            Err(error) => {
+                self.failure(&error);
+                Some(Err(error))
+            }
+        }
+    }
+}
+
+fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> Result<(u32, u32), HostError> {
+    let limit = device
+        .limits()
+        .max_texture_dimension_2d
+        .min(u32::from(u16::MAX));
+    if size.0 == 0
+        || size.1 == 0
+        || size.0 > limit
+        || size.1 > limit
+        || u64::from(size.0) * u64::from(size.1) > 16 * 1024 * 1024
+    {
+        return Err(HostError::Configuration(
+            "offscreen bitmap exceeds target budget".into(),
+        ));
+    }
+    Ok(size)
+}
+fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, wgpu::Buffer, u32) {
+    let stride = (size.0 * 4 + 255) & !255;
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("MUI worker bitmap"),
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Bgra8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("MUI worker readback"),
+        size: u64::from(stride) * u64::from(size.1),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    (target, readback, stride)
+}
+impl Offscreen {
+    /// Discard retained damage after a failed native handoff.
+    pub fn invalidate(&mut self) {
+        self.renderer.invalidate();
+    }
+    /// Return completed softbuffer-format pixels (0x00RRGGBB). Driver waits,
+    /// mapping and color conversion all happen on the calling render worker.
+    pub fn render(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        size: (u32, u32),
+    ) -> Result<Vec<BitmapPatch>, HostError> {
+        if self.first_frame {
+            self.trial.phase("first_render");
+        }
+        offscreen_size(&self.context.device, size)?;
+        if self.context.errors.lost.load(Ordering::Acquire) {
+            return Err(HostError::Configuration("offscreen device lost".into()));
+        }
+        if size != self.size {
+            self.renderer
+                .resize([size.0, size.1])
+                .map_err(HostError::Render)?;
+            let (target, readback, _) = offscreen_target(&self.context.device, size);
+            self.view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            self.target = target;
+            self.readback = readback;
+            self.size = size;
+        }
+        self.renderer
+            .render(scene, transform, &self.view)
+            .map_err(HostError::Render)?;
+        let rects = self.renderer.damage();
+        if rects.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut offset = 0;
+        let copies = rects
+            .iter()
+            .map(|&rect @ [_, _, w, h]| {
+                let stride = (w * 4 + 255) & !255;
+                let start = offset;
+                offset += u64::from(stride) * u64::from(h);
+                (rect, stride, start)
+            })
+            .collect::<Vec<_>>();
+        if self.readback.size() < offset {
+            self.readback = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("MUI packed damage readback"),
+                size: offset,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+        }
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        for &([x, y, w, h], stride, offset) in &copies {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.target,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &self.readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: Some(h),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.context.queue.submit([encoder.finish()]);
+        let (send, receive) = mpsc::sync_channel(1);
+        self.readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = send.send(result);
+            });
+        let until = Instant::now() + Duration::from_secs(2);
+        loop {
+            self.context
+                .device
+                .poll(wgpu::PollType::Poll)
+                .map_err(|e| HostError::Configuration(e.to_string()))?;
+            match receive.try_recv() {
+                Ok(result) => {
+                    result.map_err(|e| HostError::Configuration(e.to_string()))?;
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) if Instant::now() < until => {
+                    std::thread::park_timeout(Duration::from_millis(1));
+                }
+                _ => {
+                    return Err(HostError::Configuration(
+                        "offscreen readback timed out".into(),
+                    ));
+                }
+            }
+        }
+        let mapped = self
+            .readback
+            .slice(..)
+            .get_mapped_range()
+            .map_err(|e| HostError::Configuration(e.to_string()))?;
+        let mut patches = Vec::with_capacity(copies.len());
+        for (rect @ [_, _, w, h], stride, offset) in copies {
+            let mut pixels = Vec::with_capacity(w as usize * h as usize);
+            let start = offset as usize;
+            for row in mapped[start..start + stride as usize * h as usize].chunks(stride as usize) {
+                pixels.extend(
+                    row[..w as usize * 4]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|bgra| u32::from_le_bytes(*bgra) & 0x00ff_ffff),
+                );
+            }
+            patches.push(BitmapPatch { rect, pixels });
+        }
+        drop(mapped);
+        self.readback.unmap();
+        if let Some(error) = self.context.errors.observe(&mut self.error_cursor) {
+            return Err(HostError::Configuration(error));
+        }
+        if self.first_frame {
+            self.trial.finish();
+            self.first_frame = false;
+            crate::diagnostics::breadcrumb(
+                "mui-vello",
+                "first_readback_complete",
+                "GPU trial confirmed",
+            );
+        }
+        Ok(patches)
+    }
+}
+
+/// A completed device-space rectangle, in native 0x00RRGGBB pixel order.
+pub struct BitmapPatch {
+    pub rect: [u32; 4],
+    pub pixels: Vec<u32>,
 }
 
 #[cfg(test)]
@@ -735,248 +1053,4 @@ mod tests {
         drop(second);
         assert!(weak.upgrade().is_none());
     }
-}
-
-/// Window-independent renderer for an input-only native window. Construct and
-/// drive this on a render worker; no native handle is borrowed or retained.
-pub struct Offscreen {
-    context: Arc<Context>,
-    renderer: GpuRenderer,
-    target: wgpu::Texture,
-    view: wgpu::TextureView,
-    readback: wgpu::Buffer,
-    size: (u32, u32),
-    error_cursor: u64,
-}
-
-impl GpuInit {
-    /// Poll the shared device and install per-editor offscreen resources on the
-    /// caller's render thread. Unlike `poll`, this never creates a native surface.
-    pub fn poll_offscreen(&mut self, size: (u32, u32)) -> Option<Result<Offscreen, HostError>> {
-        if self.installed || !self.retry.ready(Instant::now()) {
-            return None;
-        }
-        let result = (|| {
-            let Some(context) = self.session.context()? else {
-                return Ok(None);
-            };
-            let size = offscreen_size(&context.device, size)?;
-            let mut renderer = pollster::block_on(GpuRenderer::new_shared(
-                &context.device,
-                &context.queue,
-                wgpu::TextureFormat::Bgra8Unorm,
-                [size.0, size.1],
-                Budget::default(),
-                Some(context.vello.clone()),
-            ))
-            .map_err(HostError::Render)?;
-            renderer.incremental_output();
-            let (target, readback, _) = offscreen_target(&context.device, size);
-            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            Ok(Some(Offscreen {
-                context,
-                renderer,
-                target,
-                view,
-                readback,
-                size,
-                error_cursor: 0,
-            }))
-        })();
-        match result {
-            Ok(None) => None,
-            Ok(Some(renderer)) => {
-                self.installed = true;
-                self.retry.reset();
-                Some(Ok(renderer))
-            }
-            Err(error) => {
-                self.failure(&error);
-                Some(Err(error))
-            }
-        }
-    }
-}
-
-fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> Result<(u32, u32), HostError> {
-    let limit = device
-        .limits()
-        .max_texture_dimension_2d
-        .min(u32::from(u16::MAX));
-    if size.0 == 0
-        || size.1 == 0
-        || size.0 > limit
-        || size.1 > limit
-        || u64::from(size.0) * u64::from(size.1) > 16 * 1024 * 1024
-    {
-        return Err(HostError::Configuration(
-            "offscreen bitmap exceeds target budget".into(),
-        ));
-    }
-    Ok(size)
-}
-fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, wgpu::Buffer, u32) {
-    let stride = (size.0 * 4 + 255) & !255;
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("MUI worker bitmap"),
-        size: wgpu::Extent3d {
-            width: size.0,
-            height: size.1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("MUI worker readback"),
-        size: u64::from(stride) * u64::from(size.1),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    (target, readback, stride)
-}
-impl Offscreen {
-    /// Discard retained damage after a failed native handoff.
-    pub fn invalidate(&mut self) {
-        self.renderer.invalidate();
-    }
-    /// Return completed softbuffer-format pixels (0x00RRGGBB). Driver waits,
-    /// mapping and color conversion all happen on the calling render worker.
-    pub fn render(
-        &mut self,
-        scene: &ResolvedScene,
-        transform: Affine,
-        size: (u32, u32),
-    ) -> Result<Vec<BitmapPatch>, HostError> {
-        offscreen_size(&self.context.device, size)?;
-        if self.context.errors.lost.load(Ordering::Acquire) {
-            return Err(HostError::Configuration("offscreen device lost".into()));
-        }
-        if size != self.size {
-            self.renderer
-                .resize([size.0, size.1])
-                .map_err(HostError::Render)?;
-            let (target, readback, _) = offscreen_target(&self.context.device, size);
-            self.view = target.create_view(&wgpu::TextureViewDescriptor::default());
-            self.target = target;
-            self.readback = readback;
-            self.size = size;
-        }
-        self.renderer
-            .render(scene, transform, &self.view)
-            .map_err(HostError::Render)?;
-        let rects = self.renderer.damage();
-        if rects.is_empty() {
-            return Ok(Vec::new());
-        }
-        let mut offset = 0;
-        let copies = rects
-            .iter()
-            .map(|&rect @ [_, _, w, h]| {
-                let stride = (w * 4 + 255) & !255;
-                let start = offset;
-                offset += u64::from(stride) * u64::from(h);
-                (rect, stride, start)
-            })
-            .collect::<Vec<_>>();
-        if self.readback.size() < offset {
-            self.readback = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("MUI packed damage readback"),
-                size: offset,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-        }
-        let mut encoder = self
-            .context
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        for &([x, y, w, h], stride, offset) in &copies {
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.target,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d { x, y, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &self.readback,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset,
-                        bytes_per_row: Some(stride),
-                        rows_per_image: Some(h),
-                    },
-                },
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-            );
-        }
-        self.context.queue.submit([encoder.finish()]);
-        let (send, receive) = mpsc::sync_channel(1);
-        self.readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = send.send(result);
-            });
-        let until = Instant::now() + Duration::from_secs(2);
-        loop {
-            self.context
-                .device
-                .poll(wgpu::PollType::Poll)
-                .map_err(|e| HostError::Configuration(e.to_string()))?;
-            match receive.try_recv() {
-                Ok(result) => {
-                    result.map_err(|e| HostError::Configuration(e.to_string()))?;
-                    break;
-                }
-                Err(mpsc::TryRecvError::Empty) if Instant::now() < until => {
-                    std::thread::park_timeout(Duration::from_millis(1));
-                }
-                _ => {
-                    return Err(HostError::Configuration(
-                        "offscreen readback timed out".into(),
-                    ));
-                }
-            }
-        }
-        let mapped = self
-            .readback
-            .slice(..)
-            .get_mapped_range()
-            .map_err(|e| HostError::Configuration(e.to_string()))?;
-        let mut patches = Vec::with_capacity(copies.len());
-        for (rect @ [_, _, w, h], stride, offset) in copies {
-            let mut pixels = Vec::with_capacity(w as usize * h as usize);
-            let start = offset as usize;
-            for row in mapped[start..start + stride as usize * h as usize].chunks(stride as usize) {
-                pixels.extend(
-                    row[..w as usize * 4]
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .map(|bgra| u32::from_le_bytes(*bgra) & 0x00ff_ffff),
-                );
-            }
-            patches.push(BitmapPatch { rect, pixels });
-        }
-        drop(mapped);
-        self.readback.unmap();
-        if let Some(error) = self.context.errors.observe(&mut self.error_cursor) {
-            return Err(HostError::Configuration(error));
-        }
-        Ok(patches)
-    }
-}
-
-/// A completed device-space rectangle, in native 0x00RRGGBB pixel order.
-pub struct BitmapPatch {
-    pub rect: [u32; 4],
-    pub pixels: Vec<u32>,
 }

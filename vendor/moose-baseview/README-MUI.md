@@ -69,6 +69,31 @@ UTF-8 selection events before their associated preedit/commit. Input identity
 changes cancel the preceding native context composition. XIM forwarding follows
 [X.Org XIM protocol event masks](https://xorg.freedesktop.org/archive/current/doc/libX11/XIM/xim.html).
 
+## Keyboard capture and pointer gestures
+
+Surrendering text keyboard capture is not a user focus loss. On Windows, a
+scoped `WindowState` flag surrounds `SetFocus(parent)` in the posted capture
+message handler; its synchronous `WM_KILLFOCUS` does not emit `Unfocused`.
+Keyboard routing still follows the hook's capture flag immediately. Cocoa uses
+the same scoped guard around restoring the previous first responder, preserving
+pointer gestures while disabling native IME ownership. Genuine key-window loss
+still emits `Unfocused`, even after that responder handoff. X11 capture setters
+are already no-ops because ignored keys propagate to the host; no change is needed.
+The guard restores its previous value after nested calls and Rust unwinding, so
+later genuine focus losses still reach MUI and cancel the in-flight gesture.
+
+The platform-independent policy tests run on Linux as well:
+
+```sh
+cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib platform::focus_handoff::tests --locked
+cargo test -p mui --lib host::tests::keyboard_capture_tests
+```
+
+Real Windows/macOS validation: focus a popup search field, press a row and
+release without moving the pointer; the first click must work. Also switch
+application/window focus during a held press: releasing must not activate the
+row. Host keyboard shortcuts must continue working after text capture ends.
+
 ## Frame demand and X11 creation
 
 `WindowHandler::frame_demand()` defaults to `FrameDemand::Continuous`, preserving

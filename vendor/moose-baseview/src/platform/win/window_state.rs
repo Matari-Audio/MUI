@@ -42,6 +42,8 @@ pub(crate) struct WindowState {
     pub mouse_button_counter: Cell<usize>,
     pub mouse_was_outside_window: Cell<bool>,
     pub cursor_icon: Cell<MouseCursor>,
+    /// Only true around the native call returning keyboard focus to the host.
+    pub(crate) keyboard_capture_handoff: Cell<bool>,
 
     pub user32: LibraryModule<ExtendedUser32>,
     pub shared: Rc<WindowSharedState>,
@@ -62,6 +64,7 @@ impl WindowState {
             mouse_button_counter: Cell::new(0),
             mouse_was_outside_window: true.into(),
             cursor_icon: Cell::new(MouseCursor::Default),
+            keyboard_capture_handoff: Cell::new(false),
             user32,
             shared,
 

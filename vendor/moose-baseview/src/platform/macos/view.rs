@@ -103,6 +103,7 @@ pub(crate) struct BaseviewView {
     armed_deadline: Cell<Option<Instant>>,
     tracking_area: Cell<Option<Retained<NSTrackingArea>>>,
     keyboard_capture: Cell<bool>,
+    keyboard_capture_handoff: Cell<bool>,
     previous_responder: Cell<Option<Weak<NSResponder>>>,
 
     /// Drives `on_frame`: the view's display link on macOS 14+, else a timer at the screen's rate.
@@ -169,6 +170,7 @@ impl BaseviewView {
             armed_deadline: Cell::new(None),
             tracking_area: Cell::new(None),
             keyboard_capture: Cell::new(false),
+            keyboard_capture_handoff: Cell::new(false),
             previous_responder: Cell::new(None),
             notification_center_observer: None.into(),
             parenting: ViewParentingType::Uninitialized.into(),
@@ -827,6 +829,9 @@ impl BaseviewView {
         if capture {
             Self::take_focus(this);
         } else {
+            let _handoff = crate::platform::focus_handoff::KeyboardCaptureHandoff::new(
+                &this.keyboard_capture_handoff,
+            );
             Self::release_focus(this);
         }
     }
@@ -930,7 +935,14 @@ impl ViewImpl for BaseviewView {
     }
 
     fn resign_first_responder(this: ViewRef<Self>) -> bool {
-        Self::trigger_event(this, Event::Window(WindowEvent::Unfocused));
+        if crate::platform::focus_handoff::report_focus_loss(this.keyboard_capture_handoff.get()) {
+            Self::trigger_event(this, Event::Window(WindowEvent::Unfocused));
+        } else {
+            // Native IME ownership still ends; only gesture cancellation is
+            // suppressed when the framework itself restores the host responder.
+            this.ime.focused.set(false);
+            this.ime.marked.borrow_mut().clear();
+        }
         true
     }
 
@@ -1201,13 +1213,12 @@ impl ViewImpl for BaseviewView {
         {
             return;
         }
-        let Some(first_responder) = window.firstResponder() else {
-            return;
-        };
-
-        // If the first responder isn't our NSView, the focus events will instead be triggered
-        // by the becomeFirstResponder and resignFirstResponder methods on the NSView itself.
-        if !this.view.isEqual(Some(&first_responder)) {
+        // A genuine key-window loss must cancel gestures even after surrendering
+        // the first responder to the host. Gaining focus still belongs only to
+        // our own responder; returning keyboard capture must not acquire it.
+        if window.isKeyWindow()
+            && !window.firstResponder().is_some_and(|responder| this.view.isEqual(Some(&responder)))
+        {
             return;
         }
 

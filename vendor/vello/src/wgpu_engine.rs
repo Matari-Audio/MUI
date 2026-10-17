@@ -225,6 +225,9 @@ impl WgpuEngine {
                         let tx = tx.clone();
                         std::thread::Builder::new()
                             .name("Vello shader initialisation worker thread".into())
+                            // MUI patch: native shader compilers can exceed the
+                            // Windows default stack on integrated GPU drivers.
+                            .stack_size(8 * 1024 * 1024)
                             .spawn_scoped(scope, move || {
                                 let shader = Self::create_compute_pipeline(
                                     device,
