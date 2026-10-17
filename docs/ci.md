@@ -48,3 +48,5 @@ Windows Vulkan via Mesa or SwiftShader is supplementary future coverage: WARP ex
 ## Scope
 
 Hosted software/virtual GPUs do not qualify Intel/AMD integrated GPUs, discrete AMD/NVIDIA devices, mixed-DPI multi-monitor systems, real drag-and-drop between applications, or DAW embedding/format behavior. Metal VM receipts identify the adapter actually exposed. Hardware, real DAWs (CLAP/VST3/AU where supported), driver loss and installed release artifacts remain release qualification work.
+
+The native editor's `--test-input` fixture (requires `mui-baseview/test-support`) posts ordered pointer samples through the native adapter callback on its owning thread. Actual focus requests, keyboard capture changes and reentrant platform focus callbacks execute normally. It asserts the first menu-row click after text capture, drag value changes and capture reacquisition in both reopen rounds. This is scripted adapter input; physical OS input injection and inter-application dragging remain hardware/manual checks.

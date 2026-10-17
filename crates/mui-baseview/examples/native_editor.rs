@@ -14,6 +14,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "test-support")]
+#[path = "native_editor/input.rs"]
+mod input;
+
 const INITIAL: (u32, u32) = (240, 200);
 const RESIZED: (u32, u32) = (320, 240);
 type Outcome = Arc<Mutex<Option<Result<(), String>>>>;
@@ -24,12 +28,27 @@ const HANDOVER: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 struct Green {
+    #[cfg(feature = "test-support")]
+    input: input::Probe,
     gpu_unavailable_logged: bool,
 }
 
 impl View for Green {
-    fn build(&mut self, _: &mut Ui, _: &Input) -> El {
+    fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+        #[cfg(feature = "test-support")]
+        if input::enabled() {
+            return self.input.build(ui);
+        }
+        let _ = ui;
         block(320., 240.).fill(Color::srgb(0., 1., 0.))
+    }
+
+    fn after_frame(&mut self, ui: &mut Ui) {
+        #[cfg(feature = "test-support")]
+        if input::enabled() {
+            self.input.clicks += usize::from(ui.get("row").clicked);
+        }
+        let _ = ui;
     }
 
     fn changed(&mut self) -> bool {
@@ -62,6 +81,8 @@ struct State {
     round: usize,
     first_frame: u64,
     opened: Instant,
+    #[cfg(feature = "test-support")]
+    input: input::Script,
 }
 
 struct Parent {
@@ -101,6 +122,8 @@ impl Parent {
                     )
                     .ok_or("MUI child creation failed")?,
                 );
+                #[cfg(feature = "test-support")]
+                { state.input = input::Script::default(); }
                 state.opened = Instant::now();
                 state.phase = Phase::Frame;
             }
@@ -173,6 +196,10 @@ impl Parent {
                     if resized { "resized" } else { "initial" }
                 );
                 if resized {
+                    #[cfg(feature = "test-support")]
+                    if input::enabled() && !input::advance(&mut state)? {
+                        return Ok(false);
+                    }
                     eprintln!("native_editor: round {} closing child", state.round + 1);
                     state.child.take().ok_or("missing child at close")?.close();
                     state.round += 1;
@@ -262,7 +289,9 @@ fn run() -> Result<(), String> {
                 state: RefCell::new(State {
                     child: None,
                     shared: Arc::new(Mutex::new(Shared {
-                        ui: Ui::default(),
+                        ui: Ui::default().font(
+                            Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()
+                        ),
                         view: Green::default(),
                     })),
                     requests: Arc::new(Requests::default()),
@@ -271,6 +300,8 @@ fn run() -> Result<(), String> {
                     round: 0,
                     first_frame: 0,
                     opened: Instant::now(),
+                    #[cfg(feature = "test-support")]
+                    input: input::Script::default(),
                 }),
                 cx,
                 outcome: result,

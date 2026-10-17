@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - '.github/workflows/native-drag.yml'
+      - '.github/actions/native-setup/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
@@ -15,6 +16,7 @@ on:
     branches: [main, 'audit/**']
     paths:
       - '.github/workflows/native-drag.yml'
+      - '.github/actions/native-setup/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'

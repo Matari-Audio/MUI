@@ -18,7 +18,7 @@ def main():
     cases = [
         ("gpu-contract", [binary("gpu_contract"), str(output / "gpu-contract")], []),
         ("pixels", [binary("gpu_pixels"), str(output / "pixels")], []),
-        ("embedded-gpu", [binary("native_editor")], []),
+        ("embedded-gpu", [binary("native_editor"), "--test-input"], []),
         ("multiwindow-gpu", [binary("native_windows")], ["--renderer", "gpu"]),
         ("gallery-gpu", [f"target/debug/mui-preview{suffix}", "--test-ui"],
          ["--gallery", "--renderer", "gpu"]),

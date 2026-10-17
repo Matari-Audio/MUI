@@ -324,6 +324,17 @@ impl NativeAdapter {
         }
     }
     fn native_requests(&self) {
+        #[cfg(feature = "test-support")]
+        {
+            let events = {
+                let mut queued = self.requests.test_events.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                std::mem::take(&mut *queued)
+            };
+            for event in events {
+                let _ = self.on_event(event);
+            }
+        }
         if self.requests.focus.swap(false, Ordering::AcqRel) && !self.cx.has_focus() {
             let _ = self.cx.focus();
         }

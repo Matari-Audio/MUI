@@ -9,6 +9,8 @@ on:
       - crates/mui-preview/src/scenes.rs
       - crates/mui-material/tests/material_welding.rs
       - .github/workflows/renderer-bench.yml
+      - .github/actions/native-setup/**
+      - tools/ci/ui.py
       - crates/mui-vello/**
       - vendor/vello*/**
       - Cargo.toml
@@ -22,6 +24,8 @@ on:
       - crates/mui-preview/src/scenes.rs
       - crates/mui-material/tests/material_welding.rs
       - .github/workflows/renderer-bench.yml
+      - .github/actions/native-setup/**
+      - tools/ci/ui.py
       - crates/mui-vello/**
       - vendor/vello*/**
       - Cargo.toml
