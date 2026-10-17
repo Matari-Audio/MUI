@@ -34,6 +34,10 @@ pub use baseview;
 pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 
 mod drag;
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows::build;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
@@ -357,6 +361,7 @@ fn settings(title: &str, size: (u32, u32)) -> WindowSettings {
 }
 
 /// The handler constructor `open` and `run` share.
+#[cfg(not(target_os = "windows"))]
 fn build<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
