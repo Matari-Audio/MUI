@@ -930,7 +930,8 @@ impl WgpuEngine {
                     // DX12 clears every workgroup value explicitly in WGSL.
                     // Naga's HLSL aggregate initializer stalls WARP execution.
                     // Other APIs retain wgpu's automatic zero initialization.
-                    zero_initialize_workgroup_memory: backend != wgpu::Backend::Dx12,
+                    zero_initialize_workgroup_memory:
+                        !crate::robustness::explicit_workgroup_zeroing(backend, label),
                     ..Default::default()
                 },
                 cache,

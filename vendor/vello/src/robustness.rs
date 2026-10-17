@@ -108,13 +108,17 @@ pub(crate) fn trace_pipeline(label: &str, stage: &str) {
     }
 }
 
+pub(crate) fn explicit_workgroup_zeroing(backend: wgpu::Backend, label: &str) -> bool {
+    backend == wgpu::Backend::Dx12 && label.starts_with("vello.")
+}
+
 pub(crate) fn prepare_shader<'a>(
     backend: wgpu::Backend,
     label: &str,
     source: Cow<'a, str>,
 ) -> Cow<'a, str> {
     let source = prepare_tile_shader(backend, label, source);
-    if backend == wgpu::Backend::Dx12 {
+    if explicit_workgroup_zeroing(backend, label) {
         zero_init::prepare(source)
     } else {
         source

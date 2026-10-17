@@ -33,8 +33,14 @@ retains automatic damage and existing display pacing; no frame cap is added.
 - **Checked shaders on every GPU.** Vello 0.11's unchecked creation and disabled
   zero-init are real in the baseline. The safe wgpu 30.0.1 API enables
   [runtime checks](https://docs.rs/wgpu/30.0.1/wgpu/struct.ShaderRuntimeChecks.html)
-  for bounds, loops and integer division. Compute pipeline options explicitly
-  [zero workgroup memory](https://docs.rs/wgpu/30.0.1/wgpu/struct.PipelineCompilationOptions.html).
+  for bounds, loops and integer division. Workgroup memory is explicitly zeroed: DX12 uses bounded WGSL clears
+  and an unconditional barrier before the original shader body; other APIs use
+  [wgpu automatic initialization](https://docs.rs/wgpu/30.0.1/wgpu/struct.PipelineCompilationOptions.html).
+  Hosted WARP hangs at first-frame completion with automatic HLSL zeroing on
+  both FXC and StaticDxc, even without the tile patch or runtime checks.
+  Controlled hosted variants isolate this from compilation-gate waits. The
+  explicit initializer preserves atomic and ordinary workgroup values rather
+  than dropping zeroing. The exact failing driver instruction remains unknown.
   Choosing safety globally covers AMD APUs and misclassified adapters and avoids
   creating an unchecked configuration to maintain. This reverses the optimization
   in [Vello PR 1093](https://github.com/linebender/vello/pull/1093).

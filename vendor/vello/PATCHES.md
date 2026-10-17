@@ -110,7 +110,7 @@ not inherit Windows' smaller default thread stack.
 checks), and explicitly initializes compute workgroup memory. This deliberately
 reverses upstream's unchecked shader optimization for every adapter: unknown
 adapter classification must not disable safety. No unchecked opt-out is added.
-The host pipeline-cache namespace changes to `checked1`.
+The host pipeline-cache namespace changes to `checked2`.
 
 `src/robustness.rs` derives area-AA workgroup/binding limits from the locked
 `vello_shaders` metadata, exported to MUI's host for validation before requesting
@@ -140,3 +140,15 @@ when shader sources change; the headless regression uses the actual locked
 shader source. This is a downstream mitigation, not a claim of upstream or
 real-device qualification. See `docs/igpu-robustness.md` for evidence, costs and
 the coordinator's validation scope.
+
+
+DX12 zeroing uses explicit bounded WGSL loops (`src/robustness/zero_init.rs`),
+including `atomicStore` for atomic arrays and a uniform workgroup barrier before
+any original shader operation. This retains zero-initialization semantics while
+avoiding Naga 30.0.1's HLSL single-lane aggregate assignments, which cause the
+first WARP draw to stall with both FXC and StaticDxc in hosted qualification.
+Other backends retain automatic wgpu zeroing; safe shader runtime checks stay on
+all backends. The initializer handles the locked Vello scalar/struct/fixed-array
+declarations, checks source assumptions, and validates every shipped area/MSAA
+shader through Naga in the workspace suite. Custom non-Vello shaders retain
+wgpu's automatic initializer. `MUI_GPU_DEBUG` opts into pipeline-stage tracing.

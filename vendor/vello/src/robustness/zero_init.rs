@@ -114,3 +114,66 @@ fn clear(out: &mut String, name: &str, ty: &str, depth: usize, lanes: Option<(&s
         writeln!(out, "    {name} = {ty}();").unwrap();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_shipped_shader_accepts_explicit_workgroup_initialization() {
+        let s = vello_shaders::SHADERS;
+        for shader in [
+            s.pathtag_reduce,
+            s.pathtag_reduce2,
+            s.pathtag_scan1,
+            s.pathtag_scan_small,
+            s.pathtag_scan_large,
+            s.bbox_clear,
+            s.flatten,
+            s.draw_reduce,
+            s.draw_leaf,
+            s.clip_reduce,
+            s.clip_leaf,
+            s.binning,
+            s.tile_alloc,
+            s.backdrop_dyn,
+            s.path_count_setup,
+            s.path_count,
+            s.coarse,
+            s.path_tiling_setup,
+            s.path_tiling,
+            s.fine_area,
+            s.fine_msaa8,
+            s.fine_msaa16,
+        ] {
+            let source = prepare(shader.wgsl.code.clone());
+            let module = wgpu::naga::front::wgsl::parse_str(&source).unwrap_or_else(|error| {
+                panic!("{}: {}", shader.name, error.emit_to_string(&source))
+            });
+            wgpu::naga::valid::Validator::new(
+                wgpu::naga::valid::ValidationFlags::all(),
+                wgpu::naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap_or_else(|error| panic!("{}: {error:?}", shader.name));
+            if !shader.workgroup_buffers.is_empty() {
+                let clear = source
+                    .split("// MUI: clear every workgroup value")
+                    .nth(1)
+                    .expect("missing initialization")
+                    .split("workgroupBarrier();")
+                    .next()
+                    .unwrap();
+                for (_, variable) in module.global_variables.iter() {
+                    if variable.space == wgpu::naga::AddressSpace::WorkGroup {
+                        assert!(
+                            clear.contains(variable.name.as_deref().unwrap()),
+                            "{}: missing {variable:?}",
+                            shader.name
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
