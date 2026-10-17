@@ -7,6 +7,9 @@ inputs:
   workspaces:
     default: '. -> target'
     description: Cargo workspace cache mapping
+  warp:
+    default: 'false'
+    description: Install pinned developer WARP beside CI executables
 runs:
   using: composite
   steps:
@@ -35,3 +38,9 @@ runs:
         key: ${{ inputs.cache-key }}
         workspaces: ${{ inputs.workspaces }}
         cache-on-failure: true
+    - name: Pinned developer WARP
+      if: runner.os == 'Windows' && inputs.warp == 'true'
+      shell: pwsh
+      env:
+        MUI_CI_WORKSPACES: ${{ inputs.workspaces }}
+      run: ./tools/ci/install-warp.ps1

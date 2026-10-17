@@ -30,7 +30,7 @@ def main():
     for name, command, flags in cases:
         result = subprocess.run([
             sys.executable, "tools/ci/ui.py", "--output", str(output / name),
-            "--timeout", "240", *flags, "--", *command], check=False)
+            "--timeout", "900" if name in {"effects", "gallery-gpu"} else "240", *flags, "--", *command], check=False)
         failed |= result.returncode != 0
         if name == "embedded-gpu" and result.returncode == 0:
             evidence = (output / name / "stderr.log").read_text(errors="replace")

@@ -42,6 +42,7 @@ jobs:
       - uses: ./.github/actions/native-setup
         with:
           cache-key: native-ui-${{ matrix.backend }}-${{ matrix.compiler }}
+          warp: 'true'
       - name: Build production lifecycle hosts and GPU contracts
         run: |
           mkdir -p ui-results
@@ -76,3 +77,6 @@ jobs:
           path: ui-results/
           if-no-files-found: error
           retention-days: 7
+      - name: Remove developer driver before caching
+        if: always() && runner.os == 'Windows'
+        uses: ./.github/actions/warp-cleanup

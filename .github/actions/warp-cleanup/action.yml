@@ -1,0 +1,7 @@
+name: Remove developer WARP
+description: Remove test-only side-loaded DLLs before saving Cargo caches
+runs:
+  using: composite
+  steps:
+    - shell: pwsh
+      run: ./tools/ci/install-warp.ps1 -Clean
