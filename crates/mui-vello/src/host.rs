@@ -67,19 +67,67 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     } else {
         wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
     };
-    // wgpu-hal only links static DXC on x86-64 MSVC and *panics* if asked for it
-    // elsewhere. Windows GNU/ARM64 take Auto (dxcompiler.dll if present, else FXC):
-    // FXC can TDR on very large scenes (Vello #1991), but it never takes down init.
-    descriptor.backend_options.dx12.shader_compiler =
-        if cfg!(all(target_env = "msvc", not(target_arch = "aarch64"))) {
-            wgpu::Dx12Compiler::StaticDxc
-        } else {
-            wgpu::Dx12Compiler::Auto
-        };
+    descriptor.backend_options.dx12.shader_compiler = dx12_compiler();
     descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromHwnd;
     descriptor.backend_options.dx12.latency_waitable_object =
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
     descriptor
+}
+
+fn dx12_compiler() -> wgpu::Dx12Compiler {
+    if let Some(compiler) = wgpu::Dx12Compiler::from_env() {
+        return compiler;
+    }
+    if cfg!(all(target_env = "msvc", not(target_arch = "aarch64"))) {
+        return wgpu::Dx12Compiler::StaticDxc;
+    }
+    #[cfg(windows)]
+    if let Some(path) = dynamic_dxc_path() {
+        return wgpu::Dx12Compiler::DynamicDxc { dxc_path: path };
+    }
+    if cfg!(windows) {
+        wgpu::Dx12Compiler::Fxc
+    } else {
+        wgpu::Dx12Compiler::Auto
+    }
+}
+
+#[cfg(windows)]
+fn dynamic_dxc_path() -> Option<String> {
+    let configured = std::env::var_os("MUI_DXCOMPILER_PATH").map(std::path::PathBuf::from);
+    let adjacent = plugin_directory().map(|p| p.join("dxcompiler.dll"));
+    [configured, adjacent].into_iter().flatten().find_map(|path| {
+        let path = if path.is_dir() { path.join("dxcompiler.dll") } else { path };
+        path.is_file().then(|| path.to_string_lossy().into_owned())
+    })
+}
+
+// current_exe() identifies the DAW, not the plugin DLL. Resolve this function's
+// containing module without changing its loader reference count.
+#[cfg(windows)]
+#[expect(unsafe_code, reason = "query the plugin image containing this function")]
+fn plugin_directory() -> Option<std::path::PathBuf> {
+    use std::os::windows::ffi::OsStringExt;
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetModuleHandleExW(flags: u32, address: *const u16, module: *mut *mut std::ffi::c_void) -> i32;
+        fn GetModuleFileNameW(module: *mut std::ffi::c_void, path: *mut u16, size: u32) -> u32;
+    }
+    let mut module = std::ptr::null_mut();
+    let mut path = vec![0u16; 32768];
+    // SAFETY: FROM_ADDRESS interprets the pointer as an address within our
+    // image. The module stays mapped during this call; path is writable.
+    let length = unsafe {
+        if GetModuleHandleExW(0x6, plugin_directory as *const () as *const u16, &mut module) == 0 {
+            return None;
+        }
+        GetModuleFileNameW(module, path.as_mut_ptr(), 32768) as usize
+    };
+    if length == 0 || length >= path.len() {
+        return None;
+    }
+    let path = std::path::PathBuf::from(std::ffi::OsString::from_wide(&path[..length]));
+    path.parent().map(std::path::Path::to_path_buf)
 }
 
 fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
@@ -303,8 +351,10 @@ fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
         wgpu::DeviceType::Cpu => 4,
     };
     let backend = match info.backend {
-        wgpu::Backend::Vulkan | wgpu::Backend::Metal | wgpu::Backend::Dx12 => 0,
-        _ => 1,
+        wgpu::Backend::Vulkan | wgpu::Backend::Metal => 0,
+        wgpu::Backend::Dx12 if cfg!(windows) => 1,
+        wgpu::Backend::Dx12 => 0,
+        _ => 2,
     };
     (device, backend)
 }
@@ -1290,6 +1340,19 @@ mod tests {
         info
     }
 
+    #[test]
+    fn non_validation_runtime_faults_recover_without_a_restart() {
+        assert_eq!(HostError::Surface("temporary").failure_class(), FailureClass::Transient);
+        assert_eq!(HostError::Render(crate::effects::Error::Busy).failure_class(), FailureClass::Transient);
+        assert_eq!(HostError::Validation.failure_class(), FailureClass::Permanent);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_prefers_vulkan_to_dx12_on_the_same_device_class() {
+        let vk = adapter_info("GPU", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Vulkan);
+        let dx = adapter_info("GPU", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Dx12);
+        assert!(adapter_rank(&vk) < adapter_rank(&dx));
+    }
     #[test]
     fn downlevel_gl_is_rejected_without_weakening_vello_requirements() {
         let info = adapter_info("GL", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Gl);
