@@ -755,6 +755,12 @@ fn worker<V: View>(
                         );
                         gpu = None;
                         reason = "CPU GPU recovery";
+                        // Its retained bitmap predates the GPU frames now on
+                        // screen. A presenter change needs one complete repaint.
+                        if let Some(cpu) = &mut cpu {
+                            cpu.invalidate();
+                        }
+                        unpainted = true;
                         if let Some(init) = &mut init {
                             init.recover(class);
                         }
