@@ -109,7 +109,7 @@ fn journal() -> &'static Mutex<Journal> {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "gpu-effects"))]
 pub(super) fn bounded(text: &str, max: usize) -> &str {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {

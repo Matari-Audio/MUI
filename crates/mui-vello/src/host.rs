@@ -74,6 +74,17 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromHwnd;
     descriptor.backend_options.dx12.latency_waitable_object =
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
+    crate::diagnostics::breadcrumb(
+        "mui-vello",
+        "backend_policy",
+        &format!(
+            "enabled={:?}; dx12_compiler={:?}; flags={:?}; windows_dx12_first={}",
+            descriptor.backends,
+            descriptor.backend_options.dx12.shader_compiler,
+            descriptor.flags,
+            cfg!(windows),
+        ),
+    );
     descriptor
 }
 

@@ -164,7 +164,6 @@ mod tests {
                     ))
                     .count() as u32
         );
-        let coarse = vello_shaders::SHADERS.coarse;
         assert!(
             limits.max_compute_invocations_per_workgroup
                 >= coarse.workgroup_size.iter().product::<u32>()
