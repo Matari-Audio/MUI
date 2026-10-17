@@ -1342,3 +1342,56 @@ fn native_reentrant_drag_keeps_the_driver_trail_after_a_direct_press() {
         .expect("native frame callback")
         .expect("complete stroke");
 }
+
+#[test]
+fn native_idle_wake_from_worker_does_not_invalidate_or_paint() -> Result<(), String> {
+    let mut h = handler((400, 300), 1.0);
+    for _ in 0..600 {
+        h.step();
+    }
+    assert!(!h.step(), "settled editor paints no frames");
+    let opening = std::thread::current().id();
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let called = Arc::clone(&calls);
+    let shared = Arc::clone(&h.shared);
+    h.requests.on_idle(Arc::new(move || {
+        assert!(
+            shared.try_lock().is_ok(),
+            "native idle runs outside the model lock"
+        );
+        called
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(std::thread::current().id());
+    }));
+    let wakes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counter = Arc::clone(&wakes);
+    h.requests
+        .bind_requester(Some(baseview::FrameRequester::new(move || {
+            counter.fetch_add(1, Ordering::Relaxed);
+        })));
+    let requests = Arc::clone(&h.requests);
+    let producer = std::thread::spawn(move || {
+        requests.request_native_idle();
+        assert!(!requests.redraw.load(Ordering::Acquire));
+        std::thread::current().id()
+    })
+    .join()
+    .map_err(|_| "producer panicked")?;
+    assert_ne!(producer, opening);
+    assert_eq!(wakes.load(Ordering::Relaxed), 1);
+    assert!(
+        calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    );
+    assert!(!h.step(), "host work does not repaint the editor");
+    assert_eq!(
+        *calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+        [opening]
+    );
+    Ok(())
+}
