@@ -90,6 +90,25 @@ impl Tester {
             ));
         }
         app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+        // CPU-first startup belongs outside the GPU gallery's qualified cases.
+        // Every recorded scene/size/input step must use the requested renderer.
+        if self.case == 0
+            && !self.started
+            && std::env::var("MUI_TEST_RENDERER").as_deref() == Ok("gpu")
+        {
+            let gpu = app.gpu.as_mut().ok_or("native window is required")?;
+            gpu.update();
+            if gpu.rendering_mode() != "gpu" {
+                if let Some(error) = gpu.gpu_error() {
+                    return Err(format!("required gallery GPU unavailable: {error}"));
+                }
+                let size = gpu.size();
+                let scale = gpu.window().scale_factor();
+                app.replay(size, scale);
+                let _ = app.draw()?;
+                return Ok(());
+            }
+        }
         let scene_index = self.case / (SIZES.len() * 2);
         let variant = self.case % (SIZES.len() * 2);
         let size = SIZES[variant / 2];

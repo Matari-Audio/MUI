@@ -680,7 +680,10 @@ mod tests {
             .unwrap();
         let mut packet = [0; 512];
         let (length, client) = blackhole.recv_from(&mut packet).unwrap();
-        assert!(length > 12, "a real DNS query reached the unanswered server");
+        assert!(
+            length > 12,
+            "a real DNS query reached the unanswered server"
+        );
         // Observe transport ownership directly. A detached lookup would keep
         // this UDP endpoint bound after the reporting thread returned. A wall
         // clock assertion instead measures competing shader JITs and scheduler

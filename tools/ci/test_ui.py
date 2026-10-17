@@ -80,6 +80,10 @@ class UiEvidenceTests(unittest.TestCase):
         for frame in events[2:4]:
             frame["rendering_mode"] = "gpu"
         self.assertEqual(gallery_summary(events, "gpu")["rendering_modes"], ["gpu"])
+        events[2]["rendering_mode"] = "cpu"
+        with self.assertRaises(ValueError):
+            gallery_summary(events, "gpu")
+        events[2]["rendering_mode"] = "gpu"
         events[3]["rendering_mode"] = "cpu"
         with self.assertRaises(ValueError):
             gallery_summary(events, "gpu")
