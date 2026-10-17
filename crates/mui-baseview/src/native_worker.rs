@@ -1,6 +1,6 @@
 //! Input-only native window adapter. The worker owns no native handle or native context.
 use super::*;
-use mui::vello::host::{BitmapPatch as Patch, Offscreen};
+use mui::vello::host::{BitmapPatch as Patch, HostError, Offscreen};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 
 // A model may be reopened with a fresh Requests while its old worker exits.
@@ -96,6 +96,7 @@ pub(super) fn build<V: View + Send + 'static>(
         requests.render_active.store(true, Ordering::Release);
         let spawned = std::thread::Builder::new()
             .name("mui-editor-render".into())
+            .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 while previous
                     .as_ref()
@@ -740,8 +741,10 @@ fn worker<V: View>(
         let mut patches = Vec::new();
         if let Some(scene) = scene {
             let transform = Affine::scale(driver.ui_scale());
-            if let Some(renderer) = &mut gpu {
-                match renderer.render(&scene, transform, size) {
+            if let Some(result) = render_gpu(&mut gpu, |renderer| {
+                renderer.render(&scene, transform, size)
+            }) {
+                match result {
                     Ok(damage) => {
                         patches = damage;
                         unpainted = false;
@@ -753,7 +756,6 @@ fn worker<V: View>(
                             "worker_gpu_fault",
                             &error.to_string(),
                         );
-                        gpu = None;
                         reason = "CPU GPU recovery";
                         // Its retained bitmap predates the GPU frames now on
                         // screen. A presenter change needs one complete repaint.
@@ -853,6 +855,94 @@ fn worker<V: View>(
     }
     // No HWND or host callbacks here. The owner revokes host delivery first.
     driver.close(&mut lock(shared));
+}
+
+/// A renderer/readback unwind must take the same CPU/backoff path as an error,
+/// rather than escaping the outer worker boundary and ending input processing.
+fn render_gpu<R, T>(
+    gpu: &mut Option<R>,
+    render: impl FnOnce(&mut R) -> Result<T, HostError>,
+) -> Option<Result<T, HostError>> {
+    let renderer = gpu.as_mut()?;
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render(renderer)))
+        .unwrap_or_else(|payload| {
+            Err(HostError::Unavailable {
+                message: format!(
+                    "GPU render/readback panic: {}",
+                    mui::diagnostics::panic_message(&*payload)
+                ),
+                class: FailureClass::Transient,
+            })
+        });
+    if result.is_err() {
+        let failed = gpu.take();
+        // A renderer may also panic while destroying partially initialized
+        // resources. Do not let that second unwind terminate the worker.
+        if let Err(payload) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| drop(failed)))
+        {
+            mui::diagnostics::error(
+                "mui-baseview",
+                "worker_gpu_drop_panic",
+                mui::diagnostics::panic_message(&*payload),
+            );
+        }
+    }
+    Some(result)
+}
+
+#[cfg(test)]
+mod gpu_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn render_panic_falls_back_to_cpu_and_the_worker_accepts_another_frame() {
+        struct FakeRenderer {
+            render: fn() -> Result<(), HostError>,
+        }
+        let (commands, receive) = mpsc::channel();
+        let (publish, frames) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut gpu = Some(FakeRenderer {
+                render: || panic!("injected render/readback failure"),
+            });
+            let mut retry = Retry::default();
+            while receive.recv().is_ok() {
+                let cpu_frame = match render_gpu(&mut gpu, |renderer| (renderer.render)()) {
+                    Some(Err(error)) => {
+                        assert_eq!(error.failure_class(), FailureClass::Transient);
+                        assert!(
+                            error
+                                .to_string()
+                                .contains("injected render/readback failure")
+                        );
+                        retry.fail(Instant::now(), error.failure_class());
+                        false
+                    }
+                    Some(Ok(())) => panic!("fake renderer must fail"),
+                    None => true,
+                };
+                publish
+                    .send((gpu.is_none(), cpu_frame, retry.deadline().is_some()))
+                    .unwrap();
+            }
+        });
+        commands.send(()).unwrap();
+        assert_eq!(
+            frames.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (true, false, true)
+        );
+        // A second and third request must reach CPU painting on the same worker.
+        for _ in 0..2 {
+            commands.send(()).unwrap();
+            assert_eq!(
+                frames.recv_timeout(Duration::from_secs(5)).unwrap(),
+                (true, true, true)
+            );
+        }
+        drop(commands);
+        worker.join().unwrap();
+    }
 }
 
 fn dispatch<V: View>(
