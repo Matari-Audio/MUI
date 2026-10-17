@@ -897,41 +897,42 @@ impl WgpuEngine {
         entries: Vec<wgpu::BindGroupLayoutEntry>,
         cache: Option<&PipelineCache>,
     ) -> WgpuShader {
-        // SAFETY: We only call this with trusted shaders (written by Vello developers)
-        let shader_module = unsafe {
-            device.create_shader_module_trusted(
-                wgpu::ShaderModuleDescriptor {
-                    label: Some(label),
-                    source: wgpu::ShaderSource::Wgsl(wgsl),
-                },
-                wgpu::ShaderRuntimeChecks::unchecked(),
-            )
-        };
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &entries,
-        });
-        let compute_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: None,
-                bind_group_layouts: &[Some(&bind_group_layout)],
-                immediate_size: 0,
+        crate::with_pipeline_creation(device, || {
+            let wgsl =
+                crate::robustness::prepare_shader(device.adapter_info().backend, label, wgsl);
+            // MUI: bounds, loop and integer-div checks on every backend, including
+            // integrated/shared-memory GPUs. Written-by-us does not imply UB-free.
+            let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(label),
+                source: wgpu::ShaderSource::Wgsl(wgsl),
             });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some(label),
-            layout: Some(&compute_pipeline_layout),
-            module: &shader_module,
-            entry_point: None,
-            compilation_options: PipelineCompilationOptions {
-                zero_initialize_workgroup_memory: false,
-                ..Default::default()
-            },
-            cache,
-        });
-        WgpuShader {
-            pipeline: PipelineState::Compute(pipeline),
-            bind_group_layout,
-        }
+            let bind_group_layout =
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: None,
+                    entries: &entries,
+                });
+            let compute_pipeline_layout =
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: None,
+                    bind_group_layouts: &[Some(&bind_group_layout)],
+                    immediate_size: 0,
+                });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some(label),
+                layout: Some(&compute_pipeline_layout),
+                module: &shader_module,
+                entry_point: None,
+                compilation_options: PipelineCompilationOptions {
+                    zero_initialize_workgroup_memory: true,
+                    ..Default::default()
+                },
+                cache,
+            });
+            WgpuShader {
+                pipeline: PipelineState::Compute(pipeline),
+                bind_group_layout,
+            }
+        })
     }
 }
 

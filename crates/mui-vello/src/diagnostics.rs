@@ -202,6 +202,24 @@ pub fn gpu_error(stage: &str, message: &str, adapter: &wgpu::AdapterInfo) {
     record("mui-vello", stage, message, true, Some(adapter));
 }
 
+/// One bounded identity record and a separate reason: a verbose limits dump must
+/// not truncate the driver version or the rejection that support needs.
+#[cfg(feature = "gpu-effects")]
+pub(crate) fn gpu_candidate(stage: &str, message: &str, adapter: &wgpu::AdapterInfo) {
+    let identity = format!(
+        "name={:?}; vendor={:#06x}; device={:#06x}; backend={:?}; type={:?}; driver={:?}; driver_info={:?}",
+        bounded(&adapter.name, 384),
+        adapter.vendor,
+        adapter.device,
+        adapter.backend,
+        adapter.device_type,
+        bounded(&adapter.driver, 384),
+        bounded(&adapter.driver_info, 768),
+    );
+    record("mui-vello", stage, &identity, false, Some(adapter));
+    record("mui-vello", stage, message, false, Some(adapter));
+}
+
 /// Retain across a risky native GPU operation. Normal return and Rust unwind
 /// clear it; abrupt process termination leaves an unconfirmed interruption
 /// report for the next load. This installs no process-wide panic/signal hooks.

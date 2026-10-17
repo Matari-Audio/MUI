@@ -559,6 +559,7 @@ impl GpuInit {
             {
                 self.incompatible &= matches!(error, HostError::Surface(_));
                 let info = context.adapter.get_info();
+                crate::diagnostics::gpu_candidate("surface_rejected", &error.to_string(), &info);
                 self.excluded.push((info.name, info.backend));
                 self.session = Session::private(
                     self.session.detached,
@@ -596,16 +597,15 @@ pub(super) fn surface_config(
     let limit = adapter.limits().max_texture_dimension_2d;
     let (width, height) = (size.0.min(limit).max(1), size.1.min(limit).max(1));
     let caps = surface.get_capabilities(adapter);
-    let format = surface_format(&caps.formats).ok_or({
-        HostError::Surface("adapter cannot present a non-sRGB UNORM frame to this window")
-    })?;
+    let (format, alpha_mode, present_mode) =
+        selection::surface_choices(&caps, transparency).map_err(HostError::Surface)?;
     let config = surface
         .get_default_config(adapter, width, height)
         .ok_or(HostError::Surface("adapter cannot configure this window"))?;
     Ok(wgpu::SurfaceConfiguration {
         format,
-        alpha_mode: alpha_mode(&caps.alpha_modes, transparency),
-        present_mode: present_mode(&caps.present_modes),
+        alpha_mode,
+        present_mode,
         desired_maximum_frame_latency: 1,
         ..config
     })
