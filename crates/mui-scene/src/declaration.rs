@@ -109,7 +109,10 @@ mod tests {
     use super::*;
     use crate::{Outline, Style};
     use mui_geometry::Path;
-    use std::{cell::Cell, rc::Rc, sync::Arc};
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
 
     #[test]
     fn warm_storage_reuses_boxes_and_state_capacity_without_stale_fields() {
@@ -135,7 +138,7 @@ mod tests {
 
     #[test]
     fn recycling_drops_captures_before_borrowing_the_pool() {
-        struct Capture(Rc<Cell<usize>>);
+        struct Capture(Arc<AtomicUsize>);
         impl Drop for Capture {
             fn drop(&mut self) {
                 EMPTY.with(|pool| assert!(pool.try_borrow_mut().is_ok()));
@@ -143,11 +146,11 @@ mod tests {
                 let mut fresh = Element::default();
                 fresh.extras_mut().memo = None;
                 clear_declaration_storage();
-                self.0.set(self.0.get() + 1);
+                self.0.fetch_add(1, Ordering::Relaxed);
             }
         }
         clear_declaration_storage();
-        let dropped = Rc::new(Cell::new(0));
+        let dropped = Arc::new(AtomicUsize::new(0));
         let mut element = Element::default();
         let a = Capture(dropped.clone());
         element.extras_mut().outline = Some(Outline(Arc::new(move |_| {
@@ -163,7 +166,7 @@ mod tests {
             })),
         ));
         recycle(&mut element);
-        assert_eq!(dropped.get(), 2);
+        assert_eq!(dropped.load(Ordering::Relaxed), 2);
         clear_declaration_storage();
     }
 
@@ -198,8 +201,10 @@ mod tests {
             );
         });
         clear_declaration_storage();
-        let mut huge = Element::default();
-        huge.states = Vec::with_capacity(MAX_STATE_CAPACITY + 1);
+        let mut huge = Element {
+            states: Vec::with_capacity(MAX_STATE_CAPACITY + 1),
+            ..Element::default()
+        };
         recycle(&mut huge);
         EMPTY.with(|pool| assert_eq!(pool.borrow().bytes, 0));
     }

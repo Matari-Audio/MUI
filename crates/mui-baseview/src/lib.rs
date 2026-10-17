@@ -83,6 +83,8 @@ pub struct Presentation {
 /// which is the only place baseview's `WindowContext` can be touched.
 #[derive(Default)]
 pub struct Requests {
+    #[cfg(feature = "test-support")]
+    test_events: Mutex<VecDeque<Event>>,
     size: AtomicU64,
     scale: AtomicU64,
     redraw: AtomicBool,
@@ -110,6 +112,21 @@ pub struct Requests {
 }
 
 impl Requests {
+    /// Queue an integration-fixture event through the native pump. Bounded,
+    /// ordered and absent from production builds. Native focus/capture APIs
+    /// still execute normally, including synchronous platform callbacks.
+    #[cfg(feature = "test-support")]
+    pub fn test_event(&self, event: Event) -> Result<(), String> {
+        let mut events = self.test_events.lock().map_err(|e| e.to_string())?;
+        if events.len() >= 32 {
+            return Err("native fixture event queue is full".into());
+        }
+        events.push_back(event);
+        drop(events);
+        self.wake();
+        Ok(())
+    }
+
     /// Run once on the native window thread before starting its model worker.
     pub fn on_native_start(&self, start: impl FnOnce() + Send + 'static) {
         *self

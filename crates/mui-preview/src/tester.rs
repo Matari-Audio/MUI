@@ -68,9 +68,13 @@ impl Tester {
         if let Err(error) = self.frame(app, event_loop) {
             self.fail(event_loop, error);
         } else {
-            // Ui::frame updates its own wake deadline; traversal needs a tick
-            // even when the current scene is idle or waiting for a capture.
-            app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+            // Active traversal follows the native redraw path without a frame
+            // cap. Screenshot acknowledgement is IPC polling and draws nothing.
+            if self.waiting_capture {
+                app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+            } else if let Some(gpu) = &app.gpu {
+                gpu.window().request_redraw();
+            }
         }
     }
 
@@ -89,7 +93,25 @@ impl Tester {
                 app.gpu.as_ref().map(|gpu| gpu.window().inner_size())
             ));
         }
-        app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+        // CPU-first startup belongs outside the GPU gallery's qualified cases.
+        // Every recorded scene/size/input step must use the requested renderer.
+        if self.case == 0
+            && !self.started
+            && std::env::var("MUI_TEST_RENDERER").as_deref() == Ok("gpu")
+        {
+            let gpu = app.gpu.as_mut().ok_or("native window is required")?;
+            gpu.update();
+            if gpu.rendering_mode() != "gpu" {
+                if let Some(error) = gpu.gpu_error() {
+                    return Err(format!("required gallery GPU unavailable: {error}"));
+                }
+                let size = gpu.size();
+                let scale = gpu.window().scale_factor();
+                app.replay(size, scale);
+                let _ = app.draw()?;
+                return Ok(());
+            }
+        }
         let scene_index = self.case / (SIZES.len() * 2);
         let variant = self.case % (SIZES.len() * 2);
         let size = SIZES[variant / 2];

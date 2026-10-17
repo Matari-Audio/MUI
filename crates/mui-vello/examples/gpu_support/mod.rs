@@ -42,7 +42,7 @@ pub fn fixture(scale: f64) -> mui_scene::ResolvedScene {
         .expect("GPU fixture resolves")
 }
 pub async fn device() -> Result<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::default();
+    let instance = wgpu::Instance::new(mui_vello::host::instance_descriptor());
     let adapter = instance
         .request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,

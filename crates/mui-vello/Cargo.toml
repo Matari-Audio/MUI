@@ -99,3 +99,7 @@ wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
 # yanked, so a fresh resolve breaks every Windows build. Unpin once upstream
 # publishes an immutable release.
 mach-dxcompiler-rs = { version = "=0.1.4", default-features = false }
+
+[[example]]
+name = "gpu_pixels"
+required-features = ["cpu", "gpu-effects"]

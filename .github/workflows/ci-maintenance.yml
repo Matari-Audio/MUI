@@ -1,0 +1,29 @@
+name: CI source maintenance
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-maintenance-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  sources:
+    if: github.event.repository.private == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Refresh dependent workspace locks and format source
+        run: |
+          cargo fetch --manifest-path media/Cargo.toml
+          cargo fetch --manifest-path tools/gpui-host-probe/Cargo.toml
+          cargo fmt --all
+          git diff --binary > ci-source-maintenance.patch
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-source-maintenance
+          path: ci-source-maintenance.patch
+          if-no-files-found: error

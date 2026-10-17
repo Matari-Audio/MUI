@@ -1,0 +1,82 @@
+name: Native UI qualification
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-ui-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  MUI_REPORTING_DISABLED: '1'
+  MUI_GPU_DEBUG: '1'
+  MUI_TEST_ALLOW_WARP: '1'
+  LIBGL_ALWAYS_SOFTWARE: '1'
+  GALLIUM_DRIVER: llvmpipe
+jobs:
+  native:
+    if: github.event.repository.private == false
+    name: ${{ matrix.os }} / ${{ matrix.backend }} / ${{ matrix.compiler }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, backend: vulkan, compiler: default}
+          - {os: windows-latest, backend: dx12, compiler: StaticDxc}
+          - {os: windows-latest, backend: dx12, compiler: Fxc}
+          - {os: macos-latest, backend: metal, compiler: default}
+    env:
+      WGPU_BACKEND: ${{ matrix.backend }}
+      WGPU_DX12_COMPILER: ${{ matrix.compiler }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: native-ui-${{ matrix.backend }}-${{ matrix.compiler }}
+          warp: 'true'
+      - name: Build production lifecycle hosts and GPU contracts
+        run: |
+          mkdir -p ui-results
+          exec > >(tee -a ui-results/build.log) 2>&1
+          cargo build -p mui-baseview -p mui-winit -p mui-preview -p mui-vello \
+            --examples --bins --features mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-effects --locked
+      - name: Capture native Windows fault evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dumps = Join-Path $env:GITHUB_WORKSPACE 'ui-results/dumps'
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          foreach ($exe in @('gpu_contract.exe', 'gpu_pixels.exe', 'native_editor.exe', 'native_windows.exe', 'mui-preview.exe')) {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
+            New-Item -Force -Path $key | Out-Null
+            New-ItemProperty -Force -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dumps | Out-Null
+            New-ItemProperty -Force -Path $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+            New-ItemProperty -Force -Path $key -Name DumpCount -PropertyType DWord -Value 2 | Out-Null
+          }
+      - name: All pipelines, retained contract, CPU reference pixels and native lifecycle
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- python3 tools/ci/native_suite.py
+          else
+            python3 tools/ci/native_suite.py
+          fi
+      - name: Preserve adapter, compiler, pixel diffs and lifecycle failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: native-ui-${{ matrix.os }}-${{ matrix.backend }}-${{ matrix.compiler }}
+          path: ui-results/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Remove developer driver before caching
+        if: always() && runner.os == 'Windows'
+        uses: ./.github/actions/warp-cleanup

@@ -924,6 +924,44 @@ fn bounded_weld_changes_and_moves_match_full_renders() {
 }
 
 #[test]
+fn bounded_uniform_morph_reuses_encoding_and_matches_a_fresh_frame() {
+    let (device, queue) = device().expect("GPU adapter required for material replay validation");
+    for scale in [1., 1.5, 2.] {
+        let mut scene = bounded_weld(Role::Primary, 32.);
+        let output = readable(&device);
+        let reference = readable(&device);
+        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
+        let reference_view = reference.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut retained = pollster::block_on(hybrid(&device, &queue));
+        let mut fresh = pollster::block_on(hybrid(&device, &queue));
+        let xf = Affine::scale(scale);
+        retained.render(&scene, xf, &output_view).unwrap();
+        for progress in [0., 0.5, 1.] {
+            scene.set_weld_morph("bounded.weld", progress).unwrap();
+            let stats = retained.render(&scene, xf, &output_view).unwrap();
+            assert_eq!(stats.encoded_scenes, 0);
+            assert_eq!(stats.effect_draws, 1);
+            assert_eq!(stats.uniform_upload_bytes, 16);
+            assert_eq!(stats.texture_allocations, 0);
+            assert!(stats.rendered_pixels < AREA / 2);
+            fresh.invalidate();
+            fresh.render(&scene, xf, &reference_view).unwrap();
+            near_pixels(
+                &pixels(&device, &queue, &output),
+                &pixels(&device, &queue, &reference),
+                3,
+                "material replay: ",
+            );
+            assert!(retained.is_current(&scene, xf));
+            assert_eq!(
+                retained.render(&scene, xf, &output_view).unwrap().renders,
+                0
+            );
+        }
+    }
+}
+
+#[test]
 fn unchanged_welds_skip_encoding_raster_and_presentation() {
     let (device, queue) = device().expect("GPU adapter required for weld reuse validation");
     let scene = bounded_weld(Role::Primary, 32.);

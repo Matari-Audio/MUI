@@ -41,8 +41,8 @@ def gallery_summary(events, renderer=None):
         raise ValueError("gallery cases are missing or duplicated")
     frames = [e for e in events if e.get("event") == "frame"]
     modes = sorted({f.get("rendering_mode", "unknown") for f in frames})
-    if renderer is not None and not presentation_matches(
-            [f.get("rendering_mode", "unknown") for f in frames], renderer):
+    if renderer is not None and any(
+            f.get("rendering_mode", "unknown") != renderer for f in frames):
         raise ValueError(f"expected {renderer} presentation, observed {modes}")
     for case in range(expected):
         found = [f for f in frames if f["case"] == case]
@@ -190,7 +190,8 @@ def main():
     env = os.environ.copy()
     captures = (args.gallery or args.capture) and platform.system() == "Linux"
     env.update(MUI_TEST_RESULTS=str(output), MUI_TEST_CAPTURE="1" if captures else "0",
-               MUI_DIAGNOSTICS_DIR=str(output / "mui"), MUI_REPORTING_DISABLED="1", RUST_BACKTRACE="full")
+               MUI_DIAGNOSTICS_DIR=str(output / "mui"), MUI_REPORTING_DISABLED="1", RUST_BACKTRACE="full",
+               MUI_TEST_RENDERER=args.renderer or "")
     metadata = {"platform": platform.platform(), "machine": platform.machine(),
                 "revision": env.get("GITHUB_SHA"), "command": command,
                 "environment": {key: env.get(key) for key in ("WGPU_BACKEND", "MUI_RENDERER", "DISPLAY", "WINIT_X11_SCALE_FACTOR", "LIBGL_ALWAYS_SOFTWARE", "VK_ICD_FILENAMES")}}

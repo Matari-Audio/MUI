@@ -39,7 +39,7 @@ enum Inner {
     /// one for the 3D atlas (it only changes with the scene).
     Classic(
         Box<GpuRenderer>,
-        Option<(Option<Rgba>, [u32; 2], ResolvedScene)>,
+        Option<(Option<Rgba>, [u32; 2], Box<ResolvedScene>)>,
     ),
     Sparse(Box<Sparse>),
 }
@@ -258,7 +258,7 @@ impl GpuCanvas {
                         None => bg,
                     };
                     let scene = resolve(&SceneSpec::new(bg)).map_err(|e| e.to_string())?;
-                    *base = Some((key.0, key.1, scene));
+                    *base = Some((key.0, key.1, Box::new(scene)));
                 }
                 let base = &base.as_ref().expect("set above").2;
                 renderer

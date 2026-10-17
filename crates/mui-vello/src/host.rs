@@ -394,9 +394,27 @@ fn validate_renderer_requirements(
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
 ) -> Result<(), String> {
+    validate_renderer_requirements_with_warp(
+        info,
+        flags,
+        requested,
+        supported,
+        cfg!(feature = "test-support")
+            && std::env::var("MUI_TEST_ALLOW_WARP").is_ok_and(|value| value == "1"),
+    )
+}
+
+fn validate_renderer_requirements_with_warp(
+    info: &wgpu::AdapterInfo,
+    flags: wgpu::DownlevelFlags,
+    requested: &wgpu::Limits,
+    supported: &wgpu::Limits,
+    allow_warp: bool,
+) -> Result<(), String> {
     // WARP's compute JIT faults outside Rust error handling; see the captured
     // stack in research/platform-validation-2026-10-08.md.
-    if info.backend == wgpu::Backend::Dx12
+    if !allow_warp
+        && info.backend == wgpu::Backend::Dx12
         && info.device_type == wgpu::DeviceType::Cpu
         && info.vendor == 0x1414
     {
@@ -1064,6 +1082,9 @@ impl Host {
         let mut next = config.clone();
         (next.width, next.height) = (width, height);
         if let Some(surface) = &self.surface {
+            // DXGI ResizeBuffers requires every old backbuffer view released.
+            // The renderer caches the last output view to skip idle presents.
+            renderer.invalidate();
             configure(surface, device, &next).map_err(|error| {
                 crate::diagnostics::error("mui-vello", "resize_failed", &error);
                 HostError::Configuration(error)
@@ -1102,6 +1123,8 @@ impl Host {
     ) -> Result<(), HostError> {
         // EGL permits one configured window surface per native window. Wgpu
         // creates it during configure, so release the old swapchain first.
+        // Cached output views must go before their swapchain (DXGI too).
+        self.gpu.renderer.invalidate();
         self.surface = None;
         if self.shared.is_some() {
             let config = initialization::surface_config(
@@ -1187,6 +1210,7 @@ impl Host {
                 });
             }
             let now = Instant::now();
+            self.gpu.renderer.invalidate();
             match OnDevice::open(&self.instance, Some(surface), size, self.transparency) {
                 Ok(gpu) => {
                     self.gpu = gpu;
@@ -1237,8 +1261,8 @@ impl Host {
         let frame = match surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
-                configure(surface, device, config).map_err(HostError::Configuration)?;
                 renderer.invalidate();
+                configure(surface, device, config).map_err(HostError::Configuration)?;
                 return Ok(Frame::Skipped);
             }
             Acquired::Occluded | Acquired::Timeout => return Ok(Frame::Skipped),
@@ -1502,11 +1526,12 @@ mod tests {
     fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
         let limits = wgpu::Limits::default();
         let validate = |info: &wgpu::AdapterInfo| {
-            validate_renderer_requirements(
+            validate_renderer_requirements_with_warp(
                 info,
                 wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &limits,
                 &limits,
+                false,
             )
         };
         let mut info = adapter_info(
@@ -1518,6 +1543,16 @@ mod tests {
         info.device = 0x008c;
         info.driver = "10.0.26100.33438".into();
         assert!(validate(&info).unwrap_err().contains("WARP"));
+        assert!(
+            validate_renderer_requirements_with_warp(
+                &info,
+                wgpu::DownlevelFlags::COMPUTE_SHADERS,
+                &limits,
+                &limits,
+                true,
+            )
+            .is_ok()
+        );
         info.backend = wgpu::Backend::Vulkan;
         assert!(validate(&info).is_ok());
         info.backend = wgpu::Backend::Dx12;

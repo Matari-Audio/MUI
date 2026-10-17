@@ -7,6 +7,8 @@ license.workspace = true
 
 # A native window: nothing here builds for wasm.
 [features]
+# Native integration-fixture event queue; never enabled by ordinary builds.
+test-support = ["mui/test-support"]
 # Explicitly accepts that a plugin panic can terminate its DAW.
 allow-panic-abort = []
 
