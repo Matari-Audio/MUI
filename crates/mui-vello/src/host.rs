@@ -474,8 +474,10 @@ impl HostError {
             {
                 FailureClass::Permanent
             }
-            Self::Render(crate::effects::Error::Busy) => FailureClass::Transient,
-            Self::Surface(_) | Self::Validation | Self::Render(_) => FailureClass::Permanent,
+            Self::Validation => FailureClass::Permanent,
+            // Surface loss, allocation pressure and render/driver faults can
+            // clear without restarting a DAW. Retry with the existing backoff.
+            Self::Surface(_) | Self::Render(_) => FailureClass::Transient,
             _ => FailureClass::Transient,
         }
     }
