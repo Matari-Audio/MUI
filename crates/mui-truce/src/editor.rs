@@ -93,6 +93,8 @@ pub struct MuiEditor<P: Params> {
     min: Option<(u32, u32)>,
     pub(crate) scale: HostScale,
     window: Option<Handle>,
+    #[cfg(target_os = "windows")]
+    native_pump: Option<Arc<HostPump>>,
 }
 
 /// Whole logical points, as the host's window API takes them.
@@ -146,6 +148,8 @@ impl<P: Params> MuiEditor<P> {
             min: None,
             scale: HostScale::default(),
             window: None,
+            #[cfg(target_os = "windows")]
+            native_pump: None,
         }
     }
 
@@ -185,7 +189,14 @@ impl<P: Params> MuiEditor<P> {
 
     /// Retain this handle in a framework callback and flush outside locks.
     pub fn host_pump(&self) -> Option<Arc<HostPump>> {
-        lock(&self.shared).view.bridge.host_pump()
+        #[cfg(target_os = "windows")]
+        {
+            self.native_pump.clone()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            lock(&self.shared).view.bridge.host_pump()
+        }
     }
 
     fn close_window(&mut self) {
@@ -200,6 +211,7 @@ impl<P: Params> MuiEditor<P> {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     fn close_model(&self, notify_host: bool) {
         guard("close bridge", || {
             let mut shared = lock(&self.shared);
@@ -217,6 +229,83 @@ impl<P: Params> MuiEditor<P> {
         });
     }
 
+    #[cfg(target_os = "windows")]
+    fn close_model(&self, notify_host: bool) {
+        // Revoke delivery without waiting on a model held by a slow build.
+        if let Some(pump) = &self.native_pump {
+            if notify_host {
+                pump.close();
+                pump.flush();
+            } else {
+                pump.detach();
+            }
+        }
+        // No worker was started (or it already finished). Do not wait even
+        // here: a previous editor generation may still be cancelling.
+        if !self.requests.render_active() {
+            if let Ok(mut shared) = self.shared.try_lock() {
+                shared.view.bridge.detach();
+                shared.ui.close();
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn open_native(
+        &mut self,
+        context: &PluginContext,
+        create: impl FnOnce(&Self) -> Option<Handle>,
+    ) {
+        self.close();
+        let previous = std::mem::replace(&mut self.requests, Arc::default());
+        let context = context.with_params(Arc::clone(&self.params));
+        let pump = Arc::new(HostPump::default());
+        if !pump.attach(Arc::clone(context.bridge())) {
+            return;
+        }
+        self.native_pump = Some(pump.clone());
+        let delivery = pump.clone();
+        self.requests.on_idle(Arc::new(move || {
+            delivery.flush();
+        }));
+        let revoke = pump.clone();
+        self.requests.on_close(Arc::new(move || {
+            revoke.close();
+        }));
+        let shared = self.shared.clone();
+        let cleanup = self.shared.clone();
+        let current = Arc::downgrade(&self.requests);
+        self.requests.on_render_lifecycle(
+            move || {
+                // Reopen may arrive while the old worker is in a driver. Sequence
+                // model ownership on workers; the DAW remains free to close again.
+                while previous.render_active() {
+                    if current.upgrade().is_none_or(|r| r.render_cancelled()) {
+                        return;
+                    }
+                    std::thread::park_timeout(std::time::Duration::from_millis(1));
+                }
+                if current.upgrade().is_some_and(|r| !r.render_cancelled()) {
+                    lock(&shared)
+                        .view
+                        .bridge
+                        .attach_render_context(context, pump);
+                }
+            },
+            move || {
+                let mut shared = lock(&cleanup);
+                shared.view.bridge.detach();
+                shared.ui.close();
+                shared.ui.release_thread_memos();
+            },
+        );
+        match guard("editor open", || create(self)) {
+            Some(Some(window)) => self.window = Some(window),
+            _ => self.close(),
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
     fn open_native(
         &mut self,
         context: &PluginContext,
@@ -348,6 +437,16 @@ impl<P: Params> Editor for MuiEditor<P> {
     }
 
     fn state_changed(&mut self) {
+        #[cfg(target_os = "windows")]
+        {
+            let shared = self.shared.clone();
+            self.requests.dispatch_render_work(move || {
+                let mut shared = lock(&shared);
+                shared.ui.cancel();
+                shared.view.bridge.end_all();
+            });
+        }
+        #[cfg(not(target_os = "windows"))]
         // A preset replaced what a gesture in flight was editing: end it,
         // and stop the drag so it cannot keep writing the old value.
         if guard("state changed", || {

@@ -109,6 +109,15 @@ impl<P: Params + ?Sized> Bridge<P> {
         self.seen.fill(u64::MAX);
     }
 
+    /// Install a channel already attached to its opening host thread. Only
+    /// model state moves here; host delivery remains in the native frame pump.
+    #[cfg(target_os = "windows")]
+    pub(crate) fn attach_render_context(&mut self, context: PluginContext<P>, pump: Arc<HostPump>) {
+        self.detach();
+        self.pump = Some(pump);
+        self.context = Some(context);
+        self.seen.fill(u64::MAX);
+    }
     /// End every open gesture and let the host go. Safe to call twice.
     pub fn close(&mut self) {
         self.end_all();

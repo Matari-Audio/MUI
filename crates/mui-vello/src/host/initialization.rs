@@ -726,7 +726,7 @@ mod tests {
     }
 
     #[test]
-    fn weak_registry_does_not_own_the_last_editor() {
+    fn unpinned_private_session_drops_with_the_last_editor() {
         let session = Session::private(false, Transparency::Opaque, Vec::new());
         let weak = Arc::downgrade(&session);
         let second = session.clone();
@@ -840,6 +840,10 @@ fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, 
     (target, readback, stride)
 }
 impl Offscreen {
+    /// Discard retained damage after a failed native handoff.
+    pub fn invalidate(&mut self) {
+        self.renderer.invalidate();
+    }
     /// Return completed softbuffer-format pixels (0x00RRGGBB). Driver waits,
     /// mapping and color conversion all happen on the calling render worker.
     pub fn render(

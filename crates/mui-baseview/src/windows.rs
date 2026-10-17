@@ -36,10 +36,20 @@ pub(super) fn build<V: View + Send + 'static>(
         let wake = requests.clone();
         let mut drag = drag::Host::new(&requests);
         drag.parented = parented;
-        std::thread::Builder::new()
+        requests.render_cancelled.store(false, Ordering::Release);
+        requests.render_active.store(true, Ordering::Release);
+        let spawned = std::thread::Builder::new()
             .name("mui-editor-render".into())
             .spawn(move || {
+                let start = wake
+                    .render_start
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Some(start) = start {
+                        start();
+                    }
                     worker(
                         shared,
                         wake.clone(),
@@ -58,7 +68,20 @@ pub(super) fn build<V: View + Send + 'static>(
                         mui::diagnostics::panic_message(&*payload),
                     );
                 }
-            })?;
+                let stop = wake
+                    .render_stop
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take();
+                if let Some(stop) = stop {
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop));
+                }
+                wake.render_active.store(false, Ordering::Release);
+            });
+        if let Err(error) = spawned {
+            requests.render_active.store(false, Ordering::Release);
+            return Err(error.into());
+        }
         let hook = requests
             .close
             .lock()
@@ -92,6 +115,7 @@ enum Command {
     Event(Event),
     Resize(WindowSize),
     Tick(Option<(u64, u64)>),
+    Invalidate,
     Stop,
 }
 struct Output {
@@ -131,6 +155,9 @@ pub(super) struct WindowsAdapter {
 impl WindowsAdapter {
     fn stop(&self) {
         if !self.stopped.swap(true, Ordering::AcqRel) {
+            self.requests
+                .render_cancelled
+                .store(true, Ordering::Release);
             self.close.fire();
             self.native.borrow_mut().take();
             self.drag.borrow_mut().close(&self.requests.drag);
@@ -187,18 +214,32 @@ impl WindowsAdapter {
         }
         let actual = self.cx.size();
         if output.size != (actual.physical.width, actual.physical.height) {
+            self.send(Command::Invalidate);
+            self.input_pending.set(true);
+            self.requests.wake();
             return;
         }
         if !output.patches.is_empty() {
             let mut bitmap = self.bitmap.borrow_mut();
-            if bitmap.as_ref().is_none_or(|b| b.size != output.size) {
+            // A full update already owns a completed bitmap: move it into
+            // native retention instead of allocating/copying a full frame here.
+            let mut patches = output.patches;
+            if patches.len() == 1 && patches[0].rect == [0, 0, output.size.0, output.size.1] {
+                let patch = patches.pop().expect("one patch");
+                blit(&self.cx, patch.rect, &patch.pixels);
                 *bitmap = Some(Bitmap {
                     size: output.size,
-                    pixels: vec![0; output.size.0 as usize * output.size.1 as usize],
+                    pixels: patch.pixels,
                 });
             }
+            if bitmap.as_ref().is_none_or(|b| b.size != output.size) {
+                self.send(Command::Invalidate);
+                self.input_pending.set(true);
+                self.requests.wake();
+                return;
+            }
             let bitmap = bitmap.as_mut().expect("allocated above");
-            for patch in output.patches {
+            for patch in patches {
                 let [x, y, w, h] = patch.rect;
                 for row in 0..h as usize {
                     let dest = (y as usize + row) * output.size.0 as usize + x as usize;
@@ -254,6 +295,7 @@ impl WindowHandler for WindowsAdapter {
             baseview::FrameDemand::Continuous => true,
             baseview::FrameDemand::At(at) => Instant::now() >= at,
             baseview::FrameDemand::Idle => false,
+            _ => false,
         };
         if (due || self.input_pending.get() || self.requests.redraw.load(Ordering::Acquire))
             && !self.tick_pending.swap(true, Ordering::AcqRel)
@@ -319,6 +361,7 @@ fn worker<V: View>(
     let mut init = (!software_only).then(|| GpuInit::new(true));
     let mut cpu = None::<mui::vello::software::Renderer>;
     let mut retry = Retry::default();
+    let mut unpainted = true;
     lock(&shared).ui.set_gpu_welding_available(false);
     while let Ok(command) = commands.recv() {
         if stopped.load(Ordering::Acquire) || matches!(command, Command::Stop) {
@@ -338,8 +381,28 @@ fn worker<V: View>(
                 tick_pending.store(false, Ordering::Release);
                 drag
             }
+            Command::Invalidate => {
+                driver.redraw();
+                if let Some(gpu) = &mut gpu {
+                    gpu.invalidate();
+                }
+                if let Some(cpu) = &mut cpu {
+                    cpu.invalidate();
+                }
+                unpainted = true;
+                continue;
+            }
             Command::Stop => break,
         };
+        loop {
+            let task = requests
+                .render_work
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_front();
+            let Some(task) = task else { break };
+            task();
+        }
         let now = Instant::now();
         let size = driver.size();
         let valid =
@@ -371,6 +434,7 @@ fn worker<V: View>(
                 }
             }
             let fresh = driver.advance(&mut shared, now);
+            unpainted |= fresh;
             let ime = driver
                 .ime_configuration(&shared.ui)
                 .map(|c| native_ime(c, driver.ui_scale()));
@@ -382,7 +446,7 @@ fn worker<V: View>(
                 }
             });
             (
-                if fresh && valid {
+                if unpainted && valid {
                     shared.ui.scene_snapshot()
                 } else {
                     None
@@ -397,7 +461,10 @@ fn worker<V: View>(
             let transform = Affine::scale(driver.ui_scale());
             if let Some(renderer) = &mut gpu {
                 match renderer.render(&scene, transform, size) {
-                    Ok(damage) => patches = damage,
+                    Ok(damage) => {
+                        patches = damage;
+                        unpainted = false;
+                    }
                     Err(error) => {
                         let class = error.failure_class();
                         mui::diagnostics::error(
@@ -448,6 +515,7 @@ fn worker<V: View>(
                 match result {
                     Ok(damage) => {
                         patches = damage;
+                        unpainted = false;
                         retry.reset();
                     }
                     Err(error) => {

@@ -36,8 +36,6 @@ pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 mod drag;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "windows")]
-use windows::build;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
@@ -60,6 +58,8 @@ use mui::vello::kurbo::Affine;
 #[cfg(target_os = "linux")]
 use raw_window_handle::HasDisplayHandle;
 use raw_window_handle::HasWindowHandle;
+#[cfg(target_os = "windows")]
+use windows::build;
 
 /// An app's look at every key event, down and up, before MUI routes it:
 /// `true` takes the key, and neither MUI nor the host sees it. MUI hands a
@@ -100,9 +100,58 @@ pub struct Requests {
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
     drag: drag::Mailbox,
+    #[cfg(target_os = "windows")]
+    render_active: AtomicBool,
+    #[cfg(target_os = "windows")]
+    render_cancelled: AtomicBool,
+    #[cfg(target_os = "windows")]
+    render_start: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(target_os = "windows")]
+    render_stop: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    #[cfg(target_os = "windows")]
+    render_work: Mutex<VecDeque<Box<dyn FnOnce() + Send>>>,
 }
 
 impl Requests {
+    /// Install worker-only lifecycle work before opening a Windows editor.
+    /// Neither closure may call a host/native-window API. `stop` must revoke
+    /// model-side references; it runs after cancellation, including after panic.
+    #[cfg(target_os = "windows")]
+    pub fn on_render_lifecycle(
+        &self,
+        start: impl FnOnce() + Send + 'static,
+        stop: impl FnOnce() + Send + 'static,
+    ) {
+        *self
+            .render_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(start));
+        *self
+            .render_stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(stop));
+    }
+    /// Queue ordered model work on the Windows editor worker and request a
+    /// display-paced frame. Never acquire the model lock in a native callback.
+    #[cfg(target_os = "windows")]
+    pub fn dispatch_render_work(&self, work: impl FnOnce() + Send + 'static) {
+        self.render_work
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(Box::new(work));
+        self.redraw();
+    }
+    /// True while this editor's worker can still access its model. Native close
+    /// never waits for it; a reopened worker can sequence its model attachment.
+    #[cfg(target_os = "windows")]
+    pub fn render_active(&self) -> bool {
+        self.render_active.load(Ordering::Acquire)
+    }
+    /// Native close has revoked this editor, even if a GPU call is still running.
+    #[cfg(target_os = "windows")]
+    pub fn render_cancelled(&self) -> bool {
+        self.render_cancelled.load(Ordering::Acquire)
+    }
     /// Request native keyboard focus on the window's owning thread.
     pub fn focus(&self) {
         self.focus.store(true, Ordering::Release);
@@ -1321,6 +1370,11 @@ impl Clipboard {
 fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
     mui::diagnostics::error("mui-baseview", "window_error", line);
     if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        #[cfg(target_os = "windows")]
+        if let Ok(mut shared) = shared.try_lock() {
+            shared.view.log(line);
+        }
+        #[cfg(not(target_os = "windows"))]
         lock(shared).view.log(line);
     })) {
         mui::diagnostics::error(

@@ -74,6 +74,11 @@ impl Renderer {
         Ok(())
     }
 
+    /// Discard damage history after an external full invalidation.
+    pub fn invalidate(&mut self) {
+        self.transform = None;
+    }
+
     /// Premultiplied sRGB RGBA8, top-to-bottom. Valid after a successful render.
     pub fn pixels(&self) -> &[u8] {
         self.pixels.data_as_u8_slice()
