@@ -23,7 +23,7 @@ members = [
   "vendor/vello",
   "vendor/vello_encoding",
 ]
-exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit", "vendor/accesskit_unix"]
+exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit", "vendor/accesskit_unix", "vendor/vello_cpu"]
 resolver = "2"
 # The trailer/film crates (mui-stage, mui-reel, mui-motion-bridge) live in
 # media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.
@@ -67,7 +67,7 @@ pollster = "0.4"
 png = "0.18"
 epaint_default_fonts = "0.36"
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
-vello_cpu = { version = "0.3", default-features = false, features = ["std", "u8_pipeline", "text", "png"] }
+vello_cpu = { version = "0.3", path = "vendor/vello_cpu", default-features = false, features = ["std", "u8_pipeline", "text", "png"] }
 unicode-segmentation = "1.13"
 truce = { version = "6.3", default-features = false }
 

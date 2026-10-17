@@ -122,6 +122,12 @@ pub struct RasterizerSettings {
     ///
     /// See [`RenderContext::render_with`] for more information.
     pub offset: (u16, u16),
+    /// MUI extension: crop recorded scene strips to `[x, y, width, height]`
+    /// before fine rasterization. Geometry stays in global coordinates, so
+    /// coverage and paint sampling match an ordinary whole-scene render.
+    /// The origin must be tile aligned. Requires a single-threaded context.
+    /// The cropped result starts at `offset` in the destination pixmap.
+    pub viewport: Option<[u16; 4]>,
 }
 
 impl Default for RasterizerSettings {
@@ -131,6 +137,7 @@ impl Default for RasterizerSettings {
             target_init: TargetInit::Clear(AlphaColor::TRANSPARENT),
             pixel_format: PixelFormat::Rgba8,
             offset: (0, 0),
+            viewport: None,
         }
     }
 }
@@ -846,6 +853,17 @@ impl RenderContext {
         resources: &mut Resources,
         settings: RasterizerSettings,
     ) {
+        if let Some([x, y, w, h]) = settings.viewport {
+            use vello_common::tile::Tile;
+            assert!(
+                !self.is_multi_threaded(),
+                "region raster requires a single-threaded context"
+            );
+            assert!(x.is_multiple_of(Tile::WIDTH) && y.is_multiple_of(Tile::HEIGHT));
+            assert!(w > 0 && h > 0);
+            assert!(u32::from(x) + u32::from(w) <= u32::from(self.width));
+            assert!(u32::from(y) + u32::from(h) <= u32::from(self.height));
+        }
         // TODO: Maybe we should move those checks into the dispatcher.
         assert!(
             !self.dispatcher.has_layers(),

@@ -255,7 +255,7 @@ impl NativeAdapter {
             }
             if rects.len() > 64 {
                 let (mut x, mut y, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
-                for r in rects.iter() {
+                for r in &*rects {
                     x = x.min(r[0]);
                     y = y.min(r[1]);
                     x1 = x1.max(r[0] + r[2]);

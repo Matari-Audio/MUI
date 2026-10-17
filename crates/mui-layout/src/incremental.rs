@@ -184,8 +184,8 @@ impl Frozen {
         }
     }
     /// Borrow eager bindings, or bind only the cached branch's immediate
-    /// children. Small control rows stay inline during arrange; no temporary
-    /// measured root or heap child buffer is needed for them.
+    /// children. The bound scratch is boxed to keep the enum and recursive
+    /// arrange frames small; short rows retain inline storage inside that box.
     /// Pin replay continues to use its eager measured descendants.
     pub(crate) fn children<'m, 'a, P>(m: &'m Measured<'a, P>) -> BoundChildren<'m, 'a, P> {
         if !m.children.is_empty() || m.node.children().is_empty() {

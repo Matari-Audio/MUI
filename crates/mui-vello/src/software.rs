@@ -91,7 +91,7 @@ impl Renderer {
     }
 
     /// Rasterize only damaged device rectangles, retaining every other pixel.
-    /// Uses the GPU renderer's exact paint/weld/overlap invalidation policy.
+    /// Shares the GPU renderer's element footprint/paint-order damage policy.
     /// Resize, transform and unknown bounds invalidate the target. Backdrop and
     /// shadow dependencies expand local regions rather than dropping effects.
     pub fn render_damage(
@@ -138,32 +138,26 @@ impl Renderer {
             if w == 0 || h == 0 {
                 continue;
             }
-            self.ctx.reset_and_resize(w as u16, h as u16);
+            // Generate strips in the same global coordinate system as a full
+            // render. Moving Bezier geometry into a small scratch target changes
+            // float coverage rounding, even for integral tile translations.
+            self.ctx.reset_and_resize(width as u16, height as u16);
             let mut scratch = Pixmap::new(w as u16, h as u16);
             let mut canvas = Cpu {
                 ctx: &mut self.ctx,
                 resources: &mut self.resources,
                 cache: &mut self.cache,
             };
-            let translated = Affine::translate((-(f64::from(x)), -(f64::from(y)))) * transform;
-            if matches!(change, Change::Full) {
-                crate::paint(&mut canvas, scene, translated).map_err(|e| e.to_string())?;
-            } else {
-                // Replay all intersecting paint in stacking order, including
-                // unchanged backgrounds/siblings needed for correct blending.
-                let bounds = transform
-                    .inverse()
-                    .transform_rect_bbox(crate::kurbo::Rect::new(
-                        f64::from(x),
-                        f64::from(y),
-                        f64::from(x + w),
-                        f64::from(y + h),
-                    ));
-                crate::paint_region(&mut canvas, scene, translated, bounds)
-                    .map_err(|e| e.to_string())?;
-            }
+            crate::paint(&mut canvas, scene, transform).map_err(|e| e.to_string())?;
             self.ctx.flush();
-            self.ctx.render(&mut scratch, &mut self.resources);
+            self.ctx.render_with(
+                &mut scratch,
+                &mut self.resources,
+                vello_cpu::RasterizerSettings {
+                    viewport: Some([x as u16, y as u16, w as u16, h as u16]),
+                    ..Default::default()
+                },
+            );
             for row in 0..h as usize {
                 let dest = ((y as usize + row) * width as usize + x as usize) * 4;
                 let source = row * w as usize * 4;
@@ -494,7 +488,7 @@ mod tests {
                 .unwrap(),
             vec![[0, 0, 512, 384]]
         );
-        for x in [34., 42., 60., 35.] {
+        for x in [34., 42., 60., 35., 34.125, 42.75, 60.5, 35.25] {
             let scene = scene(x);
             let damage = incremental.render_damage(&scene, Affine::IDENTITY).unwrap();
             assert!(!damage.is_empty());

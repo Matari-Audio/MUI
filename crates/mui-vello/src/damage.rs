@@ -28,9 +28,9 @@ impl Regions {
             len: 0,
         }
     }
-    pub(crate) fn add(&mut self, mut r: [u32; 4]) -> bool {
+    pub(crate) fn add(&mut self, mut r: [u32; 4]) {
         if r[2] == 0 || r[3] == 0 {
-            return true;
+            return;
         }
         let mut i = 0;
         while i < self.len {
@@ -72,13 +72,6 @@ impl Regions {
         }
         self.rects[self.len] = r;
         self.len += 1;
-        true
-    }
-    pub(crate) fn pixels(&self) -> u64 {
-        self.rects[..self.len]
-            .iter()
-            .map(|r| u64::from(r[2]) * u64::from(r[3]))
-            .sum()
     }
 }
 
@@ -477,5 +470,34 @@ mod tests {
                     .any(|r| { r[0] <= x && r[0] + r[2] >= x + 16 && r[1] == 32 && r[3] == 16 })
             );
         }
+    }
+    #[test]
+    fn content_above_a_backdrop_does_not_damage_the_blur_footprint() {
+        let popup = |hot| {
+            mui_scene::resolve(&SceneSpec::new(
+                stack![
+                    block(512., 384.).fill(Role::Background).id("background"),
+                    stack![
+                        block(40., 30.)
+                            .fill(if hot { Role::Danger } else { Role::Primary })
+                            .offset(20., 20.)
+                            .id("item")
+                    ]
+                    .size(100., 80.)
+                    .fill(Color::srgba(0.1, 0.1, 0.1, 0.65))
+                    .backdrop_blur(10.)
+                    .offset(200., 20.)
+                    .float()
+                    .id("popup"),
+                ]
+                .size(512., 384.),
+            ))
+            .unwrap()
+        };
+        let before = popup(false);
+        let after = popup(true);
+        let damage = local(&before.paint, &after.paint);
+        assert!(!damage.is_empty());
+        assert!(damage.iter().map(|r| r[2] * r[3]).sum::<u32>() < 16_000);
     }
 }

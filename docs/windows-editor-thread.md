@@ -81,15 +81,25 @@ without requiring the application to mark it dirty.
 
 Unchanged overlapping backgrounds and siblings must be replayed **within** those
 regions to reconstruct blending correctly. Blend/opacity changes include the
-contained paint. Backdrop dependencies expand through intersecting old/new effect
-footprints until stable, without invalidating unrelated parts of the window.
+contained paint. Backdrop dependencies flow forward in paint order through intersecting old/new
+effect footprints: content drawn above a backdrop cannot invalidate its prefix.
+The retained GPU backdrop cache holds a complete prefix encoding, so a changed
+prefix conservatively invalidates that encoding and repaints the target, matching
+its existing contract even if the changed paint lies outside the blur footprint.
+Hover/content above unchanged glass reuses its cached blur and stays local.
 Analytic weld slots retain material textures/uniform lanes; changed or animated
 materials add their old/new bounds to the same classifier. CPU reference welds
 produce ordinary changed paint, so CPU and GPU share the same automatic policy.
 
-CPU `Renderer::render_damage` allocates region-sized scratch targets, replays
-intersecting paint in stacking order, and replaces only damaged rows in a persistent
-bitmap. The worker converts only those rows for native transport. GPU retained
+CPU `Renderer::render_damage` records scene geometry at its original global
+coordinates, allocates region-sized scratch targets, and crops the recorded strips
+at the coarse/fine raster boundary. It replaces only damaged rows in a persistent
+bitmap; the worker converts only those rows for native transport. Translating
+curves before flattening into a small target was not bit-exact (one-bit coverage
+changes on motion), so `vendor/vello_cpu` exposes the existing nonzero-origin
+bucketer through `RasterizerSettings::viewport`. The source is the same 0.3.0
+release with this small extension; no dependency versions change. Full renders
+keep the upstream path, and the exact partial/full assertions remain unchanged. GPU retained
 patch/atlas rasterization updates only affected scene texture regions; persistent
 offscreen output uses scissor rectangles with `LoadOp::Load`, and readback copies
 only dirty rectangles. Patch-atlas packing is an allocation heuristic; failing to
@@ -152,8 +162,9 @@ Windows adapter ranking prefers Vulkan over DX12 within a device class. Explicit
 `WGPU_DX12_COMPILER` wins; supported x64 MSVC uses StaticDxc. GNU/other Windows
 configurations discover DynamicDxc through `MUI_DXCOMPILER_PATH` (DLL or directory),
 then beside the **plugin module**, and otherwise use FXC. This supports GNU today
-and the owner's later MSVC-primary migration. No version, dependency pin or target
-policy is changed by this branch.
+and the owner's later MSVC-primary migration. No version or target policy is changed. The CPU dependency now uses a local
+0.3.0 source copy for the exact strip-crop extension; transitive versions and Git
+pins are unchanged.
 
 ## Convergence: exactly what moose must change later
 

@@ -1301,7 +1301,7 @@ fn native_reentrant_drag_keeps_the_driver_trail_after_a_direct_press() {
                 && let Some(send) = self.result.borrow_mut().take()
             {
                 let received = &shared.view.0;
-                let result = if received == &bends {
+                let result = if received.as_slice() == bends.as_slice() {
                     Ok(())
                 } else {
                     Err(format!("native stroke lost bends: {received:?}"))
