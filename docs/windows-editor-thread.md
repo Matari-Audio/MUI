@@ -25,7 +25,9 @@ bitmap patches. CPU fallback uses the same transport.
 
 `BitmapPatch { rect, pixels }` and the native presenter form the presentation seam.
 A future feature-gated DirectComposition transport can replace it without moving
-model work or HWND ownership. That spike must first prove nonblocking parent
+model work or HWND ownership. The obsolete generic Win32 factory/procedure/class
+path is deleted; optional WGL bootstrap windows share the active native backend's
+class allocator and ordered destruction. That spike must first prove nonblocking parent
 destruction and pass REAPER, Bitwig, Ableton and FL Studio; it is not enabled here.
 GDI blits and compositor transactions remain native calls. Their wall time must
 be measured: this removes native-thread shader/raster/GPU waits, not arbitrary
@@ -36,6 +38,12 @@ OS/driver latency inside a bitmap copy.
 * Native input and resize/DPI events enter one FIFO. Button, wheel, key, focus,
   IME, drop and resize edges are preserved in order. Native callbacks never lock
   the model, run raster/GPU work or join the editor worker.
+* The adapter binds its weak native waker inside the builder, before starting
+  the worker or invoking integration hooks. It does not depend on outer open/run
+  helpers: custom builders and reentrant input have the same completion wake.
+  Pending input requests the next display slot, and worker output wakes native
+  delivery even when its pixel damage is empty. The native stroke probe queues
+  a press plus six bends while holding the model and asserts their exact order.
 * Tick requests coalesce. Once queued, native demand parks until the worker
   publishes its next deadline; a stalled worker cannot leave an expired demand
   causing a refresh-rate callback loop. Completed bitmaps use a one-slot mailbox.
@@ -221,6 +229,7 @@ cargo clippy -p mui-baseview -p mui-truce --all-targets -- -D warnings
 cargo check --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets
 cargo clippy --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets -- -D warnings
 cargo build --target x86_64-pc-windows-gnu -p mui-baseview --examples
+cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-gnu --features opengl
 xvfb-run -a cargo run -p mui-baseview --example worker_close_probe
 xvfb-run -a cargo run -p mui-baseview --example native_editor
 MUI_RENDERER=cpu MUI_EXPECT_SOFTWARE=1 xvfb-run -a cargo run -p mui-baseview --example native_editor

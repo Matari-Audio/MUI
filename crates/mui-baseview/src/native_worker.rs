@@ -427,6 +427,9 @@ impl Drop for NativeAdapter {
 }
 impl WindowHandler for NativeAdapter {
     fn frame_demand(&self) -> baseview::FrameDemand {
+        if self.stopped.load(Ordering::Acquire) {
+            return baseview::FrameDemand::Idle;
+        }
         // Input can arrive after on_frame queued its tick, including from a
         // reentrant callback. Keep those FIFO edges due until a later tick
         // consumes them, while parking if that tick is already queued.
