@@ -191,7 +191,6 @@ mod tests {
         assert!(validate(&info).is_ok());
     }
 
-
     #[test]
     fn surface_selection_uses_offered_modes_and_rejects_incompatible_caps() {
         use wgpu::{CompositeAlphaMode as A, PresentMode as P, TextureFormat as F};

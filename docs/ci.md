@@ -33,13 +33,15 @@ Use the pinned `rust-toolchain.toml`, native platform toolchain and dependencies
 
 ## WARP is a test opt-in
 
-Production rejects Microsoft's CPU DX12 adapter because driver shader compilation can fault outside Rust's panic boundary. Hosted correctness jobs must **both** compile `mui-vello/test-support` and set `MUI_TEST_ALLOW_WARP=1`. An environment variable alone cannot enable WARP in a normal build. The admission test checks the default rejection separately from the opt-in policy without mutating global environment.
+Production rejects Microsoft's CPU DX12 adapter because driver shader compilation can fault outside Rust's panic boundary. Hosted correctness jobs must **both** compile `mui-vello/test-support` and set `MUI_TEST_ALLOW_WARP=1`. An environment variable alone cannot enable WARP in a normal build. The admission test in `host::selection::tests` checks the default rejection separately from the opt-in policy without mutating global environment. The selection module retains the Windows DX12-first policy and checked-shader requirements described in [iGPU robustness](igpu-robustness.md).
 
 On x86_64 MSVC, set `WGPU_DX12_COMPILER=StaticDxc` or `Fxc`. Each compiler gets its own required native job. `gpu_pixels` constructs all vendored Vello AA pipelines (including MSAA8/16) and both MUI output formats under a validation error scope. Missing adapters, validation errors, native child failures, and pixel mismatches fail the job. Software adapters qualify correctness only.
 
 The Windows GPU and native-platform jobs side-load [Microsoft.Direct3D.WARP 1.0.21](https://www.nuget.org/packages/Microsoft.Direct3D.WARP/1.0.21), pinned by archive SHA256, beside their executables as [Microsoft documents](https://learn.microsoft.com/windows/win32/direct3darticles/directx-warp). The hosted system driver 10.0.26100.33438 reproduces a native JIT access violation under FXC. Developer DLLs stay out of artifacts and are removed before cache saving. Outside Actions, download the same archive and verify the SHA256 recorded in `tools/ci/install-warp.ps1`, then put its `build/native/bin/x64/d3d10warp.dll` beside the test executables in `target/debug`, `target/debug/examples` and `target/debug/deps`. Remove those DLLs after testing.
 
 Windows Vulkan via Mesa or SwiftShader is supplementary future coverage: WARP exercises the native Windows production DX12 path; Linux lavapipe already exercises software Vulkan. Do not imply Windows Vulkan qualification from those rows.
+
+The root workspace includes vendored Vello. Linux root-test and Windows/macOS native workspace tests run the unfiltered all-features workspace suite, including `host::selection::tests`, the platform-independent `windows_tries_dx12_before_loading_vulkan_and_honors_backend_override` test, and Vello `robustness::tests`. The same workspace run validates all 22 explicitly initialized area/MSAA WGSL variants with Naga. No extra filtered invocation is needed.
 
 ## Pixel and retained-scene evidence
 

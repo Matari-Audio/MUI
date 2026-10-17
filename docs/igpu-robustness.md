@@ -1,8 +1,10 @@
 # Integrated GPU robustness (implementation, not hardware qualification)
 
-Baseline: `9d1059cc` (`fix/gpu-crash-fallback`). The field report has no logs;
+Rebase baseline: `fcada6a9` (hosted UI suite, PR #140). Original implementation
+baseline: `9d1059cc` (`fix/gpu-crash-fallback`). The field report has no logs;
 none of these mechanisms establishes the cause of that particular crash.
-Coordinator owns all builds, tests and real-device qualification.
+Coordinator owns local builds and tests. Implementation validation runs only on
+public MUI hosted runners; real-device qualification remains separate.
 
 ## Before-change contracts
 
@@ -11,6 +13,7 @@ Coordinator owns all builds, tests and real-device qualification.
 | Native editor startup, CLAP/VST3/AU/standalone | GPU init worker; multiple editors may initialize concurrently | Session owns instance/device; each candidate owns pending trial and pipelines until accepted; rejected resources drop on initializer | Finite backend/adapter list; unsupported limits/formats reject before device request; next backend then CPU | Headless ranking/limit/candidate tests; real Windows Intel first-frame journal |
 | Vello and MUI pipeline creation, every GPU consumer | Init workers; resize/presenter setup may overlap other editors | Shared device owns shader cache; renderer owns pipelines | DX12 compilation serialized across MUI/Vello pipelines; checked shaders and workgroup zeroing | Headless shader-source regression; GNU release FXC and MSVC DXC runs |
 | Surface configure/resize/present, native hosts | Window callback; rendering worker where supported; never audio callback | Host owns surface and matching config; replacement validates anew | Zero size skipped; caps select format/alpha/present; lost device rebuild or CPU, lost surface recreate | Surface-selection tests; native_editor smoke and forced loss/reopen |
+| Hosted WARP admission | GPU initialization worker before device creation | Selection rejects CPU DX12 Microsoft adapters before requesting a device unless both test gates pass | Requires compiled `test-support` AND `MUI_TEST_ALLOW_WARP=1`; production cannot opt in | Pure admission policy test in `host::selection::tests`, plus hosted StaticDxc/FXC presentation |
 | Offscreen readback, Windows native CPU presentation of GPU-rendered frames | Editor render worker | Offscreen owns COPY_DST/MAP_READ buffer; map view drops before unmap | Bounded bitmap dimensions and map deadline; errors return to existing CPU recovery | Intel/AMD shared-memory resize/damage/readback runs |
 
 Audio execution paths, parameter IDs and session state are unchanged. Rendering
@@ -98,8 +101,23 @@ creating the device. No additional shared-memory-specific bug was established.
 
 ## Checks and remaining qualification
 
-Implementation-agent checks: source review, standalone `rustfmt` and
-`git diff --check` only. **No cargo, rustc, clippy, builds or tests were run.**
+Local implementation-agent checks: source review, standalone `rustfmt` and
+`git diff --check` only. **No local Cargo, rustc, Clippy, builds or tests run.**
+Hosted validation follows [the CI matrix](ci.md). `vendor/vello` is a root
+workspace member: the unfiltered `cargo test --workspace --all-features` in
+Linux root-test and both native-platform jobs executes `host::selection::tests`,
+`host::tests::windows_tries_dx12_before_loading_vulkan_and_honors_backend_override`,
+and `vello::robustness::tests` on all three OSes. The simulated Windows ordering
+test deliberately has no Windows cfg gate. WARP policy tests pass an explicit
+boolean without changing the process environment; actual admission still
+requires both the feature and environment gates.
+
+The rebase preserves cached output/presented-view release before surface resize,
+replacement and device reopening, plus material-only retained-scene replay.
+`gpu_contract`, `gpu_pixels` and native lifecycle jobs exercise these together
+with checked shaders and zero-initialized workgroup memory. Pixel tolerances
+remain those established by #140; shader safety changes do not justify widening
+them without inspecting the rendered differences.
 Cargo.lock and dependency versions are unchanged. Added headless tests cover
 Intel/AMD/NVIDIA ranking on simulated Windows, explicit backend allowlists,
 unsupported storage/workgroup limits, offered surface modes and rejection,
@@ -107,13 +125,16 @@ and the actual locked tile shader patch. The explicit-initializer test also
 parses and validates all 22 shipped area/MSAA shader variants with Naga.
 
 Coordinator commands and the final branch/commit are in
-`/mnt/Windows11/DEV_WORKSPACE/BuildScratch/mui-igpu-handoff.md`.
+`/mnt/Windows11/DEV_WORKSPACE/BuildScratch/mui-igpu-rebase-handoff.md`.
 
 Still required: real Windows 10 Intel Gen9/Gen11 and AMD APU GPU-rendered
 first-frame completion, resize, animation, multiple editors, close/reopen,
 device reset and forced surface loss; optimized GNU FXC and native MSVC DXC
-artifacts; Vulkan-only fallback; Metal/Linux rendering correctness after the
-additional barrier; comparison against CPU pixels and prior frame timing.
-A Linux cross-check cannot establish Windows driver behavior. No artifact hash
-or hardware receipt exists from this implementation agent. Obtain the original
+artifacts; real-device Vulkan-only fallback; hardware Metal/Linux rendering
+correctness after the additional barrier; same-device comparison of GPU time,
+cold-open and active-frame latency. Hosted software/VM GPU receipts establish
+only the correctness and timing actually measured there.
+A Linux cross-check cannot establish Windows driver behavior. Hosted artifact
+hashes and receipts are recorded in the handoff; no real-device hardware
+receipt exists from this implementation agent. Obtain the original
 user's session log and adapter/driver identity before attributing the crash.
