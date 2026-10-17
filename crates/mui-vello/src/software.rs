@@ -237,6 +237,7 @@ pub struct Window<W> {
     startup: bool,
     size: (u32, u32),
     startup_color: Option<u32>,
+    damage_history: std::collections::VecDeque<Vec<[u32; 4]>>,
 }
 
 #[cfg(feature = "software-window")]
@@ -288,6 +289,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             startup,
             size,
             startup_color: None,
+            damage_history: Default::default(),
         })
     }
 
@@ -375,27 +377,65 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             return Ok(true);
         }
         self.renderer.resize(size)?;
-        if self.renderer.render_inner(scene, transform, overlay)? {
-            self.presented = false;
-        }
-        if self.presented {
+        let was_presented = self.presented;
+        let mut damage = if let Some(overlay) = overlay {
+            self.renderer
+                .render_with_overlay(scene, transform, overlay)?;
+            vec![[0, 0, size.0, size.1]]
+        } else {
+            self.renderer.render_damage(scene, transform)?
+        };
+        if damage.is_empty() && self.presented {
             return Ok(false);
+        }
+        if !was_presented {
+            damage = vec![[0, 0, size.0, size.1]];
         }
         self.surface
             .resize(width, height)
             .map_err(|e| e.to_string())?;
         let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
-        for (out, rgba) in buffer
-            .iter_mut()
-            .zip(self.renderer.pixels().as_chunks::<4>().0)
-        {
-            // Opaque window: premultiplied RGB composites transparency over black.
-            *out = self.opaque_bits
-                | (u32::from(rgba[0]) << 16)
-                | (u32::from(rgba[1]) << 8)
-                | u32::from(rgba[2]);
+        let age = usize::from(buffer.age());
+        let mut repair = damage.clone();
+        if age == 0 || age > self.damage_history.len() + 1 {
+            repair = vec![[0, 0, size.0, size.1]];
+        } else {
+            for old in self.damage_history.iter().take(age - 1) {
+                repair.extend_from_slice(old);
+            }
         }
-        buffer.present().map_err(|e| e.to_string())?;
+        for [x, y, w, h] in repair {
+            for row in y..y + h {
+                let start = row as usize * size.0 as usize + x as usize;
+                for (out, rgba) in buffer[start..start + w as usize].iter_mut().zip(
+                    self.renderer.pixels()[start * 4..(start + w as usize) * 4]
+                        .as_chunks::<4>()
+                        .0,
+                ) {
+                    *out = self.opaque_bits
+                        | (u32::from(rgba[0]) << 16)
+                        | (u32::from(rgba[1]) << 8)
+                        | u32::from(rgba[2]);
+                }
+            }
+        }
+        if std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1") {
+            for &[x, y, w, h] in &damage {
+                for row in y..y + h {
+                    for col in x..x + w {
+                        if col < x + 2 || row < y + 2 || col + 2 >= x + w || row + 2 >= y + h {
+                            buffer[row as usize * size.0 as usize + col as usize] =
+                                self.opaque_bits | 0x00ff0040;
+                        }
+                    }
+                }
+            }
+        }
+        buffer
+            .present_with_damage(&softbuffer_rects(&damage))
+            .map_err(|e| e.to_string())?;
+        self.damage_history.push_front(damage);
+        self.damage_history.truncate(4);
         self.presented = true;
         Ok(true)
     }
@@ -591,4 +631,129 @@ mod tests {
         );
         assert!(Renderer::new((0, 8)).is_err());
     }
+}
+
+/// Native dirty-bitmap transport. No scene traversal, raster or GPU work occurs
+/// here; callers submit completed pixels from an editor worker.
+#[cfg(feature = "software-window")]
+pub struct BitmapWindow<W> {
+    surface: softbuffer::Surface<W, W>,
+    size: (u32, u32),
+    pixels: Vec<u32>,
+    history: std::collections::VecDeque<Vec<[u32; 4]>>,
+    opaque: u32,
+}
+#[cfg(feature = "software-window")]
+impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle + Clone>
+    BitmapWindow<W>
+{
+    pub fn new(window: W) -> Result<Self, String> {
+        let opaque = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
+            raw_window_handle::RawWindowHandle::Xlib(_)
+            | raw_window_handle::RawWindowHandle::Xcb(_) => 0xff00_0000,
+            _ => 0,
+        };
+        let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
+        let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string())?;
+        Ok(Self {
+            surface,
+            size: (0, 0),
+            pixels: Vec::new(),
+            history: Default::default(),
+            opaque,
+        })
+    }
+    pub fn present_patch(
+        &mut self,
+        rect @ [x, y, w, h]: [u32; 4],
+        pixels: &[u32],
+        size: (u32, u32),
+    ) -> Result<(), String> {
+        use std::num::NonZeroU32;
+        dimensions(size)?;
+        if x + w > size.0 || y + h > size.1 || pixels.len() != w as usize * h as usize {
+            return Err("invalid bitmap patch".into());
+        }
+        if self.size != size {
+            self.pixels
+                .resize(size.0 as usize * size.1 as usize, self.opaque);
+            self.history.clear();
+            self.size = size;
+            self.surface
+                .resize(
+                    NonZeroU32::new(size.0).unwrap(),
+                    NonZeroU32::new(size.1).unwrap(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        for row in 0..h as usize {
+            let start = (y as usize + row) * size.0 as usize + x as usize;
+            for (dst, src) in self.pixels[start..start + w as usize]
+                .iter_mut()
+                .zip(&pixels[row * w as usize..(row + 1) * w as usize])
+            {
+                *dst = self.opaque | *src;
+            }
+        }
+        let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
+        let mut repair = vec![rect];
+        let age = usize::from(buffer.age());
+        if age == 0 || age > self.history.len() + 1 {
+            repair = vec![[0, 0, size.0, size.1]];
+        } else {
+            for old in self.history.iter().take(age - 1) {
+                repair.extend_from_slice(old);
+            }
+        }
+        for [x, y, w, h] in repair {
+            for row in y..y + h {
+                let start = row as usize * size.0 as usize + x as usize;
+                buffer[start..start + w as usize]
+                    .copy_from_slice(&self.pixels[start..start + w as usize]);
+            }
+        }
+        let damage = softbuffer_rects(&[rect]);
+        buffer
+            .present_with_damage(&damage)
+            .map_err(|e| e.to_string())?;
+        self.history.push_front(vec![rect]);
+        self.history.truncate(4);
+        Ok(())
+    }
+}
+#[cfg(feature = "software-window")]
+fn softbuffer_rects(rects: &[[u32; 4]]) -> Vec<softbuffer::Rect> {
+    use std::num::NonZeroU32;
+    rects
+        .iter()
+        .filter_map(|&[x, y, w, h]| {
+            Some(softbuffer::Rect {
+                x,
+                y,
+                width: NonZeroU32::new(w)?,
+                height: NonZeroU32::new(h)?,
+            })
+        })
+        .collect()
+}
+
+/// Diagnostic only: `MUI_DEBUG_DAMAGE=1` flashes the automatically derived
+/// damaged rectangle's outline. App code never supplies invalidation regions.
+pub fn damage_flash(pixels: &[u32], size: (u32, u32)) -> Option<Vec<u32>> {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1"))
+        || size.0 == 0
+        || size.1 == 0
+    {
+        return None;
+    }
+    let mut out = pixels.to_vec();
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            if x < 2 || y < 2 || x + 2 >= size.0 || y + 2 >= size.1 {
+                out[(y * size.0 + x) as usize] = 0x00ff0040;
+            }
+        }
+    }
+    Some(out)
 }

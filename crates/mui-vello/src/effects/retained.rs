@@ -869,12 +869,7 @@ impl GpuRenderer {
             self.local_mapping += 1;
         }
 
-        let mapping = (self.effects.mapping_revision(), self.local_mapping);
-        let mut change = if overlay.is_some()
-            || !self.valid
-            || self.transform != Some(xf)
-            || self.mapping != mapping
-        {
+        let change = if overlay.is_some() || !self.valid || self.transform != Some(xf) {
             Change::Full
         } else {
             match paint_damage(
@@ -903,9 +898,6 @@ impl GpuRenderer {
         } else {
             None
         };
-        if matches!(change, Change::Parts(_)) && packed.is_none() {
-            change = Change::Full;
-        }
         if !matches!(change, Change::None) {
             self.paths.tick();
             self.cache.tick();
@@ -925,13 +917,13 @@ impl GpuRenderer {
                 self.render_region::<F>(resolved, xf, r, stats)?;
             }
             Change::Parts(regions) => {
-                self.render_regions::<F>(
-                    resolved,
-                    xf,
-                    &regions,
-                    packed.expect("checked above"),
-                    stats,
-                )?;
+                if let Some(packed) = packed {
+                    self.render_regions::<F>(resolved, xf, &regions, packed, stats)?;
+                } else {
+                    for &rect in &regions.rects[..regions.len] {
+                        self.render_region::<F>(resolved, xf, rect, stats)?;
+                    }
+                }
             }
             Change::None => {}
         }

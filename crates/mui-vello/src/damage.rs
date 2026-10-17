@@ -56,43 +56,24 @@ impl Regions {
             }
         }
         if self.len == self.rects.len() {
-            return false;
+            // Preserve bounded metadata without turning a local edit into a
+            // global invalidation. Coalesce the affected boxes only.
+            for old in &self.rects[..self.len] {
+                let x = r[0].min(old[0]);
+                let y = r[1].min(old[1]);
+                r = [
+                    x,
+                    y,
+                    (r[0] + r[2]).max(old[0] + old[2]) - x,
+                    (r[1] + r[3]).max(old[1] + old[3]) - y,
+                ];
+            }
+            self.len = 0;
         }
         self.rects[self.len] = r;
         self.len += 1;
         true
     }
-    /// Encoding has a fixed per-region cost too. Two conservative clusters
-    /// bound scene/layer replay instead of paying for a dozen tiny rectangles.
-    pub(crate) fn coalesce(&mut self) {
-        let pixels = |r: [u32; 4]| u64::from(r[2]) * u64::from(r[3]);
-        while self.len > 2 {
-            let mut best = (u64::MAX, 0, 1, [0; 4]);
-            for i in 0..self.len {
-                for j in i + 1..self.len {
-                    let (a, b) = (self.rects[i], self.rects[j]);
-                    let (x, y) = (a[0].min(b[0]), a[1].min(b[1]));
-                    let r = [
-                        x,
-                        y,
-                        (a[0] + a[2]).max(b[0] + b[2]) - x,
-                        (a[1] + a[3]).max(b[1] + b[3]) - y,
-                    ];
-                    let extra = pixels(r) - pixels(a) - pixels(b);
-                    if extra < best.0 {
-                        best = (extra, i, j, r);
-                    }
-                }
-            }
-            let (_, i, j, r) = best;
-            self.len -= 1;
-            self.rects[j] = self.rects[self.len];
-            self.len -= 1;
-            self.rects[i] = self.rects[self.len];
-            assert!(self.add(r));
-        }
-    }
-
     pub(crate) fn pixels(&self) -> u64 {
         self.rects[..self.len]
             .iter()
@@ -186,7 +167,8 @@ pub(crate) fn reach(p: &Painted) -> Option<Rect> {
         r
     };
     let r = match p.layer {
-        Layer::Backdrop | Layer::External | Layer::Shadow(ShadowKind::Inset) => return None,
+        Layer::External => return None,
+        Layer::Backdrop => path().inflate(3. * p.blur, 3. * p.blur),
         Layer::Blend { .. } | Layer::Unblend | Layer::Unclip => return Some(NOTHING),
         Layer::Clip | Layer::Mask => path(),
         // Vello's blurred rect stops at 2.5 standard deviations.
@@ -291,26 +273,8 @@ pub(crate) fn paint_damage(
             reach(p)
         }
     };
-    if dirty != NOTHING && old.iter().chain(paint).any(|p| p.layer == Layer::Backdrop) {
-        return Change::Full;
-    }
-    let head = old.iter().zip(paint).take_while(|(a, b)| a == b).count();
-    if head == old.len() && head == paint.len() {
-        if dirty == NOTHING {
-            return Change::None;
-        }
-        if paint.iter().any(|p| p.layer == Layer::Backdrop) {
-            return Change::Full;
-        }
-    }
-    // A backdrop can sample a changed entry below it even when its own
-    // declaration stayed equal. Keep the conservative full-frame fallback.
-    if old[head..]
-        .iter()
-        .chain(&paint[head..])
-        .any(|p| p.layer == Layer::Backdrop)
-    {
-        return Change::Full;
+    if old == paint && dirty == NOTHING {
+        return Change::None;
     }
     let mut regions = Regions::new();
     let tile = |r: Rect| {
@@ -324,8 +288,7 @@ pub(crate) fn paint_damage(
         let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
         [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32)
     };
-    let max_damage = PARTIAL * f64::from(size[0]) * f64::from(size[1]);
-    if dirty != NOTHING && (!regions.add(tile(dirty)) || regions.pixels() as f64 > max_damage) {
+    if dirty != NOTHING && !regions.add(tile(dirty)) {
         return Change::Full;
     }
     if !changed_paint(old, paint, |new, i| {
@@ -335,9 +298,6 @@ pub(crate) fn paint_damage(
             (old, old_external)
         };
         let p = &list[i];
-        if p.layer == Layer::Backdrop || crate::path_shadow(p) {
-            return false;
-        }
         let Some(b) = reach(p, external) else {
             return false;
         };
@@ -366,15 +326,35 @@ pub(crate) fn paint_damage(
                 }
             }
         }
-        // Once damage already requires a full raster, do not compare and
-        // accumulate the rest of a scrolling surface's paint stream.
-        regions.pixels() as f64 <= max_damage
+        true
     }) {
         return Change::Full;
     }
-    regions.coalesce();
-    if regions.pixels() as f64 > max_damage {
-        return Change::Full;
+    // A backdrop depends on paint beneath it even when its own declaration
+    // stayed equal. Expand damage through overlapping effect footprints until
+    // stable; unrelated widgets never become global invalidations.
+    loop {
+        let before = regions.pixels();
+        for p in old
+            .iter()
+            .chain(paint)
+            .filter(|p| p.layer == Layer::Backdrop)
+        {
+            if let Some(bounds) = reach(p, &HashMap::new()) {
+                let r = tile(bounds);
+                if regions.rects[..regions.len].iter().any(|a| {
+                    a[0] < r[0] + r[2]
+                        && r[0] < a[0] + a[2]
+                        && a[1] < r[1] + r[3]
+                        && r[1] < a[1] + a[3]
+                }) {
+                    regions.add(r);
+                }
+            }
+        }
+        if regions.pixels() == before {
+            break;
+        }
     }
     match regions.len {
         0 => Change::Part([0; 4]),
