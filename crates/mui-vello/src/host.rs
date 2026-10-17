@@ -18,10 +18,10 @@ use crate::effects::{Budget, EffectStats, GpuRenderer};
 use crate::kurbo::Affine;
 
 mod initialization;
-pub use initialization::{GpuInit, Offscreen};
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub use initialization::InitGate;
+pub use initialization::{BitmapPatch, GpuInit, Offscreen};
 pub(crate) mod pipeline_cache;
 
 /// A failed device rebuild waits this long before the next attempt, so a
@@ -96,21 +96,35 @@ fn dx12_compiler() -> wgpu::Dx12Compiler {
 fn dynamic_dxc_path() -> Option<String> {
     let configured = std::env::var_os("MUI_DXCOMPILER_PATH").map(std::path::PathBuf::from);
     let adjacent = plugin_directory().map(|p| p.join("dxcompiler.dll"));
-    [configured, adjacent].into_iter().flatten().find_map(|path| {
-        let path = if path.is_dir() { path.join("dxcompiler.dll") } else { path };
-        path.is_file().then(|| path.to_string_lossy().into_owned())
-    })
+    [configured, adjacent]
+        .into_iter()
+        .flatten()
+        .find_map(|path| {
+            let path = if path.is_dir() {
+                path.join("dxcompiler.dll")
+            } else {
+                path
+            };
+            path.is_file().then(|| path.to_string_lossy().into_owned())
+        })
 }
 
 // current_exe() identifies the DAW, not the plugin DLL. Resolve this function's
 // containing module without changing its loader reference count.
 #[cfg(windows)]
-#[expect(unsafe_code, reason = "query the plugin image containing this function")]
+#[expect(
+    unsafe_code,
+    reason = "query the plugin image containing this function"
+)]
 fn plugin_directory() -> Option<std::path::PathBuf> {
     use std::os::windows::ffi::OsStringExt;
     #[link(name = "kernel32")]
     unsafe extern "system" {
-        fn GetModuleHandleExW(flags: u32, address: *const u16, module: *mut *mut std::ffi::c_void) -> i32;
+        fn GetModuleHandleExW(
+            flags: u32,
+            address: *const u16,
+            module: *mut *mut std::ffi::c_void,
+        ) -> i32;
         fn GetModuleFileNameW(module: *mut std::ffi::c_void, path: *mut u16, size: u32) -> u32;
     }
     let mut module = std::ptr::null_mut();
@@ -118,7 +132,12 @@ fn plugin_directory() -> Option<std::path::PathBuf> {
     // SAFETY: FROM_ADDRESS interprets the pointer as an address within our
     // image. The module stays mapped during this call; path is writable.
     let length = unsafe {
-        if GetModuleHandleExW(0x6, plugin_directory as *const () as *const u16, &mut module) == 0 {
+        if GetModuleHandleExW(
+            0x6,
+            plugin_directory as *const () as *const u16,
+            &mut module,
+        ) == 0
+        {
             return None;
         }
         GetModuleFileNameW(module, path.as_mut_ptr(), 32768) as usize
@@ -1342,9 +1361,18 @@ mod tests {
 
     #[test]
     fn non_validation_runtime_faults_recover_without_a_restart() {
-        assert_eq!(HostError::Surface("temporary").failure_class(), FailureClass::Transient);
-        assert_eq!(HostError::Render(crate::effects::Error::Busy).failure_class(), FailureClass::Transient);
-        assert_eq!(HostError::Validation.failure_class(), FailureClass::Permanent);
+        assert_eq!(
+            HostError::Surface("temporary").failure_class(),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            HostError::Render(crate::effects::Error::Busy).failure_class(),
+            FailureClass::Transient
+        );
+        assert_eq!(
+            HostError::Validation.failure_class(),
+            FailureClass::Permanent
+        );
     }
     #[cfg(windows)]
     #[test]

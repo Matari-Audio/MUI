@@ -414,7 +414,7 @@ impl GpuInit {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let limit = context.device.limits().max_texture_dimension_2d;
                     let (width, height) = (size.0.min(limit), size.1.min(limit));
-                    let renderer = pollster::block_on(GpuRenderer::new_shared(
+                    let mut renderer = pollster::block_on(GpuRenderer::new_shared(
                         &context.device,
                         &context.queue,
                         wgpu::TextureFormat::Bgra8Unorm,
@@ -743,9 +743,9 @@ pub struct Offscreen {
     context: Arc<Context>,
     renderer: GpuRenderer,
     target: wgpu::Texture,
+    view: wgpu::TextureView,
     readback: wgpu::Buffer,
     size: (u32, u32),
-    stride: u32,
     error_cursor: u64,
 }
 
@@ -757,18 +757,31 @@ impl GpuInit {
             return None;
         }
         let result = (|| {
-            let Some(context) = self.session.context()? else { return Ok(None) };
+            let Some(context) = self.session.context()? else {
+                return Ok(None);
+            };
             let size = offscreen_size(&context.device, size)?;
-            let renderer = pollster::block_on(GpuRenderer::new_shared(
+            let mut renderer = pollster::block_on(GpuRenderer::new_shared(
                 &context.device,
                 &context.queue,
                 wgpu::TextureFormat::Bgra8Unorm,
                 [size.0, size.1],
                 Budget::default(),
                 Some(context.vello.clone()),
-            )).map_err(HostError::Render)?;
-            let (target, readback, stride) = offscreen_target(&context.device, size);
-            Ok(Some(Offscreen { context, renderer, target, readback, size, stride, error_cursor: 0 }))
+            ))
+            .map_err(HostError::Render)?;
+            renderer.incremental_output();
+            let (target, readback, _) = offscreen_target(&context.device, size);
+            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            Ok(Some(Offscreen {
+                context,
+                renderer,
+                target,
+                view,
+                readback,
+                size,
+                error_cursor: 0,
+            }))
         })();
         match result {
             Ok(None) => None,
@@ -786,11 +799,19 @@ impl GpuInit {
 }
 
 fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> Result<(u32, u32), HostError> {
-    let limit = device.limits().max_texture_dimension_2d.min(u32::from(u16::MAX));
-    if size.0 == 0 || size.1 == 0 || size.0 > limit || size.1 > limit
+    let limit = device
+        .limits()
+        .max_texture_dimension_2d
+        .min(u32::from(u16::MAX));
+    if size.0 == 0
+        || size.1 == 0
+        || size.0 > limit
+        || size.1 > limit
         || u64::from(size.0) * u64::from(size.1) > 16 * 1024 * 1024
     {
-        return Err(HostError::Configuration("offscreen bitmap exceeds target budget".into()));
+        return Err(HostError::Configuration(
+            "offscreen bitmap exceeds target budget".into(),
+        ));
     }
     Ok(size)
 }
@@ -798,7 +819,11 @@ fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, 
     let stride = (size.0 * 4 + 255) & !255;
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("MUI worker bitmap"),
-        size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: size.0,
+            height: size.1,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -817,52 +842,137 @@ fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, 
 impl Offscreen {
     /// Return completed softbuffer-format pixels (0x00RRGGBB). Driver waits,
     /// mapping and color conversion all happen on the calling render worker.
-    pub fn render(&mut self, scene: &ResolvedScene, transform: Affine, size: (u32, u32)) -> Result<Vec<u32>, HostError> {
+    pub fn render(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        size: (u32, u32),
+    ) -> Result<Vec<BitmapPatch>, HostError> {
         offscreen_size(&self.context.device, size)?;
         if self.context.errors.lost.load(Ordering::Acquire) {
             return Err(HostError::Configuration("offscreen device lost".into()));
         }
         if size != self.size {
-            self.renderer.resize([size.0, size.1]).map_err(HostError::Render)?;
-            (self.target, self.readback, self.stride) = offscreen_target(&self.context.device, size);
+            self.renderer
+                .resize([size.0, size.1])
+                .map_err(HostError::Render)?;
+            let (target, readback, _) = offscreen_target(&self.context.device, size);
+            self.view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            self.target = target;
+            self.readback = readback;
             self.size = size;
         }
-        let view = self.target.create_view(&wgpu::TextureViewDescriptor::default());
-        self.renderer.render(scene, transform, &view).map_err(HostError::Render)?;
-        let mut encoder = self.context.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo { texture: &self.target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            wgpu::TexelCopyBufferInfo { buffer: &self.readback, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.stride), rows_per_image: Some(size.1) } },
-            wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
-        );
+        self.renderer
+            .render(scene, transform, &self.view)
+            .map_err(HostError::Render)?;
+        let rects = self.renderer.damage();
+        if rects.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut offset = 0;
+        let copies = rects
+            .iter()
+            .map(|&rect @ [_, _, w, h]| {
+                let stride = (w * 4 + 255) & !255;
+                let start = offset;
+                offset += u64::from(stride) * u64::from(h);
+                (rect, stride, start)
+            })
+            .collect::<Vec<_>>();
+        if self.readback.size() < offset {
+            self.readback = self.context.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("MUI packed damage readback"),
+                size: offset,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+        }
+        let mut encoder = self
+            .context
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        for &([x, y, w, h], stride, offset) in &copies {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.target,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &self.readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset,
+                        bytes_per_row: Some(stride),
+                        rows_per_image: Some(h),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
         self.context.queue.submit([encoder.finish()]);
         let (send, receive) = mpsc::sync_channel(1);
-        self.readback.slice(..).map_async(wgpu::MapMode::Read, move |result| { let _ = send.send(result); });
+        self.readback
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                let _ = send.send(result);
+            });
         let until = Instant::now() + Duration::from_secs(2);
         loop {
-            self.context.device.poll(wgpu::PollType::Poll)
+            self.context
+                .device
+                .poll(wgpu::PollType::Poll)
                 .map_err(|e| HostError::Configuration(e.to_string()))?;
             match receive.try_recv() {
-                Ok(result) => { result.map_err(|e| HostError::Configuration(e.to_string()))?; break; }
+                Ok(result) => {
+                    result.map_err(|e| HostError::Configuration(e.to_string()))?;
+                    break;
+                }
                 Err(mpsc::TryRecvError::Empty) if Instant::now() < until => {
                     std::thread::park_timeout(Duration::from_millis(1));
                 }
-                _ => return Err(HostError::Configuration("offscreen readback timed out".into())),
+                _ => {
+                    return Err(HostError::Configuration(
+                        "offscreen readback timed out".into(),
+                    ));
+                }
             }
         }
-        let mapped = self.readback.slice(..).get_mapped_range()
+        let mapped = self
+            .readback
+            .slice(..)
+            .get_mapped_range()
             .map_err(|e| HostError::Configuration(e.to_string()))?;
-        let mut pixels = Vec::with_capacity(size.0 as usize * size.1 as usize);
-        for row in mapped.chunks(self.stride as usize).take(size.1 as usize) {
-            pixels.extend(row[..size.0 as usize * 4].as_chunks::<4>().0.iter().map(|bgra| {
-                u32::from_le_bytes(*bgra) & 0x00ff_ffff
-            }));
+        let mut patches = Vec::with_capacity(copies.len());
+        for (rect @ [_, _, w, h], stride, offset) in copies {
+            let mut pixels = Vec::with_capacity(w as usize * h as usize);
+            let start = offset as usize;
+            for row in mapped[start..start + stride as usize * h as usize].chunks(stride as usize) {
+                pixels.extend(
+                    row[..w as usize * 4]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|bgra| u32::from_le_bytes(*bgra) & 0x00ff_ffff),
+                );
+            }
+            patches.push(BitmapPatch { rect, pixels });
         }
         drop(mapped);
         self.readback.unmap();
         if let Some(error) = self.context.errors.observe(&mut self.error_cursor) {
             return Err(HostError::Configuration(error));
         }
-        Ok(pixels)
+        Ok(patches)
     }
+}
+
+/// A completed device-space rectangle, in native 0x00RRGGBB pixel order.
+pub struct BitmapPatch {
+    pub rect: [u32; 4],
+    pub pixels: Vec<u32>,
 }
