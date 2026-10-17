@@ -18,10 +18,10 @@ pub(super) fn build<V: View + Send + 'static>(
             reason = "attach provider to builder's live HWND on its owning thread"
         )]
         // SAFETY: the native endpoint stays here and drops before cx.
-        let endpoints = cx
-            .window_handle()
-            .ok()
-            .and_then(|h| unsafe { NativeAccessibility::new(h.as_raw()) });
+        let endpoints = cx.window_handle().ok().and_then(|h| {
+            // SAFETY: builder owns this HWND; native drops before cx.
+            unsafe { NativeAccessibility::new(h.as_raw()) }
+        });
         let (mut native, accessibility) =
             endpoints.map_or((None, None), |(n, a)| (Some(n), Some(a)));
         if let Some(native) = &mut native {
@@ -122,6 +122,7 @@ struct Output {
     patches: Vec<Patch>,
     size: (u32, u32),
     software: bool,
+    reason: &'static str,
     capture: bool,
     ime: Option<baseview::ImeConfiguration>,
     cursor: MouseCursor,
@@ -253,15 +254,8 @@ impl WindowsAdapter {
                 }
                 blit(&self.cx, patch.rect, &patch.pixels);
             }
-            self.requests.presented(
-                output.size,
-                output.software,
-                if output.software {
-                    "CPU worker damage"
-                } else {
-                    "GPU worker damage"
-                },
-            );
+            self.requests
+                .presented(output.size, output.software, output.reason);
         }
         self.requests.drag.rendered(output.drag);
     }
@@ -400,6 +394,11 @@ fn worker<V: View>(
     let mut gpu = None::<Offscreen>;
     let software_only = std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
     let mut init = (!software_only).then(|| GpuInit::new(true));
+    let mut reason = if software_only {
+        "CPU forced"
+    } else {
+        "CPU startup"
+    };
     let mut cpu = None::<mui::vello::software::Renderer>;
     let mut retry = Retry::default();
     let mut unpainted = true;
@@ -453,14 +452,21 @@ fn worker<V: View>(
                 match result {
                     Ok(renderer) => {
                         gpu = Some(renderer);
+                        reason = "GPU ready";
                         lock(&shared).ui.set_gpu_welding_available(true);
                         driver.redraw();
                     }
-                    Err(error) => mui::diagnostics::error(
-                        "mui-baseview",
-                        "worker_gpu_init",
-                        &error.to_string(),
-                    ),
+                    Err(error) => {
+                        if reason != "CPU GPU initialization failed" {
+                            log(
+                                &shared,
+                                &format!(
+                                    "mui-baseview: GPU unavailable ({error}); using CPU rendering"
+                                ),
+                            );
+                        }
+                        reason = "CPU GPU initialization failed";
+                    }
                 }
             }
         }
@@ -514,6 +520,7 @@ fn worker<V: View>(
                             &error.to_string(),
                         );
                         gpu = None;
+                        reason = "CPU GPU recovery";
                         if let Some(init) = &mut init {
                             init.recover(class);
                         }
@@ -590,6 +597,7 @@ fn worker<V: View>(
                 patches,
                 size,
                 software: gpu.is_none(),
+                reason,
                 capture,
                 ime,
                 cursor: native_cursor(driver.cursor()),

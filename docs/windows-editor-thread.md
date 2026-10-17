@@ -64,3 +64,71 @@ allocation and copying are bounded to 16M pixels; extreme sizes retain pixels.
 * [Microsoft: SendMessage blocks the sender until the receiver processes it](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessage).
 * [Microsoft: DestroyWindow destroys child windows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow).
 * [wgpu 30 DX12 compiler policy](https://wgpu.rs/doc/src/wgpu_types/backend.rs.html).
+
+## Damage tracking
+
+`mui-vello/src/damage.rs` is the shared classifier extracted from the existing
+retained GPU renderer. It compares the old and new `Painted` streams by stable
+node key and layer, with a bounded lookahead for insertions/deletions. Exact
+unchanged entries do not invalidate pixels. Changed entries contribute **both**
+the old and new paint footprints, including transforms, stroke, text estimates,
+shadow reach and antialiasing padding. Device bounds snap to 16-pixel tiles.
+Overlapping/touching rectangles merge; sparse regions stay separate, with a
+bounded two-cluster coalescing step. The classifier falls back to full repaint
+on rectangle-budget overflow or damage above half the target, rather than
+spending more on scene replay and copies than a full repaint.
+
+Analytic welds already retain material textures and changed uniform lanes.
+`GpuRenderer` adds the old/new bounds of a changed or moved external weld to
+ordinary paint damage, including time-driven materials. Only affected regions
+are rasterized into the existing patch/atlas targets, then copied into the
+retained scene texture. The Windows offscreen output pass uses scissor rectangles
+and LoadOp::Load; readback copies and returned bitmap patches contain only those
+rectangles. A persistent output view is essential: swapping it invalidates the
+whole output. An unchanged render produces no readback and no blit.
+
+CPU fallback resolves reference welds, whose changed geometry enters the same
+paint stream. `software::Renderer::render_damage` replays intersecting paint in
+stacking order into region-sized CPU targets. It must include unchanged
+backgrounds, overlapping siblings, masks/clips and blend layers to reconstruct
+the affected pixels correctly. Only those rows replace retained pixels; only
+those native rectangles are blitted. Full-window CPU rasterization is limited
+to actual full invalidations and happens entirely on the worker, without a
+frame-rate throttle. The existing full-raster API remains the default elsewhere.
+
+Resize/DPI/zoom transforms invalidate the full target. Theme changes enter the
+paint diff (a changed full-window background naturally invalidates everything).
+Backdrop sampling, unbounded effects, unsupported partial shadow dependencies,
+external texture mapping changes, renderer handover and transport resynchronizing
+use conservative full invalidation. Native WM_PAINT damage repairs the retained
+bitmap's exposed rectangles without rebuilding or rerasterizing the UI.
+
+## Lifecycle and integration
+
+The Windows `mui-truce` adapter attaches a host-thread pump before starting its
+worker. Parameter gestures and resize requests enqueue there; native delivery
+runs outside the model lock. Close revokes the pump first, then cancels the
+native editor; worker cancellation releases UI memo TLS and model references.
+State-load cancellation is queued on the worker. A new worker waits for its
+predecessor's model cleanup on the worker thread only. A permanently wedged
+predecessor therefore delays rendering that editor's reopen, while the DAW and
+its other windows keep running. It is not safe for custom adapters to lock
+`Shared` or call host callbacks directly from worker build/key hooks; use the
+native pump and `Requests::dispatch_render_work` for such integrations.
+
+The output mailbox has one slot, so a paused host cannot accumulate completed
+bitmaps. Ordered input uses a separate FIFO and never waits for rendering.
+Polling View::changed is still supported: an idle model poll does not build a
+tree, raster, submit GPU work, read back pixels or blit. Push-based integrations
+can request redraw when model state changes. This separates model polling from
+actual rendered frames; there is no unconditional animation/presentation loop.
+
+## Release note
+
+Windows baseview editors now render off the DAW UI thread, with display-paced
+input/animation and incremental CPU/GPU bitmap presentation. GPU sessions survive
+editor reopen; recoverable runtime faults retry, Vulkan is preferred within a
+device class, and GNU DX12 discovers DXC beside the plugin or through
+`MUI_DXCOMPILER_PATH` (a DLL file or containing directory), otherwise using FXC.
+`WGPU_DX12_COMPILER` remains an explicit override. No versions or dependency pins
+are changed. Linux/macOS keep their existing native rendering paths.
