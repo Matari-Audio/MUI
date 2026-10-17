@@ -132,3 +132,43 @@ device class, and GNU DX12 discovers DXC beside the plugin or through
 `MUI_DXCOMPILER_PATH` (a DLL file or containing directory), otherwise using FXC.
 `WGPU_DX12_COMPILER` remains an explicit override. No versions or dependency pins
 are changed. Linux/macOS keep their existing native rendering paths.
+
+## Builder handoff commands (not executed by the implementation agent)
+
+Run serially in this worktree under the orchestrator's builder lock:
+
+```sh
+cargo fmt --all -- --check
+cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib windows_frame_state_tests
+cargo test -p mui --lib host::tests
+cargo test -p mui-vello --features cpu,gpu-effects --lib
+cargo test -p mui-baseview -p mui-truce --lib
+cargo check --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets
+cargo clippy --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets -- -D warnings
+cargo build --target x86_64-pc-windows-gnu -p mui-baseview --examples
+```
+
+The pure pacing tests run on Linux; the Windows cross commands typecheck but do
+not execute Windows tests. On a real Windows desktop run the generated
+`worker_close_probe.exe` (exit 0, four responsive parent frames while build is
+blocked, close under 100 ms), then `native_editor.exe` with GPU defaults and with
+`MUI_RENDERER=cpu MUI_EXPECT_SOFTWARE=1`. Test on 60/144/240 Hz displays: active
+updates follow refresh, static content submits/blits zero frames after settling.
+The close probe deliberately fails on the Windows baseline `b8799856`; its
+watchdog exits 2 rather than leaving a hung test process. Linux/X11 can run it
+with `cargo run -p mui-baseview --example worker_close_probe` under a live X11
+session, or `xvfb-run -a` around that command.
+
+For renderer-cost regression comparison against baseline `b8799856`, run the
+same command once in the orchestrator's clean baseline worktree and once here:
+
+```sh
+cargo run --profile perf -p mui-vello --features cpu,gpu-effects --example bench
+```
+
+Compare CPU/GPU rows on the same adapter/scale; require pixel-equivalence tests
+to pass and investigate any repeatable >5% regression in unchanged native paths.
+This microbenchmark does not measure Windows readback or DAW responsiveness;
+those require the native probe and the real-host matrix above. The CPU damage
+unit test compares incremental pixels to the full renderer, checks partial
+coverage during motion/overlap, and checks full resize/DPI invalidation.
