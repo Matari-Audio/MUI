@@ -4,6 +4,8 @@
 //! MUI downstream safety policy for the locked Vello/wgpu shader set.
 use std::borrow::Cow;
 
+mod zero_init;
+
 /// Device limits for the compute pipeline with area antialiasing, as used by MUI.
 /// Derive workgroup and binding requirements from the shipped shader metadata;
 /// wgpu defaults alone need not cover a new shader release. Buffer capacity is
@@ -111,6 +113,19 @@ pub(crate) fn prepare_shader<'a>(
     label: &str,
     source: Cow<'a, str>,
 ) -> Cow<'a, str> {
+    let source = prepare_tile_shader(backend, label, source);
+    if backend == wgpu::Backend::Dx12 {
+        zero_init::prepare(source)
+    } else {
+        source
+    }
+}
+
+fn prepare_tile_shader<'a>(
+    backend: wgpu::Backend,
+    label: &str,
+    source: Cow<'a, str>,
+) -> Cow<'a, str> {
     if label != "vello.tile_alloc" {
         return source;
     }
@@ -162,7 +177,7 @@ mod tests {
         assert!(metal.contains("paths[drawobj_ix | (WG_SIZE - 1u)].tiles"));
         assert!(metal.contains("workgroupBarrier();\n    storageBarrier();"));
         assert_eq!(
-            prepare_shader(wgpu::Backend::Dx12, "other", source.clone()),
+            prepare_tile_shader(wgpu::Backend::Dx12, "other", source.clone()),
             source
         );
     }

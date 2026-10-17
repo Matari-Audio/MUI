@@ -901,8 +901,8 @@ impl WgpuEngine {
     ) -> WgpuShader {
         crate::robustness::trace_pipeline(label, "begin");
         crate::with_pipeline_creation(device, || {
-            let wgsl =
-                crate::robustness::prepare_shader(device.adapter_info().backend, label, wgsl);
+            let backend = device.adapter_info().backend;
+            let wgsl = crate::robustness::prepare_shader(backend, label, wgsl);
             // MUI: bounds, loop and integer-div checks on every backend, including
             // integrated/shared-memory GPUs. Written-by-us does not imply UB-free.
             let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -927,7 +927,10 @@ impl WgpuEngine {
                 module: &shader_module,
                 entry_point: None,
                 compilation_options: PipelineCompilationOptions {
-                    zero_initialize_workgroup_memory: true,
+                    // DX12 clears every workgroup value explicitly in WGSL.
+                    // Naga's HLSL aggregate initializer stalls WARP execution.
+                    // Other APIs retain wgpu's automatic zero initialization.
+                    zero_initialize_workgroup_memory: backend != wgpu::Backend::Dx12,
                     ..Default::default()
                 },
                 cache,
