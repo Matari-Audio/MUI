@@ -85,6 +85,95 @@ impl Renderer {
         self.render_inner(scene, transform, None::<fn(&mut dyn Canvas)>)
     }
 
+    /// Rasterize only damaged device rectangles, retaining every other pixel.
+    /// Uses the GPU renderer's exact paint/weld/overlap invalidation policy.
+    /// Resize, transform, backdrop dependencies and unknown bounds repaint fully.
+    pub fn render_damage(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+    ) -> Result<Vec<[u32; 4]>, String> {
+        use crate::damage::{Change, NOTHING, paint_damage};
+        if !transform.as_coeffs().iter().all(|v| v.is_finite()) {
+            return Err("nonfinite CPU scene transform".into());
+        }
+        if scene
+            .paint
+            .iter()
+            .any(|p| p.layer == mui_scene::Layer::External)
+        {
+            return Err("CPU damage requires reference weld resolution".into());
+        }
+        let (width, height) = self.size();
+        let empty = std::collections::HashMap::new();
+        let change = if self.transform != Some(transform) {
+            Change::Full
+        } else {
+            paint_damage(
+                &self.retained,
+                &scene.paint,
+                &empty,
+                &empty,
+                NOTHING,
+                transform,
+                [width, height],
+            )
+        };
+        let rects = match change {
+            Change::None => return Ok(Vec::new()),
+            Change::Full => vec![[0, 0, width, height]],
+            Change::Part(r) => vec![r],
+            Change::Parts(r) => r.rects[..r.len].to_vec(),
+        };
+        // Mark invalid until every region succeeds. An error must not leave a
+        // mixed-generation bitmap that compares equal on the recovery attempt.
+        self.transform = None;
+        for &[x, y, w, h] in &rects {
+            if w == 0 || h == 0 {
+                continue;
+            }
+            self.ctx.reset_and_resize(w as u16, h as u16);
+            let mut scratch = Pixmap::new(w as u16, h as u16);
+            let mut canvas = Cpu {
+                ctx: &mut self.ctx,
+                resources: &mut self.resources,
+                cache: &mut self.cache,
+            };
+            let translated = Affine::translate((-(f64::from(x)), -(f64::from(y)))) * transform;
+            if matches!(change, Change::Full) {
+                crate::paint(&mut canvas, scene, translated).map_err(|e| e.to_string())?;
+            } else {
+                // Replay all intersecting paint in stacking order, including
+                // unchanged backgrounds/siblings needed for correct blending.
+                canvas.begin_frame();
+                let bounds = transform
+                    .inverse()
+                    .transform_rect_bbox(crate::kurbo::Rect::new(
+                        f64::from(x),
+                        f64::from(y),
+                        f64::from(x + w),
+                        f64::from(y + h),
+                    ));
+                crate::replay(&mut canvas, &scene.paint, bounds, translated)
+                    .map_err(|e| e.to_string())?;
+            }
+            self.ctx.flush();
+            self.ctx.render(&mut scratch, &mut self.resources);
+            for row in 0..h as usize {
+                let dest = ((y as usize + row) * width as usize + x as usize) * 4;
+                let source = row * w as usize * 4;
+                self.pixels.data_as_u8_slice_mut()[dest..dest + w as usize * 4]
+                    .copy_from_slice(&scratch.data_as_u8_slice()[source..source + w as usize * 4]);
+            }
+        }
+        self.retained.clone_from(&scene.paint);
+        self.transform = Some(transform);
+        Ok(rects
+            .into_iter()
+            .filter(|r| r[2] != 0 && r[3] != 0)
+            .collect())
+    }
+
     /// Overlays repaint on every call and are included in the presented pixels.
     pub fn render_with_overlay(
         &mut self,
@@ -108,7 +197,8 @@ impl Renderer {
             return Ok(false);
         }
         self.transform = None;
-        self.ctx.reset();
+        let (width, height) = self.size();
+        self.ctx.reset_and_resize(width as u16, height as u16);
         let mut canvas = Cpu {
             ctx: &mut self.ctx,
             resources: &mut self.resources,
@@ -329,6 +419,64 @@ mod tests {
     use super::*;
     use mui_scene::prelude::*;
 
+    #[test]
+    fn cpu_damage_matches_full_raster_for_motion_overlap_and_resize() {
+        let scene = |x| {
+            mui_scene::resolve(&SceneSpec::new(
+                stack![
+                    block(512., 384.)
+                        .radius(0.)
+                        .fill(Color::srgb(0.1, 0.1, 0.1))
+                        .id("background"),
+                    block(32., 32.)
+                        .fill(Color::oklcha(0.7, 0.2, 30., 0.6))
+                        .id("moving")
+                        .at(x, 30.),
+                    block(16., 16.)
+                        .fill(Color::oklcha(0.8, 0.2, 200., 0.5))
+                        .id("overlap")
+                        .at(48., 40.),
+                ]
+                .size(512., 384.),
+            ))
+            .unwrap()
+        };
+        let mut incremental = Renderer::new((512, 384)).unwrap();
+        let mut full = Renderer::new((512, 384)).unwrap();
+        assert_eq!(
+            incremental
+                .render_damage(&scene(30.), Affine::IDENTITY)
+                .unwrap(),
+            vec![[0, 0, 512, 384]]
+        );
+        for x in [34., 42., 60., 35.] {
+            let scene = scene(x);
+            let damage = incremental.render_damage(&scene, Affine::IDENTITY).unwrap();
+            assert!(!damage.is_empty());
+            assert!(damage.iter().map(|r| r[2] * r[3]).sum::<u32>() < 512 * 384);
+            full.render(&scene, Affine::IDENTITY).unwrap();
+            assert_eq!(incremental.pixels(), full.pixels());
+            assert!(
+                incremental
+                    .render_damage(&scene, Affine::IDENTITY)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        incremental.resize((600, 400)).unwrap();
+        assert_eq!(
+            incremental
+                .render_damage(&scene(35.), Affine::IDENTITY)
+                .unwrap(),
+            vec![[0, 0, 600, 400]]
+        );
+        assert_eq!(
+            incremental
+                .render_damage(&scene(35.), Affine::scale(1.25))
+                .unwrap(),
+            vec![[0, 0, 600, 400]]
+        );
+    }
     #[test]
     fn cpu_shrink_returns_to_full_quality_but_gpu_startup_waits_for_handover() {
         assert!(background_only(false, (8192, 4096)));
