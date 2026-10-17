@@ -1,4 +1,4 @@
-//! Input-only HWND adapter. The worker owns no native handle or native context.
+//! Input-only native window adapter. The worker owns no native handle or native context.
 use super::*;
 use mui::vello::host::{BitmapPatch as Patch, Offscreen};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -43,10 +43,18 @@ pub(super) fn build<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
     parented: bool,
-) -> impl FnOnce(WindowContext) -> Result<WindowsAdapter, HandlerError> + Send + 'static {
+) -> impl FnOnce(WindowContext) -> Result<NativeAdapter, HandlerError> + Send + 'static {
     move |cx| {
         if !baseview::pin_current_image_for_detached_work() {
             return Err(std::io::Error::other("cannot pin plugin image for editor worker").into());
+        }
+        let start = requests
+            .native_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(start) = start {
+            start();
         }
         let size = cx.size();
         #[expect(
@@ -140,12 +148,26 @@ pub(super) fn build<V: View + Send + 'static>(
             requests.render_active.store(false, Ordering::Release);
             return Err(error.into());
         }
+        #[cfg(target_os = "linux")]
+        if let Ok(handle) = cx.window_handle() {
+            let id = match handle.as_raw() {
+                raw_window_handle::RawWindowHandle::Xlib(h) => u32::try_from(h.window).unwrap_or(0),
+                raw_window_handle::RawWindowHandle::Xcb(h) => h.window.get(),
+                _ => 0,
+            };
+            requests.x11_window.store(id, Ordering::Release);
+        }
+        #[cfg(target_os = "macos")]
+        let presenter = mac_transport::Presenter::new(&cx).map_err(std::io::Error::other)?;
+        #[cfg(target_os = "linux")]
+        let presenter =
+            mui::vello::software::BitmapWindow::new(cx.clone()).map_err(std::io::Error::other)?;
         let hook = requests
             .close
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take();
-        Ok(WindowsAdapter {
+        Ok(NativeAdapter {
             close: NativeClose {
                 hook,
                 fired: Cell::new(false),
@@ -165,6 +187,8 @@ pub(super) fn build<V: View + Send + 'static>(
             bitmap: RefCell::new(None),
             expose: RefCell::new(Vec::new()),
             input_pending: Cell::new(true),
+            #[cfg(not(target_os = "windows"))]
+            presenter: RefCell::new(presenter),
         })
     }
 }
@@ -193,10 +217,14 @@ struct Bitmap {
     pixels: Vec<u32>,
 }
 
-pub(super) struct WindowsAdapter {
+pub(super) struct NativeAdapter {
     close: NativeClose,
     requests: Arc<Requests>,
     native: RefCell<Option<NativeAccessibility>>,
+    #[cfg(target_os = "macos")]
+    presenter: RefCell<mac_transport::Presenter>,
+    #[cfg(target_os = "linux")]
+    presenter: RefCell<mui::vello::software::BitmapWindow<WindowContext>>,
     cx: WindowContext,
     send: Sender<Command>,
     output: RefCell<Receiver<Output>>,
@@ -211,7 +239,32 @@ pub(super) struct WindowsAdapter {
     expose: RefCell<Vec<[u32; 4]>>,
     input_pending: Cell<bool>,
 }
-impl WindowsAdapter {
+impl NativeAdapter {
+    fn blit(&self, rect: [u32; 4], pixels: &[u32]) {
+        let decorated = mui::vello::software::damage_flash(pixels, (rect[2], rect[3]));
+        let pixels = decorated.as_deref().unwrap_or(pixels);
+        #[cfg(target_os = "windows")]
+        blit(&self.cx, rect, pixels);
+        #[cfg(target_os = "macos")]
+        if let Err(error) = self
+            .presenter
+            .borrow_mut()
+            .present(&self.cx, rect, pixels.to_vec())
+        {
+            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+        }
+        #[cfg(target_os = "linux")]
+        if let Err(error) = self.presenter.borrow_mut().present_patch(
+            rect,
+            pixels,
+            (
+                self.cx.size().physical.width,
+                self.cx.size().physical.height,
+            ),
+        ) {
+            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+        }
+    }
     fn stop(&self) {
         if !self.stopped.swap(true, Ordering::AcqRel) {
             self.requests
@@ -226,6 +279,8 @@ impl WindowsAdapter {
             }
             let _ = self.send.send(Command::Stop);
             self.requests.bind_requester(None);
+            #[cfg(target_os = "linux")]
+            self.requests.x11_window.store(0, Ordering::Release);
         }
     }
     fn send(&self, command: Command) {
@@ -282,6 +337,26 @@ impl WindowsAdapter {
             self.requests.wake();
             return;
         }
+        #[cfg(target_os = "macos")]
+        if !output.patches.is_empty() {
+            for patch in output.patches {
+                let pixels = mui::vello::software::damage_flash(
+                    &patch.pixels,
+                    (patch.rect[2], patch.rect[3]),
+                )
+                .unwrap_or(patch.pixels);
+                if let Err(error) = self
+                    .presenter
+                    .borrow_mut()
+                    .present(&self.cx, patch.rect, pixels)
+                {
+                    mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+                }
+            }
+            self.requests
+                .presented(output.size, output.software, output.reason);
+        }
+        #[cfg(not(target_os = "macos"))]
         if !output.patches.is_empty() {
             let mut bitmap = self.bitmap.borrow_mut();
             // A full update already owns a completed bitmap: move it into
@@ -289,7 +364,7 @@ impl WindowsAdapter {
             let mut patches = output.patches;
             if patches.len() == 1 && patches[0].rect == [0, 0, output.size.0, output.size.1] {
                 let patch = patches.pop().expect("one patch");
-                blit(&self.cx, patch.rect, &patch.pixels);
+                self.blit(patch.rect, &patch.pixels);
                 *bitmap = Some(Bitmap {
                     size: output.size,
                     pixels: patch.pixels,
@@ -310,7 +385,7 @@ impl WindowsAdapter {
                     bitmap.pixels[dest..dest + w as usize]
                         .copy_from_slice(&patch.pixels[source..source + w as usize]);
                 }
-                blit(&self.cx, patch.rect, &patch.pixels);
+                self.blit(patch.rect, &patch.pixels);
             }
             self.requests
                 .presented(output.size, output.software, output.reason);
@@ -318,12 +393,12 @@ impl WindowsAdapter {
         self.requests.drag.rendered(output.drag);
     }
 }
-impl Drop for WindowsAdapter {
+impl Drop for NativeAdapter {
     fn drop(&mut self) {
         self.stop();
     }
 }
-impl WindowHandler for WindowsAdapter {
+impl WindowHandler for NativeAdapter {
     fn frame_demand(&self) -> baseview::FrameDemand {
         self.demand.get()
     }
@@ -332,6 +407,27 @@ impl WindowHandler for WindowsAdapter {
             return Ok(());
         }
         self.native_requests();
+        let clipboard = self
+            .requests
+            .clipboard_write
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(text) = clipboard {
+            baseview::copy_to_clipboard(&text);
+        }
+        #[cfg(target_os = "linux")]
+        if let (Some(native), Ok(display), Ok(handle)) = (
+            self.native.borrow_mut().as_mut(),
+            self.cx.display_handle(),
+            self.cx.window_handle(),
+        ) {
+            // SAFETY: both handles borrow this live window on its native thread.
+            #[expect(unsafe_code, reason = "native bounds query on owning thread")]
+            unsafe {
+                native.update_bounds(display.as_raw(), handle.as_raw());
+            }
+        }
         // Take each message outside the receiver borrow before native callbacks.
         loop {
             let output = self.output.borrow().try_recv().ok();
@@ -346,14 +442,14 @@ impl WindowHandler for WindowsAdapter {
                 let w = w.min(bitmap.size.0 - x);
                 let h = h.min(bitmap.size.1 - y);
                 if [x, y, w, h] == [0, 0, bitmap.size.0, bitmap.size.1] {
-                    blit(&self.cx, [x, y, w, h], &bitmap.pixels);
+                    self.blit([x, y, w, h], &bitmap.pixels);
                 } else if w > 0 && h > 0 {
                     let mut pixels = Vec::with_capacity(w as usize * h as usize);
                     for row in y..y + h {
                         let start = row as usize * bitmap.size.0 as usize + x as usize;
                         pixels.extend_from_slice(&bitmap.pixels[start..start + w as usize]);
                     }
-                    blit(&self.cx, [x, y, w, h], &pixels);
+                    self.blit([x, y, w, h], &pixels);
                 }
             }
         }
@@ -455,7 +551,10 @@ fn worker<V: View>(
     let mut driver = Driver::new(
         (size.physical.width, size.physical.height),
         size.scale_factor,
-        Box::new(Clipboard::default()),
+        Box::new(WorkerClipboard {
+            requests: requests.clone(),
+            clipboard: Clipboard::default(),
+        }),
     );
     driver.display_paced = true;
     let mut scale = size.scale_factor;
@@ -784,6 +883,7 @@ fn dispatch<V: View>(
     unsafe_code,
     reason = "bounded GDI bitmap blit on the HWND's owning thread"
 )]
+#[cfg(target_os = "windows")]
 fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) {
     #[repr(C)]
     struct Info {
@@ -871,3 +971,30 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) {
         }
     }
 }
+
+struct WorkerClipboard {
+    requests: Arc<Requests>,
+    clipboard: Clipboard,
+}
+impl mui::Clipboard for WorkerClipboard {
+    fn get(&mut self) -> Option<String> {
+        self.clipboard.read()
+    }
+    fn set(&mut self, text: &str) {
+        #[cfg(target_os = "linux")]
+        self.clipboard.write(text);
+        #[cfg(not(target_os = "linux"))]
+        {
+            self.clipboard.last = Some(text.to_owned());
+            *self
+                .requests
+                .clipboard_write
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(text.to_owned());
+            self.requests.wake();
+        }
+    }
+}
+#[cfg(target_os = "macos")]
+#[path = "mac_transport.rs"]
+mod mac_transport;

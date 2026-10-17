@@ -93,7 +93,6 @@ pub struct MuiEditor<P: Params> {
     min: Option<(u32, u32)>,
     pub(crate) scale: HostScale,
     window: Option<Handle>,
-    #[cfg(target_os = "windows")]
     native_pump: Option<Arc<HostPump>>,
 }
 
@@ -148,7 +147,6 @@ impl<P: Params> MuiEditor<P> {
             min: None,
             scale: HostScale::default(),
             window: None,
-            #[cfg(target_os = "windows")]
             native_pump: None,
         }
     }
@@ -174,8 +172,8 @@ impl<P: Params> MuiEditor<P> {
     }
 
     /// Select when the framework drives a main-thread pump outside its editor
-    /// lock. Windows native editors supply this pump automatically; elsewhere
-    /// truce 6.3 CLAP/VST3 do not, so leave this off for those wrappers.
+    /// lock. Native editors supply this pump automatically on their window
+    /// thread; explicit selection is useful for headless/custom integrations.
     #[must_use]
     pub fn with_host_pump(self) -> Self {
         let mut shared = lock(&self.shared);
@@ -184,20 +182,16 @@ impl<P: Params> MuiEditor<P> {
             Bridge::new(Arc::clone(&self.params)),
         );
         shared.view.bridge = bridge.with_host_pump();
+        let pump = shared.view.bridge.host_pump();
         drop(shared);
-        self
+        let mut editor = self;
+        editor.native_pump = pump;
+        editor
     }
 
     /// Retain this handle in a framework callback and flush outside locks.
     pub fn host_pump(&self) -> Option<Arc<HostPump>> {
-        #[cfg(target_os = "windows")]
-        {
-            self.native_pump.clone()
-        }
-        #[cfg(not(target_os = "windows"))]
-        {
-            lock(&self.shared).view.bridge.host_pump()
-        }
+        self.native_pump.clone()
     }
 
     fn close_window(&mut self) {
@@ -212,10 +206,13 @@ impl<P: Params> MuiEditor<P> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    fn close_model(&self, notify_host: bool) {
+    fn close_idle_model(&self, notify_host: bool) {
         guard("close bridge", || {
-            let mut shared = lock(&self.shared);
+            let mut shared = match self.shared.try_lock() {
+                Ok(shared) => shared,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
+            };
             if notify_host {
                 shared.view.bridge.close();
             } else {
@@ -224,13 +221,16 @@ impl<P: Params> MuiEditor<P> {
         });
         // Separate guard: a bridge failure must not skip UI cancellation.
         guard("close UI", || {
-            let mut shared = lock(&self.shared);
+            let mut shared = match self.shared.try_lock() {
+                Ok(shared) => shared,
+                Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => return,
+            };
             shared.ui.close();
             shared.ui.release_thread_memos();
         });
     }
 
-    #[cfg(target_os = "windows")]
     fn close_model(&self, notify_host: bool) {
         // Revoke delivery without waiting on a model held by a slow build.
         if let Some(pump) = &self.native_pump {
@@ -241,29 +241,29 @@ impl<P: Params> MuiEditor<P> {
                 pump.detach();
             }
         }
-        // No worker was started (or it already finished). Do not wait even
-        // here: a previous editor generation may still be cancelling.
         if !self.requests.render_active() {
-            if let Ok(mut shared) = self.shared.try_lock() {
-                shared.view.bridge.detach();
-                shared.ui.close();
-            }
+            self.close_idle_model(notify_host);
         }
     }
 
-    #[cfg(target_os = "windows")]
     fn open_native(
         &mut self,
         context: &PluginContext,
         create: impl FnOnce(&Self) -> Option<Handle>,
     ) {
+        if mui::host::headless::time().is_some() || cfg!(test) {
+            self.open_headless(context, create);
+            return;
+        }
         self.close();
         let previous = std::mem::replace(&mut self.requests, Arc::default());
         let context = context.with_params(Arc::clone(&self.params));
         let pump = Arc::new(HostPump::default());
-        if !pump.attach(Arc::clone(context.bridge())) {
-            return;
-        }
+        let channel = Arc::clone(context.bridge());
+        let attach = pump.clone();
+        self.requests.on_native_start(move || {
+            let _ = attach.attach(channel);
+        });
         self.native_pump = Some(pump.clone());
         let delivery = pump.clone();
         self.requests.on_idle(Arc::new(move || {
@@ -272,6 +272,7 @@ impl<P: Params> MuiEditor<P> {
         let revoke = pump.clone();
         self.requests.on_close(Arc::new(move || {
             revoke.close();
+            revoke.flush();
         }));
         let shared = self.shared.clone();
         let cleanup = self.shared.clone();
@@ -306,8 +307,7 @@ impl<P: Params> MuiEditor<P> {
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
-    fn open_native(
+    fn open_headless(
         &mut self,
         context: &PluginContext,
         create: impl FnOnce(&Self) -> Option<Handle>,
@@ -438,7 +438,13 @@ impl<P: Params> Editor for MuiEditor<P> {
     }
 
     fn state_changed(&mut self) {
-        #[cfg(target_os = "windows")]
+        if !self.requests.render_active() {
+            let mut shared = lock(&self.shared);
+            shared.ui.cancel();
+            shared.view.bridge.end_all();
+            self.requests.redraw();
+            return;
+        }
         {
             let shared = self.shared.clone();
             self.requests.dispatch_render_work(move || {
@@ -446,19 +452,6 @@ impl<P: Params> Editor for MuiEditor<P> {
                 shared.ui.cancel();
                 shared.view.bridge.end_all();
             });
-        }
-        #[cfg(not(target_os = "windows"))]
-        // A preset replaced what a gesture in flight was editing: end it,
-        // and stop the drag so it cannot keep writing the old value.
-        if guard("state changed", || {
-            let mut s = lock(&self.shared);
-            s.ui.cancel();
-            s.view.bridge.end_all();
-            self.requests.redraw();
-        })
-        .is_none()
-        {
-            self.close();
         }
     }
 }

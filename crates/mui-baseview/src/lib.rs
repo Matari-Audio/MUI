@@ -22,7 +22,6 @@ use std::time::{Duration, Instant};
 
 use a11y::{AccessibilityUi, NativeAccessibility};
 type A11y = (NativeAccessibility, AccessibilityUi);
-#[cfg(target_os = "windows")]
 type RenderTask = Box<dyn FnOnce() + Send>;
 
 /// Native IME and accessibility bridges for custom baseview hosts.
@@ -36,8 +35,7 @@ pub use baseview;
 pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 
 mod drag;
-#[cfg(target_os = "windows")]
-mod windows;
+mod native_worker;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
@@ -57,20 +55,19 @@ pub use mui::host::{Shared, View, lock};
 use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{FailureClass, Frame, GpuInit, Host, Retry, target_size};
 use mui::vello::kurbo::Affine;
+use native_worker::build;
 #[cfg(target_os = "linux")]
 use raw_window_handle::HasDisplayHandle;
 use raw_window_handle::HasWindowHandle;
-#[cfg(target_os = "windows")]
-use windows::build;
 
 /// An app's look at every key event, down and up, before MUI routes it:
 /// `true` takes the key, and neither MUI nor the host sees it. MUI hands a
 /// view key presses only; a computer keyboard that plays notes has to hear
-/// the key come up. Runs on the window's thread with the last frame's `Ui`.
+/// the key come up. Runs on the model worker with its retained `Ui`; native calls belong in the native pump.
 pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 
 /// A native-close signal. Runs before borrowing the model or handler; it must
-/// only signal cancellation, never borrow the UI/model or wait for workers.
+/// never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
 
 /// Last frame submitted to the native child; not GPU completion or scanout.
@@ -102,25 +99,27 @@ pub struct Requests {
     #[cfg(target_os = "linux")]
     x11_window: std::sync::atomic::AtomicU32,
     drag: drag::Mailbox,
-    #[cfg(target_os = "windows")]
     render_active: AtomicBool,
-    #[cfg(target_os = "windows")]
     render_generation: AtomicU64,
-    #[cfg(target_os = "windows")]
     render_cancelled: AtomicBool,
-    #[cfg(target_os = "windows")]
     render_start: Mutex<Option<RenderTask>>,
-    #[cfg(target_os = "windows")]
     render_stop: Mutex<Option<RenderTask>>,
-    #[cfg(target_os = "windows")]
     render_work: Mutex<VecDeque<RenderTask>>,
+    native_start: Mutex<Option<RenderTask>>,
+    clipboard_write: Mutex<Option<String>>,
 }
 
 impl Requests {
-    /// Install worker-only lifecycle work before opening a Windows editor.
+    /// Run once on the native window thread before starting its model worker.
+    pub fn on_native_start(&self, start: impl FnOnce() + Send + 'static) {
+        *self
+            .native_start
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(start));
+    }
+    /// Install worker-only lifecycle work before opening a native editor.
     /// Neither closure may call a host/native-window API. `stop` must revoke
     /// model-side references; it runs after cancellation, including after panic.
-    #[cfg(target_os = "windows")]
     pub fn on_render_lifecycle(
         &self,
         start: impl FnOnce() + Send + 'static,
@@ -135,9 +134,8 @@ impl Requests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(stop));
     }
-    /// Queue ordered model work on the Windows editor worker and request a
+    /// Queue ordered model work on the editor worker and request a
     /// display-paced frame. Never acquire the model lock in a native callback.
-    #[cfg(target_os = "windows")]
     pub fn dispatch_render_work(&self, work: impl FnOnce() + Send + 'static) {
         self.render_work
             .lock()
@@ -147,12 +145,10 @@ impl Requests {
     }
     /// True while this editor's worker can still access its model. Native close
     /// never waits for it; a reopened worker can sequence its model attachment.
-    #[cfg(target_os = "windows")]
     pub fn render_active(&self) -> bool {
         self.render_active.load(Ordering::Acquire)
     }
     /// Native close has revoked this editor, even if a GPU call is still running.
-    #[cfg(target_os = "windows")]
     pub fn render_cancelled(&self) -> bool {
         self.render_cancelled.load(Ordering::Acquire)
     }
@@ -411,69 +407,6 @@ fn settings(title: &str, size: (u32, u32)) -> WindowSettings {
     WindowSettings::new()
         .with_title(title)
         .with_size(LogicalSize::new(f64::from(size.0), f64::from(size.1)))
-}
-
-/// The handler constructor `open` and `run` share.
-#[cfg(not(target_os = "windows"))]
-fn build<V: View + Send + 'static>(
-    shared: Arc<Mutex<Shared<V>>>,
-    requests: Arc<Requests>,
-    parented: bool,
-) -> impl FnOnce(WindowContext) -> Result<Adapter<V>, HandlerError> + Send + 'static {
-    move |cx: WindowContext| {
-        let size = cx.size();
-        let physical = (size.physical.width, size.physical.height);
-        let mut handler = Handler::new(shared, requests, physical, size.scale_factor);
-        handler.drag.parented = parented;
-        #[cfg(target_os = "linux")]
-        {
-            handler.x11_window = cx
-                .window_handle()
-                .ok()
-                .and_then(|handle| match handle.as_raw() {
-                    raw_window_handle::RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok(),
-                    raw_window_handle::RawWindowHandle::Xcb(h) => Some(h.window.get()),
-                    _ => None,
-                })
-                .unwrap_or(0);
-            handler
-                .requests
-                .x11_window
-                .store(handler.x11_window, Ordering::Release);
-        }
-        // SAFETY: this pre-show builder runs on the window's thread. The
-        // handler drops its native adapter before its window context/teardown.
-        #[expect(
-            unsafe_code,
-            reason = "baseview builder owns the native window lifecycle"
-        )]
-        {
-            handler.a11y = cx.window_handle().ok().and_then(|handle| {
-                // SAFETY: this builder owns the live window's lifecycle.
-                unsafe { NativeAccessibility::new(handle.as_raw()) }
-            });
-        }
-        if let Some((native, _)) = handler.a11y.as_mut() {
-            native.focus(cx.has_focus());
-        }
-        let hook = handler
-            .requests
-            .close
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        Ok(Adapter {
-            close: NativeClose {
-                hook,
-                fired: Cell::new(false),
-            },
-            cx,
-            handler: RefCell::new(handler),
-            pending_resize: Cell::new(None),
-            pending_events: RefCell::new(VecDeque::new()),
-            buttons: NativeButtons::default(),
-        })
-    }
 }
 
 /// The window's event handler. Public so a framework adapter can drive it
@@ -1027,7 +960,8 @@ impl<V: View> Handler<V> {
 /// (on Windows, a resize from inside a frame is reported before `resize`
 /// returns). A call that finds the handler busy is kept, the latest resize
 /// and every event, and delivered once the outer call returns.
-struct Adapter<V> {
+#[doc(hidden)]
+pub struct Adapter<V> {
     // Cancel owned dialogs before dropping the native context or model.
     close: NativeClose,
     // Drop graphics and native accessibility before their window context.
@@ -1373,14 +1307,13 @@ impl Clipboard {
 
 fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
     mui::diagnostics::error("mui-baseview", "window_error", line);
-    if let Err(payload) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        #[cfg(target_os = "windows")]
-        if let Ok(mut shared) = shared.try_lock() {
-            shared.view.log(line);
-        }
-        #[cfg(not(target_os = "windows"))]
-        lock(shared).view.log(line);
-    })) {
+    if let Err(payload) =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match shared.try_lock() {
+            Ok(mut shared) => shared.view.log(line),
+            Err(std::sync::TryLockError::Poisoned(error)) => error.into_inner().view.log(line),
+            Err(std::sync::TryLockError::WouldBlock) => {}
+        }))
+    {
         mui::diagnostics::error(
             "mui-baseview",
             "logger_panic",
