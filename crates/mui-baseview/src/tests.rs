@@ -1257,55 +1257,57 @@ fn native_reentrant_drag_keeps_the_driver_trail_after_a_direct_press() {
     use std::sync::mpsc::{Sender, channel};
 
     struct Probe {
-        adapter: Adapter<Stroke>,
+        adapter: native_worker::NativeAdapter,
+        shared: Arc<Mutex<Shared<Stroke>>>,
+        queued: Cell<bool>,
         result: RefCell<Option<Sender<Result<(), String>>>>,
     }
     impl WindowHandler for Probe {
+        fn frame_demand(&self) -> baseview::FrameDemand {
+            self.adapter.frame_demand()
+        }
         fn on_frame(&self) -> Result<(), HandlerError> {
-            let Some(send) = self.result.borrow_mut().take() else {
+            self.adapter.on_frame()?;
+            let bends = [
+                Point::new(10., 10.),
+                Point::new(20., 35.),
+                Point::new(35., 20.),
+                Point::new(45., 40.),
+                Point::new(60., 15.),
+                Point::new(75., 30.),
+            ];
+            let Ok(shared) = self.shared.try_lock() else {
                 return Ok(());
             };
-            let result = (|| {
-                self.adapter.handler.borrow_mut().step();
-                // A directly delivered press is absent from the later inbox.
+            if !self.queued.replace(true) {
+                // Deliver native input while the model is borrowed. The new
+                // adapter queues it rather than borrowing a synchronous Handler.
                 self.adapter
                     .on_event(Event::Mouse(MouseEvent::ButtonPressed {
                         button: MouseButton::Left,
                         modifiers: Modifiers::empty(),
                     }));
-                let mut h = self.adapter.handler.borrow_mut();
-                h.step();
-                lock(&h.shared).view.0.clear();
-                let bends = [
-                    [
-                        Point::new(10., 10.),
-                        Point::new(20., 35.),
-                        Point::new(35., 20.),
-                    ],
-                    [
-                        Point::new(45., 40.),
-                        Point::new(60., 15.),
-                        Point::new(75., 30.),
-                    ],
-                ];
-                for segment in bends {
-                    for p in segment {
-                        // Reenter the actual adapter while its model is busy.
-                        self.adapter.on_event(Event::Mouse(MouseEvent::CursorMoved {
-                            position: PhysicalPosition::new(p.x, p.y),
-                            modifiers: Modifiers::empty(),
-                        }));
-                    }
-                    self.adapter.drain(&mut h);
-                    h.step();
+                for p in bends {
+                    self.adapter.on_event(Event::Mouse(MouseEvent::CursorMoved {
+                        position: PhysicalPosition::new(p.x, p.y),
+                        modifiers: Modifiers::empty(),
+                    }));
                 }
-                let received = &lock(&h.shared).view.0;
-                if *received != bends.concat() {
-                    return Err(format!("native stroke lost bends: {received:?}"));
-                }
-                Ok(())
-            })();
-            let _ = send.send(result);
+                return Ok(());
+            }
+            // The worker can complete after this callback. Its completion wake
+            // drives another callback even if the scene has no pixel damage.
+            if shared.view.0.len() >= bends.len()
+                && let Some(send) = self.result.borrow_mut().take()
+            {
+                let received = &shared.view.0;
+                let result = if received == &bends {
+                    Ok(())
+                } else {
+                    Err(format!("native stroke lost bends: {received:?}"))
+                };
+                let _ = send.send(result);
+            }
             Ok(())
         }
         fn on_event(&self, event: Event) -> EventStatus {
@@ -1325,7 +1327,9 @@ fn native_reentrant_drag_keeps_the_driver_trail_after_a_direct_press() {
             .with_scale_factor_override(Some(1.0)),
         move |cx| {
             Ok(Probe {
-                adapter: build(shared, Arc::default(), false)(cx)?,
+                adapter: build(shared.clone(), Arc::default(), false)(cx)?,
+                shared,
+                queued: Cell::new(false),
                 result: RefCell::new(Some(send)),
             })
         },

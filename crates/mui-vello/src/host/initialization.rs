@@ -414,7 +414,7 @@ impl GpuInit {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let limit = context.device.limits().max_texture_dimension_2d;
                     let (width, height) = (size.0.min(limit), size.1.min(limit));
-                    let mut renderer = pollster::block_on(GpuRenderer::new_shared(
+                    let renderer = pollster::block_on(GpuRenderer::new_shared(
                         &context.device,
                         &context.queue,
                         wgpu::TextureFormat::Bgra8Unorm,

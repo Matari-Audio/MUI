@@ -6,6 +6,8 @@
 
 use super::*;
 
+type Placements = smallvec::SmallVec<[Option<([f64; 2], Size)>; 8]>;
+
 /// Resolve flexible lengths from unclamped bases and constrained hypothetical
 /// sizes. Frozen items keep their min/max bound; remaining items redistribute
 /// free space using grow factors or basis-scaled shrink factors.
@@ -210,8 +212,7 @@ pub(crate) fn arrange<P>(
     // Where each in-flow child goes, then every child in declaration order
     // so frames stay in tree order; a float sits in the padding box like an
     // overlay child, unscrolled.
-    let mut placed: smallvec::SmallVec<[Option<([f64; 2], Size)>; 8]> =
-        smallvec::smallvec![None; children.len()];
+    let mut placed: Placements = smallvec::smallvec![None; children.len()];
     match &n.kind {
         Kind::Leaf => {}
         Kind::Overlay(_) | Kind::Content(_) => {

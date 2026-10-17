@@ -343,9 +343,8 @@ impl Path {
     /// A polyline through `points`, open (a stroke) or closed (a fill).
     pub fn polyline(points: impl IntoIterator<Item = Point>, closed: bool) -> Self {
         let mut it = points.into_iter();
-        let first = match it.next() {
-            Some(first) => first,
-            None => return Self::default(),
+        let Some(first) = it.next() else {
+            return Self::default();
         };
         let capacity = it.size_hint().0.saturating_add(1 + usize::from(closed));
         let mut p = Self {
