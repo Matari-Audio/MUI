@@ -105,6 +105,8 @@ pub struct Requests {
     #[cfg(target_os = "windows")]
     render_active: AtomicBool,
     #[cfg(target_os = "windows")]
+    render_generation: AtomicU64,
+    #[cfg(target_os = "windows")]
     render_cancelled: AtomicBool,
     #[cfg(target_os = "windows")]
     render_start: Mutex<Option<RenderTask>>,

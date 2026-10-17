@@ -3,6 +3,42 @@ use super::*;
 use mui::vello::host::{BitmapPatch as Patch, Offscreen};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 
+// A model may be reopened with a fresh Requests while its old worker exits.
+// Sequence its workers without taking the model lock on the host thread.
+static MODELS: std::sync::LazyLock<
+    Mutex<std::collections::HashMap<usize, std::sync::Weak<AtomicBool>>>,
+> = std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+struct ModelLease {
+    key: usize,
+    active: Arc<AtomicBool>,
+}
+impl ModelLease {
+    fn new<V>(shared: &Arc<Mutex<Shared<V>>>) -> (Self, Option<Arc<AtomicBool>>) {
+        let key = Arc::as_ptr(shared) as usize;
+        let active = Arc::new(AtomicBool::new(true));
+        let previous = MODELS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, Arc::downgrade(&active))
+            .and_then(|weak| weak.upgrade());
+        (Self { key, active }, previous)
+    }
+}
+impl Drop for ModelLease {
+    fn drop(&mut self) {
+        self.active.store(false, Ordering::Release);
+        let mut models = MODELS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if models
+            .get(&self.key)
+            .is_some_and(|weak| weak.ptr_eq(&Arc::downgrade(&self.active)))
+        {
+            models.remove(&self.key);
+        }
+    }
+}
+
 pub(super) fn build<V: View + Send + 'static>(
     shared: Arc<Mutex<Shared<V>>>,
     requests: Arc<Requests>,
@@ -32,6 +68,11 @@ pub(super) fn build<V: View + Send + 'static>(
         let stopped = Arc::new(AtomicBool::new(false));
         let tick_pending = Arc::new(AtomicBool::new(false));
         let stop = stopped.clone();
+        let (lease, previous) = ModelLease::new(&shared);
+        let generation = requests
+            .render_generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
         let pending = tick_pending.clone();
         let wake = requests.clone();
         let mut drag = drag::Host::new(&requests);
@@ -41,12 +82,24 @@ pub(super) fn build<V: View + Send + 'static>(
         let spawned = std::thread::Builder::new()
             .name("mui-editor-render".into())
             .spawn(move || {
+                while previous
+                    .as_ref()
+                    .is_some_and(|active| active.load(Ordering::Acquire))
+                {
+                    // Cancelled generations still keep their place in the
+                    // chain until the predecessor exits; subsequent opens
+                    // cannot jump past a stalled model owner.
+                    std::thread::park_timeout(Duration::from_millis(1));
+                }
                 let start = wake
                     .render_start
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .take();
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if stop.load(Ordering::Acquire) {
+                        return;
+                    }
                     if let Some(start) = start {
                         start();
                     }
@@ -78,7 +131,10 @@ pub(super) fn build<V: View + Send + 'static>(
                 if let Some(stop) = stop {
                     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(stop));
                 }
-                wake.render_active.store(false, Ordering::Release);
+                if wake.render_generation.load(Ordering::Acquire) == generation {
+                    wake.render_active.store(false, Ordering::Release);
+                }
+                drop(lease);
             });
         if let Err(error) = spawned {
             requests.render_active.store(false, Ordering::Release);
@@ -488,7 +544,8 @@ fn worker<V: View>(
         let (scene, capture, ime, update) = {
             let mut shared = lock(&shared);
             if let Some(a) = &mut accessibility {
-                if a.wants_tree() || a.apply(&mut shared.ui) {
+                let requested = a.wants_tree();
+                if a.apply(&mut shared.ui) || requested {
                     driver.redraw();
                 }
             }
