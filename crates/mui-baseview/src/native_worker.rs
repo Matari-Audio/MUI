@@ -499,7 +499,6 @@ impl WindowHandler for NativeAdapter {
         let due = match self.demand.get() {
             baseview::FrameDemand::Continuous => true,
             baseview::FrameDemand::At(at) => Instant::now() >= at,
-            baseview::FrameDemand::Idle => false,
             _ => false,
         };
         if (due || self.input_pending.get() || self.requests.redraw.load(Ordering::Acquire))
