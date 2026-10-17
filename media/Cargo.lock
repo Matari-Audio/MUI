@@ -1490,7 +1490,7 @@ dependencies = [
  "ttf-inter",
  "velato",
  "vello_common 0.3.0",
- "vello_cpu 0.3.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "vello_cpu",
  "vello_gpu",
  "vello_svg",
  "wasm-bindgen",
