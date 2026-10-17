@@ -886,7 +886,8 @@ impl GpuRenderer {
         // changed prefix invalidates that encoding globally (including changes
         // outside the blur footprint); content above it keeps the cached blur.
         let backdrop_invalid = resolved.paint.iter().enumerate().any(|(i, p)| {
-            p.layer == Layer::Backdrop && !self.backdrop_unchanged(&resolved.paint, i, p, xf)
+            p.layer == Layer::Backdrop
+                && (weld_damage != NOTHING || !self.backdrop_unchanged(&resolved.paint, i, p, xf))
         });
         let change =
             if overlay.is_some() || !self.valid || self.transform != Some(xf) || backdrop_invalid {
