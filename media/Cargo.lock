@@ -3103,19 +3103,6 @@ name = "vello_cpu"
 version = "0.3.0"
 dependencies = [
  "bytemuck",
- "glifo 0.4.0",
- "hashbrown 0.17.1",
- "png",
- "vello_common 0.3.0",
-]
-
-[[package]]
-name = "vello_cpu"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed1fec424fbba6acf6cbc78bb526447eb77590d95f40419d598870fe37535212"
-dependencies = [
- "bytemuck",
  "crossbeam-channel",
  "glifo 0.4.0",
  "hashbrown 0.17.1",
