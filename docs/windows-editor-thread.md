@@ -119,8 +119,9 @@ rasterization. AppKit fades a compositor border layer. Diagnostics can issue tha
 extra repair; ordinary idle content does not present. Pure CPU-feature tests check
 a single-widget color change stays in its padded tiles, motion covers old and new
 bounds, and unchanged snapshots yield empty damage. A CPU equivalence test checks
-partial pixels against a full render through motion/overlap and full resize/scale
-invalidation.
+partial pixels against a full render through motion/overlap, backdrops, shifted
+inset shadows and full resize/scale invalidation. Inset shadows damage their
+containing outline rather than just their offset inverse-shadow path.
 
 ## Lifetime, faults and compiler policy
 

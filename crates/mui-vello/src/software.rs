@@ -92,7 +92,8 @@ impl Renderer {
 
     /// Rasterize only damaged device rectangles, retaining every other pixel.
     /// Uses the GPU renderer's exact paint/weld/overlap invalidation policy.
-    /// Resize, transform, backdrop dependencies and unknown bounds repaint fully.
+    /// Resize, transform and unknown bounds invalidate the target. Backdrop and
+    /// shadow dependencies expand local regions rather than dropping effects.
     pub fn render_damage(
         &mut self,
         scene: &ResolvedScene,
@@ -150,7 +151,6 @@ impl Renderer {
             } else {
                 // Replay all intersecting paint in stacking order, including
                 // unchanged backgrounds/siblings needed for correct blending.
-                canvas.begin_frame();
                 let bounds = transform
                     .inverse()
                     .transform_rect_bbox(crate::kurbo::Rect::new(
@@ -159,7 +159,7 @@ impl Renderer {
                         f64::from(x + w),
                         f64::from(y + h),
                     ));
-                crate::replay(&mut canvas, &scene.paint, bounds, translated)
+                crate::paint_region(&mut canvas, scene, translated, bounds)
                     .map_err(|e| e.to_string())?;
             }
             self.ctx.flush();
@@ -521,6 +521,56 @@ mod tests {
                 .unwrap(),
             vec![[0, 0, 600, 400]]
         );
+    }
+    #[test]
+    fn partial_scene_preserves_backdrops_and_shifted_inset_shadows() {
+        let scene = |x, blur| {
+            mui_scene::resolve(&SceneSpec::new(
+                stack![
+                    block(512., 384.)
+                        .fill(Color::srgb(0.1, 0.2, 0.3))
+                        .id("background"),
+                    block(32., 32.)
+                        .fill(Color::srgb(1., 0., 0.))
+                        .id("under-glass")
+                        .at(x, 72.),
+                    block(96., 64.)
+                        .radius(8.)
+                        .fill(Color::oklcha(0.7, 0.02, 30., 0.2))
+                        .backdrop_blur(4.)
+                        .shadow(Shadow::soft(3.))
+                        .shadow(Shadow {
+                            dx: 30.,
+                            ..Shadow::inset(blur)
+                        })
+                        .id("glass")
+                        .at(64., 64.),
+                    block(32., 32.)
+                        .fill(Color::srgb(0., 1., 0.))
+                        .id("unrelated")
+                        .at(350., 240.),
+                ]
+                .size(512., 384.),
+            ))
+            .unwrap()
+        };
+        let mut partial = Renderer::new((512, 384)).unwrap();
+        let mut full = Renderer::new((512, 384)).unwrap();
+        partial
+            .render_damage(&scene(72., 2.), Affine::IDENTITY)
+            .unwrap();
+        for (x, blur) in [(80., 2.), (80., 6.), (96., 6.), (72., 2.)] {
+            let scene = scene(x, blur);
+            let damage = partial.render_damage(&scene, Affine::IDENTITY).unwrap();
+            assert!(!damage.is_empty());
+            assert!(
+                damage
+                    .iter()
+                    .all(|r| r[0] + r[2] < 256 && r[1] + r[3] < 192)
+            );
+            full.render(&scene, Affine::IDENTITY).unwrap();
+            assert_eq!(partial.pixels(), full.pixels(), "x={x}, blur={blur}");
+        }
     }
     #[test]
     fn cpu_shrink_returns_to_full_quality_but_gpu_startup_waits_for_handover() {

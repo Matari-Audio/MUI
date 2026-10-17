@@ -32,9 +32,9 @@ use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::{PixelMetadata, Pixmap};
 pub use vello_common::{kurbo, peniko};
-pub mod diagnostics;
 #[cfg(any(feature = "cpu", feature = "gpu-effects"))]
 mod damage;
+pub mod diagnostics;
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
 #[cfg(feature = "gpu-effects")]
@@ -589,6 +589,28 @@ pub fn paint(
     scene: &ResolvedScene,
     transform: Affine,
 ) -> Result<(), Error> {
+    paint_inner(canvas, scene, transform, None)
+}
+
+/// A complete scene walk clipped by the CPU target, with plain off-region
+/// entries culled. Unlike backdrop-prefix replay, this preserves backdrops and
+/// all layer/clip bookkeeping; a dirty target is still a complete scene region.
+#[cfg(feature = "cpu")]
+pub(crate) fn paint_region(
+    canvas: &mut impl Canvas,
+    scene: &ResolvedScene,
+    transform: Affine,
+    bounds: Rect,
+) -> Result<(), Error> {
+    paint_inner(canvas, scene, transform, Some(bounds))
+}
+
+fn paint_inner(
+    canvas: &mut impl Canvas,
+    scene: &ResolvedScene,
+    transform: Affine,
+    bounds: Option<Rect>,
+) -> Result<(), Error> {
     // A CPU/sink Canvas must not silently omit external GPU paint. Use
     // effects::GpuRenderer for scenes containing native material surfaces.
     if scene.paint.iter().any(|p| p.layer == Layer::External) {
@@ -601,6 +623,18 @@ pub fn paint(
             continue;
         }
         bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
+        let plain = matches!(
+            p.layer,
+            Layer::Fill | Layer::Shell(_) | Layer::Stroke | Layer::Text | Layer::Draw(_)
+        );
+        if plain
+            && bounds.is_some_and(|bounds| {
+                let pad = p.width + p.text.as_ref().map_or(0., |t| f64::from(t.size)) + 2.;
+                !scene_box(p, &bez).inflate(pad, pad).overlaps(bounds)
+            })
+        {
+            continue;
+        }
         canvas.set_transform(placed(transform, p));
         if p.layer == Layer::Backdrop {
             backdrop(canvas, &scene.paint[..i], p, &bez, transform)?;

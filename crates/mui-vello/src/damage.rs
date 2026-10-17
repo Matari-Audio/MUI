@@ -1,7 +1,7 @@
 //! Per-element damage policy shared by CPU and GPU retained renderers.
 use crate::kurbo::{Affine, Rect};
 use mui_geometry::PathCommand;
-use mui_scene::{Layer, Painted};
+use mui_scene::{Layer, Painted, ShadowKind};
 use std::collections::HashMap;
 
 /// What changed since the frame the target holds.
@@ -169,6 +169,10 @@ pub(crate) fn reach(p: &Painted) -> Option<Rect> {
     };
     let r = match p.layer {
         Layer::External => return None,
+        // Its inverse fill reaches the containing outline, not just the
+        // shifted/shrunk shadow path. paint_damage obtains that clip below;
+        // raster culling must conservatively keep the entry.
+        Layer::Shadow(ShadowKind::Inset) => return None,
         Layer::Backdrop => path().inflate(3. * p.blur, 3. * p.blur),
         Layer::Blend { .. } | Layer::Unblend | Layer::Unclip => return Some(NOTHING),
         Layer::Clip | Layer::Mask => path(),
@@ -267,9 +271,21 @@ pub(crate) fn paint_damage(
     xf: Affine,
     size: [u32; 2],
 ) -> Change {
-    let reach = |p: &Painted, external: &HashMap<mui_scene::Id, Rect>| {
+    let footprint = |list: &[Painted], index: usize, external: &HashMap<mui_scene::Id, Rect>| {
+        let p = &list[index];
         if p.layer == Layer::External {
             external.get(&p.key).copied()
+        } else if p.layer == Layer::Shadow(ShadowKind::Inset) {
+            let mut depth = 0;
+            for q in list[..index].iter().rev() {
+                match q.layer {
+                    Layer::Unclip => depth += 1,
+                    Layer::Clip if depth == 0 => return reach(q),
+                    Layer::Clip => depth -= 1,
+                    _ => {}
+                }
+            }
+            None
         } else {
             reach(p)
         }
@@ -299,7 +315,7 @@ pub(crate) fn paint_damage(
             (old, old_external)
         };
         let p = &list[i];
-        let Some(b) = reach(p, external) else {
+        let Some(b) = footprint(list, i, external) else {
             return false;
         };
         if b != NOTHING && !regions.add(tile(b)) {
@@ -308,8 +324,8 @@ pub(crate) fn paint_damage(
         // A layer's blend or opacity reaches everything inside it.
         if matches!(p.layer, Layer::Blend { .. }) {
             let mut depth = 0;
-            for q in &list[i..] {
-                let Some(b) = reach(q, external) else {
+            for (index, q) in list.iter().enumerate().skip(i) {
+                let Some(b) = footprint(list, index, external) else {
                     return false;
                 };
                 if b != NOTHING && !regions.add(tile(b)) {
@@ -341,7 +357,7 @@ pub(crate) fn paint_damage(
             .chain(paint)
             .filter(|p| p.layer == Layer::Backdrop)
         {
-            if let Some(bounds) = reach(p, &HashMap::new()) {
+            if let Some(bounds) = reach(p) {
                 let r = tile(bounds);
                 if regions.rects[..regions.len].iter().any(|a| {
                     a[0] < r[0] + r[2]
@@ -432,6 +448,22 @@ mod tests {
                 rects
                     .iter()
                     .any(|r| x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3])
+            );
+        }
+    }
+    #[test]
+    fn sparse_region_budget_coalesces_damage_without_global_invalidation() {
+        let mut regions = Regions::new();
+        for i in 0..20 {
+            regions.add([16 + i * 32, 32, 16, 16]);
+        }
+        assert!(regions.len > 0 && regions.len <= 16);
+        for i in 0..20 {
+            let x = 16 + i * 32;
+            assert!(
+                regions.rects[..regions.len]
+                    .iter()
+                    .any(|r| { r[0] <= x && r[0] + r[2] >= x + 16 && r[1] == 32 && r[3] == 16 })
             );
         }
     }
