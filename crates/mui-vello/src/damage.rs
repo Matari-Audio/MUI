@@ -362,3 +362,76 @@ pub(crate) fn paint_damage(
         _ => Change::Parts(regions),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mui_scene::prelude::*;
+    fn scene(x: f64, color: Color) -> mui_scene::ResolvedScene {
+        mui_scene::resolve(&SceneSpec::new(
+            stack![
+                block(512., 384.)
+                    .radius(0.)
+                    .fill(Color::srgb(0.1, 0.1, 0.1))
+                    .id("background"),
+                block(32., 32.)
+                    .radius(0.)
+                    .fill(color)
+                    .id("active")
+                    .at(x, 32.),
+                block(32., 32.)
+                    .radius(0.)
+                    .fill(Color::srgb(0., 1., 0.))
+                    .id("untouched")
+                    .at(320., 240.),
+            ]
+            .size(512., 384.),
+        ))
+        .unwrap()
+    }
+    fn local(before: &[Painted], after: &[Painted]) -> Vec<[u32; 4]> {
+        let external = HashMap::new();
+        match paint_damage(
+            before,
+            after,
+            &external,
+            &external,
+            NOTHING,
+            Affine::IDENTITY,
+            [512, 384],
+        ) {
+            Change::None => Vec::new(),
+            Change::Part(r) => vec![r],
+            Change::Parts(r) => r.rects[..r.len].to_vec(),
+            Change::Full => panic!("a single widget must never invalidate the whole window"),
+        }
+    }
+    #[test]
+    fn one_widget_style_change_automatically_damages_only_its_aa_tiles() {
+        let before = scene(32., Color::srgb(1., 0., 0.));
+        let after = scene(32., Color::srgb(0., 0., 1.));
+        let rects = local(&before.paint, &after.paint);
+        assert!(!rects.is_empty());
+        for [x, y, w, h] in rects {
+            assert!(x >= 16 && y >= 16 && x + w <= 80 && y + h <= 80);
+        }
+        assert!(local(&after.paint, &after.paint).is_empty());
+    }
+    #[test]
+    fn drag_or_animation_automatically_covers_old_and_new_widget_bounds() {
+        let before = scene(32., Color::srgb(1., 0., 0.));
+        let after = scene(44., Color::srgb(1., 0., 0.));
+        let rects = local(&before.paint, &after.paint);
+        assert!(!rects.is_empty());
+        for [x, y, w, h] in &rects {
+            assert!(*x >= 16 && *y >= 16 && x + w <= 80 && y + h <= 80);
+        }
+        for (x, y) in [(32, 32), (63, 63), (44, 32), (75, 63)] {
+            assert!(
+                rects
+                    .iter()
+                    .any(|r| x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3])
+            );
+        }
+    }
+}

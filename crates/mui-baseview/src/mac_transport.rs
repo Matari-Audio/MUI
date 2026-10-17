@@ -55,6 +55,8 @@ unsafe extern "C" {
     ) -> *mut c_void;
     fn CGImageRetain(value: *mut c_void) -> *mut c_void;
     fn CGImageRelease(value: *mut c_void);
+    fn CGColorCreateGenericRGB(r: f64, g: f64, b: f64, a: f64) -> *mut c_void;
+    fn CGColorRelease(value: *mut c_void);
 }
 unsafe extern "C" fn release_pixels(_: *mut c_void, data: *const c_void, bytes: usize) {
     // SAFETY: make_image transferred this exact boxed u32 slice to the provider.
@@ -121,6 +123,7 @@ pub(super) struct Presenter {
     container: *mut Object,
     pieces: Vec<Piece>,
     size: (u32, u32),
+    flashes: Vec<(std::time::Instant, *mut Object)>,
 }
 impl Presenter {
     pub(super) fn new(window: &WindowContext) -> Result<Self, String> {
@@ -143,6 +146,7 @@ impl Presenter {
                 container,
                 pieces: Vec::new(),
                 size: (0, 0),
+                flashes: Vec::new(),
             })
         }
     }
@@ -203,6 +207,45 @@ impl Presenter {
             }
             next.push(make_piece(self.container, rect, rect, image, scale));
             self.pieces = next;
+            let now = std::time::Instant::now();
+            self.flashes.retain(|(until, layer)| {
+                if *until > now {
+                    true
+                } else {
+                    let _: () = msg_send![*layer, removeFromSuperlayer];
+                    let _: () = msg_send![*layer, release];
+                    false
+                }
+            });
+            if std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1") {
+                let layer: *mut Object = msg_send![class!(CALayer), new];
+                let frame = Rect {
+                    x: f64::from(rect[0]) / scale,
+                    y: f64::from(rect[1]) / scale,
+                    w: f64::from(rect[2]) / scale,
+                    h: f64::from(rect[3]) / scale,
+                };
+                let color = CGColorCreateGenericRGB(1., 0., 0.25, 1.);
+                let _: () = msg_send![layer,setFrame:frame];
+                let _: () = msg_send![layer,setBorderWidth:2.0f64/scale];
+                let _: () = msg_send![layer,setBorderColor:color];
+                CGColorRelease(color);
+                let _: () = msg_send![layer,setZPosition:1.0f64];
+                let _: () = msg_send![layer,setOpacity:0.0f32];
+                let key: *mut Object =
+                    msg_send![class!(NSString),stringWithUTF8String:c"opacity".as_ptr()];
+                let animation: *mut Object =
+                    msg_send![class!(CABasicAnimation),animationWithKeyPath:key];
+                let from: *mut Object = msg_send![class!(NSNumber),numberWithFloat:1.0f32];
+                let to: *mut Object = msg_send![class!(NSNumber),numberWithFloat:0.0f32];
+                let _: () = msg_send![animation,setFromValue:from];
+                let _: () = msg_send![animation,setToValue:to];
+                let _: () = msg_send![animation,setDuration:0.12f64];
+                let _: () = msg_send![layer,addAnimation:animation forKey:key];
+                let _: () = msg_send![self.container,addSublayer:layer];
+                self.flashes
+                    .push((now + std::time::Duration::from_millis(150), layer));
+            }
             let _: () = msg_send![class!(CATransaction), commit];
         }
         Ok(())
@@ -247,6 +290,13 @@ unsafe fn make_piece(
 impl Drop for Presenter {
     fn drop(&mut self) {
         self.pieces.clear();
+        // SAFETY: flash layers are independently owned on this native thread.
+        unsafe {
+            for (_, layer) in self.flashes.drain(..) {
+                let _: () = msg_send![layer, removeFromSuperlayer];
+                let _: () = msg_send![layer, release];
+            }
+        }
         // SAFETY: the native adapter drops before its view context.
         unsafe {
             let _: () = msg_send![self.container, removeFromSuperlayer];

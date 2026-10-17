@@ -187,6 +187,8 @@ pub(super) fn build<V: View + Send + 'static>(
             bitmap: RefCell::new(None),
             expose: RefCell::new(Vec::new()),
             input_pending: Cell::new(true),
+            flash_at: Cell::new(None),
+            flash_rects: RefCell::new(Vec::new()),
             #[cfg(not(target_os = "windows"))]
             presenter: RefCell::new(presenter),
         })
@@ -238,11 +240,33 @@ pub(super) struct NativeAdapter {
     bitmap: RefCell<Option<Bitmap>>,
     expose: RefCell<Vec<[u32; 4]>>,
     input_pending: Cell<bool>,
+    flash_at: Cell<Option<Instant>>,
+    flash_rects: RefCell<Vec<[u32; 4]>>,
 }
 impl NativeAdapter {
     fn blit(&self, rect: [u32; 4], pixels: &[u32]) {
         let decorated = mui::vello::software::damage_flash(pixels, (rect[2], rect[3]));
-        let pixels = decorated.as_deref().unwrap_or(pixels);
+        if decorated.is_some() {
+            self.flash_at
+                .set(Some(Instant::now() + Duration::from_millis(120)));
+            let mut rects = self.flash_rects.borrow_mut();
+            if !rects.contains(&rect) {
+                rects.push(rect);
+            }
+            if rects.len() > 64 {
+                let (mut x, mut y, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+                for r in rects.iter() {
+                    x = x.min(r[0]);
+                    y = y.min(r[1]);
+                    x1 = x1.max(r[0] + r[2]);
+                    y1 = y1.max(r[1] + r[3]);
+                }
+                *rects = vec![[x, y, x1 - x, y1 - y]];
+            }
+        }
+        self.blit_raw(rect, decorated.as_deref().unwrap_or(pixels));
+    }
+    fn blit_raw(&self, rect: [u32; 4], pixels: &[u32]) {
         #[cfg(target_os = "windows")]
         blit(&self.cx, rect, pixels);
         #[cfg(target_os = "macos")]
@@ -340,11 +364,7 @@ impl NativeAdapter {
         #[cfg(target_os = "macos")]
         if !output.patches.is_empty() {
             for patch in output.patches {
-                let pixels = mui::vello::software::damage_flash(
-                    &patch.pixels,
-                    (patch.rect[2], patch.rect[3]),
-                )
-                .unwrap_or(patch.pixels);
+                let pixels = patch.pixels;
                 if let Err(error) = self
                     .presenter
                     .borrow_mut()
@@ -400,11 +420,34 @@ impl Drop for NativeAdapter {
 }
 impl WindowHandler for NativeAdapter {
     fn frame_demand(&self) -> baseview::FrameDemand {
-        self.demand.get()
+        match (self.demand.get(), self.flash_at.get()) {
+            (baseview::FrameDemand::Idle, Some(at)) => baseview::FrameDemand::At(at),
+            (baseview::FrameDemand::At(at), Some(flash)) => {
+                baseview::FrameDemand::At(at.min(flash))
+            }
+            (demand, _) => demand,
+        }
     }
     fn on_frame(&self) -> Result<(), HandlerError> {
         if self.stopped.load(Ordering::Acquire) {
             return Ok(());
+        }
+        if self.flash_at.get().is_some_and(|at| Instant::now() >= at) {
+            self.flash_at.set(None);
+            let rects = std::mem::take(&mut *self.flash_rects.borrow_mut());
+            if let Some(bitmap) = self.bitmap.borrow().as_ref() {
+                for [x, y, w, h] in rects {
+                    if x + w > bitmap.size.0 || y + h > bitmap.size.1 {
+                        continue;
+                    }
+                    let mut pixels = Vec::with_capacity(w as usize * h as usize);
+                    for row in y..y + h {
+                        let start = row as usize * bitmap.size.0 as usize + x as usize;
+                        pixels.extend_from_slice(&bitmap.pixels[start..start + w as usize]);
+                    }
+                    self.blit_raw([x, y, w, h], &pixels);
+                }
+            }
         }
         self.native_requests();
         let clipboard = self
@@ -552,6 +595,7 @@ fn worker<V: View>(
         (size.physical.width, size.physical.height),
         size.scale_factor,
         Box::new(WorkerClipboard {
+            #[cfg(not(target_os = "linux"))]
             requests: requests.clone(),
             clipboard: Clipboard::default(),
         }),
@@ -973,6 +1017,7 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) {
 }
 
 struct WorkerClipboard {
+    #[cfg(not(target_os = "linux"))]
     requests: Arc<Requests>,
     clipboard: Clipboard,
 }
