@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
   push:
     branches: [ci/free-runner-ui-suite]
-    paths: [.github/workflows/ci-maintenance.yml]
+    paths: [.github/workflows/ci-maintenance.yml, crates/**]
 permissions:
   contents: read
 concurrency:

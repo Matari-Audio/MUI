@@ -27,7 +27,7 @@ jobs:
       matrix:
         section: [root-lint, root-test, media-lint, media-cut-test, media-native-test]
     name: ${{ matrix.section }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # CUT includes expensive plugin adapter, shader, CLI and media tests.
     # Retain the uncached-run budget; sharding should shorten the cached path.
     timeout-minutes: 75
@@ -95,17 +95,19 @@ jobs:
   # Keep the existing required check name; every platform must pass.
   linux:
     if: always()
-    needs: [gate, platforms, ui]
-    runs-on: ubuntu-latest
+    needs: [gate, platforms, windows-gnu, ui]
+    runs-on: ubuntu-24.04
     steps:
       - env:
           GATE_RESULT: ${{ needs.gate.result }}
           UI_RESULT: ${{ needs.ui.result }}
+          GNU_RESULT: ${{ needs.windows-gnu.result }}
           PLATFORM_RESULT: ${{ needs.platforms.result }}
         run: |
           test "$GATE_RESULT" = success
           test "$UI_RESULT" = success
           test "$PLATFORM_RESULT" = success
+          test "$GNU_RESULT" = success
 
   ui:
     uses: ./.github/workflows/ui.yml
@@ -132,20 +134,33 @@ jobs:
         run: cargo fetch --manifest-path vendor/moose-baseview/Cargo.toml --locked
       - name: Native baseview regressions
         run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
-        env:
-          CARGO_TARGET_DIR: ${{ github.workspace }}/target
       - if: runner.os == 'macOS'
         name: Accessibility providers in two native libraries
         run: python3 tools/ci/check-macos-accesskit-images.py
       - name: Native platform lint
         run: cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
+      # Full library unit tests include adapter-selection and shader robustness
+      # regressions on every OS, without filtering future test modules.
       # fmt and wasm are already gated on Linux.
-      # Windows runners have only WARP, and wgpu's DX12 backend faults on it
-      # (Device::destroy, the effects smoke test). GPU tests read WGPU_BACKEND:
-      # `metal` has no adapter on Windows, so they skip; macOS keeps Metal.
-      - if: runner.os == 'Windows'
-        run: cargo test --workspace --all-features --locked --offline
+      - name: Native workspace library tests
+        run: cargo test --workspace --all-features --lib --locked --offline
         env:
-          WGPU_BACKEND: metal
-      - if: runner.os != 'Windows'
-        run: cargo test --workspace --all-features --locked --offline
+          WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || 'metal' }}
+          WGPU_DX12_COMPILER: StaticDxc
+          MUI_TEST_ALLOW_WARP: '1'
+
+  windows-gnu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: windows-gnu
+      - run: |
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+          rustup target add x86_64-pc-windows-gnu
+      - name: GNU cross-target lint
+        run: cargo clippy --workspace --all-features --all-targets --target x86_64-pc-windows-gnu --locked -- -D warnings

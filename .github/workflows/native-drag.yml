@@ -32,7 +32,6 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
   CARGO_BUILD_JOBS: 2
-  CARGO_TARGET_DIR: ${{ github.workspace }}/target/native-drag
   MUI_REPORTING_DISABLED: '1'
 
 jobs:
@@ -44,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:

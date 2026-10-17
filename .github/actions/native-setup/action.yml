@@ -1,0 +1,37 @@
+name: Native hosted setup
+description: Pinned Rust, native Linux dependencies, software GPU and shared Rust cache
+inputs:
+  cache-key:
+    required: true
+    description: Separates workload caches
+  workspaces:
+    default: '. -> target'
+    description: Cargo workspace cache mapping
+runs:
+  using: composite
+  steps:
+    - name: Linux native dependencies and software GPU
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          libasound2-dev libjack-jackd2-dev libx11-dev libx11-xcb-dev \
+          libxcb1-dev libxcb-icccm4-dev libxcb-dri2-0-dev libxcb-xkb-dev \
+          libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+          libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
+          libwayland-dev libvulkan-dev libfontconfig1-dev libfreetype6-dev \
+          libclang-dev libssl-dev libzstd-dev mesa-vulkan-drivers libegl1-mesa-dev \
+          libegl-mesa0 libgl1-mesa-dri mesa-utils vulkan-tools xvfb xauth dbus-x11 \
+          ffmpeg imagemagick xdotool python3-pil ripgrep weston gdb
+        icd=$(dpkg -L mesa-vulkan-drivers | sed -n '/\/lvp_icd[^/]*\.json$/p' | head -n 1)
+        test -f "$icd"
+        echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+    - name: Pinned toolchain
+      shell: bash
+      run: rustup toolchain install
+    - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      with:
+        key: ${{ inputs.cache-key }}
+        workspaces: ${{ inputs.workspaces }}
+        cache-on-failure: true
