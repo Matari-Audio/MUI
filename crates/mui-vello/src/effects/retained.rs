@@ -632,6 +632,7 @@ impl GpuRenderer {
     pub fn invalidate(&mut self) {
         self.valid = false;
         self.presented = None;
+        self.output = None;
     }
 
     /// Paint `texture` wherever the scene carries [`mui_scene::Image::texture`]

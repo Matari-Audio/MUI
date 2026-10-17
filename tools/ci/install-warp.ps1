@@ -26,9 +26,9 @@ foreach ($mapping in ($env:MUI_CI_WORKSPACES -split "`n")) {
     if (!$mapping.Trim()) { continue }
     $parts = $mapping.Trim() -split '\s*->\s*'
     $target = Join-Path (Join-Path $env:GITHUB_WORKSPACE $parts[0]) $parts[1]
-    foreach ($profile in @('debug', 'release')) {
+    foreach ($buildProfile in @('debug', 'release')) {
         foreach ($suffix in @('', 'examples', 'deps')) {
-            $directory = Join-Path (Join-Path $target $profile) $suffix
+            $directory = Join-Path (Join-Path $target $buildProfile) $suffix
             New-Item -ItemType Directory -Force -Path $directory | Out-Null
             Copy-Item -LiteralPath $source -Destination $directory -Force
             $directories += $directory

@@ -660,7 +660,6 @@ mod tests {
         dns.add_name_server(nameserver);
         let resolver = JoinedResolver(dns, ResolverOpts::default());
         let config = ureq::Agent::config_builder().build();
-        let start = Instant::now();
         let error = resolver
             .resolve(
                 // .invalid is answered locally by RFC 6761; this name reaches the UDP fixture.
@@ -676,18 +675,18 @@ mod tests {
             matches!(error, ureq::Error::Timeout(ureq::Timeout::Global)),
             "{error:?}"
         );
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "DNS runtime must cancel and join"
-        );
         blackhole
             .set_read_timeout(Some(Duration::from_millis(100)))
             .unwrap();
         let mut packet = [0; 512];
-        assert!(
-            blackhole.recv_from(&mut packet).unwrap().0 > 12,
-            "a real DNS query reached the unanswered server"
-        );
+        let (length, client) = blackhole.recv_from(&mut packet).unwrap();
+        assert!(length > 12, "a real DNS query reached the unanswered server");
+        // Observe transport ownership directly. A detached lookup would keep
+        // this UDP endpoint bound after the reporting thread returned. A wall
+        // clock assertion instead measures competing shader JITs and scheduler
+        // delays on software-GPU runners, not whether DNS was cancelled.
+        let _released = std::net::UdpSocket::bind(client)
+            .expect("DNS runtime must release its transport before returning");
     }
 
     #[test]

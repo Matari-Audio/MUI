@@ -1082,6 +1082,9 @@ impl Host {
         let mut next = config.clone();
         (next.width, next.height) = (width, height);
         if let Some(surface) = &self.surface {
+            // DXGI ResizeBuffers requires every old backbuffer view released.
+            // The renderer caches the last output view to skip idle presents.
+            renderer.invalidate();
             configure(surface, device, &next).map_err(|error| {
                 crate::diagnostics::error("mui-vello", "resize_failed", &error);
                 HostError::Configuration(error)
@@ -1120,6 +1123,8 @@ impl Host {
     ) -> Result<(), HostError> {
         // EGL permits one configured window surface per native window. Wgpu
         // creates it during configure, so release the old swapchain first.
+        // Cached output views must go before their swapchain (DXGI too).
+        self.gpu.renderer.invalidate();
         self.surface = None;
         if self.shared.is_some() {
             let config = initialization::surface_config(
@@ -1205,6 +1210,7 @@ impl Host {
                 });
             }
             let now = Instant::now();
+            self.gpu.renderer.invalidate();
             match OnDevice::open(&self.instance, Some(surface), size, self.transparency) {
                 Ok(gpu) => {
                     self.gpu = gpu;
@@ -1255,8 +1261,8 @@ impl Host {
         let frame = match surface.get_current_texture() {
             Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
             Acquired::Outdated => {
-                configure(surface, device, config).map_err(HostError::Configuration)?;
                 renderer.invalidate();
+                configure(surface, device, config).map_err(HostError::Configuration)?;
                 return Ok(Frame::Skipped);
             }
             Acquired::Occluded | Acquired::Timeout => return Ok(Frame::Skipped),
