@@ -869,25 +869,32 @@ impl GpuRenderer {
             self.local_mapping += 1;
         }
 
-        let change = if overlay.is_some() || !self.valid || self.transform != Some(xf) {
-            Change::Full
-        } else {
-            match paint_damage(
-                &self.retained,
-                &resolved.paint,
-                &self.retained_external,
-                &self.external,
-                weld_damage,
-                xf,
-                self.size,
-            ) {
-                // A host texture that changed may be sampled anywhere, and
-                // a partial encoding cannot render the frame again.
-                Change::Part(_) | Change::Parts(_) if self.stale => Change::Full,
-                Change::None if self.stale && !self.whole => Change::Full,
-                c => c,
-            }
-        };
+        // The retained backdrop cache owns a complete prefix encoding. A
+        // changed prefix invalidates that encoding globally (including changes
+        // outside the blur footprint); content above it keeps the cached blur.
+        let backdrop_invalid = resolved.paint.iter().enumerate().any(|(i, p)| {
+            p.layer == Layer::Backdrop && !self.backdrop_unchanged(&resolved.paint, i, p, xf)
+        });
+        let change =
+            if overlay.is_some() || !self.valid || self.transform != Some(xf) || backdrop_invalid {
+                Change::Full
+            } else {
+                match paint_damage(
+                    &self.retained,
+                    &resolved.paint,
+                    &self.retained_external,
+                    &self.external,
+                    weld_damage,
+                    xf,
+                    self.size,
+                ) {
+                    // A host texture that changed may be sampled anywhere, and
+                    // a partial encoding cannot render the frame again.
+                    Change::Part(_) | Change::Parts(_) if self.stale => Change::Full,
+                    Change::None if self.stale && !self.whole => Change::Full,
+                    c => c,
+                }
+            };
         let packed = if let Change::Parts(regions) = change {
             regions
                 .packed(self.device.limits().max_texture_dimension_2d)

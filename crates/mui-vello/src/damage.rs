@@ -305,8 +305,49 @@ pub(crate) fn paint_damage(
         let (x1, y1) = (snap(d.x1, true, w), snap(d.y1, true, h));
         [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32)
     };
-    if dirty != NOTHING && !regions.add(tile(dirty)) {
-        return Change::Full;
+    let overlaps = |a: [u32; 4], b: [u32; 4]| {
+        a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
+    };
+    // Dependencies flow forward in paint order. A hover drawn above glass
+    // cannot change the glass's cached prefix, even when their boxes overlap.
+    let add = |list: &[Painted], index: usize, bounds: Rect, regions: &mut Regions| {
+        if bounds == NOTHING {
+            return;
+        }
+        let mut affected = Regions::new();
+        affected.add(tile(bounds));
+        for q in &list[index + 1..] {
+            if q.layer == Layer::Backdrop
+                && let Some(bounds) = reach(q)
+            {
+                let rect = tile(bounds);
+                if affected.rects[..affected.len]
+                    .iter()
+                    .any(|&r| overlaps(r, rect))
+                {
+                    affected.add(rect);
+                }
+            }
+        }
+        for &rect in &affected.rects[..affected.len] {
+            regions.add(rect);
+        }
+    };
+    if dirty != NOTHING {
+        regions.add(tile(dirty));
+        // Material-only changes do not alter Painted. Recover their ordering
+        // from retained external slots before propagating backdrop dependencies.
+        for (list, external) in [(old, old_external), (paint, new_external)] {
+            for (index, p) in list.iter().enumerate() {
+                if p.layer == Layer::External
+                    && external
+                        .get(&p.key)
+                        .is_some_and(|&r| overlaps(tile(r), tile(dirty)))
+                {
+                    add(list, index, dirty, &mut regions);
+                }
+            }
+        }
     }
     if !changed_paint(old, paint, |new, i| {
         let (list, external) = if new {
@@ -318,9 +359,7 @@ pub(crate) fn paint_damage(
         let Some(b) = footprint(list, i, external) else {
             return false;
         };
-        if b != NOTHING && !regions.add(tile(b)) {
-            return false;
-        }
+        add(list, i, b, &mut regions);
         // A layer's blend or opacity reaches everything inside it.
         if matches!(p.layer, Layer::Blend { .. }) {
             let mut depth = 0;
@@ -328,9 +367,7 @@ pub(crate) fn paint_damage(
                 let Some(b) = footprint(list, index, external) else {
                     return false;
                 };
-                if b != NOTHING && !regions.add(tile(b)) {
-                    return false;
-                }
+                add(list, index, b, &mut regions);
                 match q.layer {
                     Layer::Blend { .. } => depth += 1,
                     Layer::Unblend => {
@@ -346,32 +383,6 @@ pub(crate) fn paint_damage(
         true
     }) {
         return Change::Full;
-    }
-    // A backdrop depends on paint beneath it even when its own declaration
-    // stayed equal. Expand damage through overlapping effect footprints until
-    // stable; unrelated widgets never become global invalidations.
-    loop {
-        let before = regions.pixels();
-        for p in old
-            .iter()
-            .chain(paint)
-            .filter(|p| p.layer == Layer::Backdrop)
-        {
-            if let Some(bounds) = reach(p) {
-                let r = tile(bounds);
-                if regions.rects[..regions.len].iter().any(|a| {
-                    a[0] < r[0] + r[2]
-                        && r[0] < a[0] + a[2]
-                        && a[1] < r[1] + r[3]
-                        && r[1] < a[1] + a[3]
-                }) {
-                    regions.add(r);
-                }
-            }
-        }
-        if regions.pixels() == before {
-            break;
-        }
     }
     match regions.len {
         0 => Change::Part([0; 4]),
