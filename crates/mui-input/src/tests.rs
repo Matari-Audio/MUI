@@ -585,3 +585,69 @@ fn cancelled_capture_waits_for_a_real_release_before_recapturing() {
         assert!(interaction.get("a").pressed && interaction.get("a").held);
     }
 }
+
+#[test]
+fn cancel_after_an_uncaptured_press_allows_a_new_press() {
+    let hit = one_square();
+    for button in Button::ALL {
+        let mut interaction = Interaction::new();
+        let pointer = |x| PointerInput {
+            pos: Some(Point::new(x, 50.)),
+            buttons: Buttons::default().set(button, true),
+            ..Default::default()
+        };
+        interaction.update(&hit, pointer(150.));
+        assert_eq!(interaction.held(), None);
+        assert!(!interaction.get("a").pressed);
+        interaction.cancel();
+        interaction.cancel();
+        interaction.update(&hit, pointer(50.));
+        assert!(interaction.get("a").pressed && interaction.get("a").held);
+    }
+}
+
+#[test]
+fn repeated_cancel_preserves_capture_suppression_until_release() {
+    let hit = one_square();
+    for button in Button::ALL {
+        let mut interaction = Interaction::new();
+        let pointer = |held| PointerInput {
+            pos: Some(Point::new(50., 50.)),
+            buttons: Buttons::default().set(button, held),
+            ..Default::default()
+        };
+        interaction.update(&hit, pointer(true));
+        assert!(interaction.get("a").pressed);
+        interaction.cancel();
+        for _ in 0..4 {
+            interaction.cancel();
+            interaction.update(&hit, pointer(true));
+            let response = interaction.get("a");
+            assert!(!response.pressed && !response.held && !response.clicked);
+        }
+        interaction.update(&hit, pointer(false));
+        assert!(!interaction.get("a").clicked);
+        interaction.update(&hit, pointer(true));
+        assert!(interaction.get("a").pressed && interaction.get("a").held);
+    }
+}
+
+#[test]
+fn release_retires_cancel_suppression_before_a_later_missed_press() {
+    let hit = one_square();
+    for button in Button::ALL {
+        let mut interaction = Interaction::new();
+        let pointer = |x, held| PointerInput {
+            pos: Some(Point::new(x, 50.)),
+            buttons: Buttons::default().set(button, held),
+            ..Default::default()
+        };
+        interaction.update(&hit, pointer(50., true));
+        interaction.cancel();
+        interaction.update(&hit, pointer(50., false));
+        interaction.update(&hit, pointer(150., true));
+        interaction.cancel();
+        interaction.update(&hit, pointer(50., true));
+        assert!(interaction.get("a").pressed && interaction.get("a").held);
+    }
+}
