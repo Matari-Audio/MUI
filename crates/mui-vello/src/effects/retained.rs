@@ -895,7 +895,7 @@ impl GpuRenderer {
                     c => c,
                 }
             };
-        let packed = if let Change::Parts(regions) = change {
+        let packed = if let Change::Parts(regions) = &change {
             regions
                 .packed(self.device.limits().max_texture_dimension_2d)
                 .filter(|p| {
@@ -909,7 +909,7 @@ impl GpuRenderer {
             self.paths.tick();
             self.cache.tick();
         }
-        match change {
+        match &change {
             Change::Full => {
                 self.valid = false; // a partial encoding must never be reused
                 self.presented = None;
@@ -921,11 +921,11 @@ impl GpuRenderer {
                 self.retained.clone_from(&resolved.paint);
             }
             Change::Part(r) => {
-                self.render_region::<F>(resolved, xf, r, stats)?;
+                self.render_region::<F>(resolved, xf, *r, stats)?;
             }
             Change::Parts(regions) => {
                 if let Some(packed) = packed {
-                    self.render_regions::<F>(resolved, xf, &regions, packed, stats)?;
+                    self.render_regions::<F>(resolved, xf, regions, &packed, stats)?;
                 } else {
                     for &rect in &regions.rects[..regions.len] {
                         self.render_region::<F>(resolved, xf, rect, stats)?;
@@ -1015,7 +1015,7 @@ impl GpuRenderer {
         resolved: &ResolvedScene,
         xf: Affine,
         regions: &Regions,
-        packed: PackedRegions,
+        packed: &PackedRegions,
         stats: &mut EffectStats,
     ) -> Result<(), Error> {
         self.damage_scene.reset();
@@ -1159,12 +1159,6 @@ impl GpuRenderer {
         self.queue.submit([encoder.finish()]);
         Ok(())
     }
-
-    /// What `paint` changed of the frame the target holds: the entries
-    /// between the run it shares with `retained` at the front and the one at
-    /// the back, old and new, as the device box they can paint on -- padded
-    /// past the anti-aliasing and out to Vello's 16 px tiles, so each tile
-    /// covers what it did in the whole frame.
 
     /// The frame, or with `part` only what reaches `[x, y, w, h]` of it.
     /// A part never holds a backdrop or a weld.

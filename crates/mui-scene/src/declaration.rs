@@ -10,6 +10,10 @@ const MAX_STATE_CAPACITY: usize = 8;
 
 #[derive(Default)]
 struct Pool {
+    #[expect(
+        clippy::vec_box,
+        reason = "this allocation pool reuses Element's Box<Extras>; Vec<Extras> would allocate a new box on every checkout"
+    )]
     extras: Vec<Box<Extras>>,
     states: Vec<States>,
     // Payload bytes, including actual state-vector capacity. The two index

@@ -356,10 +356,10 @@ impl NativeAdapter {
             let _ = self.cx.set_mouse_cursor(output.cursor);
         }
         // Native publication may reenter, but never acquires the model lock.
-        if let Some(update) = output.accessibility {
-            if let Some(native) = self.native.borrow_mut().as_mut() {
-                native.publish(update);
-            }
+        if let Some(update) = output.accessibility
+            && let Some(native) = self.native.borrow_mut().as_mut()
+        {
+            native.publish(update);
         }
         let actual = self.cx.size();
         if output.size != (actual.physical.width, actual.physical.height) {
@@ -676,26 +676,27 @@ fn worker<V: View>(
         let size = driver.size();
         let valid =
             size.0 > 0 && size.1 > 0 && u64::from(size.0) * u64::from(size.1) <= 16 * 1024 * 1024;
-        if valid && gpu.is_none() {
-            if let Some(result) = init.as_mut().and_then(|i| i.poll_offscreen(size)) {
-                match result {
-                    Ok(renderer) => {
-                        gpu = Some(renderer);
-                        reason = "GPU ready";
-                        lock(shared).ui.set_gpu_welding_available(true);
-                        driver.redraw();
+        if valid
+            && gpu.is_none()
+            && let Some(result) = init.as_mut().and_then(|i| i.poll_offscreen(size))
+        {
+            match result {
+                Ok(renderer) => {
+                    gpu = Some(renderer);
+                    reason = "GPU ready";
+                    lock(shared).ui.set_gpu_welding_available(true);
+                    driver.redraw();
+                }
+                Err(error) => {
+                    if reason != "CPU GPU initialization failed" {
+                        log(
+                            shared,
+                            &format!(
+                                "mui-baseview: GPU unavailable ({error}); using CPU rendering"
+                            ),
+                        );
                     }
-                    Err(error) => {
-                        if reason != "CPU GPU initialization failed" {
-                            log(
-                                shared,
-                                &format!(
-                                    "mui-baseview: GPU unavailable ({error}); using CPU rendering"
-                                ),
-                            );
-                        }
-                        reason = "CPU GPU initialization failed";
-                    }
+                    reason = "CPU GPU initialization failed";
                 }
             }
         }
@@ -814,10 +815,10 @@ fn worker<V: View>(
         if let Some(wake) = driver.next_wake() {
             at = at.min(wake);
         }
-        if let Some(init) = &init {
-            if gpu.is_none() {
-                at = at.min(init.deadline().unwrap_or(now + Duration::from_millis(25)));
-            }
+        if let Some(init) = &init
+            && gpu.is_none()
+        {
+            at = at.min(init.deadline().unwrap_or(now + Duration::from_millis(25)));
         }
         if let Some(deadline) = retry.deadline() {
             at = at.max(deadline);
@@ -902,38 +903,34 @@ fn dispatch<V: View>(
             MouseEvent::DragEntered {
                 position,
                 modifiers,
-                data,
+                data: DropData::Files(files),
             }
             | MouseEvent::DragMoved {
                 position,
                 modifiers,
-                data,
+                data: DropData::Files(files),
             },
         ) => {
-            if let DropData::Files(files) = data {
-                driver.drop_files(
-                    &mut lock(shared),
-                    points(position),
-                    mods(modifiers),
-                    &files,
-                    false,
-                );
-            }
+            driver.drop_files(
+                &mut lock(shared),
+                points(position),
+                mods(modifiers),
+                &files,
+                false,
+            );
         }
         Event::Mouse(MouseEvent::DragDropped {
             position,
             modifiers,
-            data,
+            data: DropData::Files(files),
         }) => {
-            if let DropData::Files(files) = data {
-                driver.drop_files(
-                    &mut lock(shared),
-                    points(position),
-                    mods(modifiers),
-                    &files,
-                    true,
-                );
-            }
+            driver.drop_files(
+                &mut lock(shared),
+                points(position),
+                mods(modifiers),
+                &files,
+                true,
+            );
         }
         _ => {}
     }

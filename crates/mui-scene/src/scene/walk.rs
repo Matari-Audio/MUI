@@ -677,7 +677,7 @@ impl<'a> Walk<'a> {
                         let hit = if d == Vec2::ZERO {
                             local.clone()
                         } else {
-                            let mut p = Path::clone(&local);
+                            let mut p = Path::clone(local);
                             p.translate(d);
                             Arc::new(p)
                         };

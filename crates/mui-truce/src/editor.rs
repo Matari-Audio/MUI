@@ -256,7 +256,7 @@ impl<P: Params> MuiEditor<P> {
             return;
         }
         self.close();
-        let previous = std::mem::replace(&mut self.requests, Arc::default());
+        let previous = std::mem::take(&mut self.requests);
         let context = context.with_params(Arc::clone(&self.params));
         let pump = Arc::new(HostPump::default());
         let channel = Arc::clone(context.bridge());

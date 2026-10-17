@@ -112,9 +112,7 @@ impl Renderer {
         }
         let (width, height) = self.size();
         let empty = std::collections::HashMap::new();
-        let change = if self.transform != Some(transform) {
-            Change::Full
-        } else {
+        let change = if self.transform == Some(transform) {
             paint_damage(
                 &self.retained,
                 &scene.paint,
@@ -124,6 +122,8 @@ impl Renderer {
                 transform,
                 [width, height],
             )
+        } else {
+            Change::Full
         };
         let rects = match change {
             Change::None => return Ok(Vec::new()),
@@ -283,7 +283,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             startup,
             size,
             startup_color: None,
-            damage_history: Default::default(),
+            damage_history: std::collections::VecDeque::default(),
         })
     }
 
@@ -703,7 +703,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             surface,
             size: (0, 0),
             pixels: Vec::new(),
-            history: Default::default(),
+            history: std::collections::VecDeque::default(),
             opaque,
         })
     }

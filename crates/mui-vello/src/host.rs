@@ -370,9 +370,8 @@ fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
         wgpu::DeviceType::Cpu => 4,
     };
     let backend = match info.backend {
-        wgpu::Backend::Vulkan | wgpu::Backend::Metal => 0,
         wgpu::Backend::Dx12 if cfg!(windows) => 1,
-        wgpu::Backend::Dx12 => 0,
+        wgpu::Backend::Vulkan | wgpu::Backend::Metal | wgpu::Backend::Dx12 => 0,
         _ => 2,
     };
     (device, backend)
@@ -546,7 +545,6 @@ impl HostError {
             Self::Validation => FailureClass::Permanent,
             // Surface loss, allocation pressure and render/driver faults can
             // clear without restarting a DAW. Retry with the existing backoff.
-            Self::Surface(_) | Self::Render(_) => FailureClass::Transient,
             _ => FailureClass::Transient,
         }
     }

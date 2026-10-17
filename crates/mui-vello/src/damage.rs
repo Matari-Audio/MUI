@@ -5,12 +5,12 @@ use mui_scene::{Layer, Painted, ShadowKind};
 use std::collections::HashMap;
 
 /// What changed since the frame the target holds.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) enum Change {
     None,
     /// Only `[x, y, w, h]`, in device pixels.
     Part([u32; 4]),
-    Parts(Regions),
+    Parts(Box<Regions>),
     Full,
 }
 
@@ -161,16 +161,14 @@ pub(crate) fn reach(p: &Painted) -> Option<Rect> {
         r
     };
     let r = match p.layer {
-        Layer::External => return None,
         // Its inverse fill reaches the containing outline, not just the
         // shifted/shrunk shadow path. paint_damage obtains that clip below;
         // raster culling must conservatively keep the entry.
-        Layer::Shadow(ShadowKind::Inset) => return None,
-        Layer::Backdrop => path().inflate(3. * p.blur, 3. * p.blur),
+        Layer::External | Layer::Shadow(ShadowKind::Inset) => return None,
         Layer::Blend { .. } | Layer::Unblend | Layer::Unclip => return Some(NOTHING),
         Layer::Clip | Layer::Mask => path(),
         // Vello's blurred rect stops at 2.5 standard deviations.
-        Layer::Shadow(_) => path().inflate(3. * p.blur, 3. * p.blur),
+        Layer::Backdrop | Layer::Shadow(_) => path().inflate(3. * p.blur, 3. * p.blur),
         _ => match &p.text {
             // As `replay` culls a run: its box is an estimate.
             Some(t) => {
@@ -380,7 +378,7 @@ pub(crate) fn paint_damage(
     match regions.len {
         0 => Change::Part([0; 4]),
         1 => Change::Part(regions.rects[0]),
-        _ => Change::Parts(regions),
+        _ => Change::Parts(Box::new(regions)),
     }
 }
 
