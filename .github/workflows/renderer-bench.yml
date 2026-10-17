@@ -57,23 +57,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Software Vulkan and native build dependencies
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: renderer-${{ matrix.engine }}
+          workspaces: tools/renderer-bench -> target
+      - name: Host receipt
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools libfontconfig1-dev libclang-dev libssl-dev libzstd-dev libxcb1-dev libxkbcommon-dev libwayland-dev gdb
-          icd=$(dpkg -L mesa-vulkan-drivers | sed -n '/\/lvp_icd[^/]*\.json$/p' | head -n 1)
-          test -f "$icd"
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
           mkdir -p renderer-results
           uname -a > renderer-results/host.txt
           lscpu >> renderer-results/host.txt
           free -m >> renderer-results/host.txt
           git rev-parse HEAD >> renderer-results/host.txt
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: tools/renderer-bench -> target
-          key: renderer-${{ matrix.engine }}
       - name: Build isolated measurement binary
         id: build
         env:
@@ -187,19 +181,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends mesa-vulkan-drivers vulkan-tools libfontconfig1-dev
-          icd=$(dpkg -L mesa-vulkan-drivers | sed -n '/\/lvp_icd[^/]*\.json$/p' | head -n 1)
-          test -f "$icd"
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: renderer-mui-pipeline
+      - name: Host receipt
+        run: |
           mkdir -p renderer-results
           lscpu > renderer-results/host.txt
           git rev-parse HEAD >> renderer-results/host.txt
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: renderer-mui-pipeline
       - name: Build existing benchmark
         run: cargo build --profile perf -p mui-vello --example bench --features cpu,gpu-effects --locked 2>&1 | tee renderer-results/build.log
       - name: Full editor and vector-heavy editor
@@ -234,24 +223,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Linux native display dependencies
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libfontconfig1-dev libfreetype6-dev \
-            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxcb-render0-dev libxcb-randr0-dev libxcb-xkb-dev libxcb-sync-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev libegl1-mesa-dev \
-            libclang-dev libssl-dev libzstd-dev mesa-vulkan-drivers vulkan-tools mesa-utils \
-            xvfb xauth dbus-x11 xdotool imagemagick python3-pil
-          icd=$(dpkg -L mesa-vulkan-drivers | sed -n '/\/lvp_icd[^/]*\.json$/p' | head -n 1)
-          test -f "$icd"
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/native-setup
         with:
+          cache-key: gpui-native-${{ runner.os }}
           workspaces: tools/gpui-host-probe -> target
-          key: gpui-native-${{ runner.os }}
       - name: Build pinned native GPUI prototype and test image seam
         shell: bash
         run: |

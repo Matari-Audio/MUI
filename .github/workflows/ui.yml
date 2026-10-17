@@ -36,25 +36,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Display and development dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libasound2-dev libjack-jackd2-dev libx11-dev libx11-xcb-dev \
-            libxcb1-dev libxcb-icccm4-dev libxcb-dri2-0-dev libxcb-xkb-dev \
-            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-            libxcb-randr0-dev libxcb-sync-dev libxkbcommon-dev libxkbcommon-x11-dev \
-            libwayland-dev libvulkan-dev libfontconfig1-dev libclang-dev libssl-dev \
-            libzstd-dev mesa-vulkan-drivers libegl1 libegl-mesa0 libgl1-mesa-dri \
-            mesa-utils vulkan-tools xvfb xauth dbus-x11 ffmpeg imagemagick xdotool python3-pil ripgrep weston
-          icd=$(dpkg -L mesa-vulkan-drivers | rg '/lvp_icd[^/]*\.json$' | head -n 1)
-          test -f "$icd"
-          echo "VK_ICD_FILENAMES=$icd" >> "$GITHUB_ENV"
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/native-setup
         with:
-          key: ui-${{ matrix.backend }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-key: ui-${{ matrix.backend }}
       - name: Evidence collector self-check
         run: /usr/bin/python3 -m unittest discover -s tools/ci -p test_ui.py -v
       - name: Build tester
@@ -179,11 +163,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: rustup toolchain install
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: ./.github/actions/native-setup
         with:
-          key: ui-embedded-${{ runner.os }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-key: ui-embedded-${{ runner.os }}
       - name: Build production embedded tester
         shell: bash
         run: |

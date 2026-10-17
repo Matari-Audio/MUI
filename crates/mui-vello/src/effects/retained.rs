@@ -869,21 +869,18 @@ impl GpuRenderer {
             self.local_mapping += 1;
         }
 
-        // Material pixels can change without changing any Vello commands.
-        // Re-rasterize the complete retained encoding in that case. Partial
-        // encodings cannot be replayed as a full frame, and changed mappings
-        // or placements still need fresh commands. Mark stale before checking
-        // backdrop prefixes so a blur sampling the material is rebuilt too.
-        let reuse_material_encoding = weld_damage != NOTHING
+        // Material pixels can change without changing Vello commands. Keep
+        // the complete encoding and append translated copies for damage tiles;
+        // this preserves bounded raster work without re-encoding geometry.
+        let reuse_material_encoding = overlay.is_none()
+            && weld_damage != NOTHING
             && self.valid
             && self.whole
             && self.transform == Some(xf)
             && self.mapping == (self.effects.mapping_revision(), self.local_mapping)
             && self.retained == resolved.paint
-            && self.retained_external == self.external;
-        if reuse_material_encoding {
-            self.stale = true;
-        }
+            && self.retained_external == self.external
+            && !resolved.paint.iter().any(|p| p.layer == Layer::Backdrop);
 
         // The retained backdrop cache owns a complete prefix encoding. A
         // changed prefix invalidates that encoding globally (including changes
@@ -894,8 +891,6 @@ impl GpuRenderer {
         let change =
             if overlay.is_some() || !self.valid || self.transform != Some(xf) || backdrop_invalid {
                 Change::Full
-            } else if reuse_material_encoding {
-                Change::None
             } else {
                 match paint_damage(
                     &self.retained,
@@ -929,24 +924,26 @@ impl GpuRenderer {
         }
         match &change {
             Change::Full => {
-                self.valid = false; // a partial encoding must never be reused
                 self.presented = None;
-                self.encode(resolved, xf, overlay, None)?;
-                stats.encoded_scenes += 1;
+                if !reuse_material_encoding {
+                    self.valid = false; // a partial encoding must never be reused
+                    self.encode(resolved, xf, overlay, None)?;
+                    stats.encoded_scenes += 1;
+                }
             }
             Change::Part([.., 0] | [.., 0, _]) => {
                 // Changed only off the target.
                 self.retained.clone_from(&resolved.paint);
             }
             Change::Part(r) => {
-                self.render_region::<F>(resolved, xf, *r, stats)?;
+                self.render_region::<F>(resolved, xf, *r, stats, reuse_material_encoding)?;
             }
             Change::Parts(regions) => {
                 if let Some(packed) = packed {
-                    self.render_regions::<F>(resolved, xf, regions, &packed, stats)?;
+                    self.render_regions::<F>(resolved, xf, regions, &packed, stats, reuse_material_encoding)?;
                 } else {
                     for &rect in &regions.rects[..regions.len] {
-                        self.render_region::<F>(resolved, xf, rect, stats)?;
+                        self.render_region::<F>(resolved, xf, rect, stats, reuse_material_encoding)?;
                     }
                 }
             }
@@ -1035,13 +1032,16 @@ impl GpuRenderer {
         regions: &Regions,
         packed: &PackedRegions,
         stats: &mut EffectStats,
+        reuse: bool,
     ) -> Result<(), Error> {
         self.damage_scene.reset();
         self.presented = None;
         for (i, r) in regions.rects[..regions.len].iter().enumerate() {
-            self.valid = false;
-            self.encode::<F>(resolved, xf, None, Some(*r))?;
-            stats.encoded_scenes += 1;
+            if !reuse {
+                self.valid = false;
+                self.encode::<F>(resolved, xf, None, Some(*r))?;
+                stats.encoded_scenes += 1;
+            }
             let [x, y] = packed.offsets[i].map(f64::from);
             self.damage_scene.push_layer(
                 crate::peniko::Fill::NonZero,
@@ -1051,7 +1051,11 @@ impl GpuRenderer {
                 &Rect::new(x, y, x + f64::from(r[2]), y + f64::from(r[3])),
             );
             self.damage_scene
-                .append(&self.scene, Some(Affine::translate((x, y))));
+                .append(&self.scene, Some(Affine::translate(if reuse {
+                    (x - f64::from(r[0]), y - f64::from(r[1]))
+                } else {
+                    (x, y)
+                })));
             self.damage_scene.pop_layer();
         }
         let have = self
@@ -1117,11 +1121,20 @@ impl GpuRenderer {
         xf: Affine,
         r @ [x, y, w, h]: [u32; 4],
         stats: &mut EffectStats,
+        reuse: bool,
     ) -> Result<(), Error> {
-        self.valid = false;
         self.presented = None;
-        self.encode::<F>(resolved, xf, None, Some(r))?;
-        stats.encoded_scenes += 1;
+        if reuse {
+            self.damage_scene.reset();
+            self.damage_scene.append(
+                &self.scene,
+                Some(Affine::translate((-f64::from(x), -f64::from(y)))),
+            );
+        } else {
+            self.valid = false;
+            self.encode::<F>(resolved, xf, None, Some(r))?;
+            stats.encoded_scenes += 1;
+        }
         if self
             .patch
             .as_ref()
@@ -1151,7 +1164,7 @@ impl GpuRenderer {
             &mut self.vello,
             &self.device,
             &self.queue,
-            &self.scene,
+            if reuse { &self.damage_scene } else { &self.scene },
             &view,
             [w, h],
         )?;

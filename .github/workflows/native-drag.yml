@@ -53,23 +53,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Linux native dependencies and isolated display
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-icccm4-dev \
-            libxcb-dri2-0-dev libxcb-xkb-dev libxcb-render0-dev libxcb-shape0-dev \
-            libxcb-xfixes0-dev libxcb-randr0-dev libxcb-sync-dev \
-            libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libvulkan-dev \
-            libfontconfig1-dev libclang-dev libssl-dev libzstd-dev xvfb xauth
-      # Use the repository's exact Rust toolchain; no persistent caches/artifacts
-      # are uploaded by this focused workflow.
-      - name: Pinned toolchain
-        run: |
-          drag_toolchain=$(sed -n 's/^channel = "\([^"]*\)"$/\1/p' rust-toolchain.toml)
-          test -n "$drag_toolchain"
-          rustup toolchain install "$drag_toolchain" --profile minimal
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: native-drag-${{ runner.os }}
       - name: Native scheduling and gesture ownership
         run: cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked drag::tests
       - name: MUI queue, coherent scene, lifecycle and teardown

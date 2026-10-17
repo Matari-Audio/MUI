@@ -1,6 +1,7 @@
 //! GPU/CPU oracle plus eager compilation of every Vello AA and MUI pipeline.
 use mui_scene::prelude::*;
 use mui_vello::{effects::{Budget, GpuRenderer}, kurbo::Affine, software};
+#[expect(dead_code, reason = "shared fixtures also serve gpu_contract") ]
 mod gpu_support;
 
 fn main() -> gpu_support::Result<()> {
