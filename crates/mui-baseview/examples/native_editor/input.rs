@@ -124,7 +124,11 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
         }
         7 => {
             if shared.view.input.value == state.input.value {
-                if state.input.ready.is_some_and(|at| at.elapsed() < Duration::from_secs(3)) {
+                if state
+                    .input
+                    .ready
+                    .is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+                {
                     return Ok(false);
                 }
                 return Err("native adapter drag did not change the control".into());
