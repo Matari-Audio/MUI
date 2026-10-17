@@ -891,60 +891,6 @@ fn render_gpu<R, T>(
     Some(result)
 }
 
-#[cfg(test)]
-mod gpu_recovery_tests {
-    use super::*;
-
-    #[test]
-    fn render_panic_falls_back_to_cpu_and_the_worker_accepts_another_frame() {
-        struct FakeRenderer {
-            render: fn() -> Result<(), HostError>,
-        }
-        let (commands, receive) = mpsc::channel();
-        let (publish, frames) = mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let mut gpu = Some(FakeRenderer {
-                render: || panic!("injected render/readback failure"),
-            });
-            let mut retry = Retry::default();
-            while receive.recv().is_ok() {
-                let cpu_frame = match render_gpu(&mut gpu, |renderer| (renderer.render)()) {
-                    Some(Err(error)) => {
-                        assert_eq!(error.failure_class(), FailureClass::Transient);
-                        assert!(
-                            error
-                                .to_string()
-                                .contains("injected render/readback failure")
-                        );
-                        retry.fail(Instant::now(), error.failure_class());
-                        false
-                    }
-                    Some(Ok(())) => panic!("fake renderer must fail"),
-                    None => true,
-                };
-                publish
-                    .send((gpu.is_none(), cpu_frame, retry.deadline().is_some()))
-                    .unwrap();
-            }
-        });
-        commands.send(()).unwrap();
-        assert_eq!(
-            frames.recv_timeout(Duration::from_secs(5)).unwrap(),
-            (true, false, true)
-        );
-        // A second and third request must reach CPU painting on the same worker.
-        for _ in 0..2 {
-            commands.send(()).unwrap();
-            assert_eq!(
-                frames.recv_timeout(Duration::from_secs(5)).unwrap(),
-                (true, true, true)
-            );
-        }
-        drop(commands);
-        worker.join().unwrap();
-    }
-}
-
 fn dispatch<V: View>(
     driver: &mut Driver,
     shared: &Mutex<Shared<V>>,
@@ -1157,3 +1103,57 @@ impl mui::Clipboard for WorkerClipboard {
 #[cfg(target_os = "macos")]
 #[path = "mac_transport.rs"]
 mod mac_transport;
+
+#[cfg(test)]
+mod gpu_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn render_panic_falls_back_to_cpu_and_the_worker_accepts_another_frame() {
+        struct FakeRenderer {
+            render: fn() -> Result<(), HostError>,
+        }
+        let (commands, receive) = mpsc::channel();
+        let (publish, frames) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let mut gpu = Some(FakeRenderer {
+                render: || panic!("injected render/readback failure"),
+            });
+            let mut retry = Retry::default();
+            while receive.recv().is_ok() {
+                let cpu_frame = match render_gpu(&mut gpu, |renderer| (renderer.render)()) {
+                    Some(Err(error)) => {
+                        assert_eq!(error.failure_class(), FailureClass::Transient);
+                        assert!(
+                            error
+                                .to_string()
+                                .contains("injected render/readback failure")
+                        );
+                        retry.fail(Instant::now(), error.failure_class());
+                        false
+                    }
+                    Some(Ok(())) => panic!("fake renderer must fail"),
+                    None => true,
+                };
+                publish
+                    .send((gpu.is_none(), cpu_frame, retry.deadline().is_some()))
+                    .unwrap();
+            }
+        });
+        commands.send(()).unwrap();
+        assert_eq!(
+            frames.recv_timeout(Duration::from_secs(5)).unwrap(),
+            (true, false, true)
+        );
+        // A second and third request must reach CPU painting on the same worker.
+        for _ in 0..2 {
+            commands.send(()).unwrap();
+            assert_eq!(
+                frames.recv_timeout(Duration::from_secs(5)).unwrap(),
+                (true, true, true)
+            );
+        }
+        drop(commands);
+        worker.join().unwrap();
+    }
+}

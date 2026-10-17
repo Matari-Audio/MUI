@@ -611,168 +611,6 @@ pub(super) fn surface_config(
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn pinned_session_survives_the_last_editor_closing() {
-        let init = GpuInit::new(true);
-        let weak = Arc::downgrade(&init.session);
-        drop(init);
-        let reopened = GpuInit::new(true);
-        assert!(Arc::ptr_eq(&weak.upgrade().unwrap(), &reopened.session));
-    }
-    #[test]
-    fn closing_drops_a_pending_receiver_without_joining_the_initializer() {
-        // The test executable cannot unload. Model an admitted, pinned worker
-        // stalled in a driver; it owns only a weak session and result sender.
-        let mut init = GpuInit::new(true);
-        init.session = Session::private(true, Transparency::Opaque, Vec::new());
-        let weak = Arc::downgrade(&init.session);
-        let (result, receiver) = mpsc::sync_channel(1);
-        let (entered, entered_rx) = mpsc::sync_channel(1);
-        let (release, release_rx) = mpsc::sync_channel(1);
-        let (done, done_rx) = mpsc::sync_channel(1);
-        init.job = Some(receiver);
-        assert!(run(true, move || {
-            entered.send(()).unwrap();
-            release_rx
-                .recv_timeout(std::time::Duration::from_secs(2))
-                .unwrap();
-            assert!(weak.upgrade().is_none());
-            assert!(
-                result
-                    .send(Err(HostError::Unavailable {
-                        message: "cancelled fixture".into(),
-                        class: FailureClass::Transient,
-                    }))
-                    .is_err()
-            );
-            done.send(()).unwrap();
-        }));
-        entered_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .unwrap();
-        let started = Instant::now();
-        drop(init);
-        assert!(started.elapsed() < std::time::Duration::from_millis(100));
-        release.send(()).unwrap();
-        done_rx
-            .recv_timeout(std::time::Duration::from_secs(1))
-            .unwrap();
-    }
-
-    #[test]
-    fn unpinned_editor_cannot_inherit_detached_work_from_a_pinned_editor() {
-        let pinned = GpuInit::new(true);
-        let unpinned = GpuInit::new(false);
-        assert!(pinned.session.detached);
-        assert!(!unpinned.session.detached);
-        assert!(!Arc::ptr_eq(&pinned.session, &unpinned.session));
-    }
-
-    #[test]
-    fn transparent_initializer_preserves_alpha_and_windows_presentation_contract() {
-        let opaque = GpuInit::new(true);
-        let transparent = GpuInit::new_with_transparency(true, Transparency::Translucent);
-        assert_eq!(transparent.transparency, Transparency::Translucent);
-        assert_eq!(
-            Arc::ptr_eq(&opaque.session, &transparent.session),
-            !cfg!(windows)
-        );
-        assert_eq!(
-            session_descriptor(Transparency::Translucent)
-                .backend_options
-                .dx12
-                .presentation_system,
-            wgpu::Dx12SwapchainKind::DxgiFromVisual
-        );
-        assert_eq!(
-            session_slot(Transparency::Translucent),
-            usize::from(cfg!(windows))
-        );
-    }
-
-    #[test]
-    #[ignore = "requires a native compute adapter"]
-    fn close_before_gpu_result_publication_never_creates_a_native_surface() {
-        let gate = InitGate::default();
-        let mut init = GpuInit::new(true);
-        init.session = Session::private(true, Transparency::Opaque, Vec::new());
-        init.set_completion_gate_for_testing(gate.clone());
-        let stop = Instant::now() + std::time::Duration::from_secs(10);
-        while !gate.wait_entered(std::time::Duration::from_millis(1)) {
-            assert!(
-                Instant::now() < stop,
-                "GPU fixture did not reach publication"
-            );
-            assert!(
-                init.poll((32, 32), |_| panic!(
-                    "native factory before gated completion"
-                ))
-                .is_none()
-            );
-        }
-        let began = Instant::now();
-        drop(init);
-        assert!(began.elapsed() < std::time::Duration::from_millis(100));
-        gate.release();
-        assert!(gate.wait_receiver_dropped(std::time::Duration::from_secs(2)));
-    }
-
-    #[test]
-    fn one_rebuild_claim_is_shared_by_all_observers() {
-        let session = Session::private(false, Transparency::Opaque, Vec::new());
-        let observer = session.clone();
-        assert_eq!(session.state.lock().unwrap().begin_generation().unwrap(), 1);
-        assert!(observer.state.lock().unwrap().begin_generation().is_err());
-        let mut state = session.state.lock().unwrap();
-        state.generation = 1;
-        state.building = false;
-        assert_eq!(state.begin_generation().unwrap(), 2);
-    }
-
-    #[test]
-    #[ignore = "requires native compute adapter"]
-    fn editors_adopt_one_device_and_rebuilt_generation() {
-        let editor = Session::private(false, Transparency::Opaque, Vec::new());
-        let second = editor.clone();
-        assert!(editor.context().unwrap().is_none());
-        let context = editor.context().unwrap().unwrap();
-        let adopted = second.context().unwrap().unwrap();
-        assert!(Arc::ptr_eq(&context, &adopted));
-        context.device.destroy();
-        let _ = context.device.poll(wgpu::PollType::Poll);
-        assert!(editor.context().unwrap().is_none());
-        editor.state.lock().unwrap().retry.reset();
-        assert!(second.context().unwrap().is_none());
-        let rebuilt = editor.context().unwrap().unwrap();
-        assert_eq!(rebuilt.generation, context.generation + 1);
-        assert_eq!(second.context().unwrap().unwrap().device, rebuilt.device);
-        // wgpu Device equality compares local IDs, reused by another Instance.
-        // Context identity/generation prove replacement instead.
-        assert!(!Arc::ptr_eq(&rebuilt, &context));
-        let weak = Arc::downgrade(&rebuilt);
-        drop(rebuilt);
-        drop(context);
-        drop(adopted);
-        drop(second);
-        drop(editor);
-        assert!(weak.upgrade().is_none());
-    }
-
-    #[test]
-    fn unpinned_private_session_drops_with_the_last_editor() {
-        let session = Session::private(false, Transparency::Opaque, Vec::new());
-        let weak = Arc::downgrade(&session);
-        let second = session.clone();
-        drop(session);
-        assert!(weak.upgrade().is_some());
-        drop(second);
-        assert!(weak.upgrade().is_none());
-    }
-}
-
 /// Window-independent renderer for an input-only native window. Construct and
 /// drive this on a render worker; no native handle is borrowed or retained.
 pub struct Offscreen {
@@ -1053,4 +891,166 @@ impl Offscreen {
 pub struct BitmapPatch {
     pub rect: [u32; 4],
     pub pixels: Vec<u32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn pinned_session_survives_the_last_editor_closing() {
+        let init = GpuInit::new(true);
+        let weak = Arc::downgrade(&init.session);
+        drop(init);
+        let reopened = GpuInit::new(true);
+        assert!(Arc::ptr_eq(&weak.upgrade().unwrap(), &reopened.session));
+    }
+    #[test]
+    fn closing_drops_a_pending_receiver_without_joining_the_initializer() {
+        // The test executable cannot unload. Model an admitted, pinned worker
+        // stalled in a driver; it owns only a weak session and result sender.
+        let mut init = GpuInit::new(true);
+        init.session = Session::private(true, Transparency::Opaque, Vec::new());
+        let weak = Arc::downgrade(&init.session);
+        let (result, receiver) = mpsc::sync_channel(1);
+        let (entered, entered_rx) = mpsc::sync_channel(1);
+        let (release, release_rx) = mpsc::sync_channel(1);
+        let (done, done_rx) = mpsc::sync_channel(1);
+        init.job = Some(receiver);
+        assert!(run(true, move || {
+            entered.send(()).unwrap();
+            release_rx
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+            assert!(weak.upgrade().is_none());
+            assert!(
+                result
+                    .send(Err(HostError::Unavailable {
+                        message: "cancelled fixture".into(),
+                        class: FailureClass::Transient,
+                    }))
+                    .is_err()
+            );
+            done.send(()).unwrap();
+        }));
+        entered_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+        let started = Instant::now();
+        drop(init);
+        assert!(started.elapsed() < std::time::Duration::from_millis(100));
+        release.send(()).unwrap();
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .unwrap();
+    }
+
+    #[test]
+    fn unpinned_editor_cannot_inherit_detached_work_from_a_pinned_editor() {
+        let pinned = GpuInit::new(true);
+        let unpinned = GpuInit::new(false);
+        assert!(pinned.session.detached);
+        assert!(!unpinned.session.detached);
+        assert!(!Arc::ptr_eq(&pinned.session, &unpinned.session));
+    }
+
+    #[test]
+    fn transparent_initializer_preserves_alpha_and_windows_presentation_contract() {
+        let opaque = GpuInit::new(true);
+        let transparent = GpuInit::new_with_transparency(true, Transparency::Translucent);
+        assert_eq!(transparent.transparency, Transparency::Translucent);
+        assert_eq!(
+            Arc::ptr_eq(&opaque.session, &transparent.session),
+            !cfg!(windows)
+        );
+        assert_eq!(
+            session_descriptor(Transparency::Translucent)
+                .backend_options
+                .dx12
+                .presentation_system,
+            wgpu::Dx12SwapchainKind::DxgiFromVisual
+        );
+        assert_eq!(
+            session_slot(Transparency::Translucent),
+            usize::from(cfg!(windows))
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a native compute adapter"]
+    fn close_before_gpu_result_publication_never_creates_a_native_surface() {
+        let gate = InitGate::default();
+        let mut init = GpuInit::new(true);
+        init.session = Session::private(true, Transparency::Opaque, Vec::new());
+        init.set_completion_gate_for_testing(gate.clone());
+        let stop = Instant::now() + std::time::Duration::from_secs(10);
+        while !gate.wait_entered(std::time::Duration::from_millis(1)) {
+            assert!(
+                Instant::now() < stop,
+                "GPU fixture did not reach publication"
+            );
+            assert!(
+                init.poll((32, 32), |_| panic!(
+                    "native factory before gated completion"
+                ))
+                .is_none()
+            );
+        }
+        let began = Instant::now();
+        drop(init);
+        assert!(began.elapsed() < std::time::Duration::from_millis(100));
+        gate.release();
+        assert!(gate.wait_receiver_dropped(std::time::Duration::from_secs(2)));
+    }
+
+    #[test]
+    fn one_rebuild_claim_is_shared_by_all_observers() {
+        let session = Session::private(false, Transparency::Opaque, Vec::new());
+        let observer = session.clone();
+        assert_eq!(session.state.lock().unwrap().begin_generation().unwrap(), 1);
+        assert!(observer.state.lock().unwrap().begin_generation().is_err());
+        let mut state = session.state.lock().unwrap();
+        state.generation = 1;
+        state.building = false;
+        assert_eq!(state.begin_generation().unwrap(), 2);
+    }
+
+    #[test]
+    #[ignore = "requires native compute adapter"]
+    fn editors_adopt_one_device_and_rebuilt_generation() {
+        let editor = Session::private(false, Transparency::Opaque, Vec::new());
+        let second = editor.clone();
+        assert!(editor.context().unwrap().is_none());
+        let context = editor.context().unwrap().unwrap();
+        let adopted = second.context().unwrap().unwrap();
+        assert!(Arc::ptr_eq(&context, &adopted));
+        context.device.destroy();
+        let _ = context.device.poll(wgpu::PollType::Poll);
+        assert!(editor.context().unwrap().is_none());
+        editor.state.lock().unwrap().retry.reset();
+        assert!(second.context().unwrap().is_none());
+        let rebuilt = editor.context().unwrap().unwrap();
+        assert_eq!(rebuilt.generation, context.generation + 1);
+        assert_eq!(second.context().unwrap().unwrap().device, rebuilt.device);
+        // wgpu Device equality compares local IDs, reused by another Instance.
+        // Context identity/generation prove replacement instead.
+        assert!(!Arc::ptr_eq(&rebuilt, &context));
+        let weak = Arc::downgrade(&rebuilt);
+        drop(rebuilt);
+        drop(context);
+        drop(adopted);
+        drop(second);
+        drop(editor);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[test]
+    fn unpinned_private_session_drops_with_the_last_editor() {
+        let session = Session::private(false, Transparency::Opaque, Vec::new());
+        let weak = Arc::downgrade(&session);
+        let second = session.clone();
+        drop(session);
+        assert!(weak.upgrade().is_some());
+        drop(second);
+        assert!(weak.upgrade().is_none());
+    }
 }
