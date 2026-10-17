@@ -1,6 +1,9 @@
 name: CI source maintenance
 on:
   workflow_dispatch:
+  push:
+    branches: [ci/free-runner-ui-suite]
+    paths: [.github/workflows/ci-maintenance.yml]
 permissions:
   contents: read
 concurrency:
