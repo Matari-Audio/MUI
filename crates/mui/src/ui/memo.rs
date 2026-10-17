@@ -47,7 +47,8 @@ impl Ui {
         deps: impl std::hash::Hash,
         build: impl FnOnce(&mut Self) -> El,
     ) -> El {
-        self.memo_impl(id.into(), deps, build, false)
+        let id: Id = id.into();
+        self.memo_impl(id.as_str(), deps, build, false)
     }
 
     /// Retain layout-positioned floating children along with this subtree.
@@ -61,18 +62,17 @@ impl Ui {
         deps: impl std::hash::Hash,
         build: impl FnOnce(&mut Self) -> El,
     ) -> El {
-        self.memo_impl(id.into(), deps, build, true)
+        let id: Id = id.into();
+        self.memo_impl(id.as_str(), deps, build, true)
     }
 
     fn memo_impl(
         &mut self,
-        id: Id,
+        id: &str,
         deps: impl std::hash::Hash,
         build: impl FnOnce(&mut Self) -> El,
         layout_floats: bool,
     ) -> El {
-        let id: Id = id.into();
-        let id = id.as_str();
         // ponytail: `deps` compares by its SipHash, so two deps that collide
         // share a subtree; pass something `Eq` and store it if that matters.
         let deps = {

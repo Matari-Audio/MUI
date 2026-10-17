@@ -6,7 +6,6 @@ mod rect;
 mod shcore;
 mod style;
 mod user32;
-pub mod uuid;
 pub mod window;
 
 pub use dpi::*;

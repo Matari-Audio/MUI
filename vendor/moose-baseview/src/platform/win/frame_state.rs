@@ -51,14 +51,15 @@ impl FrameState {
             return Wake::Wait;
         }
         if self.requested {
-            // Explicit work must not bypass refresh pacing under Continuous.
-            return Wake::Frame { compositor: self.demand == FrameDemand::Continuous };
+            // Input and expired deadlines must use the compositor too. Otherwise
+            // a stream of At(past) demands starves WM_PAINT and native input.
+            return Wake::Frame { compositor: true };
         }
         match self.demand {
             FrameDemand::Idle => Wake::Wait,
             FrameDemand::Continuous => Wake::Frame { compositor: true },
             FrameDemand::At(at) if at > now => Wake::At(at),
-            FrameDemand::At(_) => Wake::Frame { compositor: false },
+            FrameDemand::At(_) => Wake::Frame { compositor: true },
         }
     }
     pub fn posted(&mut self) {
@@ -160,6 +161,19 @@ mod tests {
         assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: true });
     }
     #[test]
+    fn dirty_input_deadlines_are_compositor_paced_on_every_frame() {
+        let mut state = visible();
+        let now = Instant::now();
+        for _ in 0..20 {
+            state.set_demand(FrameDemand::At(now));
+            state.request();
+            assert_eq!(state.next(now), Wake::Frame { compositor: true });
+            state.posted();
+            assert_eq!(state.next(now), Wake::Wait);
+            state.pending = false;
+        }
+    }
+    #[test]
     fn idle_has_no_timer_deadline() {
         let mut state = visible();
         state.set_demand(FrameDemand::Idle);
@@ -170,7 +184,7 @@ mod tests {
         let mut state = visible();
         state.set_demand(FrameDemand::Idle);
         state.request();
-        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: false });
+        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: true });
         state.posted();
         state.pending = false;
         assert_eq!(state.next(Instant::now()), Wake::Wait);
@@ -185,14 +199,14 @@ mod tests {
         state.request();
         assert_eq!(state.next(Instant::now()), Wake::Wait);
         state.pending = false;
-        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: false });
+        assert_eq!(state.next(Instant::now()), Wake::Frame { compositor: true });
     }
     #[test]
     fn deadline_schedules_one_frame_not_a_past_deadline_spin() {
         let mut state = visible();
         let at = Instant::now();
         state.set_demand(FrameDemand::At(at));
-        assert_eq!(state.next(at), Wake::Frame { compositor: false });
+        assert_eq!(state.next(at), Wake::Frame { compositor: true });
         state.posted();
         state.pending = false;
         state.set_demand(FrameDemand::At(at));

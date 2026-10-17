@@ -185,6 +185,7 @@ struct BaseEntry {
 }
 const BASE_VARIANTS: usize = 2;
 
+#[derive(Clone, Copy)]
 pub(crate) struct GeometryInput<'a> {
     pub outline: &'a Arc<Path>,
     pub joins: Option<&'a Path>,

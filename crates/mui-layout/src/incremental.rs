@@ -126,10 +126,10 @@ pub(crate) struct Frozen {
     children: Vec<Arc<Frozen>>,
 }
 /// This is local arrange scratch, not a recursively inline field of Measured.
-/// Four slots bound recursive stack use; larger branches spill without a cap.
+/// Keep bound scratch off the recursive arrange stack.
 pub(crate) enum BoundChildren<'m, 'a, P> {
     Borrowed(&'m [Measured<'a, P>]),
-    Bound(smallvec::SmallVec<[Measured<'a, P>; 4]>),
+    Bound(Box<smallvec::SmallVec<[Measured<'a, P>; 4]>>),
 }
 impl<'a, P> std::ops::Deref for BoundChildren<'_, 'a, P> {
     type Target = [Measured<'a, P>];
@@ -184,8 +184,8 @@ impl Frozen {
         }
     }
     /// Borrow eager bindings, or bind only the cached branch's immediate
-    /// children. Small control rows stay inline during arrange; no temporary
-    /// measured root or heap child buffer is needed for them.
+    /// children. The bound scratch is boxed to keep the enum and recursive
+    /// arrange frames small; short rows retain inline storage inside that box.
     /// Pin replay continues to use its eager measured descendants.
     pub(crate) fn children<'m, 'a, P>(m: &'m Measured<'a, P>) -> BoundChildren<'m, 'a, P> {
         if !m.children.is_empty() || m.node.children().is_empty() {
@@ -194,7 +194,7 @@ impl Frozen {
         let Some(frozen) = &m.frozen else {
             return BoundChildren::Borrowed(&m.children);
         };
-        BoundChildren::Bound(frozen.bindings(m.node))
+        BoundChildren::Bound(Box::new(frozen.bindings(m.node)))
     }
 
     fn bindings<'a, P, C: FromIterator<Measured<'a, P>>>(&self, node: &'a Node<P>) -> C {

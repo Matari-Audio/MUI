@@ -1,5 +1,5 @@
-//! HWND ownership for the embedded Windows platform. Keep the ABI boundary here,
-//! rather than invoking the generic wrapper's unguarded extern procedure.
+//! The Windows runtime's one HWND/class ownership implementation, including the
+//! optional WGL bootstrap window. Keep native callback ABI boundaries here.
 use super::{callback, window::BaseviewWindow, window_state::WindowSharedState};
 use crate::dpi::PhysicalSize;
 use crate::wrappers::win32::{
@@ -26,6 +26,9 @@ pub(super) struct RegisteredClass {
 
 impl RegisteredClass {
     fn new() -> Result<Self> {
+        Self::with_proc(Some(wnd_proc))
+    }
+    fn with_proc(procedure: WNDPROC) -> Result<Self> {
         static SERIAL: AtomicU64 = AtomicU64::new(0);
         let instance = HInstance::get_from_dll();
         let name = HSTRING::from(super::frame_state::class_name(
@@ -33,7 +36,7 @@ impl RegisteredClass {
             SERIAL.fetch_add(1, Ordering::Relaxed),
         ));
         let info = WNDCLASSW {
-            lpfnWndProc: Some(wnd_proc),
+            lpfnWndProc: procedure,
             hInstance: instance.as_raw(),
             lpszClassName: name.as_ptr(),
             style: CS_OWNDC,
@@ -65,6 +68,42 @@ impl Drop for RegisteredClass {
             );
         }
     }
+}
+
+/// WGL needs a temporary DC to load extensions. Share the real runtime's class
+/// allocator and keep class/window destruction ordered, including on unwinding.
+#[cfg(feature = "opengl")]
+pub(super) fn with_dummy_window<T>(handler: impl FnOnce(HWnd) -> Result<T>) -> Result<T> {
+    let class = RegisteredClass::with_proc(Some(DefWindowProcW))?;
+    // SAFETY: this thread owns class, the system procedure needs no userdata,
+    // and the class stays registered until after the temporary HWND is destroyed.
+    let hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            class.atom_ptr(),
+            ptr::null(),
+            0,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            CW_USEDEFAULT,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            class.instance.as_raw(),
+            ptr::null(),
+        )
+    };
+    let hwnd = NonNull::new(hwnd).ok_or_else(Error::from_thread)?;
+    // SAFETY: CreateWindowExW returned this live handle on the current thread.
+    let hwnd = unsafe { HWnd::from_raw(hwnd) };
+    struct TemporaryWindow(HWnd);
+    impl Drop for TemporaryWindow {
+        fn drop(&mut self) {
+            let _ = self.0.destroy();
+        }
+    }
+    let window = TemporaryWindow(hwnd);
+    handler(window.0)
 }
 
 type Initializer = dyn FnOnce(HWnd) -> BaseviewWindow;

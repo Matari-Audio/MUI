@@ -312,8 +312,8 @@ pub trait ClientCore {
 pub trait Client {
     type XEvent;
 
-    fn build_ic_attributes(&self) -> AttributeBuilder;
-    fn build_im_attributes(&self) -> AttributeBuilder;
+    fn build_ic_attributes(&self) -> AttributeBuilder<'_>;
+    fn build_im_attributes(&self) -> AttributeBuilder<'_>;
 
     fn disconnect(&mut self) -> Result<(), ClientError>;
     fn open(&mut self, locale: &str) -> Result<(), ClientError>;
@@ -367,11 +367,11 @@ where
 {
     type XEvent = C::XEvent;
 
-    fn build_ic_attributes(&self) -> AttributeBuilder {
+    fn build_ic_attributes(&self) -> AttributeBuilder<'_> {
         AttributeBuilder::new(self.ic_attributes())
     }
 
-    fn build_im_attributes(&self) -> AttributeBuilder {
+    fn build_im_attributes(&self) -> AttributeBuilder<'_> {
         AttributeBuilder::new(self.im_attributes())
     }
 

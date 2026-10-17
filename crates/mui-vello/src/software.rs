@@ -74,6 +74,11 @@ impl Renderer {
         Ok(())
     }
 
+    /// Discard damage history after an external full invalidation.
+    pub fn invalidate(&mut self) {
+        self.transform = None;
+    }
+
     /// Premultiplied sRGB RGBA8, top-to-bottom. Valid after a successful render.
     pub fn pixels(&self) -> &[u8] {
         self.pixels.data_as_u8_slice()
@@ -83,6 +88,89 @@ impl Renderer {
     /// with `WeldBackend::Reference`; unsupported scenes fail without presenting.
     pub fn render(&mut self, scene: &ResolvedScene, transform: Affine) -> Result<bool, String> {
         self.render_inner(scene, transform, None::<fn(&mut dyn Canvas)>)
+    }
+
+    /// Rasterize only damaged device rectangles, retaining every other pixel.
+    /// Shares the GPU renderer's element footprint/paint-order damage policy.
+    /// Resize, transform and unknown bounds invalidate the target. Backdrop and
+    /// shadow dependencies expand local regions rather than dropping effects.
+    pub fn render_damage(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+    ) -> Result<Vec<[u32; 4]>, String> {
+        use crate::damage::{Change, NOTHING, paint_damage};
+        if !transform.as_coeffs().iter().all(|v| v.is_finite()) {
+            return Err("nonfinite CPU scene transform".into());
+        }
+        if scene
+            .paint
+            .iter()
+            .any(|p| p.layer == mui_scene::Layer::External)
+        {
+            return Err("CPU damage requires reference weld resolution".into());
+        }
+        let (width, height) = self.size();
+        let empty = std::collections::HashMap::new();
+        let change = if self.transform == Some(transform) {
+            paint_damage(
+                &self.retained,
+                &scene.paint,
+                &empty,
+                &empty,
+                NOTHING,
+                transform,
+                [width, height],
+            )
+        } else {
+            Change::Full
+        };
+        let rects = match change {
+            Change::None => return Ok(Vec::new()),
+            Change::Full => vec![[0, 0, width, height]],
+            Change::Part(r) => vec![r],
+            Change::Parts(r) => r.rects[..r.len].to_vec(),
+        };
+        // Mark invalid until every region succeeds. An error must not leave a
+        // mixed-generation bitmap that compares equal on the recovery attempt.
+        self.transform = None;
+        for &[x, y, w, h] in &rects {
+            if w == 0 || h == 0 {
+                continue;
+            }
+            // Generate strips in the same global coordinate system as a full
+            // render. Moving Bezier geometry into a small scratch target changes
+            // float coverage rounding, even for integral tile translations.
+            self.ctx.reset_and_resize(width as u16, height as u16);
+            let mut scratch = Pixmap::new(w as u16, h as u16);
+            let mut canvas = Cpu {
+                ctx: &mut self.ctx,
+                resources: &mut self.resources,
+                cache: &mut self.cache,
+            };
+            crate::paint(&mut canvas, scene, transform).map_err(|e| e.to_string())?;
+            self.ctx.flush();
+            self.ctx.render_with(
+                &mut scratch,
+                &mut self.resources,
+                vello_cpu::RasterizerSettings {
+                    viewport: Some([x as u16, y as u16, w as u16, h as u16]),
+                    ..Default::default()
+                },
+            );
+            for row in 0..h as usize {
+                let dest = ((y as usize + row) * width as usize + x as usize) * 4;
+                let source = row * w as usize * 4;
+                self.pixels.data_as_u8_slice_mut()[dest..dest + w as usize * 4]
+                    .copy_from_slice(&scratch.data_as_u8_slice()[source..source + w as usize * 4]);
+            }
+        }
+        self.retained.clone_from(&scene.paint);
+        self.transform = Some(transform);
+        Ok(rects
+            .into_iter()
+            .filter(|r| r[2] != 0 && r[3] != 0)
+            .collect())
     }
 
     /// Overlays repaint on every call and are included in the presented pixels.
@@ -108,7 +196,8 @@ impl Renderer {
             return Ok(false);
         }
         self.transform = None;
-        self.ctx.reset();
+        let (width, height) = self.size();
+        self.ctx.reset_and_resize(width as u16, height as u16);
         let mut canvas = Cpu {
             ctx: &mut self.ctx,
             resources: &mut self.resources,
@@ -142,6 +231,7 @@ pub struct Window<W> {
     startup: bool,
     size: (u32, u32),
     startup_color: Option<u32>,
+    damage_history: std::collections::VecDeque<Vec<[u32; 4]>>,
 }
 
 #[cfg(feature = "software-window")]
@@ -193,6 +283,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             startup,
             size,
             startup_color: None,
+            damage_history: std::collections::VecDeque::default(),
         })
     }
 
@@ -280,27 +371,65 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             return Ok(true);
         }
         self.renderer.resize(size)?;
-        if self.renderer.render_inner(scene, transform, overlay)? {
-            self.presented = false;
-        }
-        if self.presented {
+        let was_presented = self.presented;
+        let mut damage = if let Some(overlay) = overlay {
+            self.renderer
+                .render_with_overlay(scene, transform, overlay)?;
+            vec![[0, 0, size.0, size.1]]
+        } else {
+            self.renderer.render_damage(scene, transform)?
+        };
+        if damage.is_empty() && self.presented {
             return Ok(false);
+        }
+        if !was_presented {
+            damage = vec![[0, 0, size.0, size.1]];
         }
         self.surface
             .resize(width, height)
             .map_err(|e| e.to_string())?;
         let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
-        for (out, rgba) in buffer
-            .iter_mut()
-            .zip(self.renderer.pixels().as_chunks::<4>().0)
-        {
-            // Opaque window: premultiplied RGB composites transparency over black.
-            *out = self.opaque_bits
-                | (u32::from(rgba[0]) << 16)
-                | (u32::from(rgba[1]) << 8)
-                | u32::from(rgba[2]);
+        let age = usize::from(buffer.age());
+        let mut repair = damage.clone();
+        if age == 0 || age > self.damage_history.len() + 1 {
+            repair = vec![[0, 0, size.0, size.1]];
+        } else {
+            for old in self.damage_history.iter().take(age - 1) {
+                repair.extend_from_slice(old);
+            }
         }
-        buffer.present().map_err(|e| e.to_string())?;
+        for [x, y, w, h] in repair {
+            for row in y..y + h {
+                let start = row as usize * size.0 as usize + x as usize;
+                for (out, rgba) in buffer[start..start + w as usize].iter_mut().zip(
+                    self.renderer.pixels()[start * 4..(start + w as usize) * 4]
+                        .as_chunks::<4>()
+                        .0,
+                ) {
+                    *out = self.opaque_bits
+                        | (u32::from(rgba[0]) << 16)
+                        | (u32::from(rgba[1]) << 8)
+                        | u32::from(rgba[2]);
+                }
+            }
+        }
+        if std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1") {
+            for &[x, y, w, h] in &damage {
+                for row in y..y + h {
+                    for col in x..x + w {
+                        if col < x + 2 || row < y + 2 || col + 2 >= x + w || row + 2 >= y + h {
+                            buffer[row as usize * size.0 as usize + col as usize] =
+                                self.opaque_bits | 0x00ff0040;
+                        }
+                    }
+                }
+            }
+        }
+        buffer
+            .present_with_damage(&softbuffer_rects(&damage))
+            .map_err(|e| e.to_string())?;
+        self.damage_history.push_front(damage);
+        self.damage_history.truncate(4);
         self.presented = true;
         Ok(true)
     }
@@ -329,6 +458,114 @@ mod tests {
     use super::*;
     use mui_scene::prelude::*;
 
+    #[test]
+    fn cpu_damage_matches_full_raster_for_motion_overlap_and_resize() {
+        let scene = |x| {
+            mui_scene::resolve(&SceneSpec::new(
+                stack![
+                    block(512., 384.)
+                        .radius(0.)
+                        .fill(Color::srgb(0.1, 0.1, 0.1))
+                        .id("background"),
+                    block(32., 32.)
+                        .fill(Color::oklcha(0.7, 0.2, 30., 0.6))
+                        .id("moving")
+                        .at(x, 30.),
+                    block(16., 16.)
+                        .fill(Color::oklcha(0.8, 0.2, 200., 0.5))
+                        .id("overlap")
+                        .at(48., 40.),
+                ]
+                .size(512., 384.),
+            ))
+            .unwrap()
+        };
+        let mut incremental = Renderer::new((512, 384)).unwrap();
+        let mut full = Renderer::new((512, 384)).unwrap();
+        assert_eq!(
+            incremental
+                .render_damage(&scene(30.), Affine::IDENTITY)
+                .unwrap(),
+            vec![[0, 0, 512, 384]]
+        );
+        for x in [34., 42., 60., 35., 34.125, 42.75, 60.5, 35.25] {
+            let scene = scene(x);
+            let damage = incremental.render_damage(&scene, Affine::IDENTITY).unwrap();
+            assert!(!damage.is_empty());
+            assert!(damage.iter().map(|r| r[2] * r[3]).sum::<u32>() < 512 * 384);
+            full.render(&scene, Affine::IDENTITY).unwrap();
+            assert_eq!(incremental.pixels(), full.pixels());
+            assert!(
+                incremental
+                    .render_damage(&scene, Affine::IDENTITY)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        incremental.resize((600, 400)).unwrap();
+        assert_eq!(
+            incremental
+                .render_damage(&scene(35.), Affine::IDENTITY)
+                .unwrap(),
+            vec![[0, 0, 600, 400]]
+        );
+        assert_eq!(
+            incremental
+                .render_damage(&scene(35.), Affine::scale(1.25))
+                .unwrap(),
+            vec![[0, 0, 600, 400]]
+        );
+    }
+    #[test]
+    fn partial_scene_preserves_backdrops_and_shifted_inset_shadows() {
+        let scene = |x, blur| {
+            mui_scene::resolve(&SceneSpec::new(
+                stack![
+                    block(512., 384.)
+                        .fill(Color::srgb(0.1, 0.2, 0.3))
+                        .id("background"),
+                    block(32., 32.)
+                        .fill(Color::srgb(1., 0., 0.))
+                        .id("under-glass")
+                        .at(x, 72.),
+                    block(96., 64.)
+                        .radius(8.)
+                        .fill(Color::oklcha(0.7, 0.02, 30., 0.2))
+                        .backdrop_blur(4.)
+                        .shadow(Shadow::soft(3.))
+                        .shadow(Shadow {
+                            dx: 30.,
+                            ..Shadow::inset(blur)
+                        })
+                        .id("glass")
+                        .at(64., 64.),
+                    block(32., 32.)
+                        .fill(Color::srgb(0., 1., 0.))
+                        .id("unrelated")
+                        .at(350., 240.),
+                ]
+                .size(512., 384.),
+            ))
+            .unwrap()
+        };
+        let mut partial = Renderer::new((512, 384)).unwrap();
+        let mut full = Renderer::new((512, 384)).unwrap();
+        partial
+            .render_damage(&scene(72., 2.), Affine::IDENTITY)
+            .unwrap();
+        for (x, blur) in [(80., 2.), (80., 6.), (96., 6.), (72., 2.)] {
+            let scene = scene(x, blur);
+            let damage = partial.render_damage(&scene, Affine::IDENTITY).unwrap();
+            assert!(!damage.is_empty());
+            assert!(
+                damage
+                    .iter()
+                    .all(|r| r[0] + r[2] < 256 && r[1] + r[3] < 192)
+            );
+            full.render(&scene, Affine::IDENTITY).unwrap();
+            assert_eq!(partial.pixels(), full.pixels(), "x={x}, blur={blur}");
+        }
+    }
     #[test]
     fn cpu_shrink_returns_to_full_quality_but_gpu_startup_waits_for_handover() {
         assert!(background_only(false, (8192, 4096)));
@@ -438,4 +675,129 @@ mod tests {
         );
         assert!(Renderer::new((0, 8)).is_err());
     }
+}
+
+/// Native dirty-bitmap transport. No scene traversal, raster or GPU work occurs
+/// here; callers submit completed pixels from an editor worker.
+#[cfg(feature = "software-window")]
+pub struct BitmapWindow<W> {
+    surface: softbuffer::Surface<W, W>,
+    size: (u32, u32),
+    pixels: Vec<u32>,
+    history: std::collections::VecDeque<Vec<[u32; 4]>>,
+    opaque: u32,
+}
+#[cfg(feature = "software-window")]
+impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle + Clone>
+    BitmapWindow<W>
+{
+    pub fn new(window: W) -> Result<Self, String> {
+        let opaque = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
+            raw_window_handle::RawWindowHandle::Xlib(_)
+            | raw_window_handle::RawWindowHandle::Xcb(_) => 0xff00_0000,
+            _ => 0,
+        };
+        let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
+        let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string())?;
+        Ok(Self {
+            surface,
+            size: (0, 0),
+            pixels: Vec::new(),
+            history: std::collections::VecDeque::default(),
+            opaque,
+        })
+    }
+    pub fn present_patch(
+        &mut self,
+        rect @ [x, y, w, h]: [u32; 4],
+        pixels: &[u32],
+        size: (u32, u32),
+    ) -> Result<(), String> {
+        use std::num::NonZeroU32;
+        dimensions(size)?;
+        if x + w > size.0 || y + h > size.1 || pixels.len() != w as usize * h as usize {
+            return Err("invalid bitmap patch".into());
+        }
+        if self.size != size {
+            self.pixels
+                .resize(size.0 as usize * size.1 as usize, self.opaque);
+            self.history.clear();
+            self.size = size;
+            self.surface
+                .resize(
+                    NonZeroU32::new(size.0).unwrap(),
+                    NonZeroU32::new(size.1).unwrap(),
+                )
+                .map_err(|e| e.to_string())?;
+        }
+        for row in 0..h as usize {
+            let start = (y as usize + row) * size.0 as usize + x as usize;
+            for (dst, src) in self.pixels[start..start + w as usize]
+                .iter_mut()
+                .zip(&pixels[row * w as usize..(row + 1) * w as usize])
+            {
+                *dst = self.opaque | *src;
+            }
+        }
+        let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
+        let mut repair = vec![rect];
+        let age = usize::from(buffer.age());
+        if age == 0 || age > self.history.len() + 1 {
+            repair = vec![[0, 0, size.0, size.1]];
+        } else {
+            for old in self.history.iter().take(age - 1) {
+                repair.extend_from_slice(old);
+            }
+        }
+        for [x, y, w, h] in repair {
+            for row in y..y + h {
+                let start = row as usize * size.0 as usize + x as usize;
+                buffer[start..start + w as usize]
+                    .copy_from_slice(&self.pixels[start..start + w as usize]);
+            }
+        }
+        let damage = softbuffer_rects(&[rect]);
+        buffer
+            .present_with_damage(&damage)
+            .map_err(|e| e.to_string())?;
+        self.history.push_front(vec![rect]);
+        self.history.truncate(4);
+        Ok(())
+    }
+}
+#[cfg(feature = "software-window")]
+fn softbuffer_rects(rects: &[[u32; 4]]) -> Vec<softbuffer::Rect> {
+    use std::num::NonZeroU32;
+    rects
+        .iter()
+        .filter_map(|&[x, y, w, h]| {
+            Some(softbuffer::Rect {
+                x,
+                y,
+                width: NonZeroU32::new(w)?,
+                height: NonZeroU32::new(h)?,
+            })
+        })
+        .collect()
+}
+
+/// Diagnostic only: `MUI_DEBUG_DAMAGE=1` flashes the automatically derived
+/// damaged rectangle's outline. App code never supplies invalidation regions.
+pub fn damage_flash(pixels: &[u32], size: (u32, u32)) -> Option<Vec<u32>> {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    if !*ENABLED.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1"))
+        || size.0 == 0
+        || size.1 == 0
+    {
+        return None;
+    }
+    let mut out = pixels.to_vec();
+    for y in 0..size.1 {
+        for x in 0..size.0 {
+            if x < 2 || y < 2 || x + 2 >= size.0 || y + 2 >= size.1 {
+                out[(y * size.0 + x) as usize] = 0x00ff0040;
+            }
+        }
+    }
+    Some(out)
 }

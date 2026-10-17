@@ -82,6 +82,30 @@ impl FrameSignal {
     }
 }
 
+// DWM normally supplies the clock. If it cannot block (remote sessions or
+// disabled composition), follow this window's current monitor, not a 60 Hz cap.
+fn display_interval(hwnd: HWND) -> Duration {
+    use windows_sys::Win32::Graphics::Gdi::*;
+    let mut monitor = MONITORINFOEXW::default();
+    monitor.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    let mut mode = DEVMODEW::default();
+    mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    // SAFETY: these APIs only query a monitor/window identifier; both output
+    // structs are writable and carry their required size fields.
+    let refresh = unsafe {
+        let handle = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        if GetMonitorInfoW(handle, &mut monitor.monitorInfo) != 0
+            && EnumDisplaySettingsW(monitor.szDevice.as_ptr(), ENUM_CURRENT_SETTINGS, &mut mode)
+                != 0
+        {
+            Some(f64::from(mode.dmDisplayFrequency))
+        } else {
+            None
+        }
+    };
+    crate::platform::frame_rate::frame_interval(refresh)
+}
+
 /// Only this thread waits on DwmFlush. The host GUI thread never waits on it.
 /// Idle/pending/hidden waits have no timer; deadlines and compositor demand are
 /// explicit. No callback, renderer, or host pointer crosses to the worker.
@@ -95,7 +119,6 @@ impl FramePacer {
         let worker = Arc::clone(&signal);
         let thread =
             std::thread::Builder::new().name("baseview-frame-pacer".into()).spawn(move || {
-                let fallback = crate::platform::frame_rate::frame_interval(None);
                 loop {
                     let mut state = worker.state.lock().unwrap_or_else(PoisonError::into_inner);
                     match state.next(Instant::now()) {
@@ -135,7 +158,7 @@ impl FramePacer {
                                 let started = Instant::now();
                                 let flushed = unsafe { DwmFlush() } >= 0;
                                 if !flushed || started.elapsed() < Duration::from_millis(1) {
-                                    worker.wait_fallback(fallback);
+                                    worker.wait_fallback(display_interval(hwnd as HWND));
                                 }
                                 state = worker.state.lock().unwrap_or_else(PoisonError::into_inner);
                             }
@@ -176,21 +199,16 @@ impl Drop for FramePacer {
             let finished = unsafe {
                 windows_sys::Win32::System::Threading::WaitForSingleObject(
                     thread.as_raw_handle(),
-                    25,
+                    0,
                 ) == windows_sys::Win32::Foundation::WAIT_OBJECT_0
             };
             if finished {
                 let _ = thread.join();
             } else {
-                // create_window pinned the image before publishing callbacks.
-                // A stuck driver wait may resume, but its target is revoked.
-                super::callback::guard(
-                    "pacer stop diagnostic",
-                    || (),
-                    || {
-                        crate::warn!("Frame pacer stop exceeded 25 ms; detached from pinned image");
-                    },
-                );
+                // create_window pinned the image. Drop only the join handle;
+                // revoke already prevents a late DwmFlush from posting again.
+                // Never wait for compositor completion on the DAW UI thread.
+                drop(thread);
             }
         }
     }

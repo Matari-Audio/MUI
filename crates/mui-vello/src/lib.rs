@@ -32,6 +32,8 @@ use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::{PixelMetadata, Pixmap};
 pub use vello_common::{kurbo, peniko};
+#[cfg(any(feature = "cpu", feature = "gpu-effects"))]
+mod damage;
 pub mod diagnostics;
 #[cfg(feature = "cpu")]
 pub use vello_cpu;

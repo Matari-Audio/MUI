@@ -880,6 +880,8 @@ pub struct Interaction {
     dragging: bool,
     /// The buttons that were down last frame, for edge detection.
     was: Buttons,
+    /// Buttons held when a capture was cancelled, until their physical release.
+    cancelled_buttons: Buttons,
     /// Which button opened the capture, and the modifiers it opened under.
     press_button: Option<Button>,
     press_mods: Mods,
@@ -903,6 +905,7 @@ impl Default for Interaction {
             shifted: Vec2::ZERO,
             dragging: false,
             was: Buttons::default(),
+            cancelled_buttons: Buttons::default(),
             press_button: None,
             press_mods: Mods::default(),
             mods: Mods::default(),
@@ -962,16 +965,27 @@ impl Interaction {
     /// Cancel the current gesture and all one-frame edge state.
     ///
     /// The configured drag threshold is preserved so focus loss can cancel a
-    /// capture without changing the interaction policy.
+    /// capture without changing the interaction policy. A cancelled capture
+    /// waits for a physical release; an uncaptured press resets edge history.
     pub fn cancel(&mut self) {
         let threshold = self.threshold;
-        let was = self.was;
+        let cancelled_buttons = if self.active.is_some() {
+            self.was
+        } else {
+            self.cancelled_buttons
+        };
+        let was = if cancelled_buttons.is_empty() {
+            Buttons::default()
+        } else {
+            self.was
+        };
         *self = Self {
             threshold,
             // Cancelling a capture is not a physical button release. A
             // disappearing target must not turn a still-held button into
             // a new press on the replacement beneath it.
             was,
+            cancelled_buttons,
             ..Self::default()
         };
     }
@@ -994,6 +1008,7 @@ impl Interaction {
         self.clicked = None;
         self.dropped = None;
         self.drag_delta = Vec2::ZERO;
+        self.cancelled_buttons = Buttons(self.cancelled_buttons.0 & input.buttons.0);
 
         let over = input
             .pos

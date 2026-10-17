@@ -1,5 +1,5 @@
-use crate::dpi::{PhysicalPosition, PhysicalSize};
-use crate::wrappers::win32::dpi::{Dpi, DpiAwarenessGuard};
+use crate::dpi::PhysicalPosition;
+use crate::wrappers::win32::dpi::Dpi;
 use crate::wrappers::win32::style::WindowStyle;
 use crate::wrappers::win32::user32::ExtendedUser32;
 use crate::wrappers::win32::{DpiAwarenessContext, ExtendedShCore, Rect};
@@ -20,7 +20,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, GetWindowLongPtrW, GetWindowLongW, SetParent, SetWindowLongPtrW, SetWindowPos,
     ShowWindow, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-    SW_HIDE, SW_SHOW, WINDOW_LONG_PTR_INDEX,
+    SW_HIDE, WINDOW_LONG_PTR_INDEX,
 };
 
 /// A simple wrapper around a HWND.
@@ -150,44 +150,6 @@ impl HWnd {
             S_OK => Ok(()),
             e => Err(Error::new(HRESULT(e), "RevokeDragDrop failed")),
         }
-    }
-
-    pub fn resize_nc_and_activate(&self, size: PhysicalSize<u32>) -> Result<()> {
-        let result = unsafe {
-            SetWindowPos(
-                self.as_raw(),
-                null_mut(), // Ignored by SWP_NOZORDER
-                0,          // Ignored by SWP_NOMOVE
-                0,          // Ignored by SWP_NOMOVE
-                size.width.try_into().unwrap_or(i32::MAX),
-                size.height.try_into().unwrap_or(i32::MAX),
-                SWP_NOZORDER | SWP_NOMOVE,
-            )
-        };
-
-        if result == 0 {
-            return Err(Error::from_thread());
-        }
-
-        Ok(())
-    }
-
-    pub fn resize_and_activate(
-        &self, client_size: PhysicalSize<u32>, window_dpi: Option<Dpi>, dpi_ctx: &DpiAwarenessGuard,
-    ) -> Result<()> {
-        let style = self.get_style()?;
-
-        let rect = Rect::from(client_size);
-        let rect = dpi_ctx.client_area_to_nc_area(rect, style, window_dpi)?;
-
-        self.resize_nc_and_activate(rect.size())
-    }
-
-    /// Returns true if the window was previously visible, false otherwise.
-    pub fn show_and_activate(&self) -> bool {
-        let result = unsafe { ShowWindow(self.as_raw(), SW_SHOW) };
-
-        result != 0
     }
 
     pub fn hide(&self) {
