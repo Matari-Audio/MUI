@@ -80,12 +80,30 @@ pub fn required_limits() -> wgpu::Limits {
 /// No guard crosses an await, GPU submission or audio callback.
 pub fn with_pipeline_creation<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> T {
     static DX12_COMPILATION: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _guard = (device.adapter_info().backend == wgpu::Backend::Dx12).then(|| {
+    let backend = device.adapter_info().backend;
+    trace_pipeline("gate", "waiting");
+    let _guard = (backend == wgpu::Backend::Dx12).then(|| {
         DX12_COMPILATION
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     });
-    create()
+    trace_pipeline("gate", "entered");
+    let value = create();
+    trace_pipeline("gate", "complete");
+    value
+}
+
+/// Opt-in initialization diagnostics, including native driver stalls. Direct
+/// stderr writes survive a timed-out test's thread-local output capture.
+pub(crate) fn trace_pipeline(label: &str, stage: &str) {
+    if std::env::var_os("MUI_GPU_DEBUG").is_some() {
+        use std::io::Write as _;
+        let _ = writeln!(
+            std::io::stderr(),
+            "vello pipeline thread={:?} label={label} stage={stage}",
+            std::thread::current().id(),
+        );
+    }
 }
 
 pub(crate) fn prepare_shader<'a>(

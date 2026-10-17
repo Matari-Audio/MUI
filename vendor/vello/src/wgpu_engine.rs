@@ -899,6 +899,7 @@ impl WgpuEngine {
         entries: Vec<wgpu::BindGroupLayoutEntry>,
         cache: Option<&PipelineCache>,
     ) -> WgpuShader {
+        crate::robustness::trace_pipeline(label, "begin");
         crate::with_pipeline_creation(device, || {
             let wgsl =
                 crate::robustness::prepare_shader(device.adapter_info().backend, label, wgsl);
@@ -908,6 +909,7 @@ impl WgpuEngine {
                 label: Some(label),
                 source: wgpu::ShaderSource::Wgsl(wgsl),
             });
+            crate::robustness::trace_pipeline(label, "module_ready");
             let bind_group_layout =
                 device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                     label: None,
@@ -930,6 +932,7 @@ impl WgpuEngine {
                 },
                 cache,
             });
+            crate::robustness::trace_pipeline(label, "pipeline_ready");
             WgpuShader {
                 pipeline: PipelineState::Compute(pipeline),
                 bind_group_layout,
