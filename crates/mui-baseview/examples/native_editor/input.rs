@@ -19,7 +19,9 @@ impl Probe {
         col([
             mui::widgets::text_input(ui, "search", &mut self.text).el,
             block(160., 36.).id("row").focusable(),
-            knob(ui, "drag", "Drag", &mut self.value, 0.0..=1.0).el.into(),
+            knob(ui, "drag", "Drag", &mut self.value, 0.0..=1.0)
+                .el
+                .into(),
         ])
         .size(320., 240.)
         .fill(Color::srgb(0., 1., 0.))
@@ -80,7 +82,7 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
             pointer(&state.requests, center(&shared.ui, "search")?)?;
             button(&state.requests, true)?;
         }
-        1 => {
+        1 | 6 => {
             button(&state.requests, false)?;
         }
         2 => {
@@ -97,6 +99,11 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
             button(&state.requests, false)?;
         }
         4 => {
+            if shared.view.input.clicks == state.input.clicks
+                && state.input.ready.is_some_and(|at| at.elapsed() < Duration::from_secs(3))
+            {
+                return Ok(false);
+            }
             if shared.view.input.clicks != state.input.clicks + 1 {
                 return Err(
                     "dropdown row did not activate on its first click after text capture handoff"
@@ -112,11 +119,11 @@ pub(super) fn advance(state: &mut State) -> Result<bool, String> {
                 pointer(&state.requests, Point::new(point.x, point.y - dy))?;
             }
         }
-        6 => {
-            button(&state.requests, false)?;
-        }
         7 => {
             if shared.view.input.value == state.input.value {
+                if state.input.ready.is_some_and(|at| at.elapsed() < Duration::from_secs(3)) {
+                    return Ok(false);
+                }
                 return Err("native adapter drag did not change the control".into());
             }
             shared.ui.focus("search");

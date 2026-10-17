@@ -32,6 +32,11 @@ def main():
             sys.executable, "tools/ci/ui.py", "--output", str(output / name),
             "--timeout", "240", *flags, "--", *command], check=False)
         failed |= result.returncode != 0
+        if name == "embedded-gpu" and result.returncode == 0:
+            evidence = (output / name / "stderr.log").read_text(errors="replace")
+            if evidence.count("PASS native focus/capture handoff") != 2:
+                print("Missing native input proof for both reopen rounds", file=sys.stderr)
+                failed = True
     return int(failed)
 
 

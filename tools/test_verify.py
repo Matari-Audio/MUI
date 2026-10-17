@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert "continue-on-error" not in native_ui
     assert all(name in native_ui for name in ("ubuntu-24.04", "windows-latest", "macos-latest", "StaticDxc", "Fxc"))
     assert "MUI_TEST_ALLOW_WARP: '1'" in native_ui
-    assert "--features mui/test-support" in native_ui
+    assert "mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-effects" in native_ui
     assert "cargo clippy --workspace --all-features --all-targets --target x86_64-pc-windows-gnu" in workflow
     assert "needs: [gate, platforms, windows-gnu, ui]" in workflow
     assert 'test "$UI_RESULT" = success' in workflow

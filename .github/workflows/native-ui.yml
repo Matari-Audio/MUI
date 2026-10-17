@@ -46,10 +46,21 @@ jobs:
         run: |
           mkdir -p ui-results
           exec > >(tee -a ui-results/build.log) 2>&1
-          cargo build -p mui-baseview --example native_editor --features test-support --locked
-          cargo build -p mui-winit --example native_windows --features mui/test-support --locked
-          cargo build -p mui-preview --bin mui-preview --features mui/test-support --locked
-          cargo build -p mui-vello --examples --features cpu,gpu-effects,test-support --locked
+          cargo build -p mui-baseview -p mui-winit -p mui-preview -p mui-vello \
+            --examples --bins --features mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-effects --locked
+      - name: Capture native Windows fault evidence
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dumps = Join-Path $env:GITHUB_WORKSPACE 'ui-results/dumps'
+          New-Item -ItemType Directory -Force -Path $dumps | Out-Null
+          foreach ($exe in @('gpu_contract.exe', 'gpu_pixels.exe', 'native_editor.exe', 'native_windows.exe', 'mui-preview.exe')) {
+            $key = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
+            New-Item -Force -Path $key | Out-Null
+            New-ItemProperty -Force -Path $key -Name DumpFolder -PropertyType ExpandString -Value $dumps | Out-Null
+            New-ItemProperty -Force -Path $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+            New-ItemProperty -Force -Path $key -Name DumpCount -PropertyType DWord -Value 2 | Out-Null
+          }
       - name: All pipelines, retained contract, CPU reference pixels and native lifecycle
         run: |
           if [[ "$RUNNER_OS" == Linux ]]; then
