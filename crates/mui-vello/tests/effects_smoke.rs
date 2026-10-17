@@ -953,7 +953,10 @@ fn bounded_uniform_morph_reuses_encoding_and_matches_a_fresh_frame() {
                 "material replay: ",
             );
             assert!(retained.is_current(&scene, xf));
-            assert_eq!(retained.render(&scene, xf, &output_view).unwrap().renders, 0);
+            assert_eq!(
+                retained.render(&scene, xf, &output_view).unwrap().renders,
+                0
+            );
         }
     }
 }
