@@ -1,6 +1,6 @@
 //! Contour regions, variable borders and shape partitions without UI dependencies.
 use crate::{
-    BooleanOp, Error, GeometryOptions, OffsetOptions, Path, PathCommand, Point, Rect, RoundedRect,
+    Arc, BooleanOp, Error, GeometryOptions, OffsetOptions, Path, PathCommand, Point, Rect,
     boolean, inset_path, offset_path,
 };
 
@@ -231,18 +231,47 @@ pub fn boundary_band(
     width.validate()?;
     let normalized = offset_path(outline, 0., options)?.path;
     let mut path = Path::default();
+    let join = |path: &mut Path, p: Point, w: f64| {
+        if w > 0. {
+            // One exact circle, not four quarter arcs and their zero-length
+            // tangent lines. Keep the solid-piece contract of union_contours.
+            let start = Point::new(p.x + w, p.y);
+            path.commands.extend([
+                PathCommand::MoveTo(start),
+                PathCommand::ArcTo(Arc {
+                    center: p,
+                    radius: w,
+                    start_angle: 0.,
+                    sweep: std::f64::consts::TAU,
+                    to: start,
+                }),
+                PathCommand::Close,
+            ]);
+        }
+    };
     for ring in normalized.flatten(options.flatten_tolerance, options.max_points)? {
         if ring.len() < 2 {
             continue;
         }
-        for (a, b) in ring
+        for (i, (a, b)) in ring
             .iter()
             .copied()
             .zip(ring.iter().copied().cycle().skip(1))
             .take(ring.len())
+            .enumerate()
         {
             let d = b - a;
             let len = (d.x * d.x + d.y * d.y).sqrt();
+            let incoming = a - ring[(i + ring.len() - 1) % ring.len()];
+            if len >= 1e-9 || incoming.length() >= 1e-9 {
+                // Every closed-ring vertex owns its join once. Retain both
+                // endpoints of a skipped short edge when either neighbor is
+                // drawable; neither endpoint may lose its only join.
+                join(&mut path, a, width.sample(a.x));
+            }
+            if path.commands.len() > options.max_points {
+                return Err(Error::TooManySegments);
+            }
             if len < 1e-9 {
                 continue;
             }
@@ -277,14 +306,11 @@ pub fn boundary_band(
                 path.commands
                     .extend(points[1..].iter().copied().map(PathCommand::LineTo));
                 path.commands.push(PathCommand::Close);
-                // Round joins, clipped on their exterior half. The shared outer
-                // contour remains exact; only the inner border edge varies.
-                for (p, w) in [(p, wp), (q, wq)] {
-                    if w > 0.0 {
-                        let disk =
-                            RoundedRect::new(Rect::new(p.x - w, p.y - w, p.x + w, p.y + w), w)?;
-                        path.commands.extend(disk.path().commands);
-                    }
+                // A ramp knee is shared by two cut segments, just as a ring
+                // vertex is shared by two edges: emit its disk once, at the
+                // start of the later segment. The ring vertices are above.
+                if ts[0] > 0. {
+                    join(&mut path, p, wp);
                 }
             }
             if path.commands.len() > options.max_points {
