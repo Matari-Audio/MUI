@@ -284,8 +284,16 @@ fn uniform_offsets_match_sweep_for_holes_and_all_alignments() {
 fn endpoint_disk_sweep(outline: &Path, width: WidthProfile, o: OffsetOptions) -> Path {
     let normalized = offset_path(outline, 0., o).unwrap().path;
     let mut path = Path::default();
-    for ring in normalized.flatten(o.flatten_tolerance, o.max_points).unwrap() {
-        for (a, b) in ring.iter().copied().zip(ring.iter().copied().cycle().skip(1)).take(ring.len()) {
+    for ring in normalized
+        .flatten(o.flatten_tolerance, o.max_points)
+        .unwrap()
+    {
+        for (a, b) in ring
+            .iter()
+            .copied()
+            .zip(ring.iter().copied().cycle().skip(1))
+            .take(ring.len())
+        {
             let d = b - a;
             let len = d.length();
             if len < 1e-9 {
@@ -310,17 +318,26 @@ fn endpoint_disk_sweep(outline: &Path, width: WidthProfile, o: OffsetOptions) ->
                 if wp.max(wq) == 0. {
                     continue;
                 }
-                path.commands.extend(Path::polyline([
-                    p - normal * wp,
-                    q - normal * wq,
-                    q + normal * wq,
-                    p + normal * wp,
-                ], true).commands);
+                path.commands.extend(
+                    Path::polyline(
+                        [
+                            p - normal * wp,
+                            q - normal * wq,
+                            q + normal * wq,
+                            p + normal * wp,
+                        ],
+                        true,
+                    )
+                    .commands,
+                );
                 for (p, w) in [(p, wp), (q, wq)] {
                     if w > 0. {
-                        path.commands.extend(RoundedRect::new(
-                            Rect::new(p.x - w, p.y - w, p.x + w, p.y + w), w,
-                        ).unwrap().path().commands);
+                        path.commands.extend(
+                            RoundedRect::new(Rect::new(p.x - w, p.y - w, p.x + w, p.y + w), w)
+                                .unwrap()
+                                .path()
+                                .commands,
+                        );
                     }
                 }
             }
@@ -332,13 +349,34 @@ fn endpoint_disk_sweep(outline: &Path, width: WidthProfile, o: OffsetOptions) ->
 #[test]
 fn one_join_per_vertex_preserves_the_sweep_fill_and_solid_contours() {
     let o = OffsetOptions::default();
-    let hole = RoundedRect::new(Rect::new(60., 30., 80., 40.), 4.).unwrap().path();
-    let mut multiple = boolean_paths(&rect(), &hole, BooleanOp::Difference, o, GeometryOptions::default()).unwrap();
-    multiple.commands.extend(RoundedRect::new(Rect::new(220., 20., 240., 50.), 3.).unwrap().path().commands);
-    let short_edges = Path::polyline([
-        Point::new(0., 0.), Point::new(0., 0.), Point::new(5e-10, 0.),
-        Point::new(0.0001, 0.), Point::new(0.0001, 0.00004), Point::new(0., 0.00004),
-    ], true);
+    let hole = RoundedRect::new(Rect::new(60., 30., 80., 40.), 4.)
+        .unwrap()
+        .path();
+    let mut multiple = boolean_paths(
+        &rect(),
+        &hole,
+        BooleanOp::Difference,
+        o,
+        GeometryOptions::default(),
+    )
+    .unwrap();
+    multiple.commands.extend(
+        RoundedRect::new(Rect::new(220., 20., 240., 50.), 3.)
+            .unwrap()
+            .path()
+            .commands,
+    );
+    let short_edges = Path::polyline(
+        [
+            Point::new(0., 0.),
+            Point::new(0., 0.),
+            Point::new(5e-10, 0.),
+            Point::new(0.0001, 0.),
+            Point::new(0.0001, 0.00004),
+            Point::new(0., 0.00004),
+        ],
+        true,
+    );
     for (outline, unit) in [(rect(), 1.), (multiple, 1.), (short_edges, 0.000001)] {
         for width in [
             WidthProfile::uniform(unit),
@@ -347,26 +385,42 @@ fn one_join_per_vertex_preserves_the_sweep_fill_and_solid_contours() {
             WidthProfile::uniform(unit * 0.01),
             WidthProfile::uniform(0.),
         ] {
-            let reference = bez_path(&endpoint_disk_sweep(&outline, width, o), 0.001 * unit).unwrap();
+            let reference =
+                bez_path(&endpoint_disk_sweep(&outline, width, o), 0.001 * unit).unwrap();
             let sweep = boundary_band(&outline, width, o).unwrap();
             sweep.validate(o.max_points).unwrap();
             let actual = bez_path(&sweep, 0.001 * unit).unwrap();
             // union_contours must still see solid pieces, never a whole
             // annulus whose inner contour would be filled independently.
             for ring in sweep.flatten(o.flatten_tolerance, o.max_points).unwrap() {
-                let area = ring.iter().zip(ring.iter().cycle().skip(1)).take(ring.len())
-                    .map(|(a, b)| a.x * b.y - a.y * b.x).sum::<f64>();
-                assert!(area > 0., "every sweep piece remains a positive solid contour");
+                let area = ring
+                    .iter()
+                    .zip(ring.iter().cycle().skip(1))
+                    .take(ring.len())
+                    .map(|(a, b)| a.x * b.y - a.y * b.x)
+                    .sum::<f64>();
+                assert!(
+                    area > 0.,
+                    "every sweep piece remains a positive solid contour"
+                );
             }
-            let merged = union_contours(&sweep, o, GeometryOptions {
-                epsilon: (unit * 0.001).min(1e-7),
-                ..Default::default()
-            }).unwrap();
+            let merged = union_contours(
+                &sweep,
+                o,
+                GeometryOptions {
+                    epsilon: (unit * 0.001).min(1e-7),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
             let merged = bez_path(&merged, 0.001 * unit).unwrap();
             let outline_bounds = bez_path(&outline, 0.001 * unit).unwrap().bounding_box();
             let interior = outline_bounds.center();
-            assert_eq!(merged.winding(interior) != 0, reference.winding(interior) != 0,
-                "merging the pieces must not fill the band's interior");
+            assert_eq!(
+                merged.winding(interior) != 0,
+                reference.winding(interior) != 0,
+                "merging the pieces must not fill the band's interior"
+            );
             let bounds = outline_bounds.inflate(unit * 3., unit * 3.);
             for ix in 0..73 {
                 for iy in 0..47 {
@@ -384,23 +438,42 @@ fn one_join_per_vertex_preserves_the_sweep_fill_and_solid_contours() {
 
 #[test]
 fn complex_6468_vertex_sweeps_fit_the_existing_budget_at_both_scales() {
-    let outline = Path::polyline((0..6468).map(|i| {
-        let angle = f64::from(i) * std::f64::consts::TAU / 6468.;
-        let radius = if i % 2 == 0 { 1000. } else { 1000.5 };
-        Point::new(radius * angle.cos(), radius * angle.sin())
-    }), true);
+    let outline = Path::polyline(
+        (0..6468).map(|i| {
+            let angle = f64::from(i) * std::f64::consts::TAU / 6468.;
+            let radius = if i % 2 == 0 { 1000. } else { 1000.5 };
+            Point::new(radius * angle.cos(), radius * angle.sin())
+        }),
+        true,
+    );
     for scale in [1., 2.] {
-        let o = OffsetOptions { flatten_tolerance: 0.1 / scale, max_points: 100_000, ..Default::default() };
-        for width in [WidthProfile::uniform(1.), WidthProfile::horizontal(0.5, 1., -500., 500.)] {
+        let o = OffsetOptions {
+            flatten_tolerance: 0.1 / scale,
+            max_points: 100_000,
+            ..Default::default()
+        };
+        for width in [
+            WidthProfile::uniform(1.),
+            WidthProfile::horizontal(0.5, 1., -500., 500.),
+        ] {
             let reference = endpoint_disk_sweep(&outline, width, o);
-            assert!(reference.commands.len() > o.max_points, "the previous representation exceeded this unchanged cap");
+            assert!(
+                reference.commands.len() > o.max_points,
+                "the previous representation exceeded this unchanged cap"
+            );
             let sweep = boundary_band(&outline, width, o).unwrap();
             sweep.validate(o.max_points).unwrap();
             sweep.flatten(o.flatten_tolerance, o.max_points).unwrap();
         }
     }
-    let tiny = OffsetOptions { max_points: 8, ..Default::default() };
-    assert_eq!(boundary_band(&rect(), WidthProfile::uniform(1.), tiny), Err(Error::TooManySegments));
+    let tiny = OffsetOptions {
+        max_points: 8,
+        ..Default::default()
+    };
+    assert_eq!(
+        boundary_band(&rect(), WidthProfile::uniform(1.), tiny),
+        Err(Error::TooManySegments)
+    );
 }
 
 #[test]
