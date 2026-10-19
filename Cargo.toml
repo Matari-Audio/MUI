@@ -135,3 +135,8 @@ opt-level = 3
 # geometry inner loops stop being a slideshow.
 [profile.dev]
 opt-level = 1
+
+# One Window type, including the registry-winit AccessKit dependency. Consumers
+# enabling mui-winit/external-xdnd must mirror this immutable workspace patch.
+[patch.crates-io]
+winit = { git = "https://github.com/DerpcatMusic/winit", rev = "9e75824b11ac05b0d28be772b91e4df25a260708" }

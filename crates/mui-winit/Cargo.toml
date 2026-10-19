@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+external-xdnd = ["winit/external-xdnd"]
+
 [dependencies]
 # Reuse the plugin-image pin rather than duplicating loader FFI.
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview", default-features = false }
