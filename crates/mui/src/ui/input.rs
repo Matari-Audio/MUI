@@ -211,6 +211,37 @@ impl Ui {
         self.preedit = None;
         self.focus = None;
     }
+    /// Discard input delivered to the outgoing view before intentionally
+    /// changing its owner, for example when switching tabs. Call this before
+    /// building or focusing the incoming view, so it cannot receive the old
+    /// view's keys, text, paste, native edits, wheel, or outside-click press.
+    /// Pointer capture, composition, and drag are cancelled as by [`Ui::cancel`];
+    /// an owed [`Edit::End`] is still delivered exactly once.
+    ///
+    /// Focus is unchanged: the caller decides whether to blur or restore it.
+    /// Persistent editor state and caller-owned values, outbound clipboard
+    /// text, and queued host edits/actions are preserved. This scans retained
+    /// nodes to discard pending native edits; it is not a constant-time API.
+    ///
+    /// This only clears `Ui`'s delivered input. It cannot change a caller's raw
+    /// [`Input`]; consumers of that input must separately check the view owner.
+    /// Native file clipboard offers and application worker/job mailboxes are
+    /// outside `Ui` and are neither cancelled nor discarded by this method.
+    pub fn discard_input_for_view_change(&mut self) {
+        self.cancel();
+        self.keys.clear();
+        self.typed.clear();
+        self.pasted = None;
+        for state in self.nodes.values_mut() {
+            if let Some(edit) = state.text_edit.as_mut() {
+                edit.native.clear();
+            }
+        }
+        self.wheel = Vec2::ZERO;
+        self.wheel_claims.clear();
+        self.press_at = None;
+        self.ime_caret = None;
+    }
     /// Focus `id` from code. No check that it exists: it may not have been
     /// built yet.
     pub fn focus(&mut self, id: impl Into<Id>) {
