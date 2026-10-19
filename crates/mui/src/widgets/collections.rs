@@ -234,9 +234,58 @@ struct Pending {
     focus: bool,
 }
 
-/// Retained keyed collection state. Initialization and `set_items` are O(n).
-/// Unchanged builds touch only visible/overscan rows, range lookup and individual
-/// variable height changes are O(log n). Uniform range lookup is O(1).
+/// Numeric index keys need no per-row storage. Explicit keys retain their
+/// permanent-ID vector and lookup map for reorder/editable collection semantics.
+#[derive(Clone, Debug)]
+enum KeyIndex {
+    Count(usize),
+    Explicit {
+        keys: Vec<u64>,
+        indexes: FxHashMap<u64, usize>,
+    },
+}
+
+impl KeyIndex {
+    fn explicit(keys: Vec<u64>) -> Self {
+        let indexes = index_keys(&keys);
+        Self::Explicit { keys, indexes }
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Count(count) => *count,
+            Self::Explicit { keys, .. } => keys.len(),
+        }
+    }
+    fn key(&self, index: usize) -> Option<u64> {
+        match self {
+            Self::Count(count) => (index < *count)
+                .then(|| u64::try_from(index).expect("count validated against u64 key space")),
+            Self::Explicit { keys, .. } => keys.get(index).copied(),
+        }
+    }
+    fn index(&self, key: u64) -> Option<usize> {
+        match self {
+            Self::Count(count) => usize::try_from(key).ok().filter(|index| index < count),
+            Self::Explicit { indexes, .. } => indexes.get(&key).copied(),
+        }
+    }
+    /// Explicit model edits may intentionally materialize the old index keys.
+    fn to_vec(&self) -> Vec<u64> {
+        match self {
+            Self::Count(count) => (0..*count)
+                .map(|index| u64::try_from(index).expect("count validated against u64 key space"))
+                .collect(),
+            Self::Explicit { keys, .. } => keys.clone(),
+        }
+    }
+}
+
+/// Retained collection state. `uniform_count` construction, storage, clone and
+/// drop are O(1) in row count until an explicit model edit. Keyed `uniform` and
+/// `variable` initialize and clone O(n) state. `set_items` and `splice` explicitly
+/// build keyed storage and cost O(n); unchanged builds never materialize keys.
+/// Unchanged builds touch only visible/overscan rows. Variable range lookup and
+/// individual height changes are O(log n); uniform range lookup is O(1).
 ///
 /// Keys must be unique permanent model IDs. Removing/reordering/inserting keys
 /// preserves the top visible key and its offset within the row. If that key is
@@ -245,8 +294,7 @@ struct Pending {
 /// follows MUI's normal lifetime (removed nodes are retired).
 #[derive(Clone, Debug)]
 pub struct ListState {
-    keys: Vec<u64>,
-    indexes: FxHashMap<u64, usize>,
+    keys: KeyIndex,
     heights: Heights,
     estimate: f64,
     offset: f64,
@@ -258,22 +306,35 @@ pub struct ListState {
 
 impl ListState {
     pub fn uniform(keys: impl IntoIterator<Item = u64>, height: f64) -> Self {
-        Self::new(keys.into_iter().collect(), height, true)
+        Self::new(KeyIndex::explicit(keys.into_iter().collect()), height, true)
     }
-    /// Convenience for append-only/index-keyed data. For editable collections
-    /// use permanent IDs with `uniform` rather than changing display indexes.
+    /// Implicit keys `0..count`, with O(1) construction, storage, clone and drop.
+    /// For editable collections use permanent IDs with `uniform` rather than
+    /// changing display indexes. Explicit `set_items`/`splice` edits switch to
+    /// keyed storage; `splice` materializes the old keys in O(count) time/space.
+    /// Total height must be finite. Scene coordinates remain f64, so this does
+    /// not promise pixel precision for arbitrarily large extents.
     pub fn uniform_count(count: usize, height: f64) -> Self {
-        Self::uniform((0..count).map(|i| i as u64), height)
+        assert!(
+            count
+                .checked_sub(1)
+                .is_none_or(|last| u64::try_from(last).is_ok()),
+            "list count exceeds u64 key space"
+        );
+        Self::new(KeyIndex::Count(count), height, true)
     }
     pub fn variable(keys: impl IntoIterator<Item = u64>, estimated_height: f64) -> Self {
-        Self::new(keys.into_iter().collect(), estimated_height, false)
+        Self::new(
+            KeyIndex::explicit(keys.into_iter().collect()),
+            estimated_height,
+            false,
+        )
     }
-    fn new(keys: Vec<u64>, height: f64, uniform: bool) -> Self {
+    fn new(keys: KeyIndex, height: f64, uniform: bool) -> Self {
         assert!(
             valid_height(height) && (keys.len() as f64 * height).is_finite(),
             "invalid list height"
         );
-        let indexes = index_keys(&keys);
         let heights = if uniform {
             Heights::Uniform(height)
         } else {
@@ -281,7 +342,6 @@ impl ListState {
         };
         Self {
             keys,
-            indexes,
             heights,
             estimate: height,
             offset: 0.0,
@@ -295,13 +355,13 @@ impl ListState {
         self.keys.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.len() == 0
     }
     pub fn key(&self, index: usize) -> Option<u64> {
-        self.keys.get(index).copied()
+        self.keys.key(index)
     }
     pub fn index(&self, key: u64) -> Option<usize> {
-        self.indexes.get(&key).copied()
+        self.keys.index(key)
     }
     pub fn height(&self, index: usize) -> Option<f64> {
         (index < self.len()).then(|| self.heights.height(index))
@@ -318,6 +378,8 @@ impl ListState {
 
     /// Replace the model order, retaining measured heights by key. Only call
     /// when the data changes, never as part of each frame's row construction.
+    /// Builds O(new length) explicit key storage, including for `uniform_count`;
+    /// it does not materialize the old implicit key range.
     // ponytail: O(n) model edits; use an order-statistic tree if frequent large
     // splices become a measured bottleneck.
     pub fn set_items(&mut self, keys: impl IntoIterator<Item = u64>) {
@@ -339,20 +401,21 @@ impl ListState {
             heights.prefix(keys.len()).is_finite(),
             "list height overflow"
         );
-        self.keys = keys;
-        self.indexes = indexes;
+        self.keys = KeyIndex::Explicit { keys, indexes };
         self.heights = heights;
-        self.active = self.active.filter(|k| self.indexes.contains_key(k));
+        self.active = self.active.filter(|key| self.index(*key).is_some());
         self.restore(anchor);
     }
     /// Insert/remove a range of model keys. Row construction remains lazy;
     /// rebuilding the vector and height index costs O(n) only on this edit.
+    /// An implicit count state materializes its old keys and becomes explicit.
+    /// Do not use this edit for astronomic implicit counts that cannot fit in RAM.
     pub fn splice(&mut self, range: Range<usize>, replacement: impl IntoIterator<Item = u64>) {
         assert!(
             range.start <= range.end && range.end <= self.len(),
             "invalid list splice"
         );
-        let mut keys = self.keys.clone();
+        let mut keys = self.keys.to_vec();
         keys.splice(range, replacement);
         self.set_items(keys);
     }
@@ -740,7 +803,7 @@ fn build_row(
     width: f64,
     render: &mut impl FnMut(&mut Ui, ListItem) -> ListRow,
 ) -> El {
-    let key = state.keys[index];
+    let key = state.key(index).expect("row index is within collection");
     let id = parent.entity(key);
     if ui.get(&id).pressed {
         state.active = Some(key);
