@@ -234,9 +234,58 @@ struct Pending {
     focus: bool,
 }
 
-/// Retained keyed collection state. Initialization and `set_items` are O(n).
-/// Unchanged builds touch only visible/overscan rows, range lookup and individual
-/// variable height changes are O(log n). Uniform range lookup is O(1).
+/// Numeric index keys need no per-row storage. Explicit keys retain their
+/// permanent-ID vector and lookup map for reorder/editable collection semantics.
+#[derive(Clone, Debug)]
+enum KeyIndex {
+    Count(usize),
+    Explicit {
+        keys: Vec<u64>,
+        indexes: FxHashMap<u64, usize>,
+    },
+}
+
+impl KeyIndex {
+    fn explicit(keys: Vec<u64>) -> Self {
+        let indexes = index_keys(&keys);
+        Self::Explicit { keys, indexes }
+    }
+    fn len(&self) -> usize {
+        match self {
+            Self::Count(count) => *count,
+            Self::Explicit { keys, .. } => keys.len(),
+        }
+    }
+    fn key(&self, index: usize) -> Option<u64> {
+        match self {
+            Self::Count(count) => (index < *count)
+                .then(|| u64::try_from(index).expect("count validated against u64 key space")),
+            Self::Explicit { keys, .. } => keys.get(index).copied(),
+        }
+    }
+    fn index(&self, key: u64) -> Option<usize> {
+        match self {
+            Self::Count(count) => usize::try_from(key).ok().filter(|index| index < count),
+            Self::Explicit { indexes, .. } => indexes.get(&key).copied(),
+        }
+    }
+    /// Explicit model edits may intentionally materialize the old index keys.
+    fn to_vec(&self) -> Vec<u64> {
+        match self {
+            Self::Count(count) => (0..*count)
+                .map(|index| u64::try_from(index).expect("count validated against u64 key space"))
+                .collect(),
+            Self::Explicit { keys, .. } => keys.clone(),
+        }
+    }
+}
+
+/// Retained collection state. `uniform_count` construction, storage, clone and
+/// drop are O(1) in row count until an explicit model edit. Keyed `uniform` and
+/// `variable` initialize and clone O(n) state. `set_items` and `splice` explicitly
+/// build keyed storage and cost O(n); unchanged builds never materialize keys.
+/// Unchanged builds touch only visible/overscan rows. Variable range lookup and
+/// individual height changes are O(log n); uniform range lookup is O(1).
 ///
 /// Keys must be unique permanent model IDs. Removing/reordering/inserting keys
 /// preserves the top visible key and its offset within the row. If that key is
@@ -245,8 +294,7 @@ struct Pending {
 /// follows MUI's normal lifetime (removed nodes are retired).
 #[derive(Clone, Debug)]
 pub struct ListState {
-    keys: Vec<u64>,
-    indexes: FxHashMap<u64, usize>,
+    keys: KeyIndex,
     heights: Heights,
     estimate: f64,
     offset: f64,
@@ -258,22 +306,35 @@ pub struct ListState {
 
 impl ListState {
     pub fn uniform(keys: impl IntoIterator<Item = u64>, height: f64) -> Self {
-        Self::new(keys.into_iter().collect(), height, true)
+        Self::new(KeyIndex::explicit(keys.into_iter().collect()), height, true)
     }
-    /// Convenience for append-only/index-keyed data. For editable collections
-    /// use permanent IDs with `uniform` rather than changing display indexes.
+    /// Implicit keys `0..count`, with O(1) construction, storage, clone and drop.
+    /// For editable collections use permanent IDs with `uniform` rather than
+    /// changing display indexes. Explicit `set_items`/`splice` edits switch to
+    /// keyed storage; `splice` materializes the old keys in O(count) time/space.
+    /// Total height must be finite. Scene coordinates remain f64, so this does
+    /// not promise pixel precision for arbitrarily large extents.
     pub fn uniform_count(count: usize, height: f64) -> Self {
-        Self::uniform((0..count).map(|i| i as u64), height)
+        assert!(
+            count
+                .checked_sub(1)
+                .is_none_or(|last| u64::try_from(last).is_ok()),
+            "list count exceeds u64 key space"
+        );
+        Self::new(KeyIndex::Count(count), height, true)
     }
     pub fn variable(keys: impl IntoIterator<Item = u64>, estimated_height: f64) -> Self {
-        Self::new(keys.into_iter().collect(), estimated_height, false)
+        Self::new(
+            KeyIndex::explicit(keys.into_iter().collect()),
+            estimated_height,
+            false,
+        )
     }
-    fn new(keys: Vec<u64>, height: f64, uniform: bool) -> Self {
+    fn new(keys: KeyIndex, height: f64, uniform: bool) -> Self {
         assert!(
             valid_height(height) && (keys.len() as f64 * height).is_finite(),
             "invalid list height"
         );
-        let indexes = index_keys(&keys);
         let heights = if uniform {
             Heights::Uniform(height)
         } else {
@@ -281,7 +342,6 @@ impl ListState {
         };
         Self {
             keys,
-            indexes,
             heights,
             estimate: height,
             offset: 0.0,
@@ -295,13 +355,13 @@ impl ListState {
         self.keys.len()
     }
     pub fn is_empty(&self) -> bool {
-        self.keys.is_empty()
+        self.len() == 0
     }
     pub fn key(&self, index: usize) -> Option<u64> {
-        self.keys.get(index).copied()
+        self.keys.key(index)
     }
     pub fn index(&self, key: u64) -> Option<usize> {
-        self.indexes.get(&key).copied()
+        self.keys.index(key)
     }
     pub fn height(&self, index: usize) -> Option<f64> {
         (index < self.len()).then(|| self.heights.height(index))
@@ -318,6 +378,8 @@ impl ListState {
 
     /// Replace the model order, retaining measured heights by key. Only call
     /// when the data changes, never as part of each frame's row construction.
+    /// Builds O(new length) explicit key storage, including for `uniform_count`;
+    /// it does not materialize the old implicit key range.
     // ponytail: O(n) model edits; use an order-statistic tree if frequent large
     // splices become a measured bottleneck.
     pub fn set_items(&mut self, keys: impl IntoIterator<Item = u64>) {
@@ -339,20 +401,21 @@ impl ListState {
             heights.prefix(keys.len()).is_finite(),
             "list height overflow"
         );
-        self.keys = keys;
-        self.indexes = indexes;
+        self.keys = KeyIndex::Explicit { keys, indexes };
         self.heights = heights;
-        self.active = self.active.filter(|k| self.indexes.contains_key(k));
+        self.active = self.active.filter(|key| self.index(*key).is_some());
         self.restore(anchor);
     }
     /// Insert/remove a range of model keys. Row construction remains lazy;
     /// rebuilding the vector and height index costs O(n) only on this edit.
+    /// An implicit count state materializes its old keys and becomes explicit.
+    /// Do not use this edit for astronomic implicit counts that cannot fit in RAM.
     pub fn splice(&mut self, range: Range<usize>, replacement: impl IntoIterator<Item = u64>) {
         assert!(
             range.start <= range.end && range.end <= self.len(),
             "invalid list splice"
         );
-        let mut keys = self.keys.clone();
+        let mut keys = self.keys.to_vec();
         keys.splice(range, replacement);
         self.set_items(keys);
     }
@@ -740,7 +803,7 @@ fn build_row(
     width: f64,
     render: &mut impl FnMut(&mut Ui, ListItem) -> ListRow,
 ) -> El {
-    let key = state.keys[index];
+    let key = state.key(index).expect("row index is within collection");
     let id = parent.entity(key);
     if ui.get(&id).pressed {
         state.active = Some(key);
@@ -820,5 +883,164 @@ mod tests {
             assert_eq!(heights.prefix(values.len()), prefix);
             assert_eq!(heights.index_at(prefix, values.len()), values.len());
         }
+    }
+
+    #[test]
+    fn implicit_counts_keep_constant_storage_at_astronomic_sizes() {
+        let small = ListState::uniform_count(4, 1.0);
+        assert!(matches!(small.keys, KeyIndex::Count(4)));
+        // These many keys could not be allocated as a Vec/map on the test host.
+        // The enum proves this path retains neither allocation, including clones.
+        // This checks storage/key identity, not f64 pixel precision at usize::MAX.
+        let state = ListState::uniform_count(usize::MAX, 1.0);
+        assert!(matches!(state.keys, KeyIndex::Count(usize::MAX)));
+        assert_eq!(state.len(), usize::MAX);
+        let last = usize::MAX - 1;
+        assert_eq!(state.key(last), u64::try_from(last).ok());
+        assert_eq!(state.index(u64::try_from(last).unwrap()), Some(last));
+        assert_eq!(state.key(usize::MAX), None);
+        assert_eq!(state.index(u64::MAX), None);
+        for _ in 0..128 {
+            let clone = state.clone();
+            assert!(matches!(clone.keys, KeyIndex::Count(usize::MAX)));
+            assert_eq!(clone.key(last), state.key(last));
+            drop(clone);
+        }
+        let empty = ListState::uniform_count(0, 20.0);
+        assert!(empty.is_empty());
+        assert_eq!(empty.key(0), None);
+        assert_eq!(empty.index(0), None);
+        assert_eq!(empty.index(u64::MAX), None);
+        assert_eq!(empty.height(0), None);
+    }
+
+    fn equivalent(a: &ListState, b: &ListState) {
+        assert_eq!(a.len(), b.len());
+        assert_eq!(a.is_empty(), b.is_empty());
+        assert_eq!(a.total_height(), b.total_height());
+        assert_eq!(a.offset, b.offset);
+        assert_eq!(a.active, b.active);
+        assert_eq!(
+            a.pending.map(|p| (p.key, p.align, p.focus)),
+            b.pending.map(|p| (p.key, p.align, p.focus))
+        );
+        for index in 0..a.len() + 2 {
+            assert_eq!(a.key(index), b.key(index));
+            assert_eq!(a.height(index), b.height(index));
+        }
+        for key in 0..a.len() as u64 + 2 {
+            assert_eq!(a.index(key), b.index(key));
+        }
+        assert_eq!(a.index(u64::MAX), b.index(u64::MAX));
+    }
+
+    #[test]
+    fn implicit_counts_match_keyed_lookup_scroll_height_and_focus_oracle() {
+        for count in 0..80 {
+            let mut implicit = ListState::uniform_count(count, 20.0);
+            let mut keyed = ListState::uniform(0..count as u64, 20.0);
+            equivalent(&implicit, &keyed);
+            for height in [2.5, 31.0, 20.0] {
+                implicit.offset = count as f64 * height / 2.0 + 1.25;
+                keyed.offset = implicit.offset;
+                assert_eq!(
+                    implicit.set_uniform_height(height),
+                    keyed.set_uniform_height(height)
+                );
+                implicit.clamp(40.0);
+                keyed.clamp(40.0);
+                equivalent(&implicit, &keyed);
+                assert_eq!(implicit.visible(40.0), keyed.visible(40.0));
+                for index in 0..count {
+                    for align in [
+                        ScrollTo::Start,
+                        ScrollTo::Center,
+                        ScrollTo::End,
+                        ScrollTo::Nearest,
+                    ] {
+                        implicit.align_item(index, 40.0, align);
+                        keyed.align_item(index, 40.0, align);
+                        equivalent(&implicit, &keyed);
+                        assert_eq!(implicit.visible(40.0), keyed.visible(40.0));
+                    }
+                    assert_eq!(implicit.focus_item(index), keyed.focus_item(index));
+                    equivalent(&implicit, &keyed);
+                }
+            }
+            assert!(!implicit.focus_item(count));
+            assert!(!implicit.scroll_to_item(count, ScrollTo::Start));
+            assert!(matches!(implicit.keys, KeyIndex::Count(_)));
+        }
+    }
+
+    #[test]
+    fn count_edits_preserve_key_anchor_active_and_pending_semantics() {
+        for splice in [false, true] {
+            let mut implicit = ListState::uniform_count(10, 20.0);
+            let mut keyed = ListState::uniform(0..10, 20.0);
+            implicit.offset = 65.0;
+            keyed.offset = 65.0;
+            implicit.active = Some(2);
+            keyed.active = Some(2);
+            implicit.focus_item(7);
+            keyed.focus_item(7);
+            if splice {
+                implicit.splice(0..1, [90, 91]);
+                keyed.splice(0..1, [90, 91]);
+                assert_eq!(implicit.offset, 85.0); // top key3, five pixels into row
+                assert_eq!(implicit.key(4), Some(3));
+            } else {
+                implicit.set_items((0..10).rev());
+                keyed.set_items((0..10).rev());
+                assert_eq!(implicit.offset, 125.0); // top key3 now at index6
+                assert_eq!(implicit.key(6), Some(3));
+            }
+            equivalent(&implicit, &keyed);
+            assert!(matches!(implicit.keys, KeyIndex::Explicit { .. }));
+            assert_eq!(implicit.pending.unwrap().key, 7);
+            implicit.set_items([90, 91]);
+            keyed.set_items([90, 91]);
+            equivalent(&implicit, &keyed);
+            assert_eq!(implicit.active, None);
+            assert_eq!(implicit.index(7), None); // pending removed target is ignored by build
+        }
+    }
+
+    #[test]
+    fn replacing_astronomic_count_materializes_only_the_new_keys() {
+        let mut state = ListState::uniform_count(usize::MAX, 1.0);
+        state.offset = 7.5;
+        state.active = Some(7);
+        state.focus_item(usize::MAX - 1);
+        state.set_items([42, 7]);
+        assert_eq!(state.len(), 2);
+        assert_eq!(state.key(0), Some(42));
+        assert_eq!(state.key(1), Some(7));
+        assert_eq!(state.index(42), Some(0));
+        assert_eq!(state.active(), Some(7));
+        assert_eq!(state.offset, 1.5);
+        assert!(
+            matches!(state.keys, KeyIndex::Explicit { ref keys, ref indexes }
+            if keys.len() == 2 && indexes.len() == 2)
+        );
+    }
+
+    #[test]
+    fn invalid_count_edits_and_height_overflow_leave_implicit_state_intact() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let mut state = ListState::uniform_count(4, 20.0);
+        state.offset = 7.0;
+        state.focus_item(3);
+        assert!(!state.set_uniform_height(f64::MAX));
+        assert!(!state.set_uniform_height(f64::NAN));
+        assert!(!state.set_uniform_height(0.0));
+        assert!(!state.set_height(0, 7.0));
+        assert!(catch_unwind(AssertUnwindSafe(|| state.set_items([1, 1]))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| state.splice(0..1, [3]))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| state.splice(4..5, []))).is_err());
+        assert_eq!(state.offset, 7.0);
+        assert_eq!(state.pending.unwrap().key, 3);
+        assert!(matches!(state.keys, KeyIndex::Count(4)));
+        assert!(catch_unwind(|| ListState::uniform_count(2, f64::MAX)).is_err());
     }
 }
