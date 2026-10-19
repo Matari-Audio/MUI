@@ -2294,6 +2294,7 @@ dependencies = [
  "mui-access",
  "wgpu",
  "winit",
+ "x11rb",
 ]
 
 [[package]]

@@ -469,11 +469,12 @@ mod tests {
     struct DropProbe {
         shared: std::sync::Weak<Shared<DropProbe>>,
         dropped: Arc<AtomicUsize>,
+        assert_unlocked: bool,
     }
 
     impl Drop for DropProbe {
         fn drop(&mut self) {
-            if let Some(shared) = self.shared.upgrade() {
+            if let Some(shared) = self.shared.upgrade().filter(|_| self.assert_unlocked) {
                 assert!(
                     shared.state.try_lock().is_ok(),
                     "mailbox payload dropped under its mutex"
@@ -544,6 +545,7 @@ mod tests {
             token.publish(DropProbe {
                 shared: Arc::downgrade(&shared),
                 dropped: Arc::clone(&dropped),
+                assert_unlocked: true,
             });
         }
         assert_eq!(dropped.load(Ordering::SeqCst), 99);
@@ -554,6 +556,7 @@ mod tests {
         token.publish(DropProbe {
             shared: Arc::downgrade(&shared),
             dropped: Arc::clone(&dropped),
+            assert_unlocked: true,
         });
         drop(token);
         assert!(receiver.poll().is_none());
@@ -577,6 +580,9 @@ mod tests {
             token.publish(DropProbe {
                 shared: Arc::downgrade(&shared),
                 dropped: Arc::clone(&dropped),
+                // Another thread may legitimately hold the mutex here. The
+                // serial mailbox test proves drops are outside our own guard.
+                assert_unlocked: false,
             });
             worker.join().unwrap();
             assert!(token.control.revoked.load(Ordering::SeqCst));

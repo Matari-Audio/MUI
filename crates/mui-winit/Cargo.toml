@@ -22,5 +22,12 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 [dev-dependencies]
 epaint_default_fonts.workspace = true
 
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = { version = "0.13", default-features = false }
+
+[[example]]
+name = "external_xdnd"
+required-features = ["external-xdnd"]
+
 [lints]
 workspace = true
