@@ -6,7 +6,7 @@ fn deliver(ui: &mut Ui, root: El, input: impl Into<Input>) {
 }
 
 fn fields(ui: &mut Ui, a: &mut String, b: &mut String) -> El {
-    vstack![
+    col![
         widgets::text_input(ui, "a", a).el,
         widgets::text_input(ui, "b", b).el,
     ]
@@ -139,6 +139,8 @@ fn view_change_discards_queued_native_edits_without_erasing_editor_state() {
     let state = node(&mut ui.nodes, "a");
     state.text_scroll = Some(12.0);
     state.stash = Some(Box::new(42_u32));
+    ui.set_ime_caret("a", Point::new(10., 20.), 18.);
+    assert!(ui.ime_caret.is_some());
     ui.discard_input_for_view_change();
     assert_eq!(ui.focus_key(), Some("a"), "caller owns focus policy");
     assert!(ui.preedit().is_none());
@@ -187,6 +189,7 @@ fn view_change_cancels_capture_drag_and_owes_end_once_on_next_frame() {
     ui.discard_input_for_view_change();
     assert!(!ui.get("gain").held);
     assert!(ui.dragging::<String>().is_none());
+    assert_eq!(ui.edits_for("gain").collect::<Vec<_>>(), vec![Edit::Begin]);
     let edits = ui
         .frame(slider(), None, at(20., 20., true), 0.016)
         .unwrap()
@@ -215,20 +218,26 @@ fn view_change_owes_end_once_when_closed_without_another_frame() {
 #[test]
 fn view_change_drops_wheel_and_press_but_preserves_host_actions() {
     let mut ui = Ui::default();
-    deliver(&mut ui, slider(), Input::default());
+    let tree = || row![slider(), block(120., 40.).id("popup")];
+    deliver(&mut ui, tree(), Input::default());
     let input = Input {
         pointer: at(20., 20., true),
         wheel: Vec2::new(0., 15.),
         ..Input::default()
     };
-    deliver(&mut ui, slider(), input);
+    deliver(&mut ui, tree(), input);
     assert!(ui.press_at.is_some());
     assert_ne!(ui.wheel, Vec2::ZERO);
+    assert_eq!(ui.wheel("gain"), Some(Vec2::new(0., 15.)));
+    assert!(!ui.wheel_claims.is_empty());
+    assert!(ui.clicked_outside(&["popup"]));
     assert!(ui.request_action(SemanticAction::set_value("gain", 0.75)));
     ui.discard_input_for_view_change();
     assert!(ui.press_at.is_none());
     assert_eq!(ui.wheel, Vec2::ZERO);
     assert!(ui.wheel_claims.is_empty());
+    assert_eq!(ui.wheel("gain"), None);
+    assert!(!ui.clicked_outside(&["popup"]));
     let mut value = 0.5;
     assert!(ui.drag("gain", &mut value, 0.0..=1.0, 120., true));
     assert_eq!(value, 0.75, "queued host action survived the barrier");
