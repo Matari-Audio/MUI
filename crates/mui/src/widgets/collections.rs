@@ -884,4 +884,163 @@ mod tests {
             assert_eq!(heights.index_at(prefix, values.len()), values.len());
         }
     }
+
+    #[test]
+    fn implicit_counts_keep_constant_storage_at_astronomic_sizes() {
+        let small = ListState::uniform_count(4, 1.0);
+        assert!(matches!(small.keys, KeyIndex::Count(4)));
+        // These many keys could not be allocated as a Vec/map on the test host.
+        // The enum proves this path retains neither allocation, including clones.
+        // This checks storage/key identity, not f64 pixel precision at usize::MAX.
+        let state = ListState::uniform_count(usize::MAX, 1.0);
+        assert!(matches!(state.keys, KeyIndex::Count(usize::MAX)));
+        assert_eq!(state.len(), usize::MAX);
+        let last = usize::MAX - 1;
+        assert_eq!(state.key(last), u64::try_from(last).ok());
+        assert_eq!(state.index(u64::try_from(last).unwrap()), Some(last));
+        assert_eq!(state.key(usize::MAX), None);
+        assert_eq!(state.index(u64::MAX), None);
+        for _ in 0..128 {
+            let clone = state.clone();
+            assert!(matches!(clone.keys, KeyIndex::Count(usize::MAX)));
+            assert_eq!(clone.key(last), state.key(last));
+            drop(clone);
+        }
+        let empty = ListState::uniform_count(0, 20.0);
+        assert!(empty.is_empty());
+        assert_eq!(empty.key(0), None);
+        assert_eq!(empty.index(0), None);
+        assert_eq!(empty.index(u64::MAX), None);
+        assert_eq!(empty.height(0), None);
+    }
+
+    fn equivalent(a: &ListState, b: &ListState) {
+        assert_eq!(a.len(), b.len());
+        assert_eq!(a.is_empty(), b.is_empty());
+        assert_eq!(a.total_height(), b.total_height());
+        assert_eq!(a.offset, b.offset);
+        assert_eq!(a.active, b.active);
+        assert_eq!(
+            a.pending.map(|p| (p.key, p.align, p.focus)),
+            b.pending.map(|p| (p.key, p.align, p.focus))
+        );
+        for index in 0..a.len() + 2 {
+            assert_eq!(a.key(index), b.key(index));
+            assert_eq!(a.height(index), b.height(index));
+        }
+        for key in 0..a.len() as u64 + 2 {
+            assert_eq!(a.index(key), b.index(key));
+        }
+        assert_eq!(a.index(u64::MAX), b.index(u64::MAX));
+    }
+
+    #[test]
+    fn implicit_counts_match_keyed_lookup_scroll_height_and_focus_oracle() {
+        for count in 0..80 {
+            let mut implicit = ListState::uniform_count(count, 20.0);
+            let mut keyed = ListState::uniform(0..count as u64, 20.0);
+            equivalent(&implicit, &keyed);
+            for height in [2.5, 31.0, 20.0] {
+                implicit.offset = count as f64 * height / 2.0 + 1.25;
+                keyed.offset = implicit.offset;
+                assert_eq!(
+                    implicit.set_uniform_height(height),
+                    keyed.set_uniform_height(height)
+                );
+                implicit.clamp(40.0);
+                keyed.clamp(40.0);
+                equivalent(&implicit, &keyed);
+                assert_eq!(implicit.visible(40.0), keyed.visible(40.0));
+                for index in 0..count {
+                    for align in [
+                        ScrollTo::Start,
+                        ScrollTo::Center,
+                        ScrollTo::End,
+                        ScrollTo::Nearest,
+                    ] {
+                        implicit.align_item(index, 40.0, align);
+                        keyed.align_item(index, 40.0, align);
+                        equivalent(&implicit, &keyed);
+                        assert_eq!(implicit.visible(40.0), keyed.visible(40.0));
+                    }
+                    assert_eq!(implicit.focus_item(index), keyed.focus_item(index));
+                    equivalent(&implicit, &keyed);
+                }
+            }
+            assert!(!implicit.focus_item(count));
+            assert!(!implicit.scroll_to_item(count, ScrollTo::Start));
+            assert!(matches!(implicit.keys, KeyIndex::Count(_)));
+        }
+    }
+
+    #[test]
+    fn count_edits_preserve_key_anchor_active_and_pending_semantics() {
+        for splice in [false, true] {
+            let mut implicit = ListState::uniform_count(10, 20.0);
+            let mut keyed = ListState::uniform(0..10, 20.0);
+            implicit.offset = 65.0;
+            keyed.offset = 65.0;
+            implicit.active = Some(2);
+            keyed.active = Some(2);
+            implicit.focus_item(7);
+            keyed.focus_item(7);
+            if splice {
+                implicit.splice(0..1, [90, 91]);
+                keyed.splice(0..1, [90, 91]);
+                assert_eq!(implicit.offset, 85.0); // top key3, five pixels into row
+                assert_eq!(implicit.key(4), Some(3));
+            } else {
+                implicit.set_items((0..10).rev());
+                keyed.set_items((0..10).rev());
+                assert_eq!(implicit.offset, 125.0); // top key3 now at index6
+                assert_eq!(implicit.key(6), Some(3));
+            }
+            equivalent(&implicit, &keyed);
+            assert!(matches!(implicit.keys, KeyIndex::Explicit { .. }));
+            assert_eq!(implicit.pending.unwrap().key, 7);
+            implicit.set_items([90, 91]);
+            keyed.set_items([90, 91]);
+            equivalent(&implicit, &keyed);
+            assert_eq!(implicit.active, None);
+            assert_eq!(implicit.index(7), None); // pending removed target is ignored by build
+        }
+    }
+
+    #[test]
+    fn replacing_astronomic_count_materializes_only_the_new_keys() {
+        let mut state = ListState::uniform_count(usize::MAX, 1.0);
+        state.offset = 7.5;
+        state.active = Some(7);
+        state.focus_item(usize::MAX - 1);
+        state.set_items([42, 7]);
+        assert_eq!(state.len(), 2);
+        assert_eq!(state.key(0), Some(42));
+        assert_eq!(state.key(1), Some(7));
+        assert_eq!(state.index(42), Some(0));
+        assert_eq!(state.active(), Some(7));
+        assert_eq!(state.offset, 1.5);
+        assert!(
+            matches!(state.keys, KeyIndex::Explicit { ref keys, ref indexes }
+            if keys.len() == 2 && indexes.len() == 2)
+        );
+    }
+
+    #[test]
+    fn invalid_count_edits_and_height_overflow_leave_implicit_state_intact() {
+        use std::panic::{AssertUnwindSafe, catch_unwind};
+        let mut state = ListState::uniform_count(4, 20.0);
+        state.offset = 7.0;
+        state.focus_item(3);
+        assert!(!state.set_uniform_height(f64::MAX));
+        assert!(!state.set_uniform_height(f64::NAN));
+        assert!(!state.set_uniform_height(0.0));
+        assert!(!state.set_height(0, 7.0));
+        assert!(catch_unwind(AssertUnwindSafe(|| state.set_items([1, 1]))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| state.splice(0..1, [3]))).is_err());
+        assert!(catch_unwind(AssertUnwindSafe(|| state.splice(4..5, []))).is_err());
+        assert_eq!(state.offset, 7.0);
+        assert_eq!(state.pending.unwrap().key, 3);
+        assert!(matches!(state.keys, KeyIndex::Count(4)));
+        assert!(catch_unwind(|| ListState::uniform_count(2, f64::MAX)).is_err());
+    }
 }

@@ -753,3 +753,85 @@ fn motion_frames_cannot_exceed_scoped_dimensions_before_paint() {
     ));
     assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 0);
 }
+
+#[test]
+fn astronomic_implicit_count_builds_only_visible_rows_and_focuses_exact_last_key() {
+    let count = usize::try_from(1_000_000_000_000_u64).unwrap_or(1_000_000_000);
+    let mut state = ListState::uniform_count(count, 20.0);
+    let mut ui = Ui::default();
+    for target in [0, count / 2, count - 1, 0, count - 1] {
+        assert!(state.focus_item(target));
+        for _ in 0..3 {
+            let mut built = Vec::new();
+            let tree = uniform_list(&mut ui, "implicit", &mut state, options(80.0), |_, row| {
+                assert_eq!(row.key, row.index as u64);
+                built.push(row.index);
+                block(100.0, 20.0)
+            });
+            assert!(tree.changed.rows_built <= 4, "{:?}", tree.changed);
+            assert!(tree.changed.visible.contains(&target));
+            assert!(built.contains(&target));
+            assert_eq!(state.active(), Some(target as u64));
+            resolve(&mut ui, tree.el);
+            assert_eq!(
+                ui.focus_key(),
+                Some(format!("implicit/item/{target}").as_str())
+            );
+            assert!(ui.scene().unwrap().surfaces().count() < 20);
+        }
+    }
+    assert_eq!(state.key(count - 1), Some((count - 1) as u64));
+    assert_eq!(state.key(count), None);
+}
+
+#[test]
+fn implicit_and_keyed_frames_keep_equivalent_focus_and_scroll_across_explicit_edits() {
+    fn frame(ui: &mut Ui, state: &mut ListState) -> ListEvent {
+        let tree = uniform_list(ui, "rows", state, options(80.0), |_, _| block(100.0, 20.0));
+        let changed = tree.changed;
+        resolve(ui, tree.el);
+        changed
+    }
+    let mut implicit = ListState::uniform_count(20, 20.0);
+    let mut keyed = ListState::uniform(0..20, 20.0);
+    let mut implicit_ui = Ui::default();
+    let mut keyed_ui = Ui::default();
+    implicit.focus_item(7);
+    keyed.focus_item(7);
+    assert_eq!(
+        frame(&mut implicit_ui, &mut implicit),
+        frame(&mut keyed_ui, &mut keyed)
+    );
+    assert_eq!(implicit_ui.focus_key(), Some("rows/item/7"));
+    implicit.splice(0..2, [90, 91, 92]);
+    keyed.splice(0..2, [90, 91, 92]);
+    assert_eq!(
+        frame(&mut implicit_ui, &mut implicit),
+        frame(&mut keyed_ui, &mut keyed)
+    );
+    assert_eq!(implicit_ui.focus_key(), keyed_ui.focus_key());
+    assert_eq!(implicit_ui.scroll("rows"), keyed_ui.scroll("rows"));
+    assert_eq!(implicit_ui.focus_key(), Some("rows/item/7"));
+    implicit.focus_item(19); // capture permanent key before reorder
+    keyed.focus_item(19);
+    let reordered = (2..20).rev().chain([90, 91, 92]).collect::<Vec<_>>();
+    implicit.set_items(reordered.clone());
+    keyed.set_items(reordered);
+    assert_eq!(
+        frame(&mut implicit_ui, &mut implicit),
+        frame(&mut keyed_ui, &mut keyed)
+    );
+    assert_eq!(implicit_ui.focus_key(), keyed_ui.focus_key());
+    assert_eq!(implicit_ui.scroll("rows"), keyed_ui.scroll("rows"));
+    assert_eq!(implicit_ui.focus_key(), Some("rows/item/18"));
+    implicit.set_items([7, 90]);
+    keyed.set_items([7, 90]);
+    for _ in 0..2 {
+        assert_eq!(
+            frame(&mut implicit_ui, &mut implicit),
+            frame(&mut keyed_ui, &mut keyed)
+        );
+        assert_eq!(implicit_ui.focus_key(), keyed_ui.focus_key());
+        assert_eq!(implicit_ui.scroll("rows"), keyed_ui.scroll("rows"));
+    }
+}
