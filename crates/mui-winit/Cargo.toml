@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+external-xdnd = ["winit/external-xdnd"]
+
 [dependencies]
 # Reuse the plugin-image pin rather than duplicating loader FFI.
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview", default-features = false }
@@ -17,6 +21,13 @@ arboard = { version = "3.6", default-features = false, features = ["wayland-data
 
 [dev-dependencies]
 epaint_default_fonts.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = { version = "0.13", default-features = false }
+
+[[example]]
+name = "external_xdnd"
+required-features = ["external-xdnd"]
 
 [lints]
 workspace = true

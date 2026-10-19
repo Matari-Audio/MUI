@@ -11,6 +11,8 @@
 // wake hook yet. Push-based change notification can replace this heartbeat.
 const MODEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+pub mod external_xdnd;
 mod gpu;
 mod windows;
 pub use gpu::Gpu;
@@ -34,6 +36,8 @@ use winit::event::{
 };
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{Key as WinitKey, NamedKey};
+#[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+use winit::platform::x11::WindowAttributesExtX11;
 use winit::window::{CursorIcon, Window, WindowId};
 
 /// Initial top-level window properties. The current monitor determines the
@@ -48,6 +52,11 @@ pub struct Options {
     /// Write bounded CPU phase samples and work counters as CSV on close.
     /// GPU completion and scanout are not measured. Disabled by default.
     pub profile_output: Option<std::path::PathBuf>,
+    /// Optional X11 registration handoff to an existing backend worker. Default
+    /// None preserves built-in file-drop behavior. Wayland reports unsupported
+    /// through Host status and retains a usable ordinary application window.
+    #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+    pub external_xdnd: Option<external_xdnd::Host>,
 }
 
 impl Default for Options {
@@ -58,6 +67,8 @@ impl Default for Options {
             poll_interval: None,
             motion_policy: mui::MotionPolicy::System,
             profile_output: None,
+            #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+            external_xdnd: None,
         }
     }
 }
@@ -83,6 +94,10 @@ pub fn run_shared<V: View>(shared: Arc<Mutex<Shared<V>>>, options: Options) -> R
 }
 
 fn validate_options(options: &Options) -> Result<(), String> {
+    #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+    if let Some(host) = &options.external_xdnd {
+        host.check().map_err(|error| error.to_string())?;
+    }
     if options.size.0 == 0 || options.size.1 == 0 {
         return Err("MUI window must have a nonzero size".into());
     }
@@ -132,6 +147,9 @@ struct App<V, T: 'static = AccessEvent> {
     shared: Arc<Mutex<Shared<V>>>,
     options: Options,
     proxy: EventLoopProxy<T>,
+    // Field order also protects unexpected App Drop, without calling close().
+    #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+    external_attachment: Option<external_xdnd::Attachment>,
     gpu: Option<Gpu>,
     driver: Option<Driver>,
     access: Option<Adapter>,
@@ -155,6 +173,8 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
             shared,
             options,
             proxy,
+            #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+            external_attachment: None,
             gpu: None,
             driver: None,
             access: None,
@@ -201,6 +221,8 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> App<V, T> {
         }
     }
     fn close(&mut self) {
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        drop(self.external_attachment.take());
         if let Some(driver) = &mut self.driver {
             driver.close(&mut lock(&self.shared));
             if let (Some(profile), Some(path)) =
@@ -353,21 +375,60 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
         if self.gpu.is_some() {
             return;
         }
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        let reservation = match self
+            .options
+            .external_xdnd
+            .as_ref()
+            .map(external_xdnd::Host::reserve)
+            .transpose()
+        {
+            Ok(reservation) => reservation,
+            Err(error) => {
+                self.error = Some(error.to_string());
+                if self.exit_on_error {
+                    event_loop.exit();
+                }
+                return;
+            }
+        };
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        let mut external_attachment = None;
         let attrs = Window::default_attributes()
             .with_title(&self.options.title)
             .with_visible(false)
             .with_inner_size(LogicalSize::new(self.options.size.0, self.options.size.1));
+        #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+        let attrs = if reservation.is_some() {
+            attrs.with_x11_drag_and_drop(false)
+        } else {
+            attrs
+        };
         let result = event_loop
             .create_window(attrs)
             .map_err(|e| e.to_string())
             .and_then(|window| {
                 let window = Arc::new(window);
+                #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+                let attachment = reservation.map(|reservation| reservation.bind(&window));
                 self.access = Some(Adapter::with_event_loop_proxy(
                     event_loop,
                     &window,
                     self.proxy.clone(),
                 ));
-                Gpu::try_new(window, Box::new(event_loop.owned_display_handle()))
+                // Keep a local Window owner until the attachment is either
+                // retained or revoked on a failed renderer initialization.
+                let result = Gpu::try_new(
+                    Arc::clone(&window),
+                    Box::new(event_loop.owned_display_handle()),
+                );
+                #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+                if result.is_ok() {
+                    external_attachment = attachment;
+                } else {
+                    drop(attachment);
+                }
+                result
             });
         match result {
             Ok(gpu) => {
@@ -390,6 +451,13 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
                         .poll_interval
                         .unwrap_or(Duration::from_secs_f64(1.0 / 60.0)),
                 );
+                #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+                {
+                    self.external_attachment = external_attachment;
+                    if let Some(attachment) = &mut self.external_attachment {
+                        attachment.publish();
+                    }
+                }
                 gpu.window().set_visible(true);
                 self.state.opened(gpu.window().has_focus());
                 self.driver
@@ -504,6 +572,10 @@ impl<V: View, T: From<AccessEvent> + Send + 'static> ApplicationHandler<AccessEv
             access.process_event(gpu.window(), &event);
         }
         match event {
+            #[cfg(all(feature = "external-xdnd", target_os = "linux"))]
+            WindowEvent::Destroyed => {
+                drop(self.external_attachment.take());
+            }
             WindowEvent::CloseRequested => {
                 self.close();
                 event_loop.exit();
