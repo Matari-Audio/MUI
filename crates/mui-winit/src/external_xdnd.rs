@@ -329,7 +329,7 @@ static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 
 fn owner(allocator: &AtomicU64) -> Result<u64, PairError> {
     allocator
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |next| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |next| {
             next.checked_add(1)
         })
         .map_err(|_| PairError::Exhausted)

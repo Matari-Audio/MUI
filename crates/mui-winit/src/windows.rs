@@ -106,7 +106,7 @@ impl<V: View + 'static> WindowController<V> {
         // Exhausting u64 identities would otherwise alias an existing window.
         WindowToken(
             self.next
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
                 .expect("MUI window identities exhausted"),
         )
     }
