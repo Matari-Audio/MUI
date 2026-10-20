@@ -61,8 +61,7 @@ fn paint(e: &Expr) -> syn::Result<Fill> {
             .path
             .segments
             .last()
-            .map(|s| s.ident.to_string())
-            .unwrap_or_default();
+            .map_or_default(|s| s.ident.to_string());
         let role = match name.as_str() {
             "Background" => Background,
             "Surface" => Surface,
@@ -121,12 +120,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
     match e {
         Expr::Paren(p) => child(&p.expr, nodes),
         Expr::Macro(m) => {
-            let name = m
-                .mac
-                .path
-                .get_ident()
-                .map(ToString::to_string)
-                .unwrap_or_default();
+            let name = m.mac.path.get_ident().map_or_default(ToString::to_string);
             let args = Args::parse_terminated.parse2(m.mac.tokens.clone())?;
             let children = args
                 .iter()
