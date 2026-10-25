@@ -29,7 +29,7 @@ resolver = "2"
 # media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.
 
 [workspace.package]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.98"
 license = "MIT"

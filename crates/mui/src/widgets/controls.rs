@@ -286,8 +286,8 @@ impl Control {
         self
     }
     /// What the readout says, instead of the default two decimals: the
-    /// value in the units the parameter actually has. A knob has no header,
-    /// so it says this under the dial in place of its label.
+    /// value in the units the parameter actually has. A knob places this
+    /// reading inside its arc and keeps its name below the dial.
     ///
     /// ```
     /// use mui::prelude::*;
@@ -298,6 +298,11 @@ impl Control {
     /// ```
     pub fn value_text(mut self, s: impl Into<String>) -> Self {
         self.look.text = Some(s.into());
+        self
+    }
+    /// Hide the visible caption while retaining the input's accessible name.
+    pub fn hide_label(mut self) -> Self {
+        self.label_visible = false;
         self
     }
     /// Reserve a readout sample in the actual font instead of padding the
@@ -615,45 +620,69 @@ pub fn knob(
 }
 
 fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
-    // A dial reads bigger than a button of the same size token: the
-    // label sits under it rather than inside it.
-    let size = look.px * 1.8;
-    let a = (135.0 + 270.0 * d.t).to_radians();
-    let r = size / 2.0 - size / 12.0;
-    let caption = match look.text.as_deref() {
-        Some(text) => Some(Arc::<str>::from(text)),
-        None if label_visible => Some(label.clone()),
-        None => None,
-    };
-    let mut content = vec![stack([
-        look.describe(
-            block(size, size)
-                .pill()
-                .preset(look.face(Role::Raised))
-                .shell(size / 24.0 + 1.0 * d.hover, Role::Field)
-                .a11y(d.a11y())
-                .named(label)
-                .focusable()
-                .cursor(Cursor::ResizeV)
-                .on(State::FocusVisible, focus_ring)
-                .id(id),
+    // The macro grammar: a quiet inner disc, a 270-degree value arc and the
+    // formatted reading in its centre. Content can widen the square for long
+    // units; the supplied reserve keeps its footprint stable during edits.
+    let size = look.px * 1.125;
+    let role = look.role;
+    let amount = d.t;
+    let hover = d.hover;
+    let width = look.px / 16.;
+    let paint = canvas(move |size| {
+        let center = Point::new(size.width * 0.5, size.height * 0.5);
+        let radius = size.width.min(size.height) * 0.42;
+        let arc = |amount: f64| {
+            Path::polyline(
+                (0..=48).map(|i| {
+                    let angle = std::f64::consts::PI * 0.75
+                        + std::f64::consts::PI * 1.5 * amount * f64::from(i) / 48.;
+                    Point::new(
+                        center.x + angle.cos() * radius,
+                        center.y + angle.sin() * radius,
+                    )
+                }),
+                false,
+            )
+        };
+        let disc = Path::polyline(
+            (0..64).map(|i| {
+                let angle = std::f64::consts::TAU * f64::from(i) / 64.;
+                Point::new(
+                    center.x + angle.cos() * radius * 0.76,
+                    center.y + angle.sin() * radius * 0.76,
+                )
+            }),
             true,
-        ),
-        // The pointer is the reading, so it keeps the role at full
-        // strength whatever the variant does to the face.
-        block(size / 12.0, size / 12.0)
-            .pill()
-            .fill(look.role)
-            .centered_at(r * a.cos(), r * a.sin()),
-    ])];
-    if let Some(caption) = caption {
-        content.push(
-            match &look.reserve {
-                Some(samples) => text(caption).reserve_all(samples.clone()),
-                None => text(caption),
-            }
-            .fill(Role::Dim),
         );
+        vec![
+            Draw::stroke(arc(1.), Role::Dim.alpha(0.12), width),
+            Draw::stroke(arc(amount), role.alpha((0.82 + hover * 0.18) as f32), width),
+            Draw::fill(disc, Role::Field),
+        ]
+    })
+    .full();
+    let reading = d
+        .readout(look)
+        .text_size(look.px * 0.3)
+        .fill(role)
+        .id(id.field("reading"));
+    let face = look.describe(
+        stack![paint, col![reading].center().pad(look.px * 0.18)]
+            .min_w(size)
+            .min_h(size)
+            .w(pct(100.))
+            .aspect(1.)
+            .a11y(d.a11y())
+            .named(label.clone())
+            .focusable()
+            .cursor(Cursor::ResizeV)
+            .on(State::FocusVisible, focus_ring)
+            .id(&id),
+        true,
+    );
+    let mut content = vec![face];
+    if label_visible && !label.is_empty() {
+        content.push(text(label).text_size(look.px * 0.3).fill(Role::Dim));
     }
     col(content).gap(Xs).align(Align::Center)
 }
