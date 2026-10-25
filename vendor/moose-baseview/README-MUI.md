@@ -200,3 +200,37 @@ recreates independent native input contexts and never keeps a dead connection.
 
 Cross-compilation proves API/type compatibility, not native IME usability; these
 manual checks remain required on each operating system and real plugin hosts.
+
+## Desktop edge surfaces
+
+`WindowSettings::with_dock(DockOptions::new(DockEdge::Top, 160))` requests
+an independent full-width edge surface. The OS/compositor owns the accepted
+rectangle. `DockEdge::Bottom` selects the other edge; `with_output` optionally
+selects a native output name. Parent/wait-for-parent settings are rejected.
+
+Linux uses a native SCTK layer-shell surface when WAYLAND_DISPLAY is present,
+with its own toolkit-owned queue, on-demand focus, fractional-scale viewport,
+cursor-shape and text-input-v3 support. Its data-device drag uses the same seat,
+surface and initiating serial; outgoing file transfers and incoming URI lists
+are bounded, nonblocking and cancelled during close. Ordinary embedded editors
+continue using X11/XWayland. Without Wayland, EWMH-capable window managers get a
+managed DOCK/STRUT_PARTIAL surface. Unsupported protocols, missing named outputs
+and unsafe internal X11 monitor edges return creation errors for the application
+to handle explicitly.
+
+Windows uses Shell AppBars and reconciles accepted bounds, activation,
+fullscreen, display/DPI changes and Explorer restart. Hide removes registration.
+AppKit creates a borderless floating strip and preserves the chosen edge when
+height changes. macOS has no work-area reservation in this implementation.
+
+`Window::visibility_control()` is a weak Send/Sync request handle. It posts to
+the native owner without invoking product callbacks or extending window life;
+Windows validates a generation token before acting on a posted native message.
+The Wayland controller coalesces visibility and wakes its native queue. Its
+close waits at most the configured close budget (250 ms by default), releases
+its exclusive zone immediately and rejects further product input. A stalled
+callback retains its handler/native resources and pinned image until retirement,
+subject to the same host-access revocation contract described above for X11.
+
+Local probe: `cargo run --manifest-path vendor/moose-baseview/Cargo.toml --example
+dock` paints both halves through softbuffer and closes after two seconds.

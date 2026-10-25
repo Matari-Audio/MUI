@@ -13,6 +13,7 @@ pub(super) struct TextInput {
     input: Option<ZwpTextInputV3>,
     entered: bool,
     enabled: bool,
+    composing: bool,
     config: Option<ImeConfiguration>,
     serial: u32,
     pending: Vec<Ime>,
@@ -29,7 +30,7 @@ impl TextInput {
         }
     }
     pub fn active(&self) -> bool {
-        self.enabled
+        self.composing
     }
     pub fn configure(&mut self, config: Option<ImeConfiguration>, scale: f64) {
         let config = config.filter(ImeConfiguration::valid);
@@ -110,6 +111,7 @@ impl Dispatch2<ZwpTextInputV3, Runtime> for TextData {
             }
             zwp_text_input_v3::Event::Leave { .. } => {
                 text.entered = false;
+                text.composing = false;
                 text.enabled = false;
                 text.pending.clear();
                 events.push(Ime::Disabled);
@@ -138,6 +140,18 @@ impl Dispatch2<ZwpTextInputV3, Runtime> for TextData {
             zwp_text_input_v3::Event::Done { serial } => {
                 if serial == text.serial {
                     events = std::mem::take(&mut text.pending);
+                    events.sort_by_key(|e| match e {
+                        Ime::Selection(_) => 0,
+                        Ime::Commit(_) => 1,
+                        _ => 2,
+                    });
+                    for event in &events {
+                        match event {
+                            Ime::Commit(_) => text.composing = false,
+                            Ime::Preedit { text: value, .. } => text.composing = !value.is_empty(),
+                            _ => {}
+                        }
+                    }
                 } else {
                     text.pending.clear();
                 }

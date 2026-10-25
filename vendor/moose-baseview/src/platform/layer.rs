@@ -48,6 +48,7 @@ struct Shared {
     size: AtomicU64,
     scale: AtomicU64,
     error: Mutex<Option<String>>,
+    surface: Mutex<Option<(LayerSurface, Connection)>>,
 }
 impl Shared {
     fn size(&self) -> WindowSize {
@@ -71,6 +72,7 @@ pub struct WindowHandle {
     sender: channel::SyncSender<Command>,
     signal: LoopSignal,
     thread: Cell<Option<JoinHandle<()>>>,
+    close_timeout: Cell<Duration>,
 }
 impl WindowHandle {
     pub fn create_window(init: WindowInitializer) -> linux::Result<Self> {
@@ -88,6 +90,7 @@ impl WindowHandle {
             size: AtomicU64::new((800_u64 << 32) | 160),
             scale: AtomicU64::new(1_f64.to_bits()),
             error: Mutex::new(None),
+            surface: Mutex::new(None),
         });
         let WindowInitializer { settings, builder, host } = init;
         drop(host);
@@ -133,7 +136,13 @@ impl WindowHandle {
             })
             .map_err(failure)?;
         match recv.recv_timeout(Duration::from_secs(3)) {
-            Ok(Ok(signal)) => Ok(Self { shared, sender, signal, thread: Cell::new(Some(thread)) }),
+            Ok(Ok(signal)) => Ok(Self {
+                shared,
+                sender,
+                signal,
+                thread: Cell::new(Some(thread)),
+                close_timeout: Cell::new(Duration::from_millis(250)),
+            }),
             result => {
                 shared.open.store(false, Ordering::Release);
                 if thread.is_finished() {
@@ -169,7 +178,9 @@ impl WindowHandle {
         Ok(())
     }
     pub fn set_keyboard_capture(&self, _: bool) {}
-    pub fn set_close_timeout(&self, _: Duration) {}
+    pub fn set_close_timeout(&self, timeout: Duration) {
+        self.close_timeout.set(timeout);
+    }
     pub fn is_open(&self) -> bool {
         self.shared.open.load(Ordering::Acquire)
     }
@@ -225,10 +236,27 @@ impl Drop for WindowHandle {
         self.shared.open.store(false, Ordering::Release);
         let _ = self.sender.try_send(Command::Close);
         self.signal.wakeup();
+        // Release the reservation even when a product renderer is stalled.
+        // Wayland proxies/Connection support requests from another thread; only
+        // the native owner dispatches events or accesses the product handler.
+        if let Some((layer, conn)) =
+            self.shared.surface.lock().unwrap_or_else(|e| e.into_inner()).take()
+        {
+            layer.set_exclusive_zone(0);
+            layer.wl_surface().attach(None, 0, 0);
+            layer.wl_surface().commit();
+            let _ = conn.flush();
+        }
         if let Some(thread) = self.thread.take() {
-            // Never detach live product callbacks. The native loop has no host RPCs;
-            // close wakes dispatch and tears down the handler before its surface.
-            let _ = thread.join();
+            let start = Instant::now();
+            while !thread.is_finished() && start.elapsed() < self.close_timeout.get() {
+                std::thread::sleep(Duration::from_millis(2));
+            }
+            if thread.is_finished() {
+                let _ = thread.join();
+            }
+            // Startup pinned the image. A stalled callback retains its own
+            // handler/surface until retirement; no new product input is admitted.
         }
     }
 }
@@ -307,6 +335,8 @@ impl Runtime {
         for seat in runtime.seats.seats() {
             context.text.borrow_mut().seat(&seat, &qh);
         }
+        *runtime.shared.surface.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((context.layer.clone(), context.conn.clone()));
         runtime.context = Some(Rc::clone(&context));
         // Configure without a buffer, and acknowledge before any presenter can attach.
         context.configure();
@@ -393,6 +423,9 @@ impl Runtime {
         }
     }
     fn event(&self, event: Event) -> EventStatus {
+        if !self.shared.open.load(Ordering::Acquire) {
+            return EventStatus::Ignored;
+        }
         self.shared.redraw.store(true, Ordering::Release);
         self.handler.as_ref().map_or(EventStatus::Ignored, |h| h.on_event(event))
     }
@@ -481,3 +514,57 @@ smithay_client_toolkit::delegate_registry!(Runtime);
 use wayland_client::Proxy;
 
 smithay_client_toolkit::delegate_dispatch2!(Runtime);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Stalled {
+        entered: mpsc::Sender<()>,
+        release: mpsc::Receiver<()>,
+        retired: mpsc::Sender<()>,
+        once: Cell<bool>,
+    }
+    impl WindowHandler for Stalled {
+        fn resized(&self, _: WindowSize) -> std::result::Result<(), HandlerError> {
+            Ok(())
+        }
+        fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+            if !self.once.replace(true) {
+                let _ = self.entered.send(());
+                let _ = self.release.recv_timeout(Duration::from_secs(5));
+            }
+            Ok(())
+        }
+        fn on_event(&self, _: Event) -> EventStatus {
+            EventStatus::Ignored
+        }
+    }
+    impl Drop for Stalled {
+        fn drop(&mut self) {
+            let _ = self.retired.send(());
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a running layer-shell compositor"]
+    fn a_stalled_dock_does_not_block_host_close() {
+        let (entered, started) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let (retired, finished) = mpsc::channel();
+        let window = Window::create(
+            WindowSettings::new().with_dock(DockOptions::new(DockEdge::Top, 120)),
+            move |_| Ok(Stalled { entered, release: released, retired, once: Cell::new(false) }),
+        )
+        .expect("native dock");
+        window.show().expect("show");
+        started.recv_timeout(Duration::from_secs(3)).expect("renderer entered");
+        let start = Instant::now();
+        window.close_bounded(Duration::from_millis(30));
+        assert!(start.elapsed() < Duration::from_millis(150), "host close must stay bounded");
+        release.send(()).expect("stalled callback still owns its resources");
+        finished
+            .recv_timeout(Duration::from_secs(3))
+            .expect("owner retires after callback returns");
+    }
+}

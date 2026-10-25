@@ -144,6 +144,13 @@ impl Runtime {
         let code = super::super::x11::keyboard::hardware_keycode_to_code(
             event.raw_code.saturating_add(8).min(u32::from(u16::MAX)) as u16,
         );
+        let composing = self.context.as_ref().is_some_and(|cx| cx.text.borrow().active());
+        if composing
+            && matches!(key, Key::Character(_))
+            && !self.modifiers.intersects(Modifiers::CONTROL | Modifiers::META | Modifiers::ALT)
+        {
+            return;
+        }
         self.event(Event::Keyboard(KeyboardEvent {
             state,
             key,
@@ -151,7 +158,7 @@ impl Runtime {
             location: crate::keyboard::code_to_location(code),
             modifiers: self.modifiers,
             repeat,
-            is_composing: self.context.as_ref().is_some_and(|cx| cx.text.borrow().active()),
+            is_composing: composing,
         }));
     }
 }

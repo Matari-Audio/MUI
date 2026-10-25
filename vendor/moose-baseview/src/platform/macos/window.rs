@@ -44,6 +44,16 @@ impl WindowHandle {
                     ),
                 )?;
 
+                if let Some(name) = init.settings.dock.as_ref().and_then(|d| d.output.as_ref()) {
+                    if !NSScreen::screens(mtm)
+                        .iter()
+                        .any(|s| s.localizedName().to_string() == *name)
+                    {
+                        return Err(crate::platform::PlatformError::CreationFailed(
+                            "selected dock display is unavailable",
+                        ));
+                    }
+                }
                 // Creates the global NSApplication instance, if it doesn't exist yet
                 let _ = NSApplication::sharedApplication(mtm);
 
