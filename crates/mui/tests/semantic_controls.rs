@@ -359,6 +359,13 @@ fn knob_reservations_keep_the_dial_and_its_neighbour_in_place() {
         );
         assert_eq!(*previous.get_or_insert(frames), frames);
         let dial = frames.0;
+        assert!(
+            !scene
+                .paint
+                .iter()
+                .any(|paint| paint.key.as_str() == "k/reading" && paint.layer == Layer::Fill),
+            "the value layout must not paint over the disc"
+        );
         let reading = scene.surface("k/reading").unwrap().frame;
         assert!(reading.x >= dial.x && reading.right() <= dial.right());
         assert!(reading.y >= dial.y && reading.bottom() <= dial.bottom());
