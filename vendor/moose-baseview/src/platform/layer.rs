@@ -166,10 +166,14 @@ impl WindowHandle {
         self.command(Command::Resize(size))
     }
     pub fn show(&self) -> linux::Result<()> {
-        self.command(Command::Show)
+        self.shared.desired_visible.store(true, Ordering::Release);
+        self.signal.wakeup();
+        Ok(())
     }
     pub fn hide(&self) -> linux::Result<()> {
-        self.command(Command::Hide)
+        self.shared.desired_visible.store(false, Ordering::Release);
+        self.signal.wakeup();
+        Ok(())
     }
     pub fn suggest_scale_factor(&self, _: f64) -> linux::Result<()> {
         Ok(())
@@ -361,7 +365,6 @@ impl Runtime {
             }
             Command::Show => {
                 self.shared.visible.store(true, Ordering::Release);
-                self.shared.desired_visible.store(true, Ordering::Release);
                 self.ready = true;
                 if !self.configured {
                     cx.configure();
@@ -369,7 +372,6 @@ impl Runtime {
             }
             Command::Hide => {
                 self.shared.visible.store(false, Ordering::Release);
-                self.shared.desired_visible.store(false, Ordering::Release);
                 self.configured = false;
                 cx.layer.set_exclusive_zone(0);
                 cx.surface().attach(None, 0, 0);
