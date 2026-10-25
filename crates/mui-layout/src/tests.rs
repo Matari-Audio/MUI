@@ -334,15 +334,6 @@ fn aspect_fit_respects_both_axes_intrinsic_flex_and_ratio_validation() {
             sibling.x >= frame.right()
         });
     }
-    let intrinsic_square = resolve_with(
-        &Node::<()>::content().aspect(1.),
-        None,
-        Limits::default(),
-        SpacingScale::DEFAULT,
-        |_, _| Size::new(80., 30.),
-    )
-    .unwrap();
-    assert_eq!(intrinsic_square.size, Size::new(80., 80.));
     let old = resolve(
         &stack([Node::content().w(Len::Pct(100.)).aspect(1.).id("old")]),
         Some(Size::new(80., 40.)),

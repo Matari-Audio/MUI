@@ -1008,20 +1008,6 @@ pub(crate) fn measure_uncached<'a, P>(
         definite[0].unwrap_or(hug.width).max(node.minimum.width),
         definite[1].unwrap_or(hug.height).max(node.minimum.height),
     );
-    // With neither axis offered, max-content supplies the width-first aspect
-    // just as a definite width does above. In particular, a reserved reading
-    // can widen an intrinsic dial without leaving its height behind.
-    let size = match node.rare().aspect {
-        Some(ratio)
-            if !node.rare().aspect_fit
-                && boxed.is_none()
-                && definite == [None, None]
-                && matches!(node.height, Len::Auto) =>
-        {
-            Size::new(size.width, (size.width / ratio).max(node.minimum.height))
-        }
-        _ => size,
-    };
     let floor = match node.vertical() {
         Some(v) if node.scroll => Size::axes(
             if v {

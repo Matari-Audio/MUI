@@ -41,6 +41,7 @@ struct Look {
     px: f64,
     variant: Variant,
     role: Role,
+    dial_color: Option<Fill>,
     palette: Palette,
     text: Option<String>,
     reserve: Option<Arc<[String]>>,
@@ -220,6 +221,7 @@ impl Control {
                 px: ui.theme().control,
                 variant: Variant::Solid,
                 role: Role::Primary,
+                dial_color: None,
                 palette: ui.theme().palette,
                 text: None,
                 reserve: None,
@@ -303,6 +305,12 @@ impl Control {
     /// Hide the visible caption while retaining the input's accessible name.
     pub fn hide_label(mut self) -> Self {
         self.label_visible = false;
+        self
+    }
+    /// Override a knob's arc and centered value with a custom instrument accent.
+    /// Other controls retain their palette role.
+    pub fn dial_color(mut self, fill: impl Into<Fill>) -> Self {
+        self.look.dial_color = Some(fill.into());
         self
     }
     /// Reserve a readout sample in the actual font instead of padding the
@@ -621,12 +629,14 @@ pub fn knob(
 
 fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
     // The macro grammar: a quiet inner disc, a 270-degree value arc and the
-    // formatted reading in its centre. Content can widen the square for long
-    // units; the supplied reserve keeps its footprint stable during edits.
-    let size = look.px * 1.125;
-    let role = look.role;
+    // formatted reading in its centre. The square keeps one size across
+    // values; units get a second centered line inside the same compact face.
+    let size = look.px * 1.25;
+    let color = look.dial_color.clone().unwrap_or_else(|| look.role.into());
+    let active = color.map(&look.palette, look.palette.surface(), |color| {
+        color.with_alpha((0.82 + d.hover * 0.18) as f32)
+    });
     let amount = d.t;
-    let hover = d.hover;
     let width = look.px / 16.;
     let paint = canvas(move |size| {
         let center = Point::new(size.width * 0.5, size.height * 0.5);
@@ -656,22 +666,28 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -
         );
         vec![
             Draw::stroke(arc(1.), Role::Dim.alpha(0.12), width),
-            Draw::stroke(arc(amount), role.alpha((0.82 + hover * 0.18) as f32), width),
+            Draw::stroke(arc(amount), active.clone(), width),
             Draw::fill(disc, Role::Field),
         ]
     })
     .full();
-    let reading = d
-        .readout(look)
+    let reading =
+        if let Some((value, unit)) = look.text.as_deref().and_then(|text| text.split_once(' ')) {
+            col![
+                text(value).text_size(look.px * 0.3).fill(color.clone()),
+                text(unit).text_size(look.px * 0.3).fill(color.clone()),
+            ]
+            .gap(0.)
+            .align(Align::Center)
+        } else {
+            readout(look.text.clone(), d.value, d.min, d.max)
+        }
         .text_size(look.px * 0.3)
-        .fill(role)
+        .fill(color.clone())
         .id(id.field("reading"));
-    let face = look.describe(
-        stack![paint, col![reading].center().pad(look.px * 0.18)]
-            .min_w(size)
-            .min_h(size)
-            .w(pct(100.))
-            .aspect(1.)
+    let input = look.describe(
+        block(pct(100.), pct(100.))
+            .no_fill()
             .a11y(d.a11y())
             .named(label.clone())
             .focusable()
@@ -680,6 +696,9 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -
             .id(&id),
         true,
     );
+    // The single input target sits above the painted arc and reading. Clicking
+    // the value must begin the same drag as clicking anywhere else on the dial.
+    let face = stack![paint, col![reading].center().full(), input].square(size);
     let mut content = vec![face];
     if label_visible && !label.is_empty() {
         content.push(text(label).text_size(look.px * 0.3).fill(Role::Dim));

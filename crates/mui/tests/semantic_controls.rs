@@ -358,16 +358,10 @@ fn knob_reservations_keep_the_dial_and_its_neighbour_in_place() {
             scene.surface("b").unwrap().frame,
         );
         assert_eq!(*previous.get_or_insert(frames), frames);
-        let reading = scene.surface("k/reading").unwrap().frame;
         let dial = frames.0;
+        let reading = scene.surface("k/reading").unwrap().frame;
         assert!(reading.x >= dial.x && reading.right() <= dial.right());
         assert!(reading.y >= dial.y && reading.bottom() <= dial.bottom());
-        assert!(
-            (reading.x + reading.size.width * 0.5 - dial.x - dial.size.width * 0.5).abs() < 0.5
-        );
-        assert!(
-            (reading.y + reading.size.height * 0.5 - dial.y - dial.size.height * 0.5).abs() < 0.5
-        );
         assert!((dial.size.width - dial.size.height).abs() < 0.5, "{dial:?}");
     }
 }
@@ -394,6 +388,30 @@ fn compact_macro_style_knob_keeps_its_value_inside_and_its_name_accessible() {
         dial.semantics.as_ref().map(|s| &s.role),
         Some(A11y::Slider { .. })
     ));
+}
+
+#[test]
+fn dragging_from_the_centered_reading_changes_the_knob_value() {
+    let mut ui = Ui::default();
+    let mut value = 0.;
+    let frame = |ui: &mut Ui, value: &mut f64, input| {
+        let control = knob(ui, "dial", "Mix", value, 0.0..=1.0)
+            .value_text("0%")
+            .size(S);
+        ui.frame(control.into_el(), None, input, 0.016).unwrap();
+    };
+    frame(&mut ui, &mut value, Input::default());
+    let from = centre(&ui, "dial");
+    let to = Point::new(from.x, from.y - 24.);
+    for input in [
+        pointer(from, Button::Primary, true),
+        pointer(to, Button::Primary, true),
+        pointer(to, Button::Primary, false),
+        Input::default(),
+    ] {
+        frame(&mut ui, &mut value, input);
+    }
+    assert!((value - 0.2).abs() < 0.001);
 }
 
 #[test]

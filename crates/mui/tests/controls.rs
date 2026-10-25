@@ -112,7 +112,11 @@ fn a_control_prints_the_value_text_it_is_given() {
             .el
             .value_text("440 Hz"),
     );
-    assert_eq!(dial, vec!["440 Hz".len(), "Cutoff".len()], "{dial:?}");
+    assert_eq!(
+        dial,
+        vec!["440".len(), "Hz".len(), "Cutoff".len()],
+        "{dial:?}"
+    );
 }
 
 /// The whole lane is the slider: a press on the track jumps the value
