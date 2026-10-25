@@ -2,6 +2,7 @@
 mod context;
 mod drag;
 mod input;
+mod text_input;
 
 use super::{linux, x11::PlatformError};
 use crate::{dpi::*, window::WindowInitializer, *};
@@ -42,6 +43,7 @@ fn failure(error: impl std::fmt::Display) -> PlatformError {
 struct Shared {
     open: AtomicBool,
     visible: AtomicBool,
+    desired_visible: AtomicBool,
     redraw: AtomicBool,
     size: AtomicU64,
     scale: AtomicU64,
@@ -81,6 +83,7 @@ impl WindowHandle {
         let shared = Arc::new(Shared {
             open: AtomicBool::new(true),
             visible: AtomicBool::new(false),
+            desired_visible: AtomicBool::new(false),
             redraw: AtomicBool::new(true),
             size: AtomicU64::new((800_u64 << 32) | 160),
             scale: AtomicU64::new(1_f64.to_bits()),
@@ -182,6 +185,19 @@ impl WindowHandle {
     pub fn handle_main_thread_callback(&self) {}
     pub fn set_parent(&self, _: super::x11::ParentWindowHandle) -> linux::Result<()> {
         Err(failure("a layer surface cannot be embedded"))
+    }
+    pub fn visibility_control(&self) -> WindowVisibility {
+        let shared = Arc::downgrade(&self.shared);
+        let signal = self.signal.clone();
+        WindowVisibility::new(move |visible| {
+            if let Some(s) = shared.upgrade() {
+                if s.open.load(Ordering::Acquire) {
+                    s.desired_visible.store(visible, Ordering::Release);
+                    s.redraw.store(true, Ordering::Release);
+                    signal.wakeup();
+                }
+            }
+        })
     }
     pub fn frame_requester(&self) -> FrameRequester {
         let shared = Arc::downgrade(&self.shared);
@@ -288,6 +304,9 @@ impl Runtime {
             event_loop.get_signal(),
             &globals,
         )?);
+        for seat in runtime.seats.seats() {
+            context.text.borrow_mut().seat(&seat, &qh);
+        }
         runtime.context = Some(Rc::clone(&context));
         // Configure without a buffer, and acknowledge before any presenter can attach.
         context.configure();
@@ -312,6 +331,7 @@ impl Runtime {
             }
             Command::Show => {
                 self.shared.visible.store(true, Ordering::Release);
+                self.shared.desired_visible.store(true, Ordering::Release);
                 self.ready = true;
                 if !self.configured {
                     cx.configure();
@@ -319,6 +339,7 @@ impl Runtime {
             }
             Command::Hide => {
                 self.shared.visible.store(false, Ordering::Release);
+                self.shared.desired_visible.store(false, Ordering::Release);
                 self.configured = false;
                 cx.layer.set_exclusive_zone(0);
                 cx.surface().attach(None, 0, 0);
@@ -331,6 +352,10 @@ impl Runtime {
         }
     }
     fn tick(&mut self) -> linux::Result<()> {
+        let visible = self.shared.desired_visible.load(Ordering::Acquire);
+        if visible != self.shared.visible.load(Ordering::Acquire) {
+            self.command(if visible { Command::Show } else { Command::Hide });
+        }
         self.start_pending_drag();
         self.data.progress(self.handler.as_deref());
         let (Some(cx), Some(handler)) = (&self.context, &self.handler) else { return Ok(()) };

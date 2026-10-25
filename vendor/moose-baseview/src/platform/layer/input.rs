@@ -24,6 +24,9 @@ impl SeatHandler for Runtime {
         match capability {
             Capability::Keyboard if self.keyboard.is_none() => {
                 self.keyboard = self.seats.get_keyboard(qh, &seat, None).ok();
+                if let Some(cx) = &self.context {
+                    cx.text.borrow_mut().seat(&seat, qh);
+                }
             }
             Capability::Pointer if self.pointer.is_none() => {
                 self.pointer = self.seats.get_pointer(qh, &seat).ok();
@@ -148,7 +151,7 @@ impl Runtime {
             location: crate::keyboard::code_to_location(code),
             modifiers: self.modifiers,
             repeat,
-            is_composing: false,
+            is_composing: self.context.as_ref().is_some_and(|cx| cx.text.borrow().active()),
         }));
     }
 }
@@ -170,10 +173,12 @@ impl PointerHandler for Runtime {
                 self.event(Event::Mouse(MouseEvent::CursorMoved { position, modifiers }));
             }
             match event.kind {
-                PointerEventKind::Enter { .. } => {
+                PointerEventKind::Enter { serial } => {
+                    cx.pointer_enter(pointer, serial);
                     self.event(Event::Mouse(MouseEvent::CursorEntered));
                 }
                 PointerEventKind::Leave { .. } => {
+                    cx.pointer_leave();
                     self.event(Event::Mouse(MouseEvent::CursorLeft));
                 }
                 PointerEventKind::Press { button, serial, .. } => {

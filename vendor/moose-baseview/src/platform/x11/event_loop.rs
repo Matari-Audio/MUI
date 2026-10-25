@@ -681,6 +681,14 @@ impl EventLoop {
         self.forward_matari_drag_event(&event);
 
         match event {
+            XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_) => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    if let Err(error) = dock.refresh() {
+                        warn!("dock output changed: {}", error);
+                        self.window.request_close();
+                    }
+                }
+            }
             ////
             // window
             ////

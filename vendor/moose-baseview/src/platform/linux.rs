@@ -46,6 +46,9 @@ impl WindowHandle {
     pub fn set_close_timeout(&self, timeout: std::time::Duration) {
         forward!(self, set_close_timeout, timeout)
     }
+    pub fn visibility_control(&self) -> WindowVisibility {
+        forward!(self, visibility_control)
+    }
     pub fn frame_requester(&self) -> FrameRequester {
         forward!(self, frame_requester)
     }

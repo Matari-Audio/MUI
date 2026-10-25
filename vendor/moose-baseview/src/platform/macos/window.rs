@@ -172,6 +172,31 @@ impl WindowHandle {
         callback("keyboard capture", (), || BaseviewView::set_keyboard_capture(view, capture));
     }
 
+    pub fn visibility_control(&self) -> WindowVisibility {
+        let view =
+            std::sync::Arc::new(dispatch2::MainThreadBound::new(self.view.clone(), self.mtm));
+        WindowVisibility::new(move |visible| {
+            let view = std::sync::Arc::clone(&view);
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                let Some(mtm) = MainThreadMarker::new() else {
+                    return;
+                };
+                let Some(view) = view.get(mtm).load() else {
+                    return;
+                };
+                let Some(view) = view.inner_ref() else {
+                    return;
+                };
+                callback("external visibility", (), || {
+                    if visible {
+                        BaseviewView::show(view);
+                    } else {
+                        BaseviewView::hide(view);
+                    }
+                });
+            });
+        })
+    }
     pub fn frame_requester(&self) -> FrameRequester {
         let Some(view) = self.view.load() else {
             return FrameRequester::new(|| {});

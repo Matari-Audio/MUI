@@ -284,6 +284,22 @@ impl WindowThreadHandle {
         receive_response(&receiver, REQUEST_TIMEOUT)
     }
 
+    pub fn visibility_control(&self) -> crate::WindowVisibility {
+        let shared = Arc::clone(&self.shared);
+        let sender = self.request_sender.clone();
+        crate::WindowVisibility::new(move |visible| {
+            if shared.callbacks_revoked()
+                || shared.is_stop_host_requested()
+                || shared.stopped.load(Ordering::Acquire)
+            {
+                return;
+            }
+            let (response, _) = mpsc::channel();
+            let request =
+                if visible { WindowThreadRequest::Show } else { WindowThreadRequest::Hide };
+            let _ = sender.try_send(WindowThreadMessage { request, response });
+        })
+    }
     pub fn frame_requester(&self) -> crate::FrameRequester {
         let shared = Arc::clone(&self.shared);
         let signal = self.loop_signal.clone();

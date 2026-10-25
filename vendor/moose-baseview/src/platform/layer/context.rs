@@ -7,6 +7,10 @@ use smithay_client_toolkit::dispatch2::Dispatch2;
 use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity};
 use std::ptr::NonNull;
 use wayland_client::{globals::GlobalList, protocol::wl_data_device::WlDataDevice};
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
+    wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
+};
 use wayland_protocols::wp::{
     fractional_scale::v1::client::{
         wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
@@ -56,6 +60,11 @@ pub struct Context {
     logical: Cell<(u32, u32)>,
     fractional: Option<WpFractionalScaleV1>,
     viewport: Option<WpViewport>,
+    pub(super) text: RefCell<super::text_input::TextInput>,
+    cursor_manager: Option<WpCursorShapeManagerV1>,
+    cursor_device: RefCell<Option<WpCursorShapeDeviceV1>>,
+    cursor: Cell<MouseCursor>,
+    cursor_serial: Cell<Option<u32>>,
     pub(super) primary: Cell<bool>,
     pub(super) press: RefCell<Option<(WlDataDevice, u32)>>,
     pub(super) pending_drag: RefCell<Option<matari_audio_drag_and_drop::StartTicket>>,
@@ -80,12 +89,13 @@ impl Context {
         if let Some(v) = viewporter {
             v.destroy();
         }
+        let cursor_manager = globals.bind(&qh, 1..=1, Noop).ok();
         let logical = (800, options.height);
         Ok(Self {
             conn,
             layer,
             options: RefCell::new(options),
-            qh,
+            qh: qh.clone(),
             shared,
             signal,
             focused: Cell::new(false),
@@ -93,6 +103,11 @@ impl Context {
             logical: Cell::new(logical),
             fractional,
             viewport,
+            text: RefCell::new(super::text_input::TextInput::bind(globals, &qh)),
+            cursor_manager,
+            cursor_device: RefCell::new(None),
+            cursor: Cell::new(MouseCursor::Default),
+            cursor_serial: Cell::new(None),
             primary: Cell::new(false),
             press: RefCell::new(None),
             pending_drag: RefCell::new(None),
@@ -192,8 +207,71 @@ impl Context {
         Ok(())
     }
     pub fn set_keyboard_capture(&self, _: bool) {}
-    pub fn set_ime_configuration(&self, _: Option<ImeConfiguration>) {}
-    pub fn set_mouse_cursor(&self, _: MouseCursor) -> linux::Result<()> {
+    pub fn set_ime_configuration(&self, config: Option<ImeConfiguration>) {
+        self.text.borrow_mut().configure(config, self.scale_factor());
+    }
+    pub(super) fn pointer_enter(
+        &self, pointer: &wayland_client::protocol::wl_pointer::WlPointer, serial: u32,
+    ) {
+        self.cursor_serial.set(Some(serial));
+        if let Some(manager) = &self.cursor_manager {
+            if let Some(old) = self.cursor_device.borrow_mut().take() {
+                old.destroy();
+            }
+            *self.cursor_device.borrow_mut() = Some(manager.get_pointer(pointer, &self.qh, Noop));
+        }
+        if self.cursor.get() == MouseCursor::Hidden {
+            pointer.set_cursor(serial, None, 0, 0);
+        } else {
+            let _ = self.set_mouse_cursor(self.cursor.get());
+        }
+    }
+    pub(super) fn pointer_leave(&self) {
+        self.cursor_serial.set(None);
+    }
+    pub fn set_mouse_cursor(&self, cursor: MouseCursor) -> linux::Result<()> {
+        self.cursor.set(cursor);
+        let Some(serial) = self.cursor_serial.get() else {
+            return Ok(());
+        };
+        let device = self.cursor_device.borrow();
+        let Some(device) = device.as_ref() else {
+            return Ok(());
+        };
+        let shape = match cursor {
+            MouseCursor::Default | MouseCursor::Hidden => Shape::Default,
+            MouseCursor::Hand => Shape::Pointer,
+            MouseCursor::HandGrabbing => Shape::Grabbing,
+            MouseCursor::Help => Shape::Help,
+            MouseCursor::Text => Shape::Text,
+            MouseCursor::VerticalText => Shape::VerticalText,
+            MouseCursor::Working => Shape::Wait,
+            MouseCursor::PtrWorking => Shape::Progress,
+            MouseCursor::NotAllowed | MouseCursor::PtrNotAllowed => Shape::NotAllowed,
+            MouseCursor::ZoomIn => Shape::ZoomIn,
+            MouseCursor::ZoomOut => Shape::ZoomOut,
+            MouseCursor::Alias => Shape::Alias,
+            MouseCursor::Copy => Shape::Copy,
+            MouseCursor::Move => Shape::Move,
+            MouseCursor::AllScroll => Shape::AllScroll,
+            MouseCursor::Cell => Shape::Cell,
+            MouseCursor::Crosshair => Shape::Crosshair,
+            MouseCursor::EResize => Shape::EResize,
+            MouseCursor::NResize => Shape::NResize,
+            MouseCursor::NeResize => Shape::NeResize,
+            MouseCursor::NwResize => Shape::NwResize,
+            MouseCursor::SResize => Shape::SResize,
+            MouseCursor::SeResize => Shape::SeResize,
+            MouseCursor::SwResize => Shape::SwResize,
+            MouseCursor::WResize => Shape::WResize,
+            MouseCursor::EwResize => Shape::EwResize,
+            MouseCursor::NsResize => Shape::NsResize,
+            MouseCursor::NwseResize => Shape::NwseResize,
+            MouseCursor::NeswResize => Shape::NeswResize,
+            MouseCursor::ColResize => Shape::ColResize,
+            MouseCursor::RowResize => Shape::RowResize,
+        };
+        device.set_shape(serial, shape);
         Ok(())
     }
     pub fn drag_resize(&self, _: ResizeEdge) -> std::result::Result<(), DragResizeError> {
@@ -227,6 +305,12 @@ impl Context {
 }
 impl Drop for Context {
     fn drop(&mut self) {
+        if let Some(d) = self.cursor_device.get_mut().take() {
+            d.destroy();
+        }
+        if let Some(m) = self.cursor_manager.take() {
+            m.destroy();
+        }
         if let Some(f) = self.fractional.take() {
             f.destroy();
         }

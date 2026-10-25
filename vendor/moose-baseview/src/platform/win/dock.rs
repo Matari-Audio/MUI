@@ -3,7 +3,10 @@ use crate::{DockEdge, DockOptions};
 use std::cell::Cell;
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, RECT, WPARAM},
-    Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST},
+    Graphics::Gdi::{
+        EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
+        MONITORINFOEXW, MONITOR_DEFAULTTONEAREST,
+    },
     UI::{HiDpi::GetDpiForWindow, Shell::*, WindowsAndMessaging::*},
 };
 
@@ -12,6 +15,7 @@ const CALLBACK: u32 = WM_USER + 100;
 pub(super) struct Dock {
     hwnd: HWND,
     options: DockOptions,
+    height: Cell<u32>,
     registered: Cell<bool>,
     syncing: Cell<bool>,
     visible: Cell<bool>,
@@ -23,12 +27,69 @@ impl Dock {
         let taskbar_created = unsafe { RegisterWindowMessageW(windows_sys::w!("TaskbarCreated")) };
         Self {
             hwnd,
+            height: Cell::new(options.height),
             options,
             registered: Cell::new(false),
             syncing: Cell::new(false),
             visible: Cell::new(false),
             taskbar_created,
         }
+    }
+    pub fn resize(&self, height: u32) {
+        self.height.set(height.clamp(100, 1024));
+        self.sync();
+    }
+    fn monitor(&self) -> HMONITOR {
+        struct Search<'a> {
+            name: &'a str,
+            found: HMONITOR,
+        }
+        unsafe extern "system" fn visit(
+            monitor: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM,
+        ) -> i32 {
+            // SAFETY: EnumDisplayMonitors invokes this synchronously with the
+            // Search pointer supplied below, on the same thread.
+            let search = unsafe { &mut *(data as *mut Search<'_>) };
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            // SAFETY: correctly sized writable MONITORINFOEXW, live monitor.
+            if unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) } != 0 {
+                let end = info.szDevice.iter().position(|c| *c == 0).unwrap_or(info.szDevice.len());
+                if String::from_utf16_lossy(&info.szDevice[..end]) == search.name {
+                    search.found = monitor;
+                    return 0;
+                }
+            }
+            1
+        }
+        if let Some(name) = &self.options.output {
+            let mut search = Search { name, found: std::ptr::null_mut() };
+            // SAFETY: callback context lives for the synchronous enumeration.
+            unsafe {
+                EnumDisplayMonitors(
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    Some(visit),
+                    &mut search as *mut Search<'_> as LPARAM,
+                );
+            }
+            search.found
+        } else {
+            // SAFETY: this HWND is owned by the calling native thread.
+            unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) }
+        }
+    }
+    pub fn register(&self) -> bool {
+        if self.monitor().is_null() {
+            return false;
+        }
+        if self.registered.get() {
+            return true;
+        }
+        // SAFETY: this initialized descriptor belongs to the live owner-thread HWND.
+        let registered = unsafe { SHAppBarMessage(ABM_NEW, &mut self.data()) != 0 };
+        self.registered.set(registered);
+        registered
     }
     fn data(&self) -> APPBARDATA {
         APPBARDATA {
@@ -67,7 +128,7 @@ impl Dock {
                 }
                 self.registered.set(true);
             }
-            let monitor = MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST);
+            let monitor = self.monitor();
             let mut info = MONITORINFO {
                 cbSize: std::mem::size_of::<MONITORINFO>() as u32,
                 ..Default::default()
@@ -76,11 +137,10 @@ impl Dock {
                 self.remove();
                 return;
             }
-            let height = (u64::from(self.options.height)
-                * u64::from(GetDpiForWindow(self.hwnd).max(96))
-                / 96)
-                .min((info.rcMonitor.bottom - info.rcMonitor.top).max(2) as u64 / 2)
-                as i32;
+            let height =
+                (u64::from(self.height.get()) * u64::from(GetDpiForWindow(self.hwnd).max(96)) / 96)
+                    .min((info.rcMonitor.bottom - info.rcMonitor.top).max(2) as u64 / 2)
+                    as i32;
             data.uEdge = match self.options.edge {
                 DockEdge::Top => ABE_TOP,
                 DockEdge::Bottom => ABE_BOTTOM,

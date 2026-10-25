@@ -17,6 +17,7 @@ pub(crate) struct Dock {
     options: DockOptions,
     scale: f64,
     visible: bool,
+    selected: Option<u32>,
 }
 impl Dock {
     pub fn new(
@@ -45,9 +46,12 @@ impl Dock {
             NotifyMask::SCREEN_CHANGE | NotifyMask::OUTPUT_CHANGE | NotifyMask::CRTC_CHANGE,
         )?
         .check()?;
-        let mut dock = Self { connection, window, options, scale, visible: false };
+        let mut dock = Self { connection, window, options, scale, visible: false, selected: None };
         dock.sync(false)?;
         Ok(dock)
+    }
+    pub fn refresh(&mut self) -> Result<()> {
+        self.sync(self.visible)
     }
     pub fn resize(&mut self, height: u32) -> Result<()> {
         self.options.height = height.clamp(100, 1024);
@@ -69,18 +73,23 @@ impl Dock {
                     .is_some_and(|a| a.name == name.as_bytes())
             })
         } else {
-            monitors
-                .monitors
-                .iter()
-                .find(|m| {
-                    i32::from(pointer.root_x) >= i32::from(m.x)
-                        && i32::from(pointer.root_x) < i32::from(m.x) + i32::from(m.width)
-                        && i32::from(pointer.root_y) >= i32::from(m.y)
-                        && i32::from(pointer.root_y) < i32::from(m.y) + i32::from(m.height)
+            self.selected
+                .and_then(|name| monitors.monitors.iter().find(|m| m.name == name))
+                .or_else(|| {
+                    monitors
+                        .monitors
+                        .iter()
+                        .find(|m| {
+                            i32::from(pointer.root_x) >= i32::from(m.x)
+                                && i32::from(pointer.root_x) < i32::from(m.x) + i32::from(m.width)
+                                && i32::from(pointer.root_y) >= i32::from(m.y)
+                                && i32::from(pointer.root_y) < i32::from(m.y) + i32::from(m.height)
+                        })
+                        .or_else(|| monitors.monitors.iter().find(|m| m.primary))
+                        .or_else(|| monitors.monitors.first())
                 })
-                .or_else(|| monitors.monitors.iter().find(|m| m.primary))
-                .or_else(|| monitors.monitors.first())
         };
+        self.selected = selected.map(|m| m.name);
         let (x, y, width, height) = match selected {
             Some(m) => (i32::from(m.x), i32::from(m.y), u32::from(m.width), u32::from(m.height)),
             None if self.options.output.is_none() => {
