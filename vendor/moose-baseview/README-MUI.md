@@ -234,3 +234,10 @@ subject to the same host-access revocation contract described above for X11.
 
 Local probe: `cargo run --manifest-path vendor/moose-baseview/Cargo.toml --example
 dock` paints both halves through softbuffer and closes after two seconds.
+
+`WindowContext::dock_outputs()` lists the native output names accepted by dock
+placement. XWayland callers query the prospective Wayland dock backend, avoiding
+XWayland monitor aliases that layer-shell would reject. That probe carries no
+editor/host state and returns within 100 ms; the native layer's own list follows
+output notifications. AppKit, Windows and pure X11 enumerate their native names.
+Query when opening a picker rather than on every frame.

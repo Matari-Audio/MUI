@@ -53,6 +53,10 @@ pub(crate) struct WindowState {
 }
 
 impl WindowState {
+    pub fn dock_outputs(&self) -> Vec<String> {
+        super::dock::output_names()
+    }
+
     pub fn new(
         hwnd: HWnd, user32: LibraryModule<ExtendedUser32>, shared: Rc<WindowSharedState>,
     ) -> Self {

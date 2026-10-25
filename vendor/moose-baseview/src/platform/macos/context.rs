@@ -19,6 +19,13 @@ pub struct WindowContext {
 }
 
 impl WindowContext {
+    pub fn dock_outputs(&self) -> Vec<String> {
+        objc2_app_kit::NSScreen::screens(self.mtm)
+            .iter()
+            .map(|s| s.localizedName().to_string())
+            .collect()
+    }
+
     pub(crate) fn new(view: ViewRef<'_, BaseviewView>) -> Self {
         Self {
             view: Weak::from_retained(&view.view.retain()),
