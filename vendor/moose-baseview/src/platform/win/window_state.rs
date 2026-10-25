@@ -133,6 +133,19 @@ impl WindowState {
         if !self.shared.is_alive.get() {
             return Ok(());
         }
+        if self.shared.docked {
+            let height = size.to_logical::<f64>(self.shared.scale_factor()).height.round() as u32;
+            // SAFETY: synchronous message to this live owner-thread HWND; no borrowed pointer.
+            unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
+                    self.hwnd.as_raw(),
+                    super::window::BV_DOCK_HEIGHT,
+                    height as usize,
+                    0,
+                );
+            }
+            return Ok(());
+        }
         // `self.window_info` will be modified in response to the `WM_SIZE` event that
         // follows the `SetWindowPos()` call
         let dpi = self.shared.current_dpi.get();
@@ -240,6 +253,7 @@ impl WindowState {
 pub struct WindowSharedState {
     pub(super) native_class: Cell<Option<super::native::RegisteredClass>>,
     pub(super) frame_signal: std::sync::Arc<super::frame::FrameSignal>,
+    pub docked: bool,
     pub parented: Cell<bool>,
     pub defer_user_close: bool,
     pub is_alive: Cell<bool>,
@@ -259,6 +273,7 @@ impl WindowSharedState {
     pub fn new(user32: LibraryModule<ExtendedUser32>, settings: &WindowSettings) -> Rc<Self> {
         Self {
             native_class: None.into(),
+            docked: settings.dock.is_some(),
             frame_signal: super::frame::FrameSignal::new(),
             parented: (settings.parent.is_some() || settings.wait_for_parent).into(),
             defer_user_close: settings.defer_user_close,

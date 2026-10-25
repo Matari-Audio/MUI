@@ -29,6 +29,23 @@ impl FrameSignal {
     pub fn matches_message(&self, serial: usize, marker: isize) -> bool {
         serial == self.serial && marker as usize == self.image_marker
     }
+    pub fn set_visibility(&self, visible: bool) {
+        let state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        if state.revoked {
+            return;
+        }
+        if let Some(hwnd) = state.hwnd {
+            // SAFETY: serialized with revoke; the receiver validates this generation.
+            unsafe {
+                PostMessageW(
+                    hwnd as HWND,
+                    if visible { super::window::BV_SHOW } else { super::window::BV_HIDE },
+                    self.serial,
+                    self.image_marker as isize,
+                );
+            }
+        }
+    }
     pub fn requester(self: &Arc<Self>) -> FrameRequester {
         let signal = Arc::clone(self);
         FrameRequester::new(move || signal.request())

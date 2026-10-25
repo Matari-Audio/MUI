@@ -223,7 +223,7 @@ fn code_to_key(
 /// practice it's probably pretty reliable.
 ///
 /// The logic is based on NativeKeyToDOMCodeName.h in Mozilla.
-fn hardware_keycode_to_code(hw_keycode: u16) -> Code {
+pub(crate) fn hardware_keycode_to_code(hw_keycode: u16) -> Code {
     match hw_keycode {
         0x0009 => Code::Escape,
         0x000A => Code::Digit1,

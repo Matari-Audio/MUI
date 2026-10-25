@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 pub(crate) use xcb_connection::X11Connection;
 
+mod dock;
 mod window;
 pub use window::*;
 
@@ -17,7 +18,7 @@ mod drag_n_drop;
 mod error;
 mod event_loop;
 mod ime;
-mod keyboard;
+pub(super) mod keyboard;
 mod visual_info;
 mod xcb_window;
 

@@ -693,7 +693,7 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -
             .focusable()
             .cursor(Cursor::ResizeV)
             .on(State::FocusVisible, focus_ring)
-            .id(&id),
+            .id(id),
         true,
     );
     // The single input target sits above the painted arc and reading. Clicking

@@ -87,6 +87,7 @@ impl ViewParentingType {
 
 pub(crate) struct BaseviewView {
     pub(crate) state: Rc<WindowSharedState>,
+    dock: Option<crate::DockOptions>,
     pub(crate) mtm: MainThreadMarker,
     pub(crate) drag: crate::drag::NativeDrag,
     resize_drag: RefCell<Option<MacResizeDrag>>,
@@ -148,6 +149,7 @@ impl BaseviewView {
         ));
 
         let inner = BaseviewView {
+            dock: init.settings.dock.clone(),
             mtm,
             drag: Default::default(),
             drag_event: RefCell::new(None),
@@ -368,7 +370,15 @@ impl BaseviewView {
             // If this is a standalone window then we'll also need to resize the window itself
             if let ViewParentingType::Windowed { owned_window } = &*this.parenting.borrow() {
                 if let Some(owned_window) = owned_window.load() {
+                    let old = owned_window.frame();
                     owned_window.setContentSize(size);
+                    if let Some(dock) = &this.dock {
+                        let mut frame = owned_window.frame();
+                        if matches!(dock.edge, crate::DockEdge::Top) {
+                            frame.origin.y = old.origin.y + old.size.height - frame.size.height;
+                        }
+                        owned_window.setFrame_display(frame, true);
+                    }
                 }
             }
         }

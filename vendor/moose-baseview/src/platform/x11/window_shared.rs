@@ -58,6 +58,7 @@ impl ScalingFactor {
 }
 
 pub(crate) struct WindowInner {
+    pub(crate) dock: RefCell<Option<super::dock::Dock>>,
     // GlContext should be dropped **before** XcbConnection is dropped
     #[cfg(feature = "opengl")]
     gl_context: Option<super::gl::GlContext>,
@@ -185,7 +186,19 @@ impl WindowInner {
         };
 
         let ime = super::ime::NativeIme::new(Arc::clone(&connection.conn), xcb_window.id().get());
+        let dock = options
+            .dock
+            .map(|options| {
+                super::dock::Dock::new(
+                    Rc::clone(&connection),
+                    xcb_window.id().get(),
+                    options,
+                    initial_scale_factor,
+                )
+            })
+            .transpose()?;
         Ok(Rc::new(Self {
+            dock: RefCell::new(dock),
             ime: RefCell::new(ime),
             ime_configuration: RefCell::new(None),
             connection,
@@ -269,6 +282,10 @@ impl WindowInner {
     }
 
     pub fn resize(&self, size: Size) -> Result<()> {
+        if let Some(dock) = self.dock.borrow_mut().as_mut() {
+            let size: crate::dpi::LogicalSize<f64> = size.to_logical(self.scale_factor());
+            return dock.resize(size.height.round() as u32);
+        }
         let new_physical_size = size.to_physical(self.scaling_factor.get());
         self.xcb_window.resize(new_physical_size)?.check()?;
 
@@ -339,8 +356,8 @@ impl WindowInner {
         self.connection.conn.xlib_display_handle()
     }
 
-    pub fn platform_handle(&self) -> PlatformHandle {
-        PlatformHandle {
+    pub fn platform_handle(&self) -> super::PlatformHandle {
+        super::PlatformHandle {
             connection: Arc::clone(&self.connection.conn),
             window_id: self.xcb_window.id(),
             visual_id: self.visual_id,

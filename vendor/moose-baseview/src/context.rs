@@ -179,10 +179,7 @@ impl WindowContext {
     ) -> Result<(), matari_audio_drag_and_drop::RejectedStart<MatariScheduleError>> {
         #[cfg(target_os = "linux")]
         {
-            let Ok(origin) = matari_audio_drag_and_drop::DragOrigin::from_window(self) else {
-                return Err(ticket.reject(MatariScheduleError::MissingWindowHandle));
-            };
-            self.inner.schedule_matari_x11_drag(ticket, origin)
+            self.inner.schedule_matari_drag(ticket)
         }
         #[cfg(any(target_os = "windows", target_os = "macos"))]
         {
@@ -313,6 +310,17 @@ impl<'a> MatariDragAdapter<'a> {
 impl matari_audio_drag_and_drop::ToolkitAdapter for MatariDragAdapter<'_> {
     type Error = MatariScheduleError;
     fn outbound_route(&self) -> Option<matari_audio_drag_and_drop::SessionRoute> {
+        #[cfg(target_os = "linux")]
+        if self
+            .window
+            .window_handle()
+            .is_ok_and(|h| matches!(h.as_raw(), raw_window_handle::RawWindowHandle::Wayland(_)))
+        {
+            return Some(matari_audio_drag_and_drop::SessionRoute {
+                protocol: matari_audio_drag_and_drop::NativeProtocol::WaylandDataDevice,
+                source: matari_audio_drag_and_drop::SourceContext::Wayland,
+            });
+        }
         Some(Self::route(self.parented))
     }
     fn schedule_outbound(

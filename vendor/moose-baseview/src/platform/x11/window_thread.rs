@@ -284,6 +284,22 @@ impl WindowThreadHandle {
         receive_response(&receiver, REQUEST_TIMEOUT)
     }
 
+    pub fn visibility_control(&self) -> crate::WindowVisibility {
+        let shared = Arc::clone(&self.shared);
+        let sender = self.request_sender.clone();
+        crate::WindowVisibility::new(move |visible| {
+            if shared.callbacks_revoked()
+                || shared.is_stop_host_requested()
+                || shared.stopped.load(Ordering::Acquire)
+            {
+                return;
+            }
+            let (response, _) = mpsc::channel();
+            let request =
+                if visible { WindowThreadRequest::Show } else { WindowThreadRequest::Hide };
+            let _ = sender.try_send(WindowThreadMessage { request, response });
+        })
+    }
     pub fn frame_requester(&self) -> crate::FrameRequester {
         let shared = Arc::clone(&self.shared);
         let signal = self.loop_signal.clone();
@@ -551,7 +567,7 @@ impl WindowThread {
             return Err(PlatformError::CreationFailed("X11 window open was cancelled".into()));
         }
 
-        let handler = handler.build(WindowContext::new(Rc::clone(&inner)))?;
+        let handler = handler.build(WindowContext::new(Rc::clone(&inner).into()))?;
         let event_loop =
             EventLoop::new(inner, handler, receiver, main_thread_caller, &mut ev_loop)?;
 

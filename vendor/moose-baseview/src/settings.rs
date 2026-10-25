@@ -8,6 +8,8 @@ use raw_window_handle::HasWindowHandle;
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct WindowSettings {
+    /// Native screen-edge placement; never applied to a host-owned child.
+    pub dock: Option<crate::DockOptions>,
     /// The window title.
     pub title: String,
 
@@ -81,6 +83,11 @@ pub struct WindowSettings {
 }
 
 impl WindowSettings {
+    /// Requests a native desktop panel. Unsupported reservation returns an error.
+    pub fn with_dock(mut self, dock: crate::DockOptions) -> Self {
+        self.dock = Some(dock);
+        self
+    }
     /// Creates a new [`WindowSettings`] with all default values.
     #[inline]
     pub fn new() -> Self {
@@ -182,6 +189,7 @@ impl WindowSettings {
 impl Default for WindowSettings {
     fn default() -> Self {
         Self {
+            dock: None,
             title: String::from("baseview window"),
             size: LogicalSize { width: 500.0, height: 400.0 }.into(),
             parent: None,

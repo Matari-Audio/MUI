@@ -27,6 +27,20 @@ impl FrameRequester {
     }
 }
 
+/// A weak, thread-safe visibility request. Native work stays on the window's
+/// owner thread; requests after teardown cannot target a recycled native handle.
+#[derive(Clone)]
+pub struct WindowVisibility(std::sync::Arc<dyn Fn(bool) + Send + Sync>);
+impl WindowVisibility {
+    pub(crate) fn new(set: impl Fn(bool) + Send + Sync + 'static) -> Self {
+        Self(std::sync::Arc::new(set))
+    }
+    /// Shows or hides the window without waiting for its event loop.
+    pub fn set_visible(&self, visible: bool) {
+        (self.0)(visible);
+    }
+}
+
 /// A handle to a Window created by baseview.
 ///
 /// Unlike some other windowing libraries like `winit`, baseview [`Window`]s manage their own
@@ -97,6 +111,13 @@ impl Window {
         handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
         host: impl Into<Option<Host>>,
     ) -> Result<Window, Error> {
+        if settings.dock.is_some() && (settings.parent.is_some() || settings.wait_for_parent) {
+            return Err(HandlerError::from(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a desktop dock must be an independent top-level window",
+            ))
+            .into());
+        }
         let builder = WindowHandlerBuilder::new(handler);
         let work = std::sync::Arc::clone(&builder.work);
         let initializer = WindowInitializer {
@@ -125,6 +146,11 @@ impl Window {
     pub fn frame_requester(&self) -> Option<FrameRequester> {
         let waker = self.waker();
         Some(FrameRequester::new(move || waker.request_redraw()))
+    }
+
+    /// Returns a visibility controller that does not own the native window.
+    pub fn visibility_control(&self) -> WindowVisibility {
+        self.inner.visibility_control()
     }
 
     /// Returns a weak wake handle that can request polling or drawing from any thread.

@@ -16,6 +16,9 @@ pub(crate) const BV_KEYBOARD_CAPTURE_FOCUS: u32 = WM_USER + 2;
 /// MOOSE: posted by the [`FramePacer`] thread once per compositor frame.
 pub(super) const BV_FRAME: u32 = WM_USER + 3;
 pub(crate) const BV_IME_CONFIGURE: u32 = WM_USER + 4;
+pub(super) const BV_SHOW: u32 = WM_USER + 5;
+pub(super) const BV_HIDE: u32 = WM_USER + 6;
+pub(super) const BV_DOCK_HEIGHT: u32 = WM_USER + 7;
 
 use super::drop_target::DropTarget;
 use super::frame::FramePacer;
@@ -108,6 +111,17 @@ impl WindowHandle {
         if !self.state.is_alive.get() {
             return Ok(());
         }
+        if self.state.docked {
+            if let Some(hwnd) = self.hwnd.get() {
+                let height =
+                    new_size.to_logical::<f64>(self.state.scale_factor()).height.round() as u32;
+                // SAFETY: this live HWND and its dock are owned by this thread.
+                unsafe {
+                    SendMessageW(hwnd.as_raw(), BV_DOCK_HEIGHT, height as usize, 0);
+                }
+                return Ok(());
+            }
+        }
         let requested_size = new_size;
         let new_size = new_size.to_physical(self.state.scale_factor());
         let hwnd = match self.hwnd.get() {
@@ -191,6 +205,14 @@ impl WindowHandle {
         Ok(())
     }
 
+    pub fn visibility_control(&self) -> crate::WindowVisibility {
+        let signal = std::sync::Arc::downgrade(&self.state.frame_signal);
+        crate::WindowVisibility::new(move |visible| {
+            if let Some(signal) = signal.upgrade() {
+                signal.set_visibility(visible);
+            }
+        })
+    }
     pub fn frame_requester(&self) -> crate::FrameRequester {
         self.state.frame_signal.requester()
     }
@@ -297,6 +319,8 @@ impl Drop for WindowHandle {
 }
 
 pub struct BaseviewWindow {
+    dock_options: Option<crate::DockOptions>,
+    dock: std::cell::OnceCell<super::dock::Dock>,
     window_state: Rc<WindowState>,
     shared_state: Rc<WindowSharedState>,
     initial_size: Size,
@@ -326,6 +350,10 @@ impl BaseviewWindow {
         shared_state.init(&init);
 
         let mut style = WindowStyle::from_settings(&init.settings);
+        if init.settings.dock.is_some() {
+            style.style = WS_POPUP;
+            style.style_ex |= WS_EX_TOOLWINDOW;
+        }
         // DXGI child surfaces need clipping; do not opt out of DWM redirection
         // (NOREDIRECTIONBITMAP breaks HWND/GDI fallback and layered host cases).
         style.style |= WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
@@ -357,6 +385,8 @@ impl BaseviewWindow {
                 ));
 
                 BaseviewWindow {
+                    dock_options: init.settings.dock,
+                    dock: std::cell::OnceCell::new(),
                     window_state,
                     initial_size: init.settings.size,
                     handler_builder: Cell::new(Some(init.builder)),
@@ -605,6 +635,16 @@ impl WindowImpl for BaseviewWindow {
     }
 
     fn after_create(&self, window: HWnd) -> core::result::Result<(), PlatformError> {
+        if let Some(options) = &self.dock_options {
+            let dock = super::dock::Dock::new(window.as_raw(), options.clone());
+            if !dock.register() {
+                return Err(HandlerError::from(std::io::Error::other(
+                    "Windows Shell refused AppBar registration",
+                ))
+                .into());
+            }
+            let _ = self.dock.set(dock);
+        }
         let window_state = &self.window_state;
 
         self._keyboard_hook.set(Some(hook::init_keyboard_hook(window.as_raw())));
@@ -703,6 +743,9 @@ impl WindowImpl for BaseviewWindow {
             },
             || {
                 let result = unsafe { wnd_proc_inner(window, msg, wparam, lparam, self) };
+                if let Some(dock) = self.dock.get() {
+                    dock.message(msg, wparam, lparam);
+                }
                 self.update_frame_demand();
                 self.finish_close(window);
                 result
@@ -711,6 +754,9 @@ impl WindowImpl for BaseviewWindow {
     }
 
     fn before_destroy(&self, window: HWnd) {
+        if let Some(dock) = self.dock.get() {
+            dock.remove();
+        }
         // External parent/OS destruction cannot be deferred here. Normally no
         // callback is active, so release native resources while HWND is valid.
         // Forced external destruction during a reentrant callback remains the
@@ -857,6 +903,24 @@ unsafe fn wnd_proc_inner(
                 let previous = window_state.mouse_button_counter.replace(0);
                 if previous == 0 && !window_state.mouse_was_outside_window.replace(true) {
                     window_bv.handle_event(Event::Mouse(MouseEvent::CursorLeft));
+                }
+            }
+            Some(0)
+        }
+        BV_DOCK_HEIGHT => {
+            if let Some(dock) = window_bv.dock.get() {
+                dock.resize(wparam as u32);
+            }
+            Some(0)
+        }
+        BV_SHOW | BV_HIDE => {
+            if window_bv.shared_state.frame_signal.matches_message(wparam, lparam) {
+                // SAFETY: the generation token identifies this live owner-thread HWND.
+                unsafe {
+                    ShowWindow(
+                        window.as_raw(),
+                        if msg == BV_SHOW { SW_SHOWNOACTIVATE } else { SW_HIDE },
+                    );
                 }
             }
             Some(0)

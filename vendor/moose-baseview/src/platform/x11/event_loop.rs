@@ -363,6 +363,11 @@ impl EventLoop {
         self.exposed = true;
         match req {
             WindowThreadRequest::Resize(new_size) => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    let logical: crate::dpi::LogicalSize<f64> =
+                        new_size.to_logical(self.window.scale_factor());
+                    return dock.resize(logical.height.round() as u32);
+                }
                 let scale_factor = self.window.scaling_factor.get();
                 let new_size = new_size.to_physical(scale_factor);
 
@@ -392,6 +397,9 @@ impl EventLoop {
                 Ok(())
             }
             WindowThreadRequest::Show => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    dock.sync(true)?;
+                }
                 self.window.xcb_window.map_window()?.check()?;
                 // A top-level MapWindow can be redirected to the WM. A
                 // checked reply is not proof of visibility: wait for the real
@@ -400,6 +408,9 @@ impl EventLoop {
                 Ok(())
             }
             WindowThreadRequest::Hide => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    dock.sync(false)?;
+                }
                 self.window.xcb_window.unmap_window()?.check()?;
                 self.window.visibility_state.window_unmapped(self.window.xcb_window.id());
                 Ok(())
@@ -675,6 +686,14 @@ impl EventLoop {
         self.forward_matari_drag_event(&event);
 
         match event {
+            XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_) => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    if let Err(error) = dock.refresh() {
+                        warn!("dock output changed: {}", error);
+                        self.window.request_close();
+                    }
+                }
+            }
             ////
             // window
             ////

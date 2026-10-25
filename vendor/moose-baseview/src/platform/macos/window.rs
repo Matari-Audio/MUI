@@ -2,10 +2,10 @@ use crate::dpi::{LogicalSize, Size};
 use objc2::rc::{Retained, Weak};
 use objc2::MainThreadMarker;
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSPasteboard, NSPasteboardTypeString, NSView,
-    NSWindow, NSWindowOrderingMode,
+    NSApplication, NSApplicationActivationPolicy, NSFloatingWindowLevel, NSPasteboard,
+    NSPasteboardTypeString, NSScreen, NSView, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
 };
-use objc2_foundation::{NSSize, NSString};
+use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -44,6 +44,16 @@ impl WindowHandle {
                     ),
                 )?;
 
+                if let Some(name) = init.settings.dock.as_ref().and_then(|d| d.output.as_ref()) {
+                    if !NSScreen::screens(mtm)
+                        .iter()
+                        .any(|s| s.localizedName().to_string() == *name)
+                    {
+                        return Err(crate::platform::PlatformError::CreationFailed(
+                            "selected dock display is unavailable",
+                        ));
+                    }
+                }
                 // Creates the global NSApplication instance, if it doesn't exist yet
                 let _ = NSApplication::sharedApplication(mtm);
 
@@ -172,6 +182,31 @@ impl WindowHandle {
         callback("keyboard capture", (), || BaseviewView::set_keyboard_capture(view, capture));
     }
 
+    pub fn visibility_control(&self) -> WindowVisibility {
+        let view =
+            std::sync::Arc::new(dispatch2::MainThreadBound::new(self.view.clone(), self.mtm));
+        WindowVisibility::new(move |visible| {
+            let view = std::sync::Arc::clone(&view);
+            dispatch2::DispatchQueue::main().exec_async(move || {
+                let Some(mtm) = MainThreadMarker::new() else {
+                    return;
+                };
+                let Some(view) = view.get(mtm).load() else {
+                    return;
+                };
+                let Some(view) = view.inner_ref() else {
+                    return;
+                };
+                callback("external visibility", (), || {
+                    if visible {
+                        BaseviewView::show(view);
+                    } else {
+                        BaseviewView::hide(view);
+                    }
+                });
+            });
+        })
+    }
     pub fn frame_requester(&self) -> FrameRequester {
         let Some(view) = self.view.load() else {
             return FrameRequester::new(|| {});
@@ -245,6 +280,29 @@ fn create_window_with_options(
 
     let title = NSString::from_str(&settings.title);
     window.setTitle(&title);
+
+    if let Some(dock) = &settings.dock {
+        let screens = NSScreen::screens(mtm);
+        let screen = screens.iter().find(|screen| {
+            dock.output.as_ref().is_none_or(|name| screen.localizedName().to_string() == *name)
+        });
+        if let Some(screen) = screen {
+            // macOS has no AppBar work-area contract. This is deliberately an
+            // edge overlay; it never changes another application's windows.
+            let frame = screen.visibleFrame();
+            let height = f64::from(dock.height).min(frame.size.height * 0.5);
+            let y = match dock.edge {
+                crate::DockEdge::Top => frame.origin.y + frame.size.height - height,
+                crate::DockEdge::Bottom => frame.origin.y,
+            };
+            window.setStyleMask(NSWindowStyleMask::Borderless);
+            window.setLevel(NSFloatingWindowLevel);
+            window.setFrame_display(
+                NSRect::new(NSPoint::new(frame.origin.x, y), NSSize::new(frame.size.width, height)),
+                false,
+            );
+        }
+    }
 
     window
 }
