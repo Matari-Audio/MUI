@@ -106,13 +106,17 @@ fn a_control_prints_the_value_text_it_is_given() {
             .value_text("440 Hz"),
     );
     assert_eq!(with, vec!["Cutoff".len(), "440 Hz".len()], "{with:?}");
-    // A knob has no header, so the text lands under the dial.
+    // A knob keeps the reading inside its arc and the name below it.
     let dial = runs(
         knob(&mut ui, "cut", "Cutoff", &mut hz, 20.0..=20_000.0)
             .el
             .value_text("440 Hz"),
     );
-    assert_eq!(dial, vec!["440 Hz".len()], "{dial:?}");
+    assert_eq!(
+        dial,
+        vec!["440".len(), "Hz".len(), "Cutoff".len()],
+        "{dial:?}"
+    );
 }
 
 /// The whole lane is the slider: a press on the track jumps the value

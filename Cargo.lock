@@ -2030,7 +2030,7 @@ dependencies = [
 
 [[package]]
 name = "mui"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "color",
  "epaint_default_fonts",
@@ -2051,7 +2051,7 @@ dependencies = [
 
 [[package]]
 name = "mui-access"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "accesskit",
  "accesskit_consumer",
@@ -2063,7 +2063,7 @@ dependencies = [
 
 [[package]]
 name = "mui-baseview"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "accesskit_macos",
  "accesskit_unix",
@@ -2086,7 +2086,7 @@ dependencies = [
 
 [[package]]
 name = "mui-gain-plugin"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "clap-sys",
  "epaint_default_fonts",
@@ -2099,7 +2099,7 @@ dependencies = [
 
 [[package]]
 name = "mui-geometry"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "i_overlay",
  "kurbo",
@@ -2108,7 +2108,7 @@ dependencies = [
 
 [[package]]
 name = "mui-input"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "mui-geometry",
  "mui-layout",
@@ -2118,7 +2118,7 @@ dependencies = [
 
 [[package]]
 name = "mui-layout"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "rustc-hash 2.1.3",
  "smallvec",
@@ -2126,7 +2126,7 @@ dependencies = [
 
 [[package]]
 name = "mui-material"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "mui-geometry",
  "mui-layout",
@@ -2135,11 +2135,11 @@ dependencies = [
 
 [[package]]
 name = "mui-motion"
-version = "0.4.0"
+version = "0.4.2"
 
 [[package]]
 name = "mui-native-dialog"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "async-channel",
  "futures-lite",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "mui-playground"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "epaint_default_fonts",
  "mui-material",
@@ -2167,7 +2167,7 @@ dependencies = [
 
 [[package]]
 name = "mui-preview"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "accesskit_winit",
  "epaint_default_fonts",
@@ -2183,7 +2183,7 @@ dependencies = [
 
 [[package]]
 name = "mui-scene"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "epaint_default_fonts",
  "mui-geometry",
@@ -2200,7 +2200,7 @@ dependencies = [
 
 [[package]]
 name = "mui-style"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "color",
  "kurbo",
@@ -2212,11 +2212,11 @@ dependencies = [
 
 [[package]]
 name = "mui-symbols"
-version = "0.4.0"
+version = "0.4.2"
 
 [[package]]
 name = "mui-text"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "epaint_default_fonts",
  "fontdb",
@@ -2232,7 +2232,7 @@ dependencies = [
 
 [[package]]
 name = "mui-truce"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "keyboard-types",
  "mui",
@@ -2245,7 +2245,7 @@ dependencies = [
 
 [[package]]
 name = "mui-vello"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "epaint_default_fonts",
  "glifo",
@@ -2279,7 +2279,7 @@ dependencies = [
 
 [[package]]
 name = "mui-weld"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "color",
  "kurbo",
@@ -2288,7 +2288,7 @@ dependencies = [
 
 [[package]]
 name = "mui-winit"
-version = "0.4.0"
+version = "0.4.2"
 dependencies = [
  "accesskit_winit",
  "arboard",

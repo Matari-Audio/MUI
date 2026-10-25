@@ -358,7 +358,67 @@ fn knob_reservations_keep_the_dial_and_its_neighbour_in_place() {
             scene.surface("b").unwrap().frame,
         );
         assert_eq!(*previous.get_or_insert(frames), frames);
+        let dial = frames.0;
+        assert!(
+            !scene
+                .paint
+                .iter()
+                .any(|paint| paint.key.as_str() == "k/reading" && paint.layer == Layer::Fill),
+            "the value layout must not paint over the disc"
+        );
+        let reading = scene.surface("k/reading").unwrap().frame;
+        assert!(reading.x >= dial.x && reading.right() <= dial.right());
+        assert!(reading.y >= dial.y && reading.bottom() <= dial.bottom());
+        assert!((dial.size.width - dial.size.height).abs() < 0.5, "{dial:?}");
     }
+}
+
+#[test]
+fn compact_macro_style_knob_keeps_its_value_inside_and_its_name_accessible() {
+    let mut ui = Ui::default();
+    let mut value = 0.5;
+    let control = knob(&mut ui, "compact", "Mix", &mut value, 0.0..=1.0)
+        .size(S)
+        .value_text("50%")
+        .value_reserve("100%");
+    ui.frame(control.into_el(), None, Input::default(), 0.016)
+        .unwrap();
+    let scene = ui.scene().unwrap();
+    let dial = scene.surface("compact").unwrap();
+    assert!(
+        dial.frame.size.width <= 48.,
+        "compact dial: {:?}",
+        dial.frame
+    );
+    assert!(scene.surface("compact/reading").is_some());
+    assert!(matches!(
+        dial.semantics.as_ref().map(|s| &s.role),
+        Some(A11y::Slider { .. })
+    ));
+}
+
+#[test]
+fn dragging_from_the_centered_reading_changes_the_knob_value() {
+    let mut ui = Ui::default();
+    let mut value = 0.;
+    let frame = |ui: &mut Ui, value: &mut f64, input| {
+        let control = knob(ui, "dial", "Mix", value, 0.0..=1.0)
+            .value_text("0%")
+            .size(S);
+        ui.frame(control.into_el(), None, input, 0.016).unwrap();
+    };
+    frame(&mut ui, &mut value, Input::default());
+    let from = centre(&ui, "dial");
+    let to = Point::new(from.x, from.y - 24.);
+    for input in [
+        pointer(from, Button::Primary, true),
+        pointer(to, Button::Primary, true),
+        pointer(to, Button::Primary, false),
+        Input::default(),
+    ] {
+        frame(&mut ui, &mut value, input);
+    }
+    assert!((value - 0.2).abs() < 0.001);
 }
 
 #[test]
@@ -421,9 +481,9 @@ fn settings_attach_help_to_nested_knob_and_slider_targets() {
 #[test]
 fn setting_does_not_repeat_builtin_knob_or_slider_labels() {
     for (is_knob, control_label, expected_text_layers) in [
-        (true, "Value", 1),
+        (true, "Value", 2),
         (false, "Value", 2),
-        (true, "Fine", 2),
+        (true, "Fine", 3),
         (false, "Fine", 3),
     ] {
         let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
