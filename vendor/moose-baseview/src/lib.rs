@@ -1,5 +1,7 @@
 mod clipboard;
 mod context;
+mod dock;
+pub use dock::{DockEdge, DockOptions};
 mod damage;
 pub mod dpi;
 mod drag_resize;

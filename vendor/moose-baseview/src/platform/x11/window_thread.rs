@@ -551,7 +551,7 @@ impl WindowThread {
             return Err(PlatformError::CreationFailed("X11 window open was cancelled".into()));
         }
 
-        let handler = handler.build(WindowContext::new(Rc::clone(&inner)))?;
+        let handler = handler.build(WindowContext::new(Rc::clone(&inner).into()))?;
         let event_loop =
             EventLoop::new(inner, handler, receiver, main_thread_caller, &mut ev_loop)?;
 

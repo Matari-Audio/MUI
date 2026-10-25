@@ -1,5 +1,6 @@
 mod callback;
 mod clipboard;
+mod dock;
 mod dpi;
 mod drop_target;
 mod error;

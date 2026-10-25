@@ -392,6 +392,9 @@ impl EventLoop {
                 Ok(())
             }
             WindowThreadRequest::Show => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    dock.sync(true)?;
+                }
                 self.window.xcb_window.map_window()?.check()?;
                 // A top-level MapWindow can be redirected to the WM. A
                 // checked reply is not proof of visibility: wait for the real
@@ -400,6 +403,9 @@ impl EventLoop {
                 Ok(())
             }
             WindowThreadRequest::Hide => {
+                if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
+                    dock.sync(false)?;
+                }
                 self.window.xcb_window.unmap_window()?.check()?;
                 self.window.visibility_state.window_unmapped(self.window.xcb_window.id());
                 Ok(())

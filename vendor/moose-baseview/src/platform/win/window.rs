@@ -297,6 +297,8 @@ impl Drop for WindowHandle {
 }
 
 pub struct BaseviewWindow {
+    dock_options: Option<crate::DockOptions>,
+    dock: std::cell::OnceCell<super::dock::Dock>,
     window_state: Rc<WindowState>,
     shared_state: Rc<WindowSharedState>,
     initial_size: Size,
@@ -326,6 +328,10 @@ impl BaseviewWindow {
         shared_state.init(&init);
 
         let mut style = WindowStyle::from_settings(&init.settings);
+        if init.settings.dock.is_some() {
+            style.style = WS_POPUP;
+            style.style_ex |= WS_EX_TOOLWINDOW;
+        }
         // DXGI child surfaces need clipping; do not opt out of DWM redirection
         // (NOREDIRECTIONBITMAP breaks HWND/GDI fallback and layered host cases).
         style.style |= WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
@@ -357,6 +363,8 @@ impl BaseviewWindow {
                 ));
 
                 BaseviewWindow {
+                    dock_options: init.settings.dock,
+                    dock: std::cell::OnceCell::new(),
                     window_state,
                     initial_size: init.settings.size,
                     handler_builder: Cell::new(Some(init.builder)),
@@ -605,6 +613,9 @@ impl WindowImpl for BaseviewWindow {
     }
 
     fn after_create(&self, window: HWnd) -> core::result::Result<(), PlatformError> {
+        if let Some(options) = &self.dock_options {
+            let _ = self.dock.set(super::dock::Dock::new(window.as_raw(), options.clone()));
+        }
         let window_state = &self.window_state;
 
         self._keyboard_hook.set(Some(hook::init_keyboard_hook(window.as_raw())));
@@ -703,6 +714,9 @@ impl WindowImpl for BaseviewWindow {
             },
             || {
                 let result = unsafe { wnd_proc_inner(window, msg, wparam, lparam, self) };
+                if let Some(dock) = self.dock.get() {
+                    dock.message(msg, wparam, lparam);
+                }
                 self.update_frame_demand();
                 self.finish_close(window);
                 result
@@ -711,6 +725,9 @@ impl WindowImpl for BaseviewWindow {
     }
 
     fn before_destroy(&self, window: HWnd) {
+        if let Some(dock) = self.dock.get() {
+            dock.remove();
+        }
         // External parent/OS destruction cannot be deferred here. Normally no
         // callback is active, so release native resources while HWND is valid.
         // Forced external destruction during a reentrant callback remains the

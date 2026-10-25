@@ -8,9 +8,13 @@ mod macos;
 pub use macos::*;
 
 #[cfg(target_os = "linux")]
+mod layer;
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "linux")]
 mod x11;
 #[cfg(target_os = "linux")]
-pub use x11::*;
+pub use linux::*;
 #[cfg(target_os = "windows")]
 mod win;
 #[cfg(target_os = "windows")]

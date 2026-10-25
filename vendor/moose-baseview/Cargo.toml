@@ -50,6 +50,10 @@ x11-dl = { version = "2.21.0" }
 calloop = "=0.14.4" # 0.14.5 raises MSRV to 1.86.
 percent-encoding = "2.3.2"
 bytemuck = { version = "1.25.2", features = ["extern_crate_alloc"] }
+smithay-client-toolkit = "0.21.1"
+wayland-client = { version = "0.31.14", features = ["system"] }
+wayland-protocols = { version = "0.32.12", features = ["client", "staging"] }
+calloop-wayland-source = "0.4.1"
 
 [target.'cfg(target_os="windows")'.dependencies]
 windows = { version = "0.62.2", features = [
@@ -143,3 +147,6 @@ all-features = true
 name = "mac_drag_geometry"
 path = "tests/mac_drag_geometry.rs"
 harness = false
+
+[dev-dependencies]
+softbuffer = "0.4.8"
