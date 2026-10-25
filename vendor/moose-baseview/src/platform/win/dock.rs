@@ -12,6 +12,35 @@ use windows_sys::Win32::{
 
 const CALLBACK: u32 = WM_USER + 100;
 
+pub(super) fn output_names() -> Vec<String> {
+    monitors().into_iter().map(|(_, name)| name).collect()
+}
+fn monitors() -> Vec<(HMONITOR, String)> {
+    unsafe extern "system" fn visit(monitor: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> i32 {
+        // SAFETY: synchronous EnumDisplayMonitors borrows the caller's vector.
+        let monitors = unsafe { &mut *(data as *mut Vec<(HMONITOR, String)>) };
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        // SAFETY: correctly sized writable structure and live monitor handle.
+        if unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) } != 0 {
+            let end = info.szDevice.iter().position(|c| *c == 0).unwrap_or(info.szDevice.len());
+            monitors.push((monitor, String::from_utf16_lossy(&info.szDevice[..end])));
+        }
+        1
+    }
+    let mut monitors = Vec::new();
+    // SAFETY: callback context lives for the complete synchronous enumeration.
+    unsafe {
+        EnumDisplayMonitors(
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            Some(visit),
+            &mut monitors as *mut Vec<(HMONITOR, String)> as LPARAM,
+        );
+    }
+    monitors
+}
+
 pub(super) struct Dock {
     hwnd: HWND,
     options: DockOptions,
@@ -40,40 +69,12 @@ impl Dock {
         self.sync();
     }
     fn monitor(&self) -> HMONITOR {
-        struct Search<'a> {
-            name: &'a str,
-            found: HMONITOR,
-        }
-        unsafe extern "system" fn visit(
-            monitor: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM,
-        ) -> i32 {
-            // SAFETY: EnumDisplayMonitors invokes this synchronously with the
-            // Search pointer supplied below, on the same thread.
-            let search = unsafe { &mut *(data as *mut Search<'_>) };
-            let mut info = MONITORINFOEXW::default();
-            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-            // SAFETY: correctly sized writable MONITORINFOEXW, live monitor.
-            if unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) } != 0 {
-                let end = info.szDevice.iter().position(|c| *c == 0).unwrap_or(info.szDevice.len());
-                if String::from_utf16_lossy(&info.szDevice[..end]) == search.name {
-                    search.found = monitor;
-                    return 0;
-                }
-            }
-            1
-        }
         if let Some(name) = &self.options.output {
-            let mut search = Search { name, found: std::ptr::null_mut() };
-            // SAFETY: callback context lives for the synchronous enumeration.
-            unsafe {
-                EnumDisplayMonitors(
-                    std::ptr::null_mut(),
-                    std::ptr::null(),
-                    Some(visit),
-                    &mut search as *mut Search<'_> as LPARAM,
-                );
-            }
-            search.found
+            monitors()
+                .into_iter()
+                .find(|(_, n)| n == name)
+                .map(|(m, _)| m)
+                .unwrap_or(std::ptr::null_mut())
         } else {
             // SAFETY: this HWND is owned by the calling native thread.
             unsafe { MonitorFromWindow(self.hwnd, MONITOR_DEFAULTTONEAREST) }

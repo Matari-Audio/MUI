@@ -43,6 +43,13 @@ impl WindowContext {
         Self { inner, work: Default::default() }
     }
 
+    /// Native output names accepted by `DockOptions::with_output`.
+    /// Query on the GUI owner thread, for example when opening a display picker.
+    /// An empty list means enumeration is unavailable; automatic placement still works.
+    pub fn dock_outputs(&self) -> Vec<String> {
+        self.inner.dock_outputs()
+    }
+
     /// Sets the [`MouseCursor`] icon to be displayed when the mouse cursor hovers this window.
     pub fn set_mouse_cursor(&self, mouse_cursor: MouseCursor) -> Result<(), Error> {
         self.inner.set_mouse_cursor(mouse_cursor)?;

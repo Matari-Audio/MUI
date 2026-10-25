@@ -53,6 +53,7 @@ pub struct Context {
     pub(super) conn: Connection,
     pub(super) qh: QueueHandle<Runtime>,
     options: RefCell<DockOptions>,
+    pub(super) outputs: RefCell<Vec<String>>,
     shared: Arc<Shared>,
     live: Arc<AtomicBool>,
     signal: LoopSignal,
@@ -95,6 +96,7 @@ impl Context {
             conn,
             layer,
             options: RefCell::new(options),
+            outputs: RefCell::new(Vec::new()),
             qh: qh.clone(),
             shared,
             signal,
@@ -155,6 +157,9 @@ impl Context {
             self.surface().set_buffer_scale(factor);
             self.set_size(self.logical.get());
         }
+    }
+    pub fn dock_outputs(&self) -> Vec<String> {
+        self.outputs.borrow().clone()
     }
     pub fn platform_handle(&self) -> PlatformHandle {
         PlatformHandle {

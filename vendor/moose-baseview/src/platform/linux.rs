@@ -92,6 +92,14 @@ impl From<x11::WindowContext> for WindowContext {
     }
 }
 impl WindowContext {
+    pub fn dock_outputs(&self) -> Vec<String> {
+        match self {
+            Self::X11(_) if std::env::var_os("WAYLAND_DISPLAY").is_some() => layer::output_names(),
+            Self::X11(cx) => cx.dock_outputs(),
+            Self::Layer(cx) => cx.dock_outputs(),
+        }
+    }
+
     pub fn set_mouse_cursor(&self, cursor: MouseCursor) -> Result<()> {
         forward!(self, set_mouse_cursor, cursor)
     }

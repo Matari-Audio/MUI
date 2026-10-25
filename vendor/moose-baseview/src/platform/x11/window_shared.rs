@@ -281,6 +281,27 @@ impl WindowInner {
         Ok(())
     }
 
+    pub fn dock_outputs(&self) -> Vec<String> {
+        use x11rb::protocol::{randr::ConnectionExt as _, xproto::ConnectionExt as _};
+        let conn = &self.connection.conn;
+        conn.randr_get_monitors(self.connection.default_screen().root, true)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| {
+                reply
+                    .monitors
+                    .into_iter()
+                    .filter_map(|m| {
+                        conn.get_atom_name(m.name)
+                            .ok()
+                            .and_then(|cookie| cookie.reply().ok())
+                            .and_then(|reply| String::from_utf8(reply.name).ok())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn resize(&self, size: Size) -> Result<()> {
         if let Some(dock) = self.dock.borrow_mut().as_mut() {
             let size: crate::dpi::LogicalSize<f64> = size.to_logical(self.scale_factor());

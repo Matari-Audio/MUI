@@ -2,6 +2,8 @@
 mod context;
 mod drag;
 mod input;
+mod outputs;
+pub(super) use outputs::names as output_names;
 mod text_input;
 
 use super::{linux, x11::PlatformError};
@@ -342,6 +344,7 @@ impl Runtime {
         *runtime.shared.surface.lock().unwrap_or_else(|e| e.into_inner()) =
             Some((context.layer.clone(), context.conn.clone()));
         runtime.context = Some(Rc::clone(&context));
+        runtime.refresh_outputs();
         // Configure without a buffer, and acknowledge before any presenter can attach.
         context.configure();
         let start = Instant::now();
@@ -511,13 +514,30 @@ impl CompositorHandler for Runtime {
     ) {
     }
 }
+impl Runtime {
+    fn refresh_outputs(&self) {
+        if let Some(cx) = &self.context {
+            *cx.outputs.borrow_mut() = self
+                .outputs
+                .outputs()
+                .filter_map(|output| self.outputs.info(&output).and_then(|info| info.name))
+                .collect();
+        }
+    }
+}
 impl OutputHandler for Runtime {
     fn output_state(&mut self) -> &mut OutputState {
         &mut self.outputs
     }
-    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
-    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
+    fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.refresh_outputs();
+    }
+    fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.refresh_outputs();
+    }
+    fn output_destroyed(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {
+        self.refresh_outputs();
+    }
 }
 impl ProvidesRegistryState for Runtime {
     fn registry(&mut self) -> &mut RegistryState {
