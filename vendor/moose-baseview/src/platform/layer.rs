@@ -344,8 +344,17 @@ impl Runtime {
         runtime.context = Some(Rc::clone(&context));
         // Configure without a buffer, and acknowledge before any presenter can attach.
         context.configure();
-        queue.roundtrip(&mut runtime).map_err(failure)?;
-        if !runtime.configured {
+        let start = Instant::now();
+        while !runtime.configured
+            && runtime.shared.open.load(Ordering::Acquire)
+            && start.elapsed() < Duration::from_secs(2)
+        {
+            queue.roundtrip(&mut runtime).map_err(failure)?;
+            if !runtime.configured {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        }
+        if !runtime.configured || !runtime.shared.open.load(Ordering::Acquire) {
             return Err(failure("compositor did not configure the dock"));
         }
         let handler = builder
