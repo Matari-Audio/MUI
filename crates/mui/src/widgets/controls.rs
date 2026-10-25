@@ -681,9 +681,9 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -
             .align(Align::Center)
         } else {
             readout(look.text.clone(), d.value, d.min, d.max)
+                .text_size(look.px * 0.3)
+                .fill(color.clone())
         }
-        .text_size(look.px * 0.3)
-        .fill(color.clone())
         .id(id.field("reading"));
     let input = look.describe(
         block(pct(100.), pct(100.))
