@@ -21,7 +21,7 @@ keywords = ["windowing", "audio", "plugin"]
 categories = ["gui"]
 repository = "https://github.com/Matari-Audio/moose"
 
-rust-version = "1.82"
+rust-version = "1.86"
 
 [features]
 default = []

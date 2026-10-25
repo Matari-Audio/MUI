@@ -135,6 +135,9 @@ impl Dock {
             };
             if GetMonitorInfoW(monitor, &mut info) == 0 {
                 self.remove();
+                // A named output vanished. Retire the surface so its owner
+                // can restore the editor instead of leaving an unreserved bar.
+                PostMessageW(self.hwnd, WM_CLOSE, 0, 0);
                 return;
             }
             let height =
@@ -151,7 +154,11 @@ impl Dock {
                 DockEdge::Top => data.rc.bottom = data.rc.top + height,
                 DockEdge::Bottom => data.rc.top = data.rc.bottom - height,
             }
-            SHAppBarMessage(ABM_SETPOS, &mut data);
+            if SHAppBarMessage(ABM_SETPOS, &mut data) == 0 {
+                self.remove();
+                PostMessageW(self.hwnd, WM_CLOSE, 0, 0);
+                return;
+            }
             let mut current = RECT::default();
             GetWindowRect(self.hwnd, &mut current);
             if current.left != data.rc.left

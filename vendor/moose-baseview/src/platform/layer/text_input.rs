@@ -37,6 +37,18 @@ impl TextInput {
         if self.config == config {
             return;
         }
+        let changed_field = self.config.as_ref().map(|c| &c.id) != config.as_ref().map(|c| &c.id);
+        if changed_field || crate::ime::composition_cancelled(&self.config, &config, self.composing)
+        {
+            if let Some(input) = self.input.as_ref().filter(|_| self.entered && self.enabled) {
+                input.disable();
+                input.commit();
+                self.serial = self.serial.wrapping_add(1);
+            }
+            self.enabled = false;
+            self.composing = false;
+            self.pending.clear();
+        }
         self.config = config;
         self.apply(scale);
     }
@@ -57,6 +69,8 @@ impl TextInput {
                         config.selection.end as i32,
                         config.selection.start as i32,
                     );
+                } else {
+                    input.set_surrounding_text(String::new(), 0, 0);
                 }
                 input.set_cursor_rectangle(
                     (config.position.x / scale) as i32,

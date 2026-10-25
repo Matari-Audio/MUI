@@ -118,6 +118,12 @@ impl KeyboardHandler for Runtime {
 impl Runtime {
     fn key(&self, event: KeyEvent, state: KeyState, repeat: bool) {
         let named = match event.keysym {
+            Keysym::Shift_L | Keysym::Shift_R => Some(NamedKey::Shift),
+            Keysym::Control_L | Keysym::Control_R => Some(NamedKey::Control),
+            Keysym::Alt_L | Keysym::Alt_R => Some(NamedKey::Alt),
+            Keysym::Super_L | Keysym::Super_R | Keysym::Meta_L | Keysym::Meta_R => {
+                Some(NamedKey::Meta)
+            }
             Keysym::Escape => Some(NamedKey::Escape),
             Keysym::Return | Keysym::KP_Enter => Some(NamedKey::Enter),
             Keysym::BackSpace => Some(NamedKey::Backspace),
@@ -134,12 +140,16 @@ impl Runtime {
             _ => None,
         };
         let key = named.map(Key::Named).unwrap_or_else(|| {
-            event
-                .utf8
-                .clone()
-                .filter(|s| !s.is_empty())
-                .map(Key::Character)
-                .unwrap_or(Key::Named(NamedKey::Unidentified))
+            // xkb's UTF-8 contains control bytes for Ctrl+C etc. Shortcut
+            // identity comes from the layout keysym, just as on the X11 path.
+            (if self.modifiers.intersects(Modifiers::CONTROL | Modifiers::META) {
+                event.keysym.key_char().map(|c| c.to_string())
+            } else {
+                event.utf8.clone()
+            })
+            .filter(|s| !s.is_empty())
+            .map(Key::Character)
+            .unwrap_or(Key::Named(NamedKey::Unidentified))
         });
         let code = super::super::x11::keyboard::hardware_keycode_to_code(
             event.raw_code.saturating_add(8).min(u32::from(u16::MAX)) as u16,
@@ -217,8 +227,8 @@ impl PointerHandler for Runtime {
                         }
                     } else {
                         ScrollDelta::Pixels {
-                            x: -horizontal.absolute as f32,
-                            y: -vertical.absolute as f32,
+                            x: -(horizontal.absolute * scale) as f32,
+                            y: -(vertical.absolute * scale) as f32,
                         }
                     };
                     self.event(Event::Mouse(MouseEvent::WheelScrolled { delta, modifiers }));

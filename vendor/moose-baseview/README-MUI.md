@@ -208,7 +208,7 @@ an independent full-width edge surface. The OS/compositor owns the accepted
 rectangle. `DockEdge::Bottom` selects the other edge; `with_output` optionally
 selects a native output name. Parent/wait-for-parent settings are rejected.
 
-Linux uses a native SCTK layer-shell surface when WAYLAND_DISPLAY is present,
+Linux uses a native SCTK layer-shell surface (requiring Rust 1.86) when WAYLAND_DISPLAY is present,
 with its own toolkit-owned queue, on-demand focus, fractional-scale viewport,
 cursor-shape and text-input-v3 support. Its data-device drag uses the same seat,
 surface and initiating serial; outgoing file transfers and incoming URI lists

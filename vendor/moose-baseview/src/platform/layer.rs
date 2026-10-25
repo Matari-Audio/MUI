@@ -377,6 +377,10 @@ impl Runtime {
                 cx.surface().attach(None, 0, 0);
                 cx.surface().commit();
                 self.data.cancel();
+                cx.primary.set(false);
+                cx.drag_active.set(false);
+                cx.press.borrow_mut().take();
+                cx.pending_drag.borrow_mut().take();
                 if let Some(h) = &self.handler {
                     h.on_event(Event::Window(WindowEvent::Unfocused));
                 }
