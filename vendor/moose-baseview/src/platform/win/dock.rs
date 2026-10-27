@@ -1,5 +1,5 @@
 //! Shell AppBar registration belongs to the toolkit-owned top-level HWND.
-use crate::{DockEdge, DockOptions};
+use crate::{dpi::LogicalSize, DockEdge, DockOptions};
 use std::cell::Cell;
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, RECT, WPARAM},
@@ -64,8 +64,8 @@ impl Dock {
             taskbar_created,
         }
     }
-    pub fn resize(&self, height: u32) {
-        self.height.set(height.clamp(100, 1024));
+    pub fn resize(&self, size: LogicalSize<f64>) {
+        self.height.set(self.options.thickness(size));
         self.sync();
     }
     fn monitor(&self) -> HMONITOR {
@@ -141,19 +141,28 @@ impl Dock {
                 PostMessageW(self.hwnd, WM_CLOSE, 0, 0);
                 return;
             }
-            let height =
+            let monitor = info.rcMonitor;
+            let span = if self.options.edge.is_vertical() {
+                monitor.right - monitor.left
+            } else {
+                monitor.bottom - monitor.top
+            };
+            let thickness =
                 (u64::from(self.height.get()) * u64::from(GetDpiForWindow(self.hwnd).max(96)) / 96)
-                    .min((info.rcMonitor.bottom - info.rcMonitor.top).max(2) as u64 / 2)
-                    as i32;
+                    .min(span.max(2) as u64 / 2) as i32;
             data.uEdge = match self.options.edge {
                 DockEdge::Top => ABE_TOP,
                 DockEdge::Bottom => ABE_BOTTOM,
+                DockEdge::Left => ABE_LEFT,
+                DockEdge::Right => ABE_RIGHT,
             };
-            data.rc = info.rcMonitor;
+            data.rc = monitor;
             SHAppBarMessage(ABM_QUERYPOS, &mut data);
             match self.options.edge {
-                DockEdge::Top => data.rc.bottom = data.rc.top + height,
-                DockEdge::Bottom => data.rc.top = data.rc.bottom - height,
+                DockEdge::Top => data.rc.bottom = data.rc.top + thickness,
+                DockEdge::Bottom => data.rc.top = data.rc.bottom - thickness,
+                DockEdge::Left => data.rc.right = data.rc.left + thickness,
+                DockEdge::Right => data.rc.left = data.rc.right - thickness,
             }
             if SHAppBarMessage(ABM_SETPOS, &mut data) == 0 {
                 self.remove();

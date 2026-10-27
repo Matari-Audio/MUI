@@ -18,7 +18,8 @@ pub(super) const BV_FRAME: u32 = WM_USER + 3;
 pub(crate) const BV_IME_CONFIGURE: u32 = WM_USER + 4;
 pub(super) const BV_SHOW: u32 = WM_USER + 5;
 pub(super) const BV_HIDE: u32 = WM_USER + 6;
-pub(super) const BV_DOCK_HEIGHT: u32 = WM_USER + 7;
+/// wparam: logical width and lparam: logical height of a requested dock size.
+pub(super) const BV_DOCK_SIZE: u32 = WM_USER + 7;
 
 use super::drop_target::DropTarget;
 use super::frame::FramePacer;
@@ -113,11 +114,15 @@ impl WindowHandle {
         }
         if self.state.docked {
             if let Some(hwnd) = self.hwnd.get() {
-                let height =
-                    new_size.to_logical::<f64>(self.state.scale_factor()).height.round() as u32;
+                let size = new_size.to_logical::<f64>(self.state.scale_factor());
                 // SAFETY: this live HWND and its dock are owned by this thread.
                 unsafe {
-                    SendMessageW(hwnd.as_raw(), BV_DOCK_HEIGHT, height as usize, 0);
+                    SendMessageW(
+                        hwnd.as_raw(),
+                        BV_DOCK_SIZE,
+                        size.width.round() as usize,
+                        size.height.round() as isize,
+                    );
                 }
                 return Ok(());
             }
@@ -907,9 +912,9 @@ unsafe fn wnd_proc_inner(
             }
             Some(0)
         }
-        BV_DOCK_HEIGHT => {
+        BV_DOCK_SIZE => {
             if let Some(dock) = window_bv.dock.get() {
-                dock.resize(wparam as u32);
+                dock.resize(crate::dpi::LogicalSize::new(wparam as f64, lparam as f64));
             }
             Some(0)
         }

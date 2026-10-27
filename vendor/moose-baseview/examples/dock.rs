@@ -1,4 +1,5 @@
 //! Native dock smoke probe. Closes after two seconds; no audio device is opened.
+//! Usage: `dock [top|bottom|left|right]` (default top).
 use baseview::{
     DockEdge, DockOptions, Event, EventStatus, HandlerError, Window, WindowContext, WindowHandler,
     WindowSettings, WindowSize,
@@ -50,12 +51,16 @@ impl WindowHandler for Probe {
     }
 }
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let edge = match std::env::args().nth(1).as_deref() {
+        Some("bottom") => DockEdge::Bottom,
+        Some("left") => DockEdge::Left,
+        Some("right") => DockEdge::Right,
+        _ => DockEdge::Top,
+    };
     let frames = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&frames);
     let window = Window::create(
-        WindowSettings::new()
-            .with_title("MUI dock probe")
-            .with_dock(DockOptions::new(DockEdge::Top, 160)),
+        WindowSettings::new().with_title("MUI dock probe").with_dock(DockOptions::new(edge, 160)),
         move |cx| {
             let context = softbuffer::Context::new(cx.platform_handle())?;
             let surface = softbuffer::Surface::new(&context, cx.platform_handle())?;

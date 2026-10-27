@@ -341,6 +341,14 @@ impl BaseviewView {
             return;
         }
         let size = size.to_logical::<f64>(this.view.backing_scale_factor());
+        // Vertical docks resize only their thickness, as on the other backends;
+        // the length stays the monitor's.
+        let size = match &this.dock {
+            Some(dock) if dock.edge.is_vertical() => {
+                LogicalSize::new(f64::from(dock.thickness(size)), this.view.frame().size.height)
+            }
+            _ => size,
+        };
         // NOTE: macOS gives you a personal rave if you pass in fractional pixels here. Even
         // though the size is in fractional pixels.
         let size = NSSize::new(size.width.round(), size.height.round());
@@ -374,8 +382,15 @@ impl BaseviewView {
                     owned_window.setContentSize(size);
                     if let Some(dock) = &this.dock {
                         let mut frame = owned_window.frame();
-                        if matches!(dock.edge, crate::DockEdge::Top) {
-                            frame.origin.y = old.origin.y + old.size.height - frame.size.height;
+                        // setContentSize keeps the bottom-left; re-pin the dock's anchored edge.
+                        match dock.edge {
+                            crate::DockEdge::Top => {
+                                frame.origin.y = old.origin.y + old.size.height - frame.size.height;
+                            }
+                            crate::DockEdge::Right => {
+                                frame.origin.x = old.origin.x + old.size.width - frame.size.width;
+                            }
+                            crate::DockEdge::Bottom | crate::DockEdge::Left => {}
                         }
                         owned_window.setFrame_display(frame, true);
                     }

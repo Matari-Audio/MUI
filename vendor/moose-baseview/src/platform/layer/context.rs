@@ -91,7 +91,8 @@ impl Context {
             v.destroy();
         }
         let cursor_manager = globals.bind(&qh, 1..=1, Noop).ok();
-        let logical = (800, options.height);
+        let thickness = options.height;
+        let logical = if options.edge.is_vertical() { (thickness, 800) } else { (800, thickness) };
         Ok(Self {
             conn,
             layer,
@@ -121,21 +122,30 @@ impl Context {
     }
     pub(super) fn configure(&self) {
         let options = self.options.borrow();
-        let edge = match options.edge {
-            DockEdge::Top => Anchor::TOP,
-            DockEdge::Bottom => Anchor::BOTTOM,
+        let thickness = options.height;
+        // Anchoring both cross-axis edges makes the compositor fill the monitor extent.
+        let (anchor, size) = match options.edge {
+            DockEdge::Top => (Anchor::TOP | Anchor::LEFT | Anchor::RIGHT, (0, thickness)),
+            DockEdge::Bottom => (Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT, (0, thickness)),
+            DockEdge::Left => (Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM, (thickness, 0)),
+            DockEdge::Right => (Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM, (thickness, 0)),
         };
-        self.layer.set_anchor(edge | Anchor::LEFT | Anchor::RIGHT);
-        self.layer.set_size(0, options.height);
-        self.layer.set_exclusive_zone(options.height as i32);
+        self.layer.set_anchor(anchor);
+        self.layer.set_size(size.0, size.1);
+        self.layer.set_exclusive_zone(thickness as i32);
         self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         self.surface().commit();
     }
     pub(super) fn set_size(&self, size: (u32, u32)) {
         let old = self.logical.get();
+        let options = self.options.borrow();
+        let thickness = options.height;
+        // The length axis is compositor-chosen and keeps its last value; the thickness axis is ours.
+        let (fallback_w, fallback_h) =
+            if options.edge.is_vertical() { (thickness, old.1) } else { (old.0, thickness) };
         self.logical.set((
-            if size.0 == 0 { old.0 } else { size.0 },
-            if size.1 == 0 { self.options.borrow().height } else { size.1 },
+            if size.0 == 0 { fallback_w } else { size.0 },
+            if size.1 == 0 { fallback_h } else { size.1 },
         ));
         let (w, h) = self.logical.get();
         let scale = self.scale_factor();
@@ -191,7 +201,8 @@ impl Context {
     }
     pub fn resize(&self, size: Size) -> linux::Result<()> {
         let size: LogicalSize<f64> = size.to_logical(self.scale_factor());
-        self.options.borrow_mut().height = (size.height.round() as u32).clamp(100, 1024);
+        let thickness = self.options.borrow().thickness(size);
+        self.options.borrow_mut().height = thickness;
         self.configure();
         Ok(())
     }

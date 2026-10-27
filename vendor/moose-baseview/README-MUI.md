@@ -204,9 +204,12 @@ manual checks remain required on each operating system and real plugin hosts.
 ## Desktop edge surfaces
 
 `WindowSettings::with_dock(DockOptions::new(DockEdge::Top, 160))` requests
-an independent full-width edge surface. The OS/compositor owns the accepted
-rectangle. `DockEdge::Bottom` selects the other edge; `with_output` optionally
-selects a native output name. Parent/wait-for-parent settings are rejected.
+an independent full-length edge surface. The OS/compositor owns the accepted
+rectangle. `DockEdge::Bottom` selects the opposite horizontal edge, and
+`DockEdge::Left` / `DockEdge::Right` select full-height vertical panels. For
+`DockOptions`, `height` is the strip thickness: the panel height on top/bottom
+and the panel width on left/right. `with_output` optionally selects a native
+output name. Parent/wait-for-parent settings are rejected.
 
 Linux uses a native SCTK layer-shell surface (requiring Rust 1.86) when WAYLAND_DISPLAY is present,
 with its own toolkit-owned queue, on-demand focus, fractional-scale viewport,
