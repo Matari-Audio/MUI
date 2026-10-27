@@ -223,8 +223,9 @@ to handle explicitly.
 
 Windows uses Shell AppBars and reconciles accepted bounds, activation,
 fullscreen, display/DPI changes and Explorer restart. Hide removes registration.
-AppKit creates a borderless floating strip and preserves the chosen edge when
-height changes. macOS has no work-area reservation in this implementation.
+AppKit creates a borderless floating strip, including left and right vertical
+strips, and preserves the chosen edge when its thickness changes. macOS has no
+work-area reservation in this implementation.
 
 `Window::visibility_control()` is a weak Send/Sync request handle. It posts to
 the native owner without invoking product callbacks or extending window life;
