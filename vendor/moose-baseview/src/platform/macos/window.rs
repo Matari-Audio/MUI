@@ -290,15 +290,32 @@ fn create_window_with_options(
             // macOS has no AppBar work-area contract. This is deliberately an
             // edge overlay; it never changes another application's windows.
             let frame = screen.visibleFrame();
-            let height = f64::from(dock.height).min(frame.size.height * 0.5);
-            let y = match dock.edge {
-                crate::DockEdge::Top => frame.origin.y + frame.size.height - height,
-                crate::DockEdge::Bottom => frame.origin.y,
+            let span = if dock.edge.is_vertical() { frame.size.width } else { frame.size.height };
+            let thickness = f64::from(dock.height).min(span * 0.5);
+            let (x, y, width, height) = match dock.edge {
+                crate::DockEdge::Top => (
+                    frame.origin.x,
+                    frame.origin.y + frame.size.height - thickness,
+                    frame.size.width,
+                    thickness,
+                ),
+                crate::DockEdge::Bottom => {
+                    (frame.origin.x, frame.origin.y, frame.size.width, thickness)
+                }
+                crate::DockEdge::Left => {
+                    (frame.origin.x, frame.origin.y, thickness, frame.size.height)
+                }
+                crate::DockEdge::Right => (
+                    frame.origin.x + frame.size.width - thickness,
+                    frame.origin.y,
+                    thickness,
+                    frame.size.height,
+                ),
             };
             window.setStyleMask(NSWindowStyleMask::Borderless);
             window.setLevel(NSFloatingWindowLevel);
             window.setFrame_display(
-                NSRect::new(NSPoint::new(frame.origin.x, y), NSSize::new(frame.size.width, height)),
+                NSRect::new(NSPoint::new(x, y), NSSize::new(width, height)),
                 false,
             );
         }

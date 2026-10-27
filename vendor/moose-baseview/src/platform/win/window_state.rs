@@ -138,14 +138,14 @@ impl WindowState {
             return Ok(());
         }
         if self.shared.docked {
-            let height = size.to_logical::<f64>(self.shared.scale_factor()).height.round() as u32;
+            let size = size.to_logical::<f64>(self.shared.scale_factor());
             // SAFETY: synchronous message to this live owner-thread HWND; no borrowed pointer.
             unsafe {
                 windows_sys::Win32::UI::WindowsAndMessaging::SendMessageW(
                     self.hwnd.as_raw(),
-                    super::window::BV_DOCK_HEIGHT,
-                    height as usize,
-                    0,
+                    super::window::BV_DOCK_SIZE,
+                    size.width.round() as usize,
+                    size.height.round() as isize,
                 );
             }
             return Ok(());

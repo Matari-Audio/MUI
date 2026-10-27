@@ -1,6 +1,6 @@
 //! Managed EWMH dock windows. Struts are root-relative, never monitor-relative.
 use super::{PlatformError, Result, X11Connection};
-use crate::{DockEdge, DockOptions};
+use crate::{dpi::LogicalSize, DockEdge, DockOptions};
 use std::rc::Rc;
 use x11rb::{
     connection::Connection,
@@ -53,8 +53,8 @@ impl Dock {
     pub fn refresh(&mut self) -> Result<()> {
         self.sync(self.visible)
     }
-    pub fn resize(&mut self, height: u32) -> Result<()> {
-        self.options.height = height.clamp(100, 1024);
+    pub fn resize(&mut self, size: LogicalSize<f64>) -> Result<()> {
+        self.options.height = self.options.thickness(size);
         self.sync(self.visible)
     }
     pub fn sync(&mut self, visible: bool) -> Result<()> {
@@ -101,33 +101,53 @@ impl Dock {
                 ))
             }
         };
+        let vertical = self.options.edge.is_vertical();
+        let span = if vertical { width } else { height };
         let thickness =
-            ((f64::from(self.options.height) * self.scale).round() as u32).min(height / 2).max(1);
+            ((f64::from(self.options.height) * self.scale).round() as u32).min(span / 2).max(1);
         if x < 0
             || y < 0
             || match self.options.edge {
                 DockEdge::Top => y != 0,
                 DockEdge::Bottom => y + height as i32 != i32::from(root_rect.height),
+                DockEdge::Left => x != 0,
+                DockEdge::Right => x + width as i32 != i32::from(root_rect.width),
             }
         {
             return Err(PlatformError::CreationFailed(
                 "this X11 monitor edge cannot be reserved without covering another display".into(),
             ));
         }
-        let top = self.options.edge == DockEdge::Top;
-        let panel_y = if top { y } else { y + height as i32 - thickness as i32 };
+        let thick = thickness as i32;
+        let (panel_x, panel_y, panel_width, panel_height) = match self.options.edge {
+            DockEdge::Top => (x, y, width, thickness),
+            DockEdge::Bottom => (x, y + height as i32 - thick, width, thickness),
+            DockEdge::Left => (x, y, thickness, height),
+            DockEdge::Right => (x + width as i32 - thick, y, thickness, height),
+        };
         conn.configure_window(
             self.window,
-            &ConfigureWindowAux::new().x(x).y(panel_y).width(width).height(thickness),
+            &ConfigureWindowAux::new()
+                .x(panel_x)
+                .y(panel_y)
+                .width(panel_width)
+                .height(panel_height),
         )?
         .check()?;
         let mut strut = [0u32; 12];
         if visible {
-            let side = if top { 2 } else { 3 };
+            // _NET_WM_STRUT_PARTIAL: left, right, top, bottom, then the start/end
+            // pair of each edge's span (left/right span y, top/bottom span x).
+            let (side, span_start) = match self.options.edge {
+                DockEdge::Left => (0, 4),
+                DockEdge::Right => (1, 6),
+                DockEdge::Top => (2, 8),
+                DockEdge::Bottom => (3, 10),
+            };
+            let (start, length) = if vertical { (y, height) } else { (x, width) };
             strut[side] = thickness;
-            let range = if top { 8 } else { 10 };
-            strut[range] = x as u32;
-            strut[range + 1] = (x as u32).saturating_add(width).saturating_sub(1);
+            strut[span_start] = start as u32;
+            strut[span_start + 1] = (start as u32).saturating_add(length).saturating_sub(1);
         }
         let partial = atom(connection, b"_NET_WM_STRUT_PARTIAL")?;
         conn.change_property32(

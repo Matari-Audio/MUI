@@ -366,7 +366,7 @@ impl EventLoop {
                 if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
                     let logical: crate::dpi::LogicalSize<f64> =
                         new_size.to_logical(self.window.scale_factor());
-                    return dock.resize(logical.height.round() as u32);
+                    return dock.resize(logical);
                 }
                 let scale_factor = self.window.scaling_factor.get();
                 let new_size = new_size.to_physical(scale_factor);

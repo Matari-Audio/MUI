@@ -305,7 +305,7 @@ impl WindowInner {
     pub fn resize(&self, size: Size) -> Result<()> {
         if let Some(dock) = self.dock.borrow_mut().as_mut() {
             let size: crate::dpi::LogicalSize<f64> = size.to_logical(self.scale_factor());
-            return dock.resize(size.height.round() as u32);
+            return dock.resize(size);
         }
         let new_physical_size = size.to_physical(self.scaling_factor.get());
         self.xcb_window.resize(new_physical_size)?.check()?;
