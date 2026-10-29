@@ -200,6 +200,12 @@ impl PointerHandler for Runtime {
                 }
                 PointerEventKind::Press { button, serial, .. } => {
                     if button == BTN_LEFT {
+                        // The dock gets no press while the compositor grabs the pointer for
+                        // a drag, so a press here proves a still-active source lost its
+                        // terminal event.
+                        if cx.drag_active.replace(false) {
+                            self.data.retire();
+                        }
                         cx.primary.set(true);
                         *cx.press.borrow_mut() = pointer
                             .data::<PointerData<()>>()
