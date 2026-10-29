@@ -118,12 +118,19 @@ impl WindowInner {
 
         let mut size_hints = get_size_hints(&sizing_strategy, physical_size, initial_scale_factor);
 
+        let transparent =
+            options.transparent && options.parent.is_none() && !options.wait_for_parent;
+
         #[cfg(feature = "opengl")]
-        let visual_info =
-            WindowVisualConfig::find_best_visual_config_for_gl(&xcb_connection, options.gl_config)?;
+        let visual_info = WindowVisualConfig::find_best_visual_config_for_gl(
+            &xcb_connection,
+            options.gl_config,
+            transparent,
+        )?;
 
         #[cfg(not(feature = "opengl"))]
-        let visual_info = WindowVisualConfig::find_best_visual_config(&xcb_connection)?;
+        let visual_info =
+            WindowVisualConfig::find_best_visual_config(&xcb_connection, transparent)?;
 
         let connection = Rc::new(xcb_connection);
         let owner = options

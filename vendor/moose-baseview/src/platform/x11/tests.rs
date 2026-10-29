@@ -261,7 +261,7 @@ fn native_root_visual_checked_creation_zero_size_and_xembed_reparent() {
             .unwrap();
         conn.conn.map_window(p).unwrap().check().unwrap();
     }
-    let visual = visual_info::WindowVisualConfig::find_best_visual_config(&conn).unwrap();
+    let visual = visual_info::WindowVisualConfig::find_best_visual_config(&conn, false).unwrap();
     assert_eq!(visual.visual_id, conn.default_screen().root_visual);
     assert_eq!(visual.visual_depth, conn.default_screen().root_depth);
     let child = xcb_window::XcbWindow::new(

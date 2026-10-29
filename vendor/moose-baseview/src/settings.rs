@@ -10,6 +10,9 @@ use raw_window_handle::HasWindowHandle;
 pub struct WindowSettings {
     /// Native screen-edge placement; never applied to a host-owned child.
     pub dock: Option<crate::DockOptions>,
+    /// Request an alpha-capable X11 visual for a detached window. Other platforms
+    /// retain their native visual selection. Opaque presentation remains the default.
+    pub transparent: bool,
     /// The window title.
     pub title: String,
 
@@ -88,6 +91,12 @@ impl WindowSettings {
         self.dock = Some(dock);
         self
     }
+    /// Request an alpha-capable visual (X11 detached windows only).
+    pub fn with_transparent(mut self, transparent: bool) -> Self {
+        self.transparent = transparent;
+        self
+    }
+
     /// Creates a new [`WindowSettings`] with all default values.
     #[inline]
     pub fn new() -> Self {
@@ -190,6 +199,7 @@ impl Default for WindowSettings {
     fn default() -> Self {
         Self {
             dock: None,
+            transparent: false,
             title: String::from("baseview window"),
             size: LogicalSize { width: 500.0, height: 400.0 }.into(),
             parent: None,
