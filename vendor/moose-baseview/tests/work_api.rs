@@ -117,3 +117,93 @@ fn native_poll_timer_delayed_draw_and_close_revoke_work() {
     waker.request_redraw();
     assert!(receive.try_iter().next().is_none());
 }
+
+/// A transparent utility window needs ARGB without taking input from a covering
+/// application. Run under Xvfb; xdotool supplies actual server input, not SendEvent.
+#[test]
+#[ignore = "requires an isolated X11 display and xdotool"]
+fn transparent_window_preserves_overlay_input() {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use x11rb::{
+        connection::Connection,
+        protocol::{xproto::*, Event as XEvent},
+        CURRENT_TIME,
+    };
+    struct Probe;
+    impl WindowHandler for Probe {
+        fn draw(&self) -> Result<(), HandlerError> {
+            Ok(())
+        }
+        fn resized(&self, _: WindowSize) -> Result<(), HandlerError> {
+            Ok(())
+        }
+        fn on_event(&self, _: Event) -> EventStatus {
+            EventStatus::Ignored
+        }
+    }
+    let (send, receive) = channel();
+    let window = Window::create(
+        WindowSettings::new().with_title("transparent baseview probe").with_transparent(true),
+        move |cx| {
+            let id = match cx.window_handle().unwrap().as_raw() {
+                RawWindowHandle::Xlib(h) => h.window as u32,
+                RawWindowHandle::Xcb(h) => h.window.get(),
+                _ => panic!("requires X11"),
+            };
+            send.send(id).unwrap();
+            Ok(Probe)
+        },
+    )
+    .unwrap();
+    window.show().unwrap();
+    let id = receive.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (conn, screen) = x11rb::connect(None).unwrap();
+    assert_eq!(conn.get_geometry(id).unwrap().reply().unwrap().depth, 32);
+    let root = conn.setup().roots[screen].root;
+    let overlay = conn.generate_id().unwrap();
+    conn.create_window(
+        0,
+        overlay,
+        root,
+        0,
+        0,
+        500,
+        400,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        0,
+        &CreateWindowAux::new().event_mask(EventMask::BUTTON_PRESS | EventMask::KEY_PRESS),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.map_window(overlay).unwrap().check().unwrap();
+    conn.configure_window(overlay, &ConfigureWindowAux::new().stack_mode(StackMode::ABOVE))
+        .unwrap()
+        .check()
+        .unwrap();
+    conn.set_input_focus(InputFocus::POINTER_ROOT, overlay, CURRENT_TIME).unwrap().check().unwrap();
+    assert!(std::process::Command::new("xdotool")
+        .args(["mousemove", "100", "100", "click", "1", "type", "overlay"])
+        .status()
+        .unwrap()
+        .success());
+    let mut clicks = 0;
+    let mut keys = 0;
+    let until = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < until {
+        assert_eq!(conn.get_input_focus().unwrap().reply().unwrap().focus, overlay);
+        while let Some(event) = conn.poll_for_event().unwrap() {
+            match event {
+                XEvent::ButtonPress(e) if e.event == overlay => clicks += 1,
+                XEvent::KeyPress(e) if e.event == overlay => keys += 1,
+                _ => {}
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(clicks, 1);
+    assert_eq!(keys, 7);
+    conn.destroy_window(overlay).unwrap().check().unwrap();
+    window.close();
+}
