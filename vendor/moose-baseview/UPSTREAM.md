@@ -32,6 +32,12 @@ and Clippy spelling-only changes are grouped separately.
 
 ## Compatibility and lifetime contracts
 
+Detached X11 windows may request `WindowSettings::with_transparent(true)` to
+select a 32-bit TrueColor visual when available. Opaque windows and embedded
+editors retain the root visual; this option does not override an explicit GL
+configuration or change other platforms. Renderers must still request alpha
+presentation, and compositor blur remains an application/platform concern.
+
 The default remains `FrameDemand::Continuous` and `draw` calls legacy `on_frame`.
 This preserves existing BUFFR polling of background preferences, meters and GPU
 initialization. Handlers implementing current draw-only logic may override demand
