@@ -196,9 +196,7 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
         .collect();
     mui.sort();
     mui.dedup();
-    let pinned = std::fs::read_to_string(pkg_dir.join("Cargo.toml"))
-        .map(|t| pinned(&t))
-        .unwrap_or_default();
+    let pinned = std::fs::read_to_string(pkg_dir.join("Cargo.toml")).map_or_default(|t| pinned(&t));
     Ok(Plugin {
         dir: pkg_dir,
         package,
