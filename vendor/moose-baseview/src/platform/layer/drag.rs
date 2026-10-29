@@ -1,14 +1,22 @@
 //! Native file transfers share the dock's connection, seat and event queue.
 use super::*;
 use matari_audio_drag_and_drop::{
-    FileSet, LinuxOutcome, NativeProtocol, SessionRoute, SourceContext, WaylandReporter,
-    WaylandRuntimePort, WaylandSourceReporter,
+    DragPreview, FileSet, LinuxOutcome, NativeProtocol, PreviewFailureStage, PreviewStatus,
+    SessionRoute, SourceContext, WaylandIcon, WaylandReporter, WaylandRuntimePort,
+    WaylandSourceReporter,
 };
-use smithay_client_toolkit::data_device_manager::{
-    data_device::{DataDevice, DataDeviceHandler},
-    data_offer::{DataOfferHandler, DragOffer},
-    data_source::{DataSourceHandler, DragSource},
-    DataDeviceManagerState, ReadPipe, WritePipe,
+use smithay_client_toolkit::{
+    compositor::CompositorState,
+    data_device_manager::{
+        data_device::{DataDevice, DataDeviceHandler},
+        data_offer::{DataOfferHandler, DragOffer},
+        data_source::{DataSourceHandler, DragSource},
+        DataDeviceManagerState, ReadPipe, WritePipe,
+    },
+    shm::{
+        slot::{Buffer, SlotPool},
+        Shm, ShmHandler,
+    },
 };
 use std::{
     io::{Read, Write},
@@ -19,7 +27,7 @@ use wayland_client::{
     globals::GlobalList,
     protocol::{
         wl_data_device::WlDataDevice, wl_data_device_manager::DndAction,
-        wl_data_source::WlDataSource, wl_seat::WlSeat,
+        wl_data_source::WlDataSource, wl_seat::WlSeat, wl_shm,
     },
 };
 
@@ -39,6 +47,56 @@ struct Source {
     native: DragSource,
     bytes: Arc<[u8]>,
     reporter: Rc<RefCell<WaylandSourceReporter>>,
+    _icon: Option<Icon>,
+}
+/// Dock-owned drag thumbnail. It stays alive until the native source terminates.
+struct Icon {
+    surface: wl_surface::WlSurface,
+    _pool: SlotPool,
+    _buffer: Buffer,
+    icon: WaylandIcon,
+}
+impl Icon {
+    fn new(
+        data: &Data, qh: &QueueHandle<Runtime>, preview: &DragPreview, scale: i32,
+    ) -> std::io::Result<Self> {
+        let icon = preview.wayland_icon(scale).map_err(std::io::Error::other)?;
+        let [width, height] = icon.buffer_size;
+        let stride = width
+            .checked_mul(4)
+            .ok_or_else(|| std::io::Error::other("drag icon stride overflow"))?;
+        let mut pool =
+            SlotPool::new(icon.pixels.len(), &data.shm).map_err(std::io::Error::other)?;
+        let (buffer, canvas) = pool
+            .create_buffer(width, height, stride, wl_shm::Format::Argb8888)
+            .map_err(std::io::Error::other)?;
+        canvas.copy_from_slice(&icon.pixels);
+        Ok(Self { surface: data.compositor.create_surface(qh), _pool: pool, _buffer: buffer, icon })
+    }
+    /// Commit only after `start_drag` has assigned the icon role.
+    fn show(&self) {
+        let (surface, icon, buffer) = (&self.surface, &self.icon, self._buffer.wl_buffer());
+        if surface.version() >= 3 {
+            surface.set_buffer_scale(icon.scale);
+        }
+        if surface.version() >= 5 {
+            surface.attach(Some(buffer), 0, 0);
+            surface.offset(icon.offset[0], icon.offset[1]);
+        } else {
+            surface.attach(Some(buffer), icon.offset[0], icon.offset[1]);
+        }
+        if surface.version() >= 4 {
+            surface.damage_buffer(0, 0, icon.buffer_size[0], icon.buffer_size[1]);
+        } else {
+            surface.damage(0, 0, icon.logical_size[0], icon.logical_size[1]);
+        }
+        surface.commit();
+    }
+}
+impl Drop for Icon {
+    fn drop(&mut self) {
+        self.surface.destroy();
+    }
 }
 struct Transfer {
     pipe: WritePipe,
@@ -60,15 +118,21 @@ struct Inbound {
 
 pub(super) struct Data {
     manager: DataDeviceManagerState,
+    compositor: CompositorState,
+    shm: Shm,
     devices: Vec<DataDevice>,
     source: Option<Source>,
     transfers: Vec<Transfer>,
     inbound: Option<Inbound>,
 }
 impl Data {
-    pub fn new(globals: &GlobalList, qh: &QueueHandle<Runtime>) -> linux::Result<Self> {
+    pub fn new(
+        globals: &GlobalList, qh: &QueueHandle<Runtime>, compositor: CompositorState,
+    ) -> linux::Result<Self> {
         Ok(Self {
             manager: DataDeviceManagerState::bind(globals, qh).map_err(failure)?,
+            compositor,
+            shm: Shm::bind(globals, qh).map_err(failure)?,
             devices: Vec::new(),
             source: None,
             transfers: Vec::new(),
@@ -86,10 +150,14 @@ impl Data {
     pub fn device(&self, seat: &WlSeat) -> Option<WlDataDevice> {
         self.devices.iter().find(|d| d.data().seat() == seat).map(|d| d.inner().clone())
     }
-    pub fn cancel(&mut self) {
+    /// Retire the source once the dock's grab is gone without a terminal event.
+    pub fn retire(&mut self) {
         if let Some(source) = self.source.take() {
-            source.reporter.borrow().finish_linux(LinuxOutcome::Cancelled);
+            source.reporter.borrow().retire();
         }
+    }
+    pub fn cancel(&mut self) {
+        self.retire();
         self.transfers.clear();
         self.inbound = None;
     }
@@ -191,13 +259,44 @@ impl WaylandRuntimePort for Port<'_> {
             [URI_LIST],
             DndAction::Copy,
         );
+        // Buffer scale is only legal on surfaces v3+; match the dock's output.
+        let scale = if self.context.surface().version() >= 3 {
+            self.context.scale_factor().ceil().max(1.0) as i32
+        } else {
+            1
+        };
+        // A thumbnail that cannot be built must not stop the file drag.
+        let icon = files.preview().and_then(|preview| {
+            match Icon::new(&*self.data, &self.context.qh, preview, scale) {
+                Ok(icon) => Some(icon),
+                Err(_) => {
+                    reporter.preview(PreviewStatus::Unavailable {
+                        stage: PreviewFailureStage::Bitmap,
+                        native_code: None,
+                    });
+                    None
+                }
+            }
+        });
+        if icon.is_some() {
+            reporter.preview(PreviewStatus::Attached);
+        }
         // This device, surface and serial all came from this runtime's current
         // pointer queue; no connection or foreign event queue is synthesized.
-        device.start_drag(Some(native.inner()), self.context.surface(), None, serial);
+        device.start_drag(
+            Some(native.inner()),
+            self.context.surface(),
+            icon.as_ref().map(|icon| &icon.surface),
+            serial,
+        );
+        if let Some(icon) = &icon {
+            icon.show();
+        }
         self.data.source = Some(Source {
             native,
             bytes: uris.into_bytes().into(),
             reporter: Rc::new(RefCell::new(WaylandSourceReporter::new(reporter))),
+            _icon: icon,
         });
         self.context.drag_active.set(true);
         Ok(SessionRoute {
@@ -230,6 +329,11 @@ impl Runtime {
                 modifiers: self.modifiers,
             }));
         }
+    }
+}
+impl ShmHandler for Runtime {
+    fn shm_state(&mut self) -> &mut Shm {
+        &mut self.data.shm
     }
 }
 impl DataSourceHandler for Runtime {

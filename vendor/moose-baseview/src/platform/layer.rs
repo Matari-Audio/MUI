@@ -296,7 +296,7 @@ impl Runtime {
             registry: RegistryState::new(&globals),
             outputs: OutputState::new(&globals, &qh),
             seats: SeatState::new(&globals, &qh),
-            data: drag::Data::new(&globals, &qh)?,
+            data: drag::Data::new(&globals, &qh, compositor.clone())?,
             shared: Arc::clone(&shared),
             context: None,
             handler: None,
