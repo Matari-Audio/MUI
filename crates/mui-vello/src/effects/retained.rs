@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// Vello's compute pipelines and atlas are device-wide; retained encodings and
-/// targets stay per window. The short queue-submit critical section is serialized.
+/// targets stay per window. Coarse allocation validation and submission are serialized.
 #[derive(Clone)]
 pub(crate) struct SharedVello {
     renderer: Arc<Mutex<vello::Renderer>>,
@@ -53,10 +53,9 @@ use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
 /// per change to the paint list and rendered on the GPU, and a frame that
 /// changed nothing is one present pass of the texture already holding it.
 ///
-/// Nothing crosses back to the CPU. Weld materials, blurred backdrops and
-/// the host's own textures ([`GpuRenderer::set_texture`]) are copied into
-/// Vello's image atlas GPU-side, so one device serves the UI and whatever
-/// else the host draws with it.
+/// Coarse allocation counters are read back before fine rasterization. Weld
+/// materials, blurred backdrops and the host's own textures
+/// ([`GpuRenderer::set_texture`]) are copied into Vello's image atlas GPU-side.
 ///
 /// Device and queue ownership is per renderer. Recreate it on device loss.
 pub struct GpuRenderer {
@@ -1372,7 +1371,7 @@ impl GpuRenderer {
                         &mut canvas,
                         p,
                         self.paths.get(&p.path)?,
-                        crate::placed(xf, p),
+                        crate::placed(draw, p),
                     )?;
                 }
             }
