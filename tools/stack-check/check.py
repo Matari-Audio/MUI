@@ -264,19 +264,22 @@ def main():
         manifest = load_manifest(args.manifest)
         reports = []
         config = json.loads(args.configuration.read_text()) if args.configuration else None
+        configured = args.configuration is not None
+        if configured and not isinstance(config, dict):
+            raise ValueError('shipping configuration must be an object')
         for repo in args.repositories:
             if not repo.is_dir():
                 raise ValueError(f"repository does not exist: {repo}")
             root = repo.resolve()
             locks = None
-            if config:
+            if configured:
                 lock = (root / config['lockfile']).resolve()
                 if not lock.is_relative_to(root):
                     raise ValueError('configuration lockfile must be inside the product')
                 locks = [lock]
-            graph, manifests = shipping_graph(root, manifest, config) if config else (None, None)
+            graph, manifests = shipping_graph(root, manifest, config) if configured else (None, None)
             reports.append(scan(root, manifest, locks, manifests))
-            if config:
+            if configured:
                 reports[-1]["shipping_graph"] = graph
         print(json.dumps({"manifest_status": manifest.get("status"), "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(), "repositories": reports}, indent=2))
         return int(any(report["issues"] or report.get("shipping_graph", {}).get("issues") for report in reports))

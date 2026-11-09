@@ -45,6 +45,18 @@ source = "git+https://github.com/Matari-Audio/MUI?rev={MUI}#{MUI}"
         self.assertEqual(report["resolved"][0]["package"], "mui")
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.repo.iterdir()})
 
+    def test_explicit_invalid_configuration_cannot_skip_shipping_graph(self):
+        config = self.repo / 'configuration.json'
+        for value in ({}, None, [], False, ''):
+            config.write_text(json.dumps(value))
+            result = subprocess.run(
+                [sys.executable, str(CHECK), str(self.repo), '--configuration', str(config)],
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 2, (value, result.stdout, result.stderr))
+            self.assertEqual(result.stdout, '')
+            self.assertIn('stack-check:', result.stderr)
+
     def test_framework_workspace_packages_are_registered(self):
         self.lock(f'''[[package]]
 name = "moose-au"
