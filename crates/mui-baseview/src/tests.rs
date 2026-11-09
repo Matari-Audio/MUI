@@ -1417,3 +1417,67 @@ fn native_idle_wake_from_worker_does_not_invalidate_or_paint() -> Result<(), Str
     );
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires an isolated X11 display"]
+fn native_policies_keep_ui_on_worker_and_x11_lifecycle_on_native_thread() {
+    use std::sync::mpsc::channel;
+
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: Knob { value: 0.5 },
+    }));
+    for _ in 0..2 {
+        let requests = Arc::new(Requests::default());
+        let (native_send, native_receive) = channel();
+        let (pointer_send, pointer_receive) = channel();
+        let (x11_send, x11_receive) = channel();
+        requests.on_native_start(move || {
+            native_send.send(std::thread::current().id()).unwrap();
+        });
+        let mut pointer_send = Some(pointer_send);
+        requests.on_pointer(Arc::new(Mutex::new(move |_: &Ui| {
+            if let Some(send) = pointer_send.take() {
+                send.send(std::thread::current().id()).unwrap();
+            }
+            false
+        })));
+        requests.on_x11_window(Arc::new(Mutex::new(move |id| {
+            x11_send.send((id, std::thread::current().id())).unwrap();
+        })));
+        let model_guard = lock(&shared);
+        let window = Window::create(
+            settings("MUI native policy lifecycle", (100, 100)),
+            build(shared.clone(), requests.clone(), false),
+        )
+        .expect("native policy window creation");
+        window.show().expect("native policy window mapping");
+        let native_thread = native_receive
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        let (id, creation_thread) = x11_receive.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(creation_thread, native_thread);
+        assert_eq!(requests.x11_window(), id);
+        assert!(id.is_some());
+        drop(model_guard);
+        let worker_thread = pointer_receive
+            .recv_timeout(Duration::from_secs(10))
+            .unwrap();
+        assert_ne!(
+            worker_thread, native_thread,
+            "pointer policy needs the worker Ui"
+        );
+        let model_guard = lock(&shared);
+        window.close();
+        let (id, cancellation_thread) = x11_receive.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert_eq!(id, None);
+        assert_eq!(cancellation_thread, native_thread);
+        assert_eq!(requests.x11_window(), None);
+        drop(model_guard);
+        assert!(
+            x11_receive.try_recv().is_err(),
+            "cancellation must be delivered once"
+        );
+    }
+}

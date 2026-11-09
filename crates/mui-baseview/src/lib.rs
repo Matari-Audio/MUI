@@ -36,6 +36,7 @@ pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 
 mod drag;
 mod native_worker;
+mod policies;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
@@ -56,6 +57,7 @@ use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{FailureClass, Frame, GpuInit, Host, Retry, target_size};
 use mui::vello::kurbo::Affine;
 use native_worker::build;
+pub use policies::{WheelAcceleration, WheelPolicy};
 #[cfg(target_os = "linux")]
 use raw_window_handle::HasDisplayHandle;
 use raw_window_handle::HasWindowHandle;
@@ -69,6 +71,16 @@ pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 /// A native-close signal. Runs before borrowing the model or handler; it must
 /// never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
+
+/// Evaluated with the retained `Ui` on its model worker. Returning true hides
+/// the pointer during a gesture; the native thread restores its original position
+/// on release. Leaving the window or losing focus cancels restoration.
+pub type PointerHook = Arc<Mutex<dyn FnMut(&mui::Ui) -> bool + Send>>;
+
+/// Native-thread creation and cancellation of an owned X11 identifier.
+/// This hook must not borrow the UI/model or wait for the model worker.
+#[cfg(target_os = "linux")]
+pub type X11WindowHook = Arc<Mutex<dyn FnMut(Option<u32>) + Send>>;
 
 /// Last frame submitted to the native child; not GPU completion or scanout.
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +106,10 @@ pub struct Requests {
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
+    pointer: Mutex<Option<PointerHook>>,
+    wheel: Mutex<WheelPolicy>,
+    #[cfg(target_os = "linux")]
+    x11_hook: Mutex<Option<X11WindowHook>>,
     close: Mutex<Option<CloseHook>>,
     idle: Mutex<Option<CloseHook>>,
     requester: Mutex<Option<baseview::FrameRequester>>,
@@ -112,6 +128,34 @@ pub struct Requests {
 }
 
 impl Requests {
+    /// Configure baseview notch conversion before opening this editor.
+    /// The separate floating Wayland adapter does not use this policy.
+    pub fn set_wheel_policy(&self, policy: WheelPolicy) {
+        *self
+            .wheel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
+    }
+
+    /// Install the model-worker pointer policy before opening a baseview editor.
+    /// The separate floating Wayland adapter does not use this policy.
+    pub fn on_pointer(&self, hook: PointerHook) {
+        *self
+            .pointer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Observe creation and cancellation on the native thread. Register before
+    /// opening. Each created X11 window retains its hook until cancellation.
+    #[cfg(target_os = "linux")]
+    pub fn on_x11_window(&self, hook: X11WindowHook) {
+        *self
+            .x11_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
     /// Queue an integration-fixture event through the native pump. Bounded,
     /// ordered and absent from production builds. Native focus/capture APIs
     /// still execute normally, including synchronous platform callbacks.
