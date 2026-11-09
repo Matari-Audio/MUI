@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,16 @@ class Update(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=HERE)
         self.root = Path(self.tmp.name)
+        self.bin = self.root / 'bin'
+        self.bin.mkdir()
+        cargo = self.bin / 'cargo'
+        cargo.write_text("""#!/usr/bin/env python3
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[sys.argv.index('--manifest-path') + 1]).parent
+manifest = str(root / 'Cargo.toml')
+print(json.dumps({'workspace_root': str(root), 'workspace_members': ['app'], 'packages': [{'id': 'app', 'manifest_path': manifest}]}))
+""")
+        cargo.chmod(0o755)
         subprocess.run(['git', 'init', '-q', '-b', 'fixture', str(self.root)], check=True)
         (self.root / 'Cargo.toml').write_text('''[package]\nname = "example"\nversion = "0.1.0"\n[target.'cfg(unix)'.dev-dependencies]\nrenamed = { package = "mui", git = "https://github.com/Matari-Audio/MUI", rev = "''' + OLD + '''", optional = true, default-features = false, features = ["x"] }\n''')
         (self.root / 'Cargo.lock').write_text('version = 3\n')
@@ -19,7 +30,7 @@ class Update(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'fixture'], check=True)
         self.addCleanup(self.tmp.cleanup)
     def run_cli(self, *args):
-        return subprocess.run(['python3', str(HERE / 'update.py'), str(self.root), *args], capture_output=True, text=True)
+        return subprocess.run(['python3', str(HERE / 'update.py'), str(self.root), *args], capture_output=True, text=True, env={**os.environ, 'PATH': str(self.bin) + os.pathsep + os.environ['PATH']})
     def test_apply_preserves_flags_and_is_idempotent(self):
         before = (self.root / 'Cargo.toml').read_text()
         result = self.run_cli('--apply')
@@ -81,3 +92,24 @@ source = "git+https://github.com/Matari-Audio/moose?rev=bbbbbbbbbbbbbbbbbbbbbbbb
         check = subprocess.run(['python3', str(HERE / 'check.py'), str(self.root)], capture_output=True, text=True)
         self.assertEqual(check.returncode, 1)
         self.assertIn('multiple-sources', check.stdout)
+
+    def test_historical_workspace_is_untouched_unless_explicitly_managed(self):
+        historical = self.root / 'history'
+        historical.mkdir()
+        manifest = historical / 'Cargo.toml'
+        manifest.write_text((self.root / 'Cargo.toml').read_text())
+        lock = historical / 'Cargo.lock'
+        lock.write_text('version = 3\n[[package]]\nname = "mui"\nversion = "1.0.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n')
+        before = manifest.read_bytes(), lock.read_bytes()
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'history'], check=True)
+        result = self.run_cli('--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(NEW, (self.root / 'Cargo.toml').read_text())
+        self.assertEqual((manifest.read_bytes(), lock.read_bytes()), before)
+        lock.write_text('version = 3\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'manage history'], check=True)
+        result = self.run_cli('--workspace', 'history', '--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(NEW, manifest.read_text())

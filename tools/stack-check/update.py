@@ -2,23 +2,60 @@
 """Plan conservative framework pin edits. Apply only with --apply."""
 import argparse
 import difflib
+import json
 import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
-from check import files, identity, load_manifest, scan, ROOT
+from check import identity, load_manifest, scan, ROOT
 
 
-def plan(root, contract):
-    report = scan(root, contract)
+def workspace_files(root, workspace):
+    directory = (root / workspace).resolve()
+    if not directory.is_relative_to(root) or not directory.is_dir():
+        raise ValueError(f'workspace must be inside checkout: {workspace}')
+    lock = directory / 'Cargo.lock'
+    if not lock.resolve().is_relative_to(root):
+        raise ValueError(f'workspace lockfile must be inside checkout: {lock}')
+    before = lock.read_bytes() if lock.exists() else None
+    try:
+        result = subprocess.run(['cargo', 'metadata', '--no-deps', '--format-version', '1', '--locked',
+                                 '--manifest-path', str(directory / 'Cargo.toml')],
+                                cwd=directory, capture_output=True, text=True)
+    finally:
+        after = lock.read_bytes() if lock.exists() else None
+        if before != after:
+            raise ValueError(f'cargo metadata modified the lockfile: {lock}')
+    if result.returncode:
+        raise ValueError(f'cargo metadata failed for {directory}: {result.stderr.strip()}')
+    metadata = json.loads(result.stdout)
+    if Path(metadata['workspace_root']).resolve() != directory:
+        raise ValueError(f'not a workspace root: {directory}')
+    packages = {p['id']: p for p in metadata['packages']}
+    manifests = {Path(packages[i]['manifest_path']).resolve() for i in metadata['workspace_members']}
+    manifests.add((directory / 'Cargo.toml').resolve())
+    if not all(p.is_relative_to(root) for p in manifests):
+        raise ValueError('workspace manifests must be inside the product')
+    if before is None:
+        raise ValueError(f'workspace lockfile missing: {lock}')
+    return manifests, lock
+
+
+def plan(root, contract, workspaces=()):
+    manifests, locks = set(), set()
+    for workspace in ('.', *workspaces):
+        workspace_manifests, lock = workspace_files(root, workspace)
+        manifests.update(workspace_manifests)
+        locks.add(lock)
+    report = scan(root, contract, sorted(locks), manifests)
     blocked = [i for i in report['issues'] if i['kind'] in ('local-patch', 'custom-alias', 'unregistered-source')]
     if blocked:
         raise ValueError(f'unsafe local, alias, or unregistered source: {blocked}')
     repos = {identity(f['repository']): (name, f) for name, f in contract['family'].items()}
     owners = {package for family in contract['family'].values() for package in family['packages']}
     edits = {}
-    for path in sorted(files(root, 'Cargo.toml')):
+    for path in sorted(manifests):
         original = path.read_text()
         parsed = tomllib.loads(original)
         lines = original.splitlines(keepends=True)
@@ -108,6 +145,7 @@ def main():
     parser.add_argument('repository', type=Path)
     parser.add_argument('--manifest', type=Path, default=ROOT / 'stack.toml')
     parser.add_argument('--apply', action='store_true')
+    parser.add_argument('--workspace', action='append', default=[], help='additional managed workspace relative to repository')
     args = parser.parse_args()
     try:
         root = args.repository.resolve()
@@ -115,7 +153,7 @@ def main():
             result = subprocess.run(['git', '-C', str(root), 'status', '--porcelain', '--untracked-files=all'], check=True, capture_output=True, text=True)
             if result.stdout:
                 raise ValueError('worktree must be clean before applying')
-        edits = plan(root, load_manifest(args.manifest))
+        edits = plan(root, load_manifest(args.manifest), args.workspace)
         for path, (old, new) in edits.items():
             print(''.join(difflib.unified_diff(old.splitlines(True), new.splitlines(True), fromfile=str(path), tofile=str(path))), end='')
         if args.apply:
