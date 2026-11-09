@@ -15,6 +15,8 @@ mod linux;
 mod x11;
 #[cfg(target_os = "linux")]
 pub use linux::*;
+#[cfg(target_os = "linux")]
+pub(crate) use x11::WindowThreadControl;
 #[cfg(target_os = "windows")]
 mod win;
 #[cfg(target_os = "windows")]

@@ -1447,12 +1447,14 @@ fn native_policies_keep_ui_on_worker_and_x11_lifecycle_on_native_thread() {
             x11_send.send((id, std::thread::current().id())).unwrap();
         })));
         let model_guard = lock(&shared);
-        let window = Window::create(
-            settings("MUI native policy lifecycle", (100, 100)),
-            build(shared.clone(), requests.clone(), false),
+        let window = open_floating_threaded(
+            "MUI native policy lifecycle",
+            (100, 100),
+            None,
+            Arc::clone(&shared),
+            Arc::clone(&requests),
         )
         .expect("native policy window creation");
-        window.show().expect("native policy window mapping");
         let native_thread = native_receive
             .recv_timeout(Duration::from_secs(10))
             .unwrap();
@@ -1469,7 +1471,7 @@ fn native_policies_keep_ui_on_worker_and_x11_lifecycle_on_native_thread() {
             "pointer policy needs the worker Ui"
         );
         let model_guard = lock(&shared);
-        window.close();
+        std::thread::spawn(move || window.close()).join().unwrap();
         let (id, cancellation_thread) = x11_receive.recv_timeout(Duration::from_secs(10)).unwrap();
         assert_eq!(id, None);
         assert_eq!(cancellation_thread, native_thread);

@@ -27,6 +27,7 @@ mod tests;
 mod visibility_tree;
 mod window_shared;
 mod window_thread;
+pub(crate) use window_thread::WindowThreadControl;
 
 pub use error::{CookieExt as _, PlatformError};
 pub(crate) type Result<T> = std::result::Result<T, PlatformError>;

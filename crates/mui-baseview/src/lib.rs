@@ -446,6 +446,60 @@ pub fn open<V: View + Send + 'static>(
         .ok()
 }
 
+/// Open an embedded X11 editor with a movable command controller.
+/// Native window state and callbacks stay on the X11 worker. Close the
+/// controller before destroying the host parent.
+#[cfg(target_os = "linux")]
+pub fn open_threaded<V: View + Send + 'static>(
+    parent: &impl HasWindowHandle,
+    title: &str,
+    size: (u32, u32),
+    scale: Option<f64>,
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) -> Option<baseview::ThreadedWindow> {
+    if mui::host::headless::offer(&shared, size) {
+        return None;
+    }
+    if let Err(error) = parent.window_handle() {
+        log(
+            &shared,
+            &format!("mui-baseview: no parent window ({error})"),
+        );
+        return None;
+    }
+    let settings = settings(title, size)
+        .with_parent(parent)
+        .with_scale_factor_override(scale);
+    let sink = Arc::clone(&shared);
+    baseview::ThreadedWindow::create(settings, build(shared, requests, true))
+        .and_then(|window| window.show().map(|()| window))
+        .map_err(|error| log(&sink, &format!("mui-baseview: window failed ({error})")))
+        .ok()
+}
+
+/// Open a floating X11 editor without claiming the process's standalone event loop.
+#[cfg(target_os = "linux")]
+pub fn open_floating_threaded<V: View + Send + 'static>(
+    title: &str,
+    size: (u32, u32),
+    scale: Option<f64>,
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) -> Option<baseview::ThreadedWindow> {
+    if mui::host::headless::offer(&shared, size) {
+        return None;
+    }
+    let sink = Arc::clone(&shared);
+    baseview::ThreadedWindow::create(
+        settings(title, size).with_scale_factor_override(scale),
+        build(shared, requests, false),
+    )
+    .and_then(|window| window.show().map(|()| window))
+    .map_err(|error| log(&sink, &format!("mui-baseview: window failed ({error})")))
+    .ok()
+}
+
 /// Run a top-level window of `size` logical points at the system scale, until
 /// it closes: an app's main loop. Never call it from a plugin: it tells the
 /// OS this process is baseview's alone (Windows DPI awareness).
