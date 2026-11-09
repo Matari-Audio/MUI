@@ -65,5 +65,7 @@ jobs:
           if not configs:
               raise SystemExit("shipping configurations are missing")
           for config in configs:
+              if not config.resolve().is_relative_to(root):
+                  raise SystemExit("shipping configurations must be inside the product checkout")
               subprocess.run([sys.executable, ".framework-stack-tools/tools/stack-check/check.py", ".", "--manifest", str(manifest), "--configuration", str(config)], check=True)
           PY
