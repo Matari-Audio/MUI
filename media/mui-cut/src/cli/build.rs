@@ -9,14 +9,16 @@
 //! copies the plugin's `Cargo.lock` (so everything but MUI stays at the
 //! plugin's versions) and its non-MUI `[patch]`es, and builds with
 //! `--config patch.<MUI>.<crate>.path=…` for every MUI crate the plugin
-//! uses. The plugin's checkout, `Cargo.lock` included, is only read.
+//! uses. It updates the copied lockfile only for those git MUI packages,
+//! then rejects remaining incompatible git MUI packages. The plugin's
+//! checkout, `Cargo.lock` included, is only read.
 //!
 //! Frameworks: moose and truce plugins (`moose::plugin!` / `truce::plugin!`
 //! make `crate::cli::Plugin`), nice-plug (the type `nice_export_clap!` names,
 //! public at the crate root), and plain MUI crates, which export
 //! `pub fn mui_editor() -> (mui::Ui, (u32, u32), impl mui::host::View + Send + 'static)`
 //! and, for sound, `pub fn mui_audio(sample_rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static`.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -235,6 +237,32 @@ fn locked_mui(lock: &str) -> Vec<String> {
                 .find_map(|l| l.strip_prefix("name = \"")?.strip_suffix('"'))
                 .map(str::to_owned)
         })
+        .collect()
+}
+
+/// Fully qualified package selectors for the copied git MUI lock entries.
+fn locked_mui_specs(lock: &str) -> Vec<String> {
+    lock.split("[[package]]")
+        .filter_map(|block| {
+            let field = |name: &str| {
+                block
+                    .lines()
+                    .find_map(|line| line.strip_prefix(name)?.strip_suffix('"'))
+            };
+            let source = field("source = \"")?;
+            if !is_mui(source) {
+                return None;
+            }
+            let source = source.split('#').next()?;
+            Some(format!(
+                "{}#{}@{}",
+                source,
+                field("name = \"")?,
+                field("version = \"")?
+            ))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -513,6 +541,34 @@ pub fn adapter(plugin: &str, features: &[String], project_dir: &Path) -> Result<
     used.dedup();
     let config = patch_config(&used, &local)?;
     let dir = write_adapter(&p, &root, &used, features)?;
+    let specs = std::fs::read_to_string(dir.join("Cargo.lock"))
+        .map(|lock| locked_mui_specs(&lock))
+        .unwrap_or_default();
+    if !specs.is_empty() {
+        let mut update = cargo(&dir);
+        update.arg("update").args(&specs);
+        for c in &config {
+            update.args(["--config", c]);
+        }
+        let out = update.output().map_err(|e| format!("cargo update: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "resolving MUI for `{}` failed:\n{}",
+                p.package,
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        let lock = std::fs::read_to_string(dir.join("Cargo.lock"))
+            .map_err(|e| format!("reading adapter lockfile: {e}"))?;
+        let remaining = locked_mui_specs(&lock);
+        if !remaining.is_empty() {
+            return Err(format!(
+                "`{}` requires MUI packages incompatible with this tree: {}",
+                p.package,
+                remaining.join(", ")
+            ));
+        }
+    }
     let name = adapter_name(&p);
     let mut cmd = cargo(&dir);
     cmd.args([
@@ -917,6 +973,13 @@ mod tests {
                     [[package]]\nname = \"moose\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/Matari-Audio/moose#def\"\n\n\
                     [[package]]\nname = \"mui-baseview\"\nversion = \"0.4.0\"\nsource = \"git+https://github.com/Matari-Audio/MUI?rev=48dde27#48dde27\"\n";
         assert_eq!(locked_mui(lock), ["mui", "mui-baseview"]);
+        assert_eq!(
+            locked_mui_specs(lock),
+            [
+                "git+https://github.com/Matari-Audio/MUI#mui@0.4.0",
+                "git+https://github.com/Matari-Audio/MUI?rev=48dde27#mui-baseview@0.4.0",
+            ]
+        );
         let manifest = r#"
 mui = { git = "https://github.com/Matari-Audio/MUI", rev = "48dde277444db4c4b9fa1099ecd52f997a18402a", features = ["cpu"] }
 mui-text = { git = "https://github.com/Matari-Audio/MUI" }
