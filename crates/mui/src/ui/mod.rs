@@ -3,6 +3,7 @@ use std::any::Any;
 mod wake;
 use crate::SemanticAction;
 use std::collections::{BTreeSet, HashMap};
+use wake::CallerWake;
 
 use mui_geometry::{Point, Vec2};
 use mui_input::{
@@ -176,6 +177,9 @@ pub struct Ui {
     pointer_time: Option<std::time::Instant>,
     /// This frame's wheel, for [`Response::wheel`].
     wheel: Vec2,
+    wheel_turned: Option<f64>,
+    wheel_capture: Option<Id>,
+    popup_wheel_scopes: Vec<Id>,
     /// Ids that read [`Ui::wheel`] while the tree now being handed in was
     /// built: no scroll node they sit in takes the wheel over them.
     wheel_claims: Vec<String>,
@@ -203,6 +207,7 @@ pub struct Ui {
     /// still reports the knot it grabbed.
     tagged: Option<(String, String)>,
     time: f64,
+    wake: Option<CallerWake>,
     /// The last frame resolved: see [`Ui::inert`].
     resolved: bool,
     /// Where along a held scrollbar's thumb the pointer took it, so the
@@ -308,6 +313,9 @@ impl Ui {
             double: None,
             double_click: DOUBLE_CLICK,
             wheel: Vec2::ZERO,
+            wheel_turned: None,
+            wheel_capture: None,
+            popup_wheel_scopes: Vec::new(),
             wheel_claims: Vec::new(),
             press_at: None,
             last_click: None,
@@ -324,6 +332,7 @@ impl Ui {
             hover: None,
             tagged: None,
             time: 0.0,
+            wake: None,
             resolved: false,
             board: None,
             bar_grab: 0.0,
@@ -524,6 +533,13 @@ impl Ui {
     pub fn scene(&self) -> Option<&ResolvedScene> {
         self.scene.as_deref()
     }
+    /// Confine wheel input to this popup and its descendants while it is mounted.
+    pub fn capture_popup_wheel(&mut self, id: impl Into<Id>) {
+        let id = id.into();
+        if !self.popup_wheel_scopes.contains(&id) {
+            self.popup_wheel_scopes.push(id);
+        }
+    }
     /// Retain the last scene in O(1), without borrowing this `Ui`.
     ///
     /// Hosts can take this snapshot under their model lock, then release the
@@ -663,6 +679,10 @@ impl Ui {
                 self.scene.as_deref().and_then(|s| s.surface(id)),
             )
             && self.inside_surface(s, p)
+            && self
+                .scene
+                .as_deref()
+                .is_some_and(|scene| self.owns_wheel(scene, s))
         {
             response.wheel = s.local_pose().delta(self.wheel);
         }
@@ -708,6 +728,12 @@ impl Ui {
                     .iter()
                     .any(|a| matches!(a, SemanticAction::Activate { id: old } if old == &id))
                 {
+                    self.hot.extend(
+                        self.scene
+                            .as_ref()
+                            .into_iter()
+                            .flat_map(|s| s.memos_at(&id).map(|(id, _)| id)),
+                    );
                     self.actions.push(SemanticAction::Activate { id });
                 }
                 true
@@ -723,6 +749,12 @@ impl Ui {
                 // Coalesce repeated requests, while leaving pointer capture untouched.
                 self.actions.retain(
                     |a| !matches!(a, SemanticAction::SetValue { id: old, .. } if old == &id),
+                );
+                self.hot.extend(
+                    self.scene
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|s| s.memos_at(&id).map(|(id, _)| id)),
                 );
                 self.actions.push(SemanticAction::SetValue { id, value });
                 true
@@ -950,6 +982,7 @@ impl Ui {
         {
             let previous_blink = self.blink();
             self.time += dt;
+            self.advance_caller_wake();
             self.play_until = self.time;
             self.issued = 0;
             // This root owns every retained subtree. No new build ran, so
@@ -1003,6 +1036,10 @@ impl Ui {
         // Even a frame crossing the last key owes the tree drawing its endpoint.
         let playing = self.time < self.play_until;
         self.time += dt;
+        self.advance_caller_wake();
+        if self.wheel != Vec2::ZERO {
+            self.wheel_turned = Some(self.time);
+        }
         // Consume this build's request. An unread/removed play must not keep an
         // otherwise idle UI awake until its old deadline.
         self.play_until = self.time;
@@ -1065,6 +1102,7 @@ impl Ui {
         self.capture(root, &memos);
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
+        self.wheel_capture = self.wheel_capture_for(&scene);
         animating |= self.settle(&scene, wheel);
         // Keys and typed text are read by the next build, like a release:
         // a host that sleeps between events owes it that frame.
@@ -1366,6 +1404,36 @@ impl Ui {
         Ok((scene, glided, spec.root))
     }
 
+    fn wheel_capture_for(&self, scene: &ResolvedScene) -> Option<Id> {
+        if self.wheel == Vec2::ZERO {
+            return None;
+        }
+        let pointer = self.pointer.pos?;
+        scene
+            .surfaces()
+            .rev()
+            .find(|s| {
+                (s.captures_wheel || self.popup_wheel_scopes.contains(&s.key))
+                    && !s.disabled
+                    && self.inside_surface(s, pointer)
+            })
+            .map(|s| s.key.clone())
+    }
+
+    fn owns_wheel(&self, scene: &ResolvedScene, surface: &mui_scene::ResolvedSurface) -> bool {
+        let Some(owner) = &self.wheel_capture else {
+            return true;
+        };
+        let mut current = Some(surface);
+        while let Some(s) = current {
+            if s.key == *owner {
+                return true;
+            }
+            current = s.parent.as_ref().and_then(|id| scene.surface(id.as_str()));
+        }
+        false
+    }
+
     /// Logical frame containment in the node's own axes, plus the same
     /// cached exact ancestor clips used by gesture hit testing.
     fn inside_surface(&self, s: &mui_scene::ResolvedSurface, p: Point) -> bool {
@@ -1432,6 +1500,8 @@ impl Ui {
             )
         });
         self.delivered = std::mem::take(&mut self.edits);
+        self.popup_wheel_scopes
+            .retain(|id| scene.surface(id.as_str()).is_some());
         if let Some(old) = self.scene.replace(scene)
             && let Ok(old) = Arc::try_unwrap(old)
         {

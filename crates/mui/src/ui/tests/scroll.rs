@@ -303,3 +303,29 @@ fn a_key_asks_for_the_frame_that_reads_it() {
     };
     assert!(ui.frame(tree(), None, input, 0.016).unwrap().animating);
 }
+
+#[test]
+fn popup_scope_retains_wheel_after_its_scroller_reaches_the_end() {
+    let mut ui = Ui::default();
+    let tree = || {
+        col([
+            col([block(30., 80.)]).size(30., 40.).scroll().id("popup"),
+            block(30., 100.),
+        ])
+        .size(30., 60.)
+        .scroll()
+        .id("outer")
+    };
+    let wheel = || Input {
+        pointer: at(10., 10., false),
+        wheel: Vec2::new(0., 100.),
+        ..Input::default()
+    };
+    ui.capture_popup_wheel("popup");
+    ui.frame(tree(), None, wheel(), 0.016).unwrap();
+    assert_eq!(ui.scroll("popup"), [0., 40.]);
+    ui.frame(tree(), None, wheel(), 0.016).unwrap();
+    assert_eq!(ui.scroll("outer"), [0., 0.]);
+    assert_eq!(ui.get("outer").wheel, Vec2::ZERO);
+    assert_ne!(ui.get("popup").wheel, Vec2::ZERO);
+}
