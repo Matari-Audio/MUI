@@ -103,6 +103,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         self.assertIn("declaration-drift", [i["kind"] for i in report["issues"]])
         self.assertIn("unregistered-source", [i["kind"] for i in report["issues"]])
 
+    def test_baseview_compatibility_lane_leaves_legacy_api_alone(self):
+        revision = STACK['family']['baseview_compat']['revision']
+        fixed = f'git+https://github.com/DerpcatMusic/baseview?rev={revision}#{revision}'
+        template = '''[[package]]
+name = "baseview"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+[[package]]
+name = "baseview"
+version = "{version}"
+source = "{source}"
+'''
+        self.lock(template.format(version='0.3.2', source=fixed))
+        code, report = self.run_check()
+        self.assertEqual(code, 0, report['issues'])
+        self.assertEqual([p['version'] for p in report['resolved']], ['0.3.2'])
+        for version in ('0.3.2', '0.3.7'):
+            self.lock(template.format(version=version, source='registry+https://github.com/rust-lang/crates.io-index'))
+            self.assertIn('unregistered-source', [i['kind'] for i in self.run_check()[1]['issues']])
+        self.lock(template.format(version='0.1.1', source=fixed))
+        self.assertIn('unregistered-source', [i['kind'] for i in self.run_check()[1]['issues']])
+
+    def test_api_lane_manifest_requires_major_minor_and_owned_package(self):
+        import check
+        path = self.repo / 'stack.toml'
+        contract = CHECK.with_name('stack.toml').read_text()
+        for replacement in ('api_lines = { baseview = "0.3.*" }', 'api_lines = { different = "0.3" }'):
+            path.write_text(contract.replace('api_lines = { baseview = "0.3" }', replacement))
+            with self.assertRaisesRegex(ValueError, 'API lines'):
+                check.load_manifest(path)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -118,3 +118,33 @@ class UpstreamRenderer(unittest.TestCase):
                 packages[1]['source'] = registry
                 packages[2]['version'] = '0.0.10'
                 self.assertEqual(check.shipping_graph(root, manifest, config)[0]['issues'][0]['kind'], 'unregistered-source')
+
+class CompatibilityLane(unittest.TestCase):
+    def test_legacy_and_fixed_baseview_coexist_but_unfixed_03_is_rejected(self):
+        import check
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        registry = 'registry+https://github.com/rust-lang/crates.io-index'
+        revision = 'b' * 40
+        fixed = 'git+https://github.com/DerpcatMusic/baseview?rev=' + revision + '#' + revision
+        manifest = {'family': {'compat': {'repository': 'https://github.com/DerpcatMusic/baseview', 'revision': revision, 'packages': ['baseview'], 'api_lines': {'baseview': '0.3'}}}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Cargo.lock').write_text('version = 4\n')
+            (root / 'Cargo.toml').write_text('')
+            packages = [{'id': identifier, 'name': name, 'version': version, 'source': source, 'manifest_path': str(root / 'Cargo.toml')}
+                        for identifier, name, version, source in [('app', 'app', '0.1.0', None), ('old', 'baseview', '0.1.1', registry), ('fixed', 'baseview', '0.3.2', fixed)]]
+            def dep(name): return {'pkg': name, 'dep_kinds': [{'kind': None}]}
+            metadata = {'workspace_root': str(root), 'workspace_members': ['app'], 'packages': packages,
+                        'resolve': {'nodes': [{'id': 'app', 'deps': [dep('old'), dep('fixed')]}, {'id': 'old', 'deps': []}, {'id': 'fixed', 'deps': []}]}}
+            config = {'target': 'x86_64-unknown-linux-gnu', 'feature_mode': 'default', 'features': [], 'root_packages': ['app'], 'lockfile': 'Cargo.lock'}
+            def run(*args, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=config['target'] if args[0][0] == 'rustc' else json.dumps(metadata), stderr='')
+            with patch.object(check.subprocess, 'run', side_effect=run):
+                report, _ = check.shipping_graph(root, manifest, config)
+                self.assertEqual(report['issues'], [])
+                self.assertEqual([p['id'] for p in report['resolved']], ['fixed'])
+                packages[2]['source'] = registry
+                for version in ('0.3.2', '0.3.7'):
+                    packages[2]['version'] = version
+                    self.assertEqual(check.shipping_graph(root, manifest, config)[0]['issues'][0]['kind'], 'unregistered-source')

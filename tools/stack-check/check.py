@@ -36,8 +36,20 @@ def load_manifest(path):
         repo = identity(family["repository"])
         if repo in repos or not family["packages"]:
             raise ValueError("each family needs a unique repository and package list")
+        lanes = family.get("api_lines", {})
+        if not isinstance(lanes, dict) or any(
+            name not in family["packages"] or not isinstance(line, str)
+            or not re.fullmatch(r"[0-9]+\.[0-9]+", line)
+            for name, line in lanes.items()
+        ):
+            raise ValueError("API lines must name a family package and its major.minor version")
         repos.add(repo)
     return data
+
+
+def owns_version(family, package, version):
+    line = family.get("api_lines", {}).get(package)
+    return line is None or isinstance(version, str) and version.startswith(line + ".")
 
 
 def scan(root, manifest, lockfiles=None, manifests=None):
@@ -65,14 +77,15 @@ def scan(root, manifest, lockfiles=None, manifests=None):
                 continue
             source_repo = identity(source.split("#")[0]) if source.startswith("git+") else ""
             family_name = repo_names.get(source_repo)
-            if canonical not in owners and not family_name and not name.startswith(("mui-", "moose-")):
+            package_owners = [f for f in owners.get(canonical, []) if owns_version(families[f], canonical, package["version"])]
+            if not package_owners and not family_name and not name.startswith(("mui-", "moose-")):
                 continue
             entry = {"lock": str(lock.relative_to(root)), "package": name, "version": package["version"], "source": source}
             resolved.append(entry)
             graph.setdefault(canonical, set()).add(source)
             if name in aliases:
                 issue("custom-alias", package=name, represents=canonical, lock=entry["lock"])
-            if not family_name or family_name not in owners.get(canonical, []):
+            if not family_name or family_name not in package_owners:
                 issue("unregistered-source", **entry)
             elif source.rsplit("#", 1)[-1] != families[family_name]["revision"]:
                 issue("revision-drift", family=family_name, **entry)
@@ -198,7 +211,8 @@ def shipping_graph(root, manifest, config):
         name, source = package['name'], package.get('source') or 'path/workspace'
         canonical = aliases.get(name, name)
         family = repos.get(identity(source.split('#')[0])) if source.startswith('git+') else None
-        if canonical not in owners and not family and not name.startswith(('mui-', 'moose-')):
+        package_owners = {f for f in owners.get(canonical, set()) if owns_version(manifest['family'][f], canonical, package.get('version'))}
+        if not package_owners and not family and not name.startswith(('mui-', 'moose-')):
             continue
         upstream = any(name == x['package'] and package['version'] == x['version'] and source == 'registry+https://github.com/rust-lang/crates.io-index'
                        and parents.get(package_id) and all(packages[p]['name'] == x['parent'] and packages[p].get('source') == 'registry+https://github.com/rust-lang/crates.io-index' for p in parents[package_id])
@@ -210,7 +224,7 @@ def shipping_graph(root, manifest, config):
         seen.setdefault(canonical, []).append(package_id)
         if name in aliases:
             issues.append({'kind': 'custom-alias', **entry})
-        if family not in owners.get(canonical, set()):
+        if family not in package_owners:
             issues.append({'kind': 'unregistered-source', **entry})
         elif source.rsplit('#', 1)[-1] != manifest['family'][family]['revision']:
             issues.append({'kind': 'revision-drift', **entry})

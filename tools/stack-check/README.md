@@ -11,3 +11,5 @@ Run `python3 tools/stack-check/update.py PRODUCT --manifest STACK.toml` to revie
 The reusable `.github/workflows/framework-stack.yml` runs each JSON configuration in the caller's configuration directory. Private callers use the existing Matari runner pool and may supply their dependency setup token. Public callers use GitHub-hosted runners and do not need access to private coordination data.
 
 Run `python3 -m unittest discover -s tools/stack-check -p 'test_*.py'` for the checker and updater contract tests. This directory is exported from the coordination tools; changes must update the export and its recorded source hashes together.
+
+A family may constrain an owned package with `api_lines = { baseview = "0.3" }`. This checks every resolved 0.3 release against the shared backport while leaving unrelated registry 0.1 APIs outside that family. A package from the family repository must still match its declared API line and immutable revision. Local or ambiguous framework declarations still require explicit migration.
