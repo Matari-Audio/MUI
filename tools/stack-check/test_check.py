@@ -7,7 +7,7 @@ from pathlib import Path
 
 CHECK = Path(__file__).with_name("check.py")
 MUI = "7ecbec645affb8a81216854688a2e1f0cf6944e9"
-MOOSE = "156879b8a404d7dd28af3ce5b87139ffbab0e614"
+MOOSE = "5dfb23df2c9eebfef229b0d2e286110637197c79"
 
 
 class StackCheck(unittest.TestCase):

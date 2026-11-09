@@ -217,6 +217,22 @@ def shipping_graph(root, manifest, config):
     for name, ids in seen.items():
         if len(ids) > 1:
             issues.append({'kind': 'multiple-packages', 'package': name, 'ids': ids})
+    if 'windows' in target.split('-'):
+        def dependency_ids(node_id, name):
+            return {dep['pkg'] for dep in nodes[node_id]['deps']
+                    if dep['pkg'] in reachable and packages[dep['pkg']]['name'] == name
+                    and any(kind['kind'] != 'dev' for kind in dep['dep_kinds'])}
+        for hal in sorted(reachable):
+            if packages[hal]['name'] != 'wgpu-hal' or 'dx12' not in nodes[hal].get('features', []):
+                continue
+            hal_windows = dependency_ids(hal, 'windows')
+            for allocator in dependency_ids(hal, 'gpu-allocator'):
+                allocator_windows = dependency_ids(allocator, 'windows')
+                if hal_windows != allocator_windows or len(hal_windows) != 1:
+                    issues.append({'kind': 'windows-abi-mismatch', 'wgpu_hal': hal,
+                                   'gpu_allocator': allocator, 'wgpu_hal_windows': sorted(hal_windows),
+                                   'gpu_allocator_windows': sorted(allocator_windows),
+                                   'action': 'Deliberately align the lockfile and repeat the Windows cross-check.'})
     manifests = {Path(packages[i]['manifest_path']).resolve() for i in metadata['workspace_members']}
     manifests.add((Path(metadata['workspace_root']) / 'Cargo.toml').resolve())
     if not all(p.is_relative_to(root) for p in manifests):

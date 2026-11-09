@@ -56,3 +56,34 @@ print(json.dumps({'workspace_root': str(p), 'workspace_members': [root], 'packag
         self.assertIn('declaration-drift', broad.stdout)
         report = json.loads(result.stdout)['repositories'][0]
         self.assertEqual([lock['path'] for lock in report['lockfiles']], ['Cargo.lock'])
+
+class WindowsAbi(unittest.TestCase):
+    def test_dx12_compares_only_allocator_and_hal_windows(self):
+        import check
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Cargo.lock').write_text('version = 4\n')
+            (root / 'Cargo.toml').write_text('')
+            ids = ['app', 'hal', 'alloc', 'win-new', 'win-old', 'unrelated']
+            names = ['app', 'wgpu-hal', 'gpu-allocator', 'windows', 'windows', 'midir']
+            def dep(pkg): return {'pkg': pkg, 'dep_kinds': [{'kind': None}]}
+            packages = [{'id': i, 'name': n, 'source': None, 'manifest_path': str(root / 'Cargo.toml')} for i, n in zip(ids, names)]
+            nodes = [{'id': 'app', 'deps': [dep('hal'), dep('unrelated')]},
+                     {'id': 'hal', 'features': ['dx12'], 'deps': [dep('alloc'), dep('win-new')]},
+                     {'id': 'alloc', 'deps': [dep('win-old')]},
+                     {'id': 'unrelated', 'deps': [dep('win-old')]},
+                     {'id': 'win-new', 'deps': []}, {'id': 'win-old', 'deps': []}]
+            metadata = {'workspace_root': str(root), 'workspace_members': ['app'], 'packages': packages, 'resolve': {'nodes': nodes}}
+            config = {'target': 'x86_64-pc-windows-msvc', 'feature_mode': 'default', 'features': [], 'root_packages': ['app'], 'lockfile': 'Cargo.lock'}
+            def run(*args, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=('\n'.join([config['target'], 'x86_64-unknown-linux-gnu']) if args[0][0] == 'rustc' else json.dumps(metadata)), stderr='')
+            with patch.object(check.subprocess, 'run', side_effect=run):
+                report, _ = check.shipping_graph(root, {'family': {}}, config)
+                self.assertEqual(report['issues'][0]['kind'], 'windows-abi-mismatch')
+                nodes[2]['deps'] = [dep('win-new')]
+                self.assertEqual(check.shipping_graph(root, {'family': {}}, config)[0]['issues'], [])
+                nodes[2]['deps'] = [dep('win-old')]
+                config['target'] = 'x86_64-unknown-linux-gnu'
+                self.assertEqual(check.shipping_graph(root, {'family': {}}, config)[0]['issues'], [])

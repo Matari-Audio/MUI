@@ -40,7 +40,7 @@ class Update(unittest.TestCase):
         result = self.run_cli('--apply')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(cargo.read_text(), before_cargo.replace(OLD, NEW))
-        self.assertEqual(workflow.read_text(), before_workflow.replace(OLD, '156879b8a404d7dd28af3ce5b87139ffbab0e614'))
+        self.assertEqual(workflow.read_text(), before_workflow.replace(OLD, '5dfb23df2c9eebfef229b0d2e286110637197c79'))
         subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
         subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'pins'], check=True)
         self.assertIn('0 files proposed', self.run_cli('--apply').stdout)
