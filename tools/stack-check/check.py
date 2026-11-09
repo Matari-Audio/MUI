@@ -40,7 +40,7 @@ def load_manifest(path):
     return data
 
 
-def scan(root, manifest, lockfiles=None):
+def scan(root, manifest, lockfiles=None, manifests=None):
     issues, resolved, declarations, tooling = [], [], [], []
     families = manifest["family"]
     aliases = manifest.get("aliases", {})
@@ -97,7 +97,7 @@ def scan(root, manifest, lockfiles=None):
         elif isinstance(value, list):
             for child in value:
                 visit(child, path, manifest_path)
-    for cargo in sorted(files(root, "Cargo.toml")):
+    for cargo in sorted(files(root, "Cargo.toml") if manifests is None else manifests):
         visit(tomllib.loads(cargo.read_text()), [], str(cargo.relative_to(root)))
     workflow_dir = root / ".github" / "workflows"
     if workflow_dir.is_dir():
@@ -106,19 +106,29 @@ def scan(root, manifest, lockfiles=None):
                 continue
             content = workflow.read_text()
             variables = {}
-            for key, value in re.findall(r'^\s*([A-Za-z_][A-Za-z_0-9]*):\s*["\']?([0-9a-f]{40})["\']?\s*$', content, re.M):
-                variables.setdefault(key, set()).add(value)
+            for number, binding in enumerate(content.splitlines(), 1):
+                match = re.match(r'^\s*([A-Za-z_][A-Za-z_0-9]*):\s*(.*?)\s*$', binding)
+                if match:
+                    variables.setdefault(match.group(1), []).append((number, match.group(2)))
             for line_number, line in enumerate(content.splitlines(), 1):
                 if line.lstrip().startswith("#") or not re.search(r'\bcargo(?:\s+\+\S+)?\s+install\b.*\bcargo-moose\b', line):
                     continue
                 rev = re.search(r'--rev(?:=|\s+)["\']?([^\s"\']+)', line)
                 value = rev.group(1) if rev else ""
-                if value.startswith("$"):
-                    choices = variables.get(value.strip('${}'), set())
-                    value = next(iter(choices)) if len(choices) == 1 else ""
-                entry = {"file": str(workflow.relative_to(root)), "line": line_number, "revision": value or None}
+                binding = None
+                variable = re.fullmatch(r'\$(?:([A-Za-z_][A-Za-z_0-9]*)|\{([A-Za-z_][A-Za-z_0-9]*)\})', value)
+                if variable:
+                    name = variable.group(1) or variable.group(2)
+                    choices = variables.get(name, [])
+                    literals = [re.fullmatch(r"(?:([0-9a-f]{40})|\"([0-9a-f]{40})\"|'([0-9a-f]{40})')", item) for _, item in choices]
+                    values = {next((v for v in match.groups() if v), '') for match in literals if match}
+                    value = next(iter(values)) if choices and len(literals) == len(choices) and all(literals) and len(values) == 1 else ''
+                    binding = {"name": name, "lines": [number for number, _ in choices]} if value else {"name": name, "lines": []}
+                git = re.search(r'--git(?:=|\s+)["\']?([^\s"\']+)', line)
+                repository = git.group(1) if git else ''
+                entry = {"file": str(workflow.relative_to(root)), "line": line_number, "revision": value or None, "binding": binding, "repository": repository}
                 tooling.append(entry)
-                if value != families["moose"]["revision"] or identity("https://github.com/Matari-Audio/moose") not in identity(line):
+                if value != families["moose"]["revision"] or identity(repository) != identity(families["moose"]["repository"]):
                     issue("tooling-drift", **entry)
     return {"repository": str(root), "lockfiles": [{"path": str(p.relative_to(root)), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()} for p in locks], "resolved": resolved, "declarations": declarations, "tooling": tooling, "issues": issues}
 
@@ -207,7 +217,11 @@ def shipping_graph(root, manifest, config):
     for name, ids in seen.items():
         if len(ids) > 1:
             issues.append({'kind': 'multiple-packages', 'package': name, 'ids': ids})
-    return {'configuration': config, 'lock_sha256': hashlib.sha256(before).hexdigest(), 'resolved': resolved, 'issues': issues}
+    manifests = {Path(packages[i]['manifest_path']).resolve() for i in metadata['workspace_members']}
+    manifests.add((Path(metadata['workspace_root']) / 'Cargo.toml').resolve())
+    if not all(p.is_relative_to(root) for p in manifests):
+        raise ValueError('workspace manifests must be inside the product')
+    return {'configuration': config, 'lock_sha256': hashlib.sha256(before).hexdigest(), 'resolved': resolved, 'issues': issues}, manifests
 
 
 def main():
@@ -230,9 +244,10 @@ def main():
                 if not lock.is_relative_to(root):
                     raise ValueError('configuration lockfile must be inside the product')
                 locks = [lock]
-            reports.append(scan(root, manifest, locks))
+            graph, manifests = shipping_graph(root, manifest, config) if config else (None, None)
+            reports.append(scan(root, manifest, locks, manifests))
             if config:
-                reports[-1]["shipping_graph"] = shipping_graph(root, manifest, config)
+                reports[-1]["shipping_graph"] = graph
         print(json.dumps({"manifest_status": manifest.get("status"), "manifest_sha256": hashlib.sha256(args.manifest.read_bytes()).hexdigest(), "repositories": reports}, indent=2))
         return int(any(report["issues"] or report.get("shipping_graph", {}).get("issues") for report in reports))
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, tomllib.TOMLDecodeError) as error:

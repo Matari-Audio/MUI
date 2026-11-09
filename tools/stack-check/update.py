@@ -39,7 +39,12 @@ def plan(root, contract):
             for key, child in value.items():
                 visit(child, keys + [key])
         visit(parsed, [])
+        seen = set()
         for key, value, revision in changes:
+            signature = (key, repr(value), revision)
+            if signature in seen:
+                continue
+            seen.add(signature)
             # Match a complete single-line TOML inline table, then verify its parsed value.
             matches = []
             for index, line in enumerate(lines):
@@ -52,16 +57,19 @@ def plan(root, contract):
                     continue
                 if item == value:
                     matches.append((index, match))
-            if len(matches) != 1:
-                raise ValueError(f'{path}: declaration {key} is ambiguous or not a single-line inline table')
-            index, match = matches[0]
-            table = match.group(2)
-            rev = re.search(r'(?<![\w-])rev\s*=\s*(["\'])([^"\']*)\1', table)
-            if rev:
-                table = table[:rev.start(2)] + revision + table[rev.end(2):]
-            else:
-                table = table[:-1].rstrip() + ', rev = "' + revision + '" }'
-            lines[index] = match.group(1) + table + match.group(3)
+            if not matches:
+                # Identical declarations may already have been updated in this pass.
+                if value.get('rev') == revision:
+                    continue
+                raise ValueError(f'{path}: declaration {key} is not a single-line inline table')
+            for index, match in matches:
+                table = match.group(2)
+                rev = re.search(r'(?<![\w-])rev\s*=\s*(["\'])([^"\']*)\1', table)
+                if rev:
+                    table = table[:rev.start(2)] + revision + table[rev.end(2):]
+                else:
+                    table = table[:-1].rstrip() + ', rev = "' + revision + '" }'
+                lines[index] = match.group(1) + table + match.group(3)
         updated = ''.join(lines)
         tomllib.loads(updated)
         if updated != original:
@@ -72,10 +80,23 @@ def plan(root, contract):
         lines = updated.splitlines(keepends=True)
         index = entry['line'] - 1
         line = lines[index]
-        rev = re.search(r'--rev(?:=|\s+)([0-9a-f]{40})(?=\s|$)', line)
-        if not rev or identity('https://github.com/Matari-Audio/moose') not in identity(line):
+        if identity(entry['repository']) != identity(contract['family']['moose']['repository']) or not entry['revision']:
             raise ValueError(f'{path}:{index + 1}: unsupported cargo-moose command')
-        lines[index] = line[:rev.start(1)] + contract['family']['moose']['revision'] + line[rev.end(1):]
+        binding = entry['binding']
+        if binding:
+            if not binding['lines']:
+                raise ValueError(f'{path}:{index + 1}: ambiguous or dynamic variable binding')
+            for number in binding['lines']:
+                line = lines[number - 1]
+                match = re.fullmatch(r'(\s*' + re.escape(binding['name']) + r':\s*["\']?)(?:' + re.escape(entry['revision']) + '|' + re.escape(contract['family']['moose']['revision']) + r')(["\']?\s*)', line)
+                if not match:
+                    raise ValueError(f'{path}:{number}: unsupported variable binding')
+                lines[number - 1] = match.group(1) + contract['family']['moose']['revision'] + match.group(2)
+        else:
+            rev = re.search(r'--rev(?:=|\s+)(["\']?)([0-9a-f]{40})\1(?=\s|$)', line)
+            if not rev:
+                raise ValueError(f'{path}:{index + 1}: unsupported cargo-moose command')
+            lines[index] = line[:rev.start(2)] + contract['family']['moose']['revision'] + line[rev.end(2):]
         updated = ''.join(lines)
         if updated != original:
             edits[path] = (original, updated)

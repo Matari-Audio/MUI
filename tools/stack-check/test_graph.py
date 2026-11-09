@@ -26,7 +26,7 @@ p = pathlib.Path.cwd()
 (p / 'arguments.json').write_text(json.dumps(sys.argv[1:]))
 if os.environ.get('MUTATE'): (p / 'Cargo.lock').write_text('changed')
 root = 'path+file:///app#app@0.1.0'
-print(json.dumps({'workspace_root': str(p), 'workspace_members': [root], 'packages': [{'id': root, 'name': 'app', 'source': None}], 'resolve': {'nodes': [{'id': root, 'dependencies': [], 'deps': []}]}}))
+print(json.dumps({'workspace_root': str(p), 'workspace_members': [root], 'packages': [{'id': root, 'name': 'app', 'source': None, 'manifest_path': str(p / 'Cargo.toml')}], 'resolve': {'nodes': [{'id': root, 'dependencies': [], 'deps': []}]}}))
 ''')
         cargo.chmod(0o755)
 
@@ -48,7 +48,11 @@ print(json.dumps({'workspace_root': str(p), 'workspace_members': [root], 'packag
         nested = self.root / 'unused-tool'
         nested.mkdir()
         (nested / 'Cargo.lock').write_text('version = 4\n[[package]]\nname="mui"\nversion="0.1.0"\n')
+        (nested / 'Cargo.toml').write_text('[package]\nname="historical"\nversion="0.1.0"\n[dependencies]\nmui = { git = "https://github.com/Matari-Audio/MUI", rev = "' + 'a' * 40 + '" }\n')
         result = self.run_cli()
         self.assertEqual(result.returncode, 0, result.stderr)
+        broad = subprocess.run(['python3', str(HERE / 'check.py'), str(self.root)], text=True, capture_output=True)
+        self.assertEqual(broad.returncode, 1)
+        self.assertIn('declaration-drift', broad.stdout)
         report = json.loads(result.stdout)['repositories'][0]
         self.assertEqual([lock['path'] for lock in report['lockfiles']], ['Cargo.lock'])

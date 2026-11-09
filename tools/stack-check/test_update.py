@@ -28,6 +28,34 @@ class Update(unittest.TestCase):
         subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
         subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'update'], check=True)
         self.assertIn('0 files proposed', self.run_cli('--apply').stdout)
+    def test_variable_binding_and_duplicate_tables_apply(self):
+        cargo = self.root / 'Cargo.toml'
+        cargo.write_text(cargo.read_text() + "[target.'cfg(windows)'.dev-dependencies]\n" + cargo.read_text().splitlines()[-1] + "\n")
+        workflow = self.root / '.github/workflows/ci.yml'
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text('env:\n  MOOSE_REV: "' + OLD + '"\nsteps:\n  - run: cargo install cargo-moose --git https://github.com/Matari-Audio/moose --rev "$MOOSE_REV" --locked\n')
+        before_cargo, before_workflow = cargo.read_text(), workflow.read_text()
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'workflow'], check=True)
+        result = self.run_cli('--apply')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(cargo.read_text(), before_cargo.replace(OLD, NEW))
+        self.assertEqual(workflow.read_text(), before_workflow.replace(OLD, '156879b8a404d7dd28af3ce5b87139ffbab0e614'))
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'pins'], check=True)
+        self.assertIn('0 files proposed', self.run_cli('--apply').stdout)
+
+    def test_ambiguous_variable_refuses_without_writes(self):
+        workflow = self.root / '.github/workflows/ci.yml'
+        workflow.parent.mkdir(parents=True)
+        workflow.write_text('env:\n  MOOSE_REV: "' + OLD + '"\n  MOOSE_REV: ${{ inputs.rev }}\nsteps:\n  - run: cargo install cargo-moose --git https://github.com/Matari-Audio/moose --rev "$MOOSE_REV"\n')
+        subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
+        subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'workflow'], check=True)
+        before = (self.root / 'Cargo.toml').read_bytes(), workflow.read_bytes()
+        result = self.run_cli('--apply')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(before, ((self.root / 'Cargo.toml').read_bytes(), workflow.read_bytes()))
+
     def test_dirty_tree_and_local_patch_leave_files_unchanged(self):
         path = self.root / 'Cargo.toml'
         path.write_text(path.read_text() + '\n[patch.crates-io]\nmui = { path = "vendor/mui" }\n')

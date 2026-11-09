@@ -7,7 +7,7 @@ from pathlib import Path
 
 CHECK = Path(__file__).with_name("check.py")
 MUI = "7ecbec645affb8a81216854688a2e1f0cf6944e9"
-MOOSE = "5cb2dac7e2b74136bbcf7caafb6bac09633d4f34"
+MOOSE = "156879b8a404d7dd28af3ce5b87139ffbab0e614"
 
 
 class StackCheck(unittest.TestCase):
@@ -58,7 +58,7 @@ source = "git+https://github.com/Matari-Audio/MUI?rev={MUI}#{MUI}"
 
     def test_forks_sources_and_tool_revisions_fail(self):
         self.lock(f'''[[package]]
-name = "kontra-native-host"
+name = "fixture-native-host"
 version = "0.1.0"
 [[package]]
 name = "moose-baseview"
