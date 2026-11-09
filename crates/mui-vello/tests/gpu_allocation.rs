@@ -5,7 +5,10 @@ use mui_vello::{
     effects::{Budget, GpuRenderer},
     kurbo::Affine,
 };
-#[allow(dead_code)]
+#[expect(
+    dead_code,
+    reason = "shared GPU example helpers include an unused fixture"
+)]
 #[path = "../examples/gpu_support/mod.rs"]
 mod gpu_support;
 fn scene(hidden: usize, alpha: f32, color: f32) -> mui_scene::ResolvedScene {
@@ -37,7 +40,7 @@ async fn run() -> gpu_support::Result<()> {
     for alpha in [0., 0.9] {
         let size = [1180, 760];
         let target = gpu_support::target(&device, size);
-        let view = target.create_view(&Default::default());
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
         // A fresh renderer AND target prevent a stale cached frame from passing.
         let mut renderer = GpuRenderer::new(
             &device,
@@ -56,11 +59,15 @@ async fn run() -> gpu_support::Result<()> {
         );
         let before = gpu_support::readback(&device, &queue, &target, size)?;
         assert!(
-            before.chunks_exact(4).all(|p| p[3] == 255),
+            before.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "first frame must be opaque"
         );
         assert!(
-            before.chunks_exact(4).all(|p| p[..3] != [0, 0, 0]),
+            before
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[..3] != [0, 0, 0]),
             "first frame must contain visible color"
         );
         let next = scene(1, alpha, 0.7);
@@ -87,7 +94,7 @@ async fn run() -> gpu_support::Result<()> {
         let resized = [590, 380];
         renderer.resize(resized)?;
         let target = gpu_support::target(&device, resized);
-        let resized_view = target.create_view(&Default::default());
+        let resized_view = target.create_view(&wgpu::TextureViewDescriptor::default());
         let frame = renderer.render(&next, Affine::scale(0.5), &resized_view)?;
         assert_eq!(frame.encoded_scenes, 1);
         assert_eq!(
@@ -96,7 +103,7 @@ async fn run() -> gpu_support::Result<()> {
         );
         let pixels = gpu_support::readback(&device, &queue, &target, resized)?;
         assert!(
-            pixels.chunks_exact(4).all(|p| p[3] == 255),
+            pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
             "resized first frame must be opaque"
         );
         println!(
@@ -137,7 +144,7 @@ fn cpu_coarse_stages_preserve_download_and_render_contract() {
             &device,
             vello::RendererOptions {
                 use_cpu: true,
-                ..Default::default()
+                ..vello::RendererOptions::default()
             },
         )
         .unwrap();
@@ -154,7 +161,7 @@ fn cpu_coarse_stages_preserve_download_and_render_contract() {
                 &device,
                 &queue,
                 &scene,
-                &target.create_view(&Default::default()),
+                &target.create_view(&wgpu::TextureViewDescriptor::default()),
                 &vello::RenderParams {
                     base_color: vello::peniko::Color::BLACK,
                     width: size[0],
@@ -165,7 +172,11 @@ fn cpu_coarse_stages_preserve_download_and_render_contract() {
             .unwrap();
         let pixels = gpu_support::readback(&device, &queue, &target, size).unwrap();
         assert!(
-            pixels.chunks_exact(4).all(|pixel| pixel == [255; 4]),
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255; 4]),
             "CPU coarse stages must render every pixel"
         );
     });

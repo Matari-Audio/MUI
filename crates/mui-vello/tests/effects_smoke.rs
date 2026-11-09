@@ -1157,10 +1157,10 @@ fn image_survives_image_free_frame() {
         usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = texture.create_view(&Default::default());
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let mut renderer = vello::Renderer::new(&device, vello::RendererOptions::default()).unwrap();
     let image = ImageData {
-        data: Blob::new(Arc::new(vec![255u8, 30, 40, 255].repeat(16))),
+        data: Blob::new(Arc::new([255u8, 30, 40, 255].repeat(16))),
         format: ImageFormat::Rgba8,
         alpha_type: ImageAlphaType::Alpha,
         width: 4,
