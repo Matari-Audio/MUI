@@ -882,10 +882,12 @@ impl Ui {
             None => ((x / (size * 0.6)).round().max(0.0) as usize).min(s.chars().count()),
         }
     }
-    /// Every char boundary of `s` with the x of a caret there, ascending by
-    /// byte: the inverse of [`Ui::hit`], ending at the whole string's
-    /// advance. Shaped once, however many carets a field asks for.
-    pub(crate) fn carets(&self, s: &str, size: f64) -> Vec<(usize, f64)> {
+    /// Byte offsets and logical x positions for custom single-line text editors.
+    /// Uses the scene's primary font and fallbacks at `size`, ending at the
+    /// string's advance. Boundaries inside one shaping cluster share its
+    /// leading edge. Without a font, positions use the scene's 0.6em estimate.
+    /// Returns an empty vector when configured fonts cannot shape the text.
+    pub fn carets(&self, s: &str, size: f64) -> Vec<(usize, f64)> {
         match self.fonts() {
             Some(fonts) => mui_text::caret_positions(&fonts, s, size, &[]).unwrap_or_default(),
             // ponytail: the 0.6em guess the scene itself falls back to
