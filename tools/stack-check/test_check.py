@@ -2,12 +2,14 @@ import json
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
 CHECK = Path(__file__).with_name("check.py")
-MUI = "7ecbec645affb8a81216854688a2e1f0cf6944e9"
-MOOSE = "5dfb23df2c9eebfef229b0d2e286110637197c79"
+STACK = tomllib.loads(CHECK.with_name("stack.toml").read_text())
+MUI = STACK["family"]["mui"]["revision"]
+MOOSE = STACK["family"]["moose"]["revision"]
 
 
 class StackCheck(unittest.TestCase):
@@ -58,7 +60,7 @@ source = "git+https://github.com/Matari-Audio/MUI?rev={MUI}#{MUI}"
 
     def test_forks_sources_and_tool_revisions_fail(self):
         self.lock(f'''[[package]]
-name = "fixture-native-host"
+name = "kontra-native-host"
 version = "0.1.0"
 [[package]]
 name = "moose-baseview"

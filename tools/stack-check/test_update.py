@@ -2,12 +2,15 @@ import json
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 OLD = 'a' * 40
-NEW = '7ecbec645affb8a81216854688a2e1f0cf6944e9'
+STACK = tomllib.loads((HERE / 'stack.toml').read_text())
+NEW = STACK['family']['mui']['revision']
+MOOSE = STACK['family']['moose']['revision']
 
 class Update(unittest.TestCase):
     def setUp(self):
@@ -51,7 +54,7 @@ print(json.dumps({'workspace_root': str(root), 'workspace_members': ['app'], 'pa
         result = self.run_cli('--apply')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(cargo.read_text(), before_cargo.replace(OLD, NEW))
-        self.assertEqual(workflow.read_text(), before_workflow.replace(OLD, '5dfb23df2c9eebfef229b0d2e286110637197c79'))
+        self.assertEqual(workflow.read_text(), before_workflow.replace(OLD, MOOSE))
         subprocess.run(['git', '-C', str(self.root), 'add', '.'], check=True)
         subprocess.run(['git', '-C', str(self.root), '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'pins'], check=True)
         self.assertIn('0 files proposed', self.run_cli('--apply').stdout)

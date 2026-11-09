@@ -87,3 +87,34 @@ class WindowsAbi(unittest.TestCase):
                 nodes[2]['deps'] = [dep('win-old')]
                 config['target'] = 'x86_64-unknown-linux-gnu'
                 self.assertEqual(check.shipping_graph(root, {'family': {}}, config)[0]['issues'], [])
+
+class UpstreamRenderer(unittest.TestCase):
+    def test_egui_renderer_exception_requires_exact_version_and_registry_parent(self):
+        import check
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        registry = 'registry+https://github.com/rust-lang/crates.io-index'
+        manifest = {'family': {'mui': {'repository': 'https://github.com/Matari-Audio/MUI', 'revision': 'b' * 40, 'packages': ['vello_cpu']}},
+                    'upstream_coexistence': [{'package': 'vello_cpu', 'version': '0.0.9', 'parent': 'epaint'}]}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'Cargo.lock').write_text('version = 4\n')
+            (root / 'Cargo.toml').write_text('')
+            packages = [{'id': name, 'name': name, 'version': version, 'source': source, 'manifest_path': str(root / 'Cargo.toml')}
+                        for name, version, source in [('app', '0.1.0', None), ('epaint', '0.35.0', registry), ('vello_cpu', '0.0.9', registry)]]
+            def dep(name): return {'pkg': name, 'dep_kinds': [{'kind': None}]}
+            nodes = [{'id': 'app', 'deps': [dep('epaint')]}, {'id': 'epaint', 'deps': [dep('vello_cpu')]}, {'id': 'vello_cpu', 'deps': []}]
+            metadata = {'workspace_root': str(root), 'workspace_members': ['app'], 'packages': packages, 'resolve': {'nodes': nodes}}
+            config = {'target': 'x86_64-unknown-linux-gnu', 'feature_mode': 'default', 'features': [], 'root_packages': ['app'], 'lockfile': 'Cargo.lock'}
+            def run(*args, **kwargs):
+                return SimpleNamespace(returncode=0, stdout=config['target'] if args[0][0] == 'rustc' else json.dumps(metadata), stderr='')
+            with patch.object(check.subprocess, 'run', side_effect=run):
+                self.assertEqual(check.shipping_graph(root, manifest, config)[0]['issues'], [])
+                packages[1]['name'] = 'different-parent'
+                self.assertEqual(check.shipping_graph(root, manifest, config)[0]['issues'][0]['kind'], 'unregistered-source')
+                packages[1]['name'] = 'epaint'
+                packages[1]['source'] = 'git+https://example.com/epaint#' + 'c' * 40
+                self.assertEqual(check.shipping_graph(root, manifest, config)[0]['issues'][0]['kind'], 'unregistered-source')
+                packages[1]['source'] = registry
+                packages[2]['version'] = '0.0.10'
+                self.assertEqual(check.shipping_graph(root, manifest, config)[0]['issues'][0]['kind'], 'unregistered-source')
