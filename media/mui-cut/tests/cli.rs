@@ -964,13 +964,19 @@ fn add_builds_a_git_mui_plugin_against_this_tree_and_lists_its_parts() {
     );
     // Use the reported artifact's exact adapter, since the cache contains other
     // fixtures and checkouts. Its lock has MUI from the local path (no git source).
-    let built = std::fs::read_to_string(
-        adapter_cache
+    let built = {
+        let dir = adapter_cache
             .join("adapters")
-            .join(adapter.file_stem().unwrap())
-            .join("Cargo.lock"),
-    )
-    .unwrap();
+            .join(adapter.file_stem().unwrap());
+        // Another capture may be preparing this same cached workspace.
+        let lock = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(dir.join(".build.lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        std::fs::read_to_string(dir.join("Cargo.lock")).unwrap()
+    };
     let mui: Vec<_> = built
         .split("[[package]]")
         .filter(|b| b.contains("\nname = \"mui\"\n"))
