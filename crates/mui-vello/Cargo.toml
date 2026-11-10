@@ -11,6 +11,9 @@ default = []
 test-support = []
 reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
+# The instanced SDF quad pass: rounded rects, strokes, analytic shadows and
+# clips in one draw with no compute. Independent of classic Vello.
+gpu-quad = ["wgpu/wgsl"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
@@ -45,7 +48,7 @@ wgpu.workspace = true
 vello_cpu = { workspace = true, optional = true }
 
 [dev-dependencies]
-naga = { version = "30", features = ["wgsl-in"] }
+naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
 mui-layout.workspace = true
 mui-material.workspace = true
 epaint_default_fonts.workspace = true
@@ -83,6 +86,14 @@ required-features = ["gpu-effects"]
 [[example]]
 name = "bench"
 required-features = ["cpu", "gpu-effects"]
+
+[[example]]
+name = "quad_coverage"
+required-features = ["gpu-quad"]
+
+[[example]]
+name = "quad_bench"
+required-features = ["gpu-quad", "gpu-effects"]
 
 [lints]
 workspace = true
