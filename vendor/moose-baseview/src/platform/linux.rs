@@ -15,6 +15,9 @@ pub enum WindowHandle {
 }
 
 macro_rules! forward {
+    ($self:ident, control => $method:ident $(, $arg:expr)*) => {
+        match $self { Self::X11(inner) => inner.control().$method($($arg),*), Self::Layer(inner) => inner.$method($($arg),*) }
+    };
     ($self:ident, $method:ident $(, $arg:expr)*) => {
         match $self { Self::X11(inner) => inner.$method($($arg),*), Self::Layer(inner) => inner.$method($($arg),*) }
     };
@@ -29,55 +32,55 @@ impl WindowHandle {
         }
     }
     pub fn size(&self) -> WindowSize {
-        forward!(self, size)
+        forward!(self, control => size)
     }
     pub fn resize(&self, size: Size) -> Result<()> {
-        forward!(self, resize, size)
+        forward!(self, control => resize, size)
     }
     pub fn suggest_scale_factor(&self, scale: f64) -> Result<()> {
-        forward!(self, suggest_scale_factor, scale)
+        forward!(self, control => suggest_scale_factor, scale)
     }
     pub fn set_scale_factor_override(&self, scale: Option<f64>) -> Result<()> {
-        forward!(self, set_scale_factor_override, scale)
+        forward!(self, control => set_scale_factor_override, scale)
     }
     pub fn set_keyboard_capture(&self, capture: bool) {
-        forward!(self, set_keyboard_capture, capture)
+        forward!(self, control => set_keyboard_capture, capture)
     }
     pub fn set_close_timeout(&self, timeout: std::time::Duration) {
-        forward!(self, set_close_timeout, timeout)
+        forward!(self, control => set_close_timeout, timeout)
     }
     pub fn visibility_control(&self) -> WindowVisibility {
-        forward!(self, visibility_control)
+        forward!(self, control => visibility_control)
     }
     pub fn frame_requester(&self) -> FrameRequester {
-        forward!(self, frame_requester)
+        forward!(self, control => frame_requester)
     }
     pub fn run_until_closed(&self) -> Result<()> {
-        forward!(self, run_until_closed)
+        forward!(self, control => run_until_closed)
     }
     pub fn show(&self) -> Result<()> {
-        forward!(self, show)
+        forward!(self, control => show)
     }
     pub fn hide(&self) -> Result<()> {
-        forward!(self, hide)
+        forward!(self, control => hide)
     }
     pub fn is_open(&self) -> bool {
-        forward!(self, is_open)
+        forward!(self, control => is_open)
     }
     pub fn is_resizable(&self) -> bool {
-        forward!(self, is_resizable)
+        forward!(self, control => is_resizable)
     }
     pub fn min_size(&self) -> Option<Size> {
-        forward!(self, min_size)
+        forward!(self, control => min_size)
     }
     pub fn max_size(&self) -> Option<Size> {
-        forward!(self, max_size)
+        forward!(self, control => max_size)
     }
     pub fn handle_main_thread_callback(&self) {
         forward!(self, handle_main_thread_callback)
     }
     pub fn set_parent(&self, parent: ParentWindowHandle) -> Result<()> {
-        forward!(self, set_parent, parent)
+        forward!(self, control => set_parent, parent)
     }
 }
 

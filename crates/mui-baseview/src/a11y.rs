@@ -244,7 +244,9 @@ impl Drop for NativeAccessibility {
 impl AccessibilityUi {
     /// A native provider asked for a full tree; redraw even an idle UI.
     pub fn wants_tree(&self) -> bool {
-        self.alive.load(Ordering::Acquire) && self.asked.load(Ordering::Acquire)
+        self.alive.load(Ordering::Acquire)
+            && self.active.load(Ordering::Acquire)
+            && self.asked.load(Ordering::Acquire)
     }
 
     /// Apply queued requests on the normal UI tick; no native calls occur.
@@ -414,6 +416,36 @@ mod tests {
         // window's endpoint after its predecessor has closed.
         callback.do_action(request());
         assert_eq!(Arc::strong_count(&shared), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn deactivation_stops_pending_tree_demand_and_reactivation_requests_it_again() {
+        let alive = Arc::new(AtomicBool::new(true));
+        let asked = Arc::new(AtomicBool::new(false));
+        let active = Arc::new(AtomicBool::new(false));
+        let (_, actions) = channel();
+        let endpoint = AccessibilityUi {
+            alive: Arc::clone(&alive),
+            actions,
+            asked: Arc::clone(&asked),
+            active: Arc::clone(&active),
+            publisher: Publisher::default(),
+        };
+        let mut activation = Asked {
+            alive,
+            asked,
+            active: Arc::clone(&active),
+        };
+        activation.request_initial_tree();
+        assert!(endpoint.wants_tree());
+        Gone(active).deactivate_accessibility();
+        assert!(
+            !endpoint.wants_tree(),
+            "inactive accessibility must not keep requesting frames"
+        );
+        activation.request_initial_tree();
+        assert!(endpoint.wants_tree());
     }
 
     #[test]

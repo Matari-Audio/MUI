@@ -7,6 +7,7 @@ use std::collections::hash_map::Entry;
 // Keys are handles and small ids hashed every dispatch, never attacker input.
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
+use wgpu::util::DeviceExt as _;
 use wgpu::{
     BindGroup, BindGroupLayout, Buffer, BufferUsages, CommandEncoder, CommandEncoderDescriptor,
     ComputePass, ComputePassDescriptor, ComputePipeline, Device, PipelineCache,
@@ -761,14 +762,26 @@ impl WgpuEngine {
                     profiler.end_query(&mut rpass, query);
                 }
                 Command::Download(proxy) => {
-                    let src_buf = self
+                    pass = None;
+                    let source = self
                         .bind_map
-                        .get_gpu_buf(proxy.id)
+                        .get_buf(*proxy)
                         .ok_or(Error::UnavailableBufferUsed(proxy.name, "download"))?;
                     let usage = BufferUsages::MAP_READ | BufferUsages::COPY_DST;
-                    let buf = self.pool.get_buf(proxy.size, "download", usage, device);
-                    pass = None;
-                    encoder.copy_buffer_to_buffer(src_buf, 0, &buf, 0, proxy.size);
+                    let buf = match &source.buffer {
+                        MaterializedBuffer::Gpu(source) => {
+                            let buf = self.pool.get_buf(proxy.size, "download", usage, device);
+                            encoder.copy_buffer_to_buffer(source, 0, &buf, 0, proxy.size);
+                            buf
+                        }
+                        MaterializedBuffer::Cpu(source) => {
+                            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                label: Some("cpu download"),
+                                contents: &source.borrow(),
+                                usage,
+                            })
+                        }
+                    };
                     self.downloads.insert(proxy.id, buf);
                 }
                 Command::Clear(proxy, offset, size) => {
@@ -830,6 +843,15 @@ impl WgpuEngine {
             texture.destroy();
         }
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn live_resource_counts(&self) -> (usize, usize, usize) {
+        (
+            self.bind_map.buf_map.len(),
+            self.bind_map.image_map.len(),
+            self.downloads.len(),
+        )
     }
 
     pub fn get_download(&self, buf: BufferProxy) -> Option<&Buffer> {

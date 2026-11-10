@@ -1,0 +1,71 @@
+name: Shared framework stack
+on:
+  workflow_call:
+    inputs:
+      tools-revision:
+        required: true
+        type: string
+      stack-sha256:
+        required: true
+        type: string
+      manifest:
+        type: string
+        default: tools/framework-stack/stack.toml
+      configurations:
+        type: string
+        default: tools/framework-stack
+    secrets:
+      dependency-token:
+        required: false
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ${{ fromJSON(github.event.repository.private && '["self-hosted", "Linux", "X64", "matari-linux"]' || '["ubuntu-24.04"]') }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Validate immutable inputs
+        shell: bash
+        env:
+          TOOLS_REVISION: ${{ inputs.tools-revision }}
+          STACK_DIGEST: ${{ inputs.stack-sha256 }}
+        run: |
+          [[ "$TOOLS_REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$STACK_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Product dependency setup
+        if: hashFiles('.github/actions/ci-setup/action.yml') != ''
+        uses: ./.github/actions/ci-setup
+        with:
+          token: ${{ secrets.dependency-token }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: Matari-Audio/MUI
+          ref: ${{ inputs.tools-revision }}
+          path: .framework-stack-tools
+          persist-credentials: false
+      - name: Check candidate graphs
+        shell: bash
+        env:
+          STACK_MANIFEST: ${{ inputs.manifest }}
+          CONFIGURATIONS: ${{ inputs.configurations }}
+          STACK_DIGEST: ${{ inputs.stack-sha256 }}
+        run: |
+          python3 - "$STACK_MANIFEST" "$CONFIGURATIONS" "$STACK_DIGEST" <<'PY'
+          import hashlib, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          manifest, configurations = [pathlib.Path(p).resolve() for p in sys.argv[1:3]]
+          if not all(p.is_relative_to(root) for p in (manifest, configurations)):
+              raise SystemExit("stack inputs must be inside the product checkout")
+          if hashlib.sha256(manifest.read_bytes()).hexdigest() != sys.argv[3]:
+              raise SystemExit("candidate manifest digest mismatch")
+          configs = sorted(configurations.glob("*.json"))
+          if not configs:
+              raise SystemExit("shipping configurations are missing")
+          for config in configs:
+              if not config.resolve().is_relative_to(root):
+                  raise SystemExit("shipping configurations must be inside the product checkout")
+              subprocess.run([sys.executable, ".framework-stack-tools/tools/stack-check/check.py", ".", "--manifest", str(manifest), "--configuration", str(config)], check=True)
+          PY

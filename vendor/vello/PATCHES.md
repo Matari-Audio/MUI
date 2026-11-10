@@ -152,3 +152,15 @@ all backends. The initializer handles the locked Vello scalar/struct/fixed-array
 declarations, checks source assumptions, and validates every shipped area/MSAA
 shader through Naga in the workspace suite. Custom non-Vello shaders retain
 wgpu's automatic initializer. `MUI_GPU_DEBUG` opts into pipeline-stage tracing.
+
+## Image atlas retention and coarse allocation recovery
+
+An image-free encoding retains the previous atlas. Otherwise a later scene can
+refer to cached images whose GPU pixels were discarded. On native targets,
+coarse allocation metadata is read back before fine rendering. Failed stages
+are grown within device limits and retried up to eight times. The renderer
+returns an error instead of presenting an incomplete frame if recovery fails.
+The synchronous WebAssembly path retains upstream behavior because WebGPU
+cannot synchronously wait for buffer mapping; its async path uses recovery.
+The GPU tests `image_survives_image_free_frame` and `gpu_allocation` cover the
+observable atlas and nested-layer regressions.

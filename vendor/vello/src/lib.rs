@@ -287,6 +287,15 @@ pub enum Error {
     #[cfg(feature = "wgpu")]
     #[error("Buffer '{0}' is not available but used for {1}")]
     UnavailableBufferUsed(&'static str, &'static str),
+    /// Fine rasterization requires resources from a coarse pass.
+    #[error("No coarse pass is pending for fine rasterization")]
+    MissingFinePass,
+    /// A second coarse pass would overwrite the first pass's owned resources.
+    #[error("A coarse pass is already pending fine rasterization or discard")]
+    FinePassPending,
+    /// The requested anti-aliasing shader was not enabled in the renderer.
+    #[error("Renderer has no shader for anti-aliasing mode {0:?}")]
+    UnsupportedAntialiasing(AaConfig),
     /// Failed to async map a buffer.
     /// See [`wgpu::BufferAsyncError`] for more information.
     #[cfg(feature = "wgpu")]
@@ -301,6 +310,16 @@ pub enum Error {
     #[cfg(feature = "wgpu")]
     #[error("wgpu Error from scope")]
     WgpuErrorFromScope(#[from] wgpu::Error),
+
+    /// GPU allocation could not fit the device's storage-buffer limit.
+    #[error("GPU {0} allocation needs {1} bytes, device limit is {2}")]
+    AllocationLimit(&'static str, u64, u64),
+    /// Coarse allocation did not converge after bounded retries.
+    #[error("GPU allocation recovery exhausted (stage bits {0})")]
+    AllocationRecovery(u32),
+    /// GPU completion or allocation readback failed.
+    #[error("GPU allocation readback failed: {0}")]
+    AllocationReadback(String),
 
     /// Failed to create [`GpuProfiler`].
     /// See [`wgpu_profiler::CreationError`] for more information.
@@ -341,6 +360,8 @@ pub struct Renderer {
     resolver: Resolver,
     image_atlas: Option<recording::ImageProxy>,
     shaders: FullShaders,
+    allocation: BumpAllocators,
+    pending: Option<PendingRender>,
     #[cfg(feature = "debug_layers")]
     debug: debug::DebugRenderer,
     #[cfg(feature = "wgpu-profiler")]
@@ -429,10 +450,16 @@ impl Default for RendererOptions {
 }
 
 #[cfg(feature = "wgpu")]
-struct RenderResult {
-    bump: Option<BumpAllocators>,
+struct PendingRender {
+    render: Render,
+    bump: Option<recording::BufferProxy>,
     #[cfg(feature = "debug_layers")]
     captured: Option<render::CapturedBuffers>,
+}
+
+#[cfg(feature = "wgpu")]
+struct RenderResult {
+    bump: Option<BumpAllocators>,
 }
 
 #[cfg(feature = "wgpu")]
@@ -465,6 +492,8 @@ impl Renderer {
             resolver: Resolver::new(),
             image_atlas: None,
             shaders,
+            allocation: Default::default(),
+            pending: None,
             #[cfg(feature = "debug_layers")]
             debug,
             #[cfg(feature = "wgpu-profiler")]
@@ -496,26 +525,50 @@ impl Renderer {
         texture: &TextureView,
         params: &RenderParams,
     ) -> Result<()> {
-        let (recording, target) = render::render_full(
-            scene,
-            &mut self.resolver,
-            &self.shaders,
-            &mut self.image_atlas,
-            params,
-        );
-        let external_resources = [ExternalResource::Image(
-            *target.as_image().unwrap(),
-            texture,
-        )];
-        self.engine.run_recording(
-            device,
-            queue,
-            &recording,
-            &external_resources,
-            "render_to_texture",
-            #[cfg(feature = "wgpu-profiler")]
-            &mut self.profiler,
-        )?;
+        self.cleanup_pending(device, queue)?;
+        // WebGPU cannot synchronously wait for mapped buffers.
+        #[cfg(target_arch = "wasm32")]
+        {
+            let (recording, target) = render::render_full(
+                scene,
+                &mut self.resolver,
+                &self.shaders,
+                &mut self.image_atlas,
+                params,
+            )?;
+            self.engine.run_recording(
+                device,
+                queue,
+                &recording,
+                &[ExternalResource::Image(
+                    *target.as_image().unwrap(),
+                    texture,
+                )],
+                "render_to_texture",
+                #[cfg(feature = "wgpu-profiler")]
+                &mut self.profiler,
+            )?;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let mut future = Box::pin(
+                self.render_to_texture_async_internal(device, queue, scene, texture, params, false),
+            );
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            loop {
+                match Future::poll(future.as_mut(), &mut context) {
+                    std::task::Poll::Ready(result) => {
+                        result?;
+                        break;
+                    }
+                    std::task::Poll::Pending => {
+                        device
+                            .poll(wgpu::PollType::wait_indefinitely())
+                            .map_err(|error| Error::AllocationReadback(error.to_string()))?;
+                    }
+                }
+            }
+        }
         // N.B. This is horrible; this integration of wgpu-profiler really needs some work...
         #[cfg(feature = "wgpu-profiler")]
         {
@@ -633,6 +686,7 @@ impl Renderer {
         if let Some(error) = error {
             return Err(error.into());
         }
+        self.pending = None;
         self.engine = engine;
         self.image_atlas = None;
         self.shaders = shaders;
@@ -675,7 +729,14 @@ impl Renderer {
         }
 
         let result = self
-            .render_to_texture_async_internal(device, queue, scene, texture, params)
+            .render_to_texture_async_internal(
+                device,
+                queue,
+                scene,
+                texture,
+                params,
+                !debug_layers.is_empty(),
+            )
             .await?;
 
         #[cfg(feature = "debug_layers")]
@@ -686,14 +747,20 @@ impl Renderer {
                 params.height,
                 recording::ImageFormat::Rgba8,
             );
-            if let Some(captured) = result.captured {
+            if self
+                .pending
+                .as_ref()
+                .and_then(|pending| pending.captured.as_ref())
+                .is_some()
+            {
+                let captured = self.pending.as_ref().unwrap().captured.as_ref().unwrap();
                 let bump = result.bump.as_ref().unwrap();
                 // TODO: We could avoid this download if `DebugLayers::VALIDATION` is unset.
-                let downloads = DebugDownloads::map(&self.engine, &captured, bump).await?;
+                let downloads = DebugDownloads::map(&self.engine, captured, bump).await?;
                 self.debug.render(
                     &mut recording,
                     target_proxy,
-                    &captured,
+                    captured,
                     bump,
                     params,
                     &downloads,
@@ -702,6 +769,7 @@ impl Renderer {
 
                 // TODO: this sucks. better to release everything in a helper
                 // TODO: it would be much better to have a way to safely destroy a buffer.
+                let captured = self.pending.as_mut().unwrap().captured.take().unwrap();
                 self.engine.free_download(captured.lines);
                 captured.release_buffers(&mut recording);
             }
@@ -728,7 +796,33 @@ impl Renderer {
             }
         }
 
+        self.pending = None;
         Ok(result.bump)
+    }
+
+    fn cleanup_pending(&mut self, device: &Device, queue: &Queue) -> Result<()> {
+        if let Some(mut pending) = self.pending.take() {
+            if let Some(bump) = pending.bump {
+                self.engine.free_download(bump);
+            }
+            let mut recording = Recording::default();
+            #[cfg(feature = "debug_layers")]
+            if let Some(captured) = pending.captured.take() {
+                self.engine.free_download(captured.lines);
+                captured.release_buffers(&mut recording);
+            }
+            pending.render.discard(&mut recording);
+            self.engine.run_recording(
+                device,
+                queue,
+                &recording,
+                &[],
+                "discard_pending_coarse",
+                #[cfg(feature = "wgpu-profiler")]
+                &mut self.profiler,
+            )?;
+        }
+        Ok(())
     }
 
     async fn render_to_texture_async_internal(
@@ -738,67 +832,131 @@ impl Renderer {
         scene: &Scene,
         texture: &TextureView,
         params: &RenderParams,
+        _capture_debug: bool,
     ) -> Result<RenderResult> {
-        let mut render = Render::new();
-        let encoding = scene.encoding();
-        // TODO: turn this on; the download feature interacts with CPU dispatch.
-        // Currently this is always enabled when the `debug_layers` setting is enabled as the bump
-        // counts are used for debug visualiation.
-        let robust = cfg!(feature = "debug_layers");
-        let recording = render.render_encoding_coarse(
-            encoding,
-            &mut self.resolver,
-            &self.shaders,
-            &mut self.image_atlas,
-            params,
-            robust,
-        );
-        let target = render.out_image();
-        let bump_buf = render.bump_buf();
-        #[cfg(feature = "debug_layers")]
-        let captured = render.take_captured_buffers();
-        self.engine.run_recording(
-            device,
-            queue,
-            &recording,
-            &[],
-            "t_async_coarse",
-            #[cfg(feature = "wgpu-profiler")]
-            &mut self.profiler,
-        )?;
-
-        let mut bump: Option<BumpAllocators> = None;
-        if let Some(bump_buf) = self.engine.get_download(bump_buf) {
-            let buf_slice = bump_buf.slice(..);
-            let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-            buf_slice.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
-            receiver.receive().await.expect("channel was closed")?;
-            let mapped = buf_slice
-                .get_mapped_range()
-                .expect("bump buffer was just mapped");
-            bump = Some(bytemuck::pod_read_unaligned(&mapped));
-        }
-        // TODO: apply logic to determine whether we need to rerun coarse, and also
-        // allocate the blend stack as needed.
-        self.engine.free_download(bump_buf);
-        // Maybe clear to reuse allocation?
-        let mut recording = Recording::default();
-        render.record_fine(&self.shaders, &mut recording);
-        let external_resources = [ExternalResource::Image(target, texture)];
-        self.engine.run_recording(
-            device,
-            queue,
-            &recording,
-            &external_resources,
-            "t_async_fine",
-            #[cfg(feature = "wgpu-profiler")]
-            &mut self.profiler,
-        )?;
-        Ok(RenderResult {
-            bump,
+        self.cleanup_pending(device, queue)?;
+        let mut last_failed = 0;
+        let mut allocation = self.allocation;
+        // Five dependent allocation stages can reveal more work after an earlier retry.
+        for attempt in 0..8 {
+            let mut render = Render::new();
+            render.allocation = allocation;
             #[cfg(feature = "debug_layers")]
-            captured,
-        })
+            {
+                render.capture_debug = _capture_debug;
+            }
+            let limits = device.limits();
+            render.buffer_limit = limits
+                .max_buffer_size
+                .min(limits.max_storage_buffer_binding_size);
+            let previous_atlas = self.image_atlas;
+            let recording = render.render_encoding_coarse(
+                scene.encoding(),
+                &mut self.resolver,
+                &self.shaders,
+                &mut self.image_atlas,
+                params,
+                true,
+            )?;
+            let target = render.out_image();
+            let bump_proxy = render.bump_buf();
+            #[cfg(feature = "debug_layers")]
+            let captured = render.take_captured_buffers();
+            let engine = &mut self.engine;
+            #[cfg(feature = "wgpu-profiler")]
+            let profiler = &mut self.profiler;
+            render::submit_coarse_recording(
+                &mut self.resolver,
+                &mut self.image_atlas,
+                previous_atlas,
+                &recording,
+                || {
+                    engine.run_recording(
+                        device,
+                        queue,
+                        &recording,
+                        &[],
+                        "checked_coarse",
+                        #[cfg(feature = "wgpu-profiler")]
+                        profiler,
+                    )
+                },
+            )?;
+            self.pending = Some(PendingRender {
+                render,
+                bump: Some(bump_proxy),
+                #[cfg(feature = "debug_layers")]
+                captured,
+            });
+            let readback = async {
+                let buffer = self
+                    .engine
+                    .get_download(bump_proxy)
+                    .ok_or_else(|| Error::AllocationReadback("missing bump buffer".into()))?;
+                let slice = buffer.slice(..);
+                let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
+                slice.map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = sender.send(result);
+                });
+                receiver
+                    .receive()
+                    .await
+                    .ok_or_else(|| Error::AllocationReadback("closed map callback".into()))??;
+                let mapped = slice
+                    .get_mapped_range()
+                    .map_err(|error| Error::AllocationReadback(error.to_string()))?;
+                let bump: BumpAllocators = bytemuck::pod_read_unaligned(&mapped);
+                drop(mapped);
+                buffer.unmap();
+                Ok::<_, Error>(bump)
+            }
+            .await;
+            self.engine.free_download(bump_proxy);
+            self.pending.as_mut().unwrap().bump = None;
+            let mut recording = Recording::default();
+            match readback {
+                Ok(bump) if bump.failed == 0 => {
+                    self.pending
+                        .as_mut()
+                        .unwrap()
+                        .render
+                        .record_fine(&self.shaders, &mut recording)?;
+                    self.engine.run_recording(
+                        device,
+                        queue,
+                        &recording,
+                        &[ExternalResource::Image(target, texture)],
+                        "checked_fine",
+                        #[cfg(feature = "wgpu-profiler")]
+                        &mut self.profiler,
+                    )?;
+                    self.allocation = allocation;
+                    #[cfg(feature = "debug_layers")]
+                    if !_capture_debug {
+                        self.pending = None;
+                    }
+                    #[cfg(not(feature = "debug_layers"))]
+                    {
+                        self.pending = None;
+                    }
+                    return Ok(RenderResult { bump: Some(bump) });
+                }
+                result => {
+                    self.cleanup_pending(device, queue)?;
+                    let bump = result?;
+                    log::debug!("GPU allocation retry {attempt}: {bump:?}");
+                    last_failed = bump.failed;
+                    allocation.binning = allocation.binning.max(bump.binning);
+                    allocation.lines = allocation.lines.max(bump.lines);
+                    allocation.tile = allocation.tile.max(bump.tile);
+                    allocation.seg_counts = allocation.seg_counts.max(bump.seg_counts);
+                    allocation.segments = allocation.segments.max(bump.segments);
+                    allocation.blend = allocation.blend.max(bump.blend);
+                    allocation.ptcl = allocation.ptcl.max(bump.ptcl);
+                }
+            }
+        }
+        Err(Error::AllocationRecovery(last_failed))
     }
 }
 #[cfg(all(feature = "debug_layers", feature = "wgpu"))]
@@ -821,8 +979,126 @@ impl<'a> DebugDownloads<'a> {
 
         let lines = lines_buf.slice(..bump.lines as u64 * size_of::<LineSoup>() as u64);
         let (sender, receiver) = futures_intrusive::channel::shared::oneshot_channel();
-        lines.map_async(wgpu::MapMode::Read, move |v| sender.send(v).unwrap());
+        lines.map_async(wgpu::MapMode::Read, move |v| {
+            let _ = sender.send(v);
+        });
         receiver.receive().await.expect("channel was closed")?;
         Ok(Self { lines })
+    }
+}
+
+#[cfg(all(test, feature = "wgpu", not(target_arch = "wasm32")))]
+mod cancellation_tests {
+    use super::*;
+    use std::future::Future;
+    use std::task::{Context, Poll, Waker};
+
+    fn block_on<F: Future>(future: F) -> F::Output {
+        let mut future = std::pin::pin!(future);
+        let mut context = Context::from_waker(Waker::noop());
+        loop {
+            if let Poll::Ready(value) = future.as_mut().poll(&mut context) {
+                return value;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn cancelled_attempts_do_not_accumulate_resources() {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let Ok(adapter) = block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let (device, queue) = block_on(adapter.request_device(&Default::default())).unwrap();
+        let mut renderer = Renderer::new(&device, RendererOptions::default()).unwrap();
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d {
+                width: 64,
+                height: 64,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&Default::default());
+        let mut scene = Scene::new();
+        scene.fill(
+            peniko::Fill::NonZero,
+            kurbo::Affine::IDENTITY,
+            peniko::Color::WHITE,
+            None,
+            &kurbo::Rect::new(0., 0., 64., 64.),
+        );
+        let params = RenderParams {
+            base_color: peniko::Color::BLACK,
+            width: 64,
+            height: 64,
+            antialiasing_method: AaConfig::Area,
+        };
+        let mut first = None;
+        for _ in 0..3 {
+            let mut future = Box::pin(renderer.render_to_texture_async(
+                &device,
+                &queue,
+                &scene,
+                &view,
+                &params,
+                DebugLayers::none(),
+            ));
+            assert!(
+                future
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop()))
+                    .is_pending()
+            );
+            drop(future);
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let counts = renderer.engine.live_resource_counts();
+            assert_eq!(
+                *first.get_or_insert(counts),
+                counts,
+                "cancelled resources must stay bounded"
+            );
+        }
+        #[cfg(feature = "debug_layers")]
+        {
+            let mut first_debug = None;
+            for _ in 0..3 {
+                let mut future = Box::pin(renderer.render_to_texture_async(
+                    &device,
+                    &queue,
+                    &scene,
+                    &view,
+                    &params,
+                    DebugLayers::VALIDATION,
+                ));
+                let mut context = Context::from_waker(Waker::noop());
+                assert!(future.as_mut().poll(&mut context).is_pending());
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                assert!(future.as_mut().poll(&mut context).is_pending());
+                drop(future);
+                device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+                let counts = renderer.engine.live_resource_counts();
+                assert_eq!(
+                    *first_debug.get_or_insert(counts),
+                    counts,
+                    "cancelled debug downloads must stay bounded"
+                );
+            }
+        }
+        renderer
+            .render_to_texture(&device, &queue, &scene, &view, &params)
+            .unwrap();
+        let counts = renderer.engine.live_resource_counts();
+        assert_eq!(counts.0, 0, "successful frame releases coarse buffers");
+        assert_eq!(counts.2, 0, "successful frame releases downloads");
     }
 }

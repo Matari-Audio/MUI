@@ -3,12 +3,9 @@
 
 //! Take an encoded scene and create a graph to render it
 
-use crate::recording::{BufferProxy, ImageFormat, ImageProxy, Recording, ResourceProxy};
+use crate::recording::{BufferProxy, Command, ImageFormat, ImageProxy, Recording, ResourceProxy};
 use crate::shaders::FullShaders;
 use crate::{AaConfig, RenderParams};
-
-#[cfg(feature = "wgpu")]
-use crate::Scene;
 
 use vello_encoding::{Encoding, Resolver, WorkgroupSize, make_mask_lut, make_mask_lut_16};
 
@@ -19,11 +16,63 @@ enum AtlasProxyAction {
     Resized,
 }
 
+type MaskGenerator = fn() -> Vec<u8>;
+type FinePipeline = (crate::ShaderId, Option<MaskGenerator>);
+fn fine_pipeline(aa: AaConfig, shaders: &FullShaders) -> crate::Result<FinePipeline> {
+    let (shader, mask): (_, Option<MaskGenerator>) = match aa {
+        AaConfig::Area => (shaders.fine_area, None),
+        AaConfig::Msaa8 => (shaders.fine_msaa8, Some(make_mask_lut)),
+        AaConfig::Msaa16 => (shaders.fine_msaa16, Some(make_mask_lut_16)),
+    };
+    Ok((
+        shader.ok_or(crate::Error::UnsupportedAntialiasing(aa))?,
+        mask,
+    ))
+}
+
+// Resolve has already marked these images clean, but none of this recording's
+// uploads/frees may be treated as submitted after a refusal. Dirty every upload,
+// including valid images preceding/following the refused image, and retain the
+// previously committed atlas (a resized atlas's FreeImage was not submitted).
+fn restore_unsubmitted_coarse(
+    resolver: &mut Resolver,
+    persistent_image_atlas: &mut Option<ImageProxy>,
+    previous_atlas: Option<ImageProxy>,
+    recording: &Recording,
+) {
+    for command in &recording.commands {
+        if let Command::WriteImage(_, _, image) = command {
+            resolver.mark_image_dirty(image);
+        }
+    }
+    *persistent_image_atlas = previous_atlas;
+}
+
+/// Restore unsubmitted image bookkeeping when coarse submission is refused.
+///
+/// Restoring CPU bookkeeping does not roll back any GPU writes already queued.
+pub(crate) fn submit_coarse_recording(
+    resolver: &mut Resolver,
+    persistent_image_atlas: &mut Option<ImageProxy>,
+    previous_atlas: Option<ImageProxy>,
+    recording: &Recording,
+    submit: impl FnOnce() -> crate::Result<()>,
+) -> crate::Result<()> {
+    let result = submit();
+    if result.is_err() {
+        restore_unsubmitted_coarse(resolver, persistent_image_atlas, previous_atlas, recording);
+    }
+    result
+}
+
 /// State for a render in progress.
 pub struct Render {
-    fine_wg_count: Option<WorkgroupSize>,
     fine_resources: Option<FineResources>,
     mask_buf: Option<ResourceProxy>,
+    pub(crate) allocation: vello_encoding::BumpAllocators,
+    pub(crate) buffer_limit: u64,
+    #[cfg(feature = "debug_layers")]
+    pub(crate) capture_debug: bool,
 
     #[cfg(feature = "debug_layers")]
     captured_buffers: Option<CapturedBuffers>,
@@ -41,6 +90,7 @@ impl Drop for Render {
 /// Resources produced by pipeline, needed for fine rasterization.
 struct FineResources {
     aa_config: AaConfig,
+    wg_count: WorkgroupSize,
 
     config_buf: ResourceProxy,
     bump_buf: ResourceProxy,
@@ -80,35 +130,26 @@ impl CapturedBuffers {
     }
 }
 
-#[cfg(feature = "wgpu")]
+#[cfg(all(feature = "wgpu", target_arch = "wasm32"))]
 pub(crate) fn render_full(
-    scene: &Scene,
+    scene: &crate::Scene,
     resolver: &mut Resolver,
     shaders: &FullShaders,
     image_atlas: &mut Option<ImageProxy>,
     params: &RenderParams,
-) -> (Recording, ResourceProxy) {
-    render_encoding_full(scene.encoding(), resolver, shaders, image_atlas, params)
-}
-
-#[cfg(feature = "wgpu")]
-/// Create a single recording with both coarse and fine render stages.
-///
-/// This function is not recommended when the scene can be complex, as it does not
-/// implement robust dynamic memory.
-pub(crate) fn render_encoding_full(
-    encoding: &Encoding,
-    resolver: &mut Resolver,
-    shaders: &FullShaders,
-    image_atlas: &mut Option<ImageProxy>,
-    params: &RenderParams,
-) -> (Recording, ResourceProxy) {
+) -> crate::Result<(Recording, ResourceProxy)> {
     let mut render = Render::new();
-    let mut recording =
-        render.render_encoding_coarse(encoding, resolver, shaders, image_atlas, params, false);
-    let out_image = render.out_image();
-    render.record_fine(shaders, &mut recording);
-    (recording, out_image.into())
+    let mut recording = render.render_encoding_coarse(
+        scene.encoding(),
+        resolver,
+        shaders,
+        image_atlas,
+        params,
+        false,
+    )?;
+    let target = render.out_image();
+    render.record_fine(shaders, &mut recording)?;
+    Ok((recording, target.into()))
 }
 
 impl Default for Render {
@@ -120,9 +161,12 @@ impl Default for Render {
 impl Render {
     pub fn new() -> Self {
         Self {
-            fine_wg_count: None,
             fine_resources: None,
             mask_buf: None,
+            allocation: Default::default(),
+            buffer_limit: u64::from(u32::MAX),
+            #[cfg(feature = "debug_layers")]
+            capture_debug: true,
             #[cfg(feature = "debug_layers")]
             captured_buffers: None,
         }
@@ -140,11 +184,16 @@ impl Render {
         persistent_image_atlas: &mut Option<ImageProxy>,
         params: &RenderParams,
         robust: bool,
-    ) -> Recording {
+    ) -> crate::Result<Recording> {
         use vello_encoding::RenderConfig;
+        if self.fine_resources.is_some() {
+            return Err(crate::Error::FinePassPending);
+        }
+        fine_pipeline(params.antialiasing_method, shaders)?;
         let mut recording = Recording::default();
         let mut packed = vec![];
 
+        let previous_atlas = *persistent_image_atlas;
         let (layout, ramps, images) = resolver.resolve(encoding, &mut packed);
         let gradient_image = if ramps.height == 0 {
             ResourceProxy::new_image(1, 1, ImageFormat::Rgba8)
@@ -160,7 +209,10 @@ impl Render {
         let atlas_width = images.width.max(1);
         let atlas_height = images.height.max(1);
         let (image_atlas, atlas_proxy_action) = match persistent_image_atlas {
-            Some(proxy) if proxy.width == atlas_width && proxy.height == atlas_height => {
+            Some(proxy)
+                if images.width == 0
+                    || (proxy.width == atlas_width && proxy.height == atlas_height) =>
+            {
                 (*proxy, AtlasProxyAction::Reused)
             }
             Some(proxy) => {
@@ -201,8 +253,17 @@ impl Render {
         for image in images.images {
             recording.write_image(image_atlas, image.1, image.2, image.0.clone());
         }
-        let cpu_config =
+        let mut cpu_config =
             RenderConfig::new(&layout, params.width, params.height, &params.base_color);
+        if let Err(error) = grow_buffers(&mut cpu_config, self.allocation, self.buffer_limit) {
+            restore_unsubmitted_coarse(
+                resolver,
+                persistent_image_atlas,
+                previous_atlas,
+                &recording,
+            );
+            return Err(error);
+        }
         // HACK: The coarse workgroup counts is the number of active bins.
         if (cpu_config.workgroup_counts.coarse.0
             * cpu_config.workgroup_counts.coarse.1
@@ -511,8 +572,8 @@ impl Render {
             buffer_sizes.blend_spill.size_in_bytes().into(),
             "vello.blend_spill",
         );
-        self.fine_wg_count = Some(wg_counts.fine);
         self.fine_resources = Some(FineResources {
+            wg_count: wg_counts.fine,
             aa_config: params.antialiasing_method,
             config_buf,
             bump_buf,
@@ -532,7 +593,7 @@ impl Render {
 
         #[cfg(feature = "debug_layers")]
         {
-            if robust {
+            if robust && self.capture_debug {
                 let path_bboxes = *path_bbox_buf.as_buf().unwrap();
                 let lines = *lines_buf.as_buf().unwrap();
                 recording.download(lines);
@@ -553,68 +614,60 @@ impl Render {
             recording.free_resource(lines_buf);
         }
 
-        recording
+        Ok(recording)
     }
 
     /// Run fine rasterization assuming the coarse phase succeeded.
-    pub fn record_fine(&mut self, shaders: &FullShaders, recording: &mut Recording) {
-        let fine_wg_count = self.fine_wg_count.take().unwrap();
-        let fine = self.fine_resources.take().unwrap();
-        match fine.aa_config {
-            AaConfig::Area => {
-                recording.dispatch(
-                    shaders
-                        .fine_area
-                        .expect("shaders not configured to support AA mode: area"),
-                    fine_wg_count,
-                    [
-                        fine.config_buf,
-                        fine.segments_buf,
-                        fine.ptcl_buf,
-                        fine.info_bin_data_buf,
-                        fine.blend_spill_buf,
-                        ResourceProxy::Image(fine.out_image),
-                        fine.gradient_image,
-                        fine.image_atlas,
-                    ],
-                );
-            }
-            _ => {
-                if self.mask_buf.is_none() {
-                    let mask_lut = match fine.aa_config {
-                        AaConfig::Msaa16 => make_mask_lut_16(),
-                        AaConfig::Msaa8 => make_mask_lut(),
-                        _ => unreachable!(),
-                    };
-                    let buf = recording.upload("vello.mask_lut", mask_lut);
-                    self.mask_buf = Some(buf.into());
-                }
-                let fine_shader = match fine.aa_config {
-                    AaConfig::Msaa16 => shaders
-                        .fine_msaa16
-                        .expect("shaders not configured to support AA mode: msaa16"),
-                    AaConfig::Msaa8 => shaders
-                        .fine_msaa8
-                        .expect("shaders not configured to support AA mode: msaa8"),
-                    _ => unreachable!(),
-                };
-                recording.dispatch(
-                    fine_shader,
-                    fine_wg_count,
-                    [
-                        fine.config_buf,
-                        fine.segments_buf,
-                        fine.ptcl_buf,
-                        fine.info_bin_data_buf,
-                        fine.blend_spill_buf,
-                        ResourceProxy::Image(fine.out_image),
-                        fine.gradient_image,
-                        fine.image_atlas,
-                        self.mask_buf.unwrap(),
-                    ],
-                );
-            }
+    ///
+    /// A missing coarse pass or unsupported AA mode is refused before consuming
+    /// any resources or appending commands. The caller can retry or discard.
+    pub fn record_fine(
+        &mut self,
+        shaders: &FullShaders,
+        recording: &mut Recording,
+    ) -> crate::Result<()> {
+        let fine = self
+            .fine_resources
+            .as_ref()
+            .ok_or(crate::Error::MissingFinePass)?;
+        let (shader, mask_lut) = fine_pipeline(fine.aa_config, shaders)?;
+        let fine = self
+            .fine_resources
+            .take()
+            .ok_or(crate::Error::MissingFinePass)?;
+        let mut resources = Vec::with_capacity(if mask_lut.is_some() { 9 } else { 8 });
+        resources.extend([
+            fine.config_buf,
+            fine.segments_buf,
+            fine.ptcl_buf,
+            fine.info_bin_data_buf,
+            fine.blend_spill_buf,
+            ResourceProxy::Image(fine.out_image),
+            fine.gradient_image,
+            fine.image_atlas,
+        ]);
+        if let Some(make_lut) = mask_lut {
+            let mask = self
+                .mask_buf
+                .get_or_insert_with(|| recording.upload("vello.mask_lut", make_lut()).into());
+            resources.push(*mask);
         }
+        recording.dispatch(shader, fine.wg_count, resources);
+        self.free_fine(fine, recording);
+        Ok(())
+    }
+
+    pub(crate) fn discard(&mut self, recording: &mut Recording) {
+        if let Some(fine) = self.fine_resources.take() {
+            self.free_fine(fine, recording);
+        }
+        #[cfg(feature = "debug_layers")]
+        if let Some(captured) = self.captured_buffers.take() {
+            captured.release_buffers(recording);
+        }
+    }
+
+    fn free_fine(&mut self, fine: FineResources, recording: &mut Recording) {
         recording.free_resource(fine.config_buf);
         recording.free_resource(fine.tile_buf);
         recording.free_resource(fine.segments_buf);
@@ -649,5 +702,99 @@ impl Render {
     #[cfg(feature = "debug_layers")]
     pub fn take_captured_buffers(&mut self) -> Option<CapturedBuffers> {
         self.captured_buffers.take()
+    }
+}
+
+fn grow_buffers(
+    config: &mut vello_encoding::RenderConfig,
+    need: vello_encoding::BumpAllocators,
+    limit: u64,
+) -> crate::Result<()> {
+    use vello_encoding::BufferSize;
+    fn grow<T: Copy>(
+        buffer: &mut BufferSize<T>,
+        need: u64,
+        limit: u64,
+        name: &'static str,
+    ) -> crate::Result<()> {
+        let mut count = u64::from(buffer.len()).max(need);
+        if need > u64::from(buffer.len()) {
+            // Failed stages can expose additional work on the next pass.
+            count = count
+                .next_power_of_two()
+                .min(limit.min(u64::from(u32::MAX)) / size_of::<T>() as u64)
+                .max(need);
+        }
+        let bytes = count.saturating_mul(size_of::<T>() as u64);
+        if bytes > limit.min(u64::from(u32::MAX)) {
+            return Err(crate::Error::AllocationLimit(name, bytes, limit));
+        }
+        *buffer = BufferSize::new(count as u32);
+        Ok(())
+    }
+    let sizes = &mut config.buffer_sizes;
+    grow(
+        &mut sizes.bin_data,
+        u64::from(need.binning) + u64::from(config.gpu.layout.bin_data_start),
+        limit,
+        "binning",
+    )?;
+    grow(&mut sizes.lines, need.lines.into(), limit, "lines")?;
+    grow(&mut sizes.tiles, need.tile.into(), limit, "tiles")?;
+    grow(
+        &mut sizes.seg_counts,
+        need.seg_counts.into(),
+        limit,
+        "segment counts",
+    )?;
+    grow(&mut sizes.segments, need.segments.into(), limit, "segments")?;
+    grow(
+        &mut sizes.blend_spill,
+        need.blend.into(),
+        limit,
+        "blend spill",
+    )?;
+    grow(&mut sizes.ptcl, need.ptcl.into(), limit, "commands")?;
+    config.gpu.binning_size = sizes.bin_data.len() - config.gpu.layout.bin_data_start;
+    config.gpu.lines_size = sizes.lines.len();
+    config.gpu.tiles_size = sizes.tiles.len();
+    config.gpu.seg_counts_size = sizes.seg_counts.len();
+    config.gpu.segments_size = sizes.segments.len();
+    config.gpu.blend_size = sizes.blend_spill.len();
+    config.gpu.ptcl_size = sizes.ptcl.len();
+    Ok(())
+}
+
+#[cfg(test)]
+mod allocation_tests {
+    use super::*;
+    #[test]
+    fn grow_and_limit_gpu_allocations() {
+        let mut config = vello_encoding::RenderConfig::new(
+            &Default::default(),
+            1180,
+            760,
+            &peniko::Color::BLACK,
+        );
+        let need = vello_encoding::BumpAllocators {
+            blend: 5_908_480,
+            binning: 300_000,
+            ..Default::default()
+        };
+        grow_buffers(&mut config, need, 128 << 20).unwrap();
+        assert!(config.gpu.blend_size >= need.blend);
+        assert_eq!(config.buffer_sizes.blend_spill.len(), config.gpu.blend_size);
+        assert!(config.gpu.binning_size >= need.binning);
+        assert!(
+            grow_buffers(
+                &mut config,
+                vello_encoding::BumpAllocators {
+                    blend: u32::MAX,
+                    ..need
+                },
+                128 << 20
+            )
+            .is_err()
+        );
     }
 }

@@ -9,14 +9,16 @@
 //! copies the plugin's `Cargo.lock` (so everything but MUI stays at the
 //! plugin's versions) and its non-MUI `[patch]`es, and builds with
 //! `--config patch.<MUI>.<crate>.path=…` for every MUI crate the plugin
-//! uses. The plugin's checkout, `Cargo.lock` included, is only read.
+//! uses. It updates the copied lockfile only for those git MUI packages,
+//! then rejects remaining incompatible git MUI packages. The plugin's
+//! checkout, `Cargo.lock` included, is only read.
 //!
 //! Frameworks: moose and truce plugins (`moose::plugin!` / `truce::plugin!`
 //! make `crate::cli::Plugin`), nice-plug (the type `nice_export_clap!` names,
 //! public at the crate root), and plain MUI crates, which export
 //! `pub fn mui_editor() -> (mui::Ui, (u32, u32), impl mui::host::View + Send + 'static)`
 //! and, for sound, `pub fn mui_audio(sample_rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static`.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -235,6 +237,32 @@ fn locked_mui(lock: &str) -> Vec<String> {
                 .find_map(|l| l.strip_prefix("name = \"")?.strip_suffix('"'))
                 .map(str::to_owned)
         })
+        .collect()
+}
+
+/// Fully qualified package selectors for the copied git MUI lock entries.
+fn locked_mui_specs(lock: &str) -> Vec<String> {
+    lock.split("[[package]]")
+        .filter_map(|block| {
+            let field = |name: &str| {
+                block
+                    .lines()
+                    .find_map(|line| line.strip_prefix(name)?.strip_suffix('"'))
+            };
+            let source = field("source = \"")?;
+            if !is_mui(source) {
+                return None;
+            }
+            let source = source.split('#').next()?;
+            Some(format!(
+                "{}#{}@{}",
+                source,
+                field("name = \"")?,
+                field("version = \"")?
+            ))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -512,8 +540,51 @@ pub fn adapter(plugin: &str, features: &[String], project_dir: &Path) -> Result<
     used.sort();
     used.dedup();
     let config = patch_config(&used, &local)?;
-    let dir = write_adapter(&p, &root, &used, features)?;
-    let name = adapter_name(&p);
+    let name = adapter_name(&p, &root, features);
+    let dir = cache().join("adapters").join(&name);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let lock_path = dir.join(".build.lock");
+    let build_lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    // Cargo's lock starts after our generated inputs have already been written.
+    // Keep this file alive through generation, resolution and the complete build.
+    build_lock
+        .lock()
+        .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+    write_adapter(&dir, &p, &root, &used, features)?;
+    let specs = std::fs::read_to_string(dir.join("Cargo.lock"))
+        .map(|lock| locked_mui_specs(&lock))
+        .unwrap_or_default();
+    if !specs.is_empty() {
+        let mut update = cargo(&dir);
+        update.arg("update").args(&specs);
+        for c in &config {
+            update.args(["--config", c]);
+        }
+        let out = update.output().map_err(|e| format!("cargo update: {e}"))?;
+        if !out.status.success() {
+            return Err(format!(
+                "resolving MUI for `{}` failed:\n{}",
+                p.package,
+                String::from_utf8_lossy(&out.stderr)
+            ));
+        }
+        let lock = std::fs::read_to_string(dir.join("Cargo.lock"))
+            .map_err(|e| format!("reading adapter lockfile: {e}"))?;
+        let remaining = locked_mui_specs(&lock);
+        if !remaining.is_empty() {
+            return Err(format!(
+                "`{}` requires MUI packages incompatible with this tree: {}",
+                p.package,
+                remaining.join(", ")
+            ));
+        }
+    }
     let mut cmd = cargo(&dir);
     cmd.args([
         "build",
@@ -562,25 +633,24 @@ fn cargo(dir: &Path) -> Command {
     c
 }
 
-/// The adapter's package, binary and directory name: one per plugin
-/// folder, so adapters sharing a target directory never overwrite another.
-fn adapter_name(p: &Plugin) -> String {
-    let hash = crate::plugin::fnv(
-        crate::plugin::FNV_OFFSET,
-        p.dir.to_string_lossy().as_bytes(),
-    );
-    format!("adapter-{}-{:08x}", p.package, hash as u32)
+/// The adapter's package, binary and directory name for one build configuration.
+fn adapter_name(p: &Plugin, root: &Path, features: &[String]) -> String {
+    let mut features = features.to_vec();
+    features.sort();
+    features.dedup();
+    let inputs = json!([p.dir.to_string_lossy(), root.to_string_lossy(), features]);
+    let hash = crate::plugin::fnv(crate::plugin::FNV_OFFSET, inputs.to_string().as_bytes());
+    format!("adapter-{}-{hash:016x}", p.package)
 }
 
-/// Write the adapter workspace for `p`; its directory.
+/// Write the adapter workspace while its build lock is held.
 fn write_adapter(
+    dir: &Path,
     p: &Plugin,
     root: &Path,
     patched: &[String],
     features: &[String],
-) -> Result<PathBuf> {
-    let dir = cache().join("adapters").join(adapter_name(p));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+) -> Result<()> {
     let write = |name: &str, text: &str| {
         let f = dir.join(name);
         // Unchanged files keep their times: Cargo rebuilds nothing.
@@ -601,7 +671,7 @@ fn write_adapter(
             Err(_) => {}
         }
     }
-    Ok(dir)
+    Ok(())
 }
 
 fn toml_str(s: &str) -> String {
@@ -648,7 +718,7 @@ fn manifest(p: &Plugin, root: &Path, patched: &[String], features: &[String]) ->
          # Optimised dependencies (the capture rasterises on the CPU), no debug info.\n\
          [profile.dev]\ndebug = 0\n[profile.dev.package.\"*\"]\nopt-level = 3\n\n{patches}",
         pkg = p.package,
-        name = adapter_name(p),
+        name = adapter_name(p, root, features),
         dir = p.dir.display(),
         deps = deps.join("\n"),
         patches = patches(&root_manifest, &p.workspace_root, patched),
@@ -912,11 +982,31 @@ mod tests {
     }
 
     #[test]
+    fn adapter_cache_separates_framework_roots_and_feature_sets() {
+        let root = mui_root();
+        let plugin = detect(&root.join("media/mui-cut/tests/fixtures/plain")).unwrap();
+        let base = adapter_name(&plugin, &root, &[]);
+        assert_ne!(base, adapter_name(&plugin, &root.join("other"), &[]));
+        assert_ne!(base, adapter_name(&plugin, &root, &["cpu".into()]));
+        assert_eq!(
+            adapter_name(&plugin, &root, &["cpu".into(), "gpu".into()]),
+            adapter_name(&plugin, &root, &["gpu".into(), "cpu".into(), "cpu".into()]),
+        );
+    }
+
+    #[test]
     fn finds_mui_crates_in_a_lock_and_rev_pins_in_a_manifest() {
         let lock = "[[package]]\nname = \"mui\"\nversion = \"0.4.0\"\nsource = \"git+https://github.com/Matari-Audio/MUI#abc\"\n\n\
                     [[package]]\nname = \"moose\"\nversion = \"0.1.0\"\nsource = \"git+https://github.com/Matari-Audio/moose#def\"\n\n\
                     [[package]]\nname = \"mui-baseview\"\nversion = \"0.4.0\"\nsource = \"git+https://github.com/Matari-Audio/MUI?rev=48dde27#48dde27\"\n";
         assert_eq!(locked_mui(lock), ["mui", "mui-baseview"]);
+        assert_eq!(
+            locked_mui_specs(lock),
+            [
+                "git+https://github.com/Matari-Audio/MUI#mui@0.4.0",
+                "git+https://github.com/Matari-Audio/MUI?rev=48dde27#mui-baseview@0.4.0",
+            ]
+        );
         let manifest = r#"
 mui = { git = "https://github.com/Matari-Audio/MUI", rev = "48dde277444db4c4b9fa1099ecd52f997a18402a", features = ["cpu"] }
 mui-text = { git = "https://github.com/Matari-Audio/MUI" }

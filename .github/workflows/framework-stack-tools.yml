@@ -1,0 +1,16 @@
+name: Framework stack tools
+on:
+  push:
+    paths: ['tools/stack-check/**', '.github/workflows/framework-stack*.yml']
+  pull_request:
+    paths: ['tools/stack-check/**', '.github/workflows/framework-stack*.yml']
+permissions:
+  contents: read
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - run: python3 -m unittest discover -s tools/stack-check -p 'test_*.py'

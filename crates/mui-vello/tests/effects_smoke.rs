@@ -1094,3 +1094,96 @@ fn packed_text_regions_match_fresh_glyph_rendering() {
         same_pixels(&part, &whole);
     }
 }
+
+#[test]
+fn vector_partial_repaint_matches_full_frame_at_nonzero_origin() {
+    use mui_vello::kurbo::{Rect, Shape};
+    let scene = |color| {
+        let vector = mui_scene::Vector::new(
+            32.,
+            24.,
+            vec![mui_scene::VectorCommand::Fill {
+                path: Rect::new(0., 0., 32., 24.).to_path(0.01),
+                transform: Affine::IDENTITY,
+                brush: mui_vello::peniko::Brush::Solid(mui_vello::peniko::Color::from_rgba8(
+                    color, 210, 70, 255,
+                )),
+                brush_transform: Affine::IDENTITY,
+                rule: mui_vello::peniko::Fill::NonZero,
+            }],
+        )
+        .unwrap();
+        resolve(&SceneSpec::new(
+            stack([block(32., 24.)
+                .at(132., 116.)
+                .fill(Fill::Vector(Arc::new(vector), Fit::Fill))
+                .id("changed")])
+            .size(320., 200.)
+            .radius(0.)
+            .fill(Color::srgb(0.08, 0.08, 0.08)),
+        ))
+        .unwrap()
+    };
+    for scale in [1., 1.5, 2.] {
+        let Some((part, whole, stats)) = damaged_at(&scene(30), &scene(160), Affine::scale(scale))
+        else {
+            return;
+        };
+        assert!(
+            stats.rendered_pixels < AREA,
+            "expected partial repaint at {scale}"
+        );
+        same_pixels(&part, &whole);
+    }
+}
+
+#[test]
+fn image_survives_image_free_frame() {
+    use vello::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: SIZE[0],
+            height: SIZE[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut renderer = vello::Renderer::new(&device, vello::RendererOptions::default()).unwrap();
+    let image = ImageData {
+        data: Blob::new(Arc::new([255u8, 30, 40, 255].repeat(16))),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: 4,
+        height: 4,
+    };
+    let mut scene = vello::Scene::new();
+    scene.draw_image(&image, Affine::scale(10.));
+    let params = vello::RenderParams {
+        base_color: vello::peniko::Color::BLACK,
+        width: SIZE[0],
+        height: SIZE[1],
+        antialiasing_method: vello::AaConfig::Area,
+    };
+    renderer
+        .render_to_texture(&device, &queue, &scene, &view, &params)
+        .unwrap();
+    let before = pixels(&device, &queue, &texture);
+    renderer
+        .render_to_texture(&device, &queue, &vello::Scene::new(), &view, &params)
+        .unwrap();
+    renderer
+        .render_to_texture(&device, &queue, &scene, &view, &params)
+        .unwrap();
+    let after = pixels(&device, &queue, &texture);
+    same_pixels(&before, &after);
+}

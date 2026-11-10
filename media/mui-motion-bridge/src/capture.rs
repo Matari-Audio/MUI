@@ -554,6 +554,12 @@ fn widgets(
             continue;
         };
         let scope = list[i].parent.as_deref();
+        let field = format!("{root}/");
+        for s in &list {
+            if s.parent.as_deref() == scope && s.key.starts_with(&field) {
+                adopt.push((s.key.to_string(), root.clone()));
+            }
+        }
         // Where it is: inside the unnamed containers whose paths prefix the
         // first surface after it (and its own), or, when that one is named
         // or outside (the part ends its container), those prefixing the
@@ -593,7 +599,7 @@ fn widgets(
                 .max(i);
             let crowded = list[start..=end]
                 .iter()
-                .any(|s| named(&s.key) && !under(&s.key, root));
+                .any(|s| named(&s.key) && !under(&s.key, root) && !s.key.starts_with(&field));
             if crowded {
                 break;
             }
@@ -675,7 +681,15 @@ fn controls(scene: &mui_scene::ResolvedScene, part: Option<&str>, area: f64) -> 
         .collect();
     candidates
         .iter()
-        .filter(|c| !candidates.iter().any(|o| o != *c && under(c, o)))
+        .filter(|c| {
+            !candidates.iter().any(|o| {
+                o != *c
+                    && (under(c, o)
+                        || (c.starts_with(&format!("{o}/"))
+                            && scene.surface(c).and_then(|s| s.parent.as_deref())
+                                == scene.surface(o).and_then(|s| s.parent.as_deref())))
+            })
+        })
         .map(|c| (*c).to_owned())
         .collect()
 }
@@ -737,6 +751,39 @@ mod tests {
         .unwrap();
         assert!(discover_parts(&scene, 300., 40.).is_empty());
         assert_eq!(discover_tree(&scene, 300., 40., 1), ["share", "roll"]);
+    }
+
+    #[test]
+    fn sibling_reading_belongs_to_its_control() {
+        let scene = resolve(&SceneSpec::new(
+            row![
+                row![stack![
+                    block(20., 20.).fill(Role::Ink).id("dial/reading"),
+                    block(40., 40.).fill(Role::Primary).id("dial"),
+                ]]
+                .size(120., 60.)
+                .id("panel")
+            ]
+            .size(300., 200.),
+        ))
+        .unwrap();
+        let roots = discover_tree(&scene, 300., 200., 2);
+        assert_eq!(roots, ["panel", "dial"]);
+        let (adopt, _) = widgets(&scene, &roots);
+        let refs: Vec<_> = roots.iter().map(String::as_str).collect();
+        let adopted: Vec<_> = adopt
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        let layers = scene.capture_layers_adopting(&refs, &adopted).unwrap();
+        assert!(layers.iter().any(|layer| {
+            layer.part.as_deref() == Some("dial")
+                && layer
+                    .scene
+                    .paint
+                    .iter()
+                    .any(|paint| paint.key.as_ref() == "dial/reading")
+        }));
     }
 
     /// Two levels: panels, then the controls in them, addressed by path;

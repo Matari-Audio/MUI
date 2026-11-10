@@ -36,6 +36,7 @@ pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 
 mod drag;
 mod native_worker;
+mod policies;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
@@ -56,6 +57,7 @@ use mui::prelude::{Button, Cursor, Key, Mods, Point};
 use mui::vello::host::{FailureClass, Frame, GpuInit, Host, Retry, target_size};
 use mui::vello::kurbo::Affine;
 use native_worker::build;
+pub use policies::{WheelAcceleration, WheelPolicy};
 #[cfg(target_os = "linux")]
 use raw_window_handle::HasDisplayHandle;
 use raw_window_handle::HasWindowHandle;
@@ -69,6 +71,16 @@ pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 /// A native-close signal. Runs before borrowing the model or handler; it must
 /// never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
+
+/// Evaluated with the retained `Ui` on its model worker. Returning true hides
+/// the pointer during a gesture; the native thread restores its original position
+/// on release. Leaving the window or losing focus cancels restoration.
+pub type PointerHook = Arc<Mutex<dyn FnMut(&mui::Ui) -> bool + Send>>;
+
+/// Native-thread creation and cancellation of an owned X11 identifier.
+/// This hook must not borrow the UI/model or wait for the model worker.
+#[cfg(target_os = "linux")]
+pub type X11WindowHook = Arc<Mutex<dyn FnMut(Option<u32>) + Send>>;
 
 /// Last frame submitted to the native child; not GPU completion or scanout.
 #[derive(Clone, Copy, Debug)]
@@ -94,6 +106,10 @@ pub struct Requests {
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
+    pointer: Mutex<Option<PointerHook>>,
+    wheel: Mutex<WheelPolicy>,
+    #[cfg(target_os = "linux")]
+    x11_hook: Mutex<Option<X11WindowHook>>,
     close: Mutex<Option<CloseHook>>,
     idle: Mutex<Option<CloseHook>>,
     requester: Mutex<Option<baseview::FrameRequester>>,
@@ -112,6 +128,34 @@ pub struct Requests {
 }
 
 impl Requests {
+    /// Configure baseview notch conversion before opening this editor.
+    /// The separate floating Wayland adapter does not use this policy.
+    pub fn set_wheel_policy(&self, policy: WheelPolicy) {
+        *self
+            .wheel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy;
+    }
+
+    /// Install the model-worker pointer policy before opening a baseview editor.
+    /// The separate floating Wayland adapter does not use this policy.
+    pub fn on_pointer(&self, hook: PointerHook) {
+        *self
+            .pointer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    /// Observe creation and cancellation on the native thread. Register before
+    /// opening. Each created X11 window retains its hook until cancellation.
+    #[cfg(target_os = "linux")]
+    pub fn on_x11_window(&self, hook: X11WindowHook) {
+        *self
+            .x11_hook
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
     /// Queue an integration-fixture event through the native pump. Bounded,
     /// ordered and absent from production builds. Native focus/capture APIs
     /// still execute normally, including synchronous platform callbacks.
@@ -400,6 +444,60 @@ pub fn open<V: View + Send + 'static>(
     window
         .map_err(|e| log(&sink, &format!("mui-baseview: window failed ({e})")))
         .ok()
+}
+
+/// Open an embedded X11 editor with a movable command controller.
+/// Native window state and callbacks stay on the X11 worker. Close the
+/// controller before destroying the host parent.
+#[cfg(target_os = "linux")]
+pub fn open_threaded<V: View + Send + 'static>(
+    parent: &impl HasWindowHandle,
+    title: &str,
+    size: (u32, u32),
+    scale: Option<f64>,
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) -> Option<baseview::ThreadedWindow> {
+    if mui::host::headless::offer(&shared, size) {
+        return None;
+    }
+    if let Err(error) = parent.window_handle() {
+        log(
+            &shared,
+            &format!("mui-baseview: no parent window ({error})"),
+        );
+        return None;
+    }
+    let settings = settings(title, size)
+        .with_parent(parent)
+        .with_scale_factor_override(scale);
+    let sink = Arc::clone(&shared);
+    baseview::ThreadedWindow::create(settings, build(shared, requests, true))
+        .and_then(|window| window.show().map(|()| window))
+        .map_err(|error| log(&sink, &format!("mui-baseview: window failed ({error})")))
+        .ok()
+}
+
+/// Open a floating X11 editor without claiming the process's standalone event loop.
+#[cfg(target_os = "linux")]
+pub fn open_floating_threaded<V: View + Send + 'static>(
+    title: &str,
+    size: (u32, u32),
+    scale: Option<f64>,
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) -> Option<baseview::ThreadedWindow> {
+    if mui::host::headless::offer(&shared, size) {
+        return None;
+    }
+    let sink = Arc::clone(&shared);
+    baseview::ThreadedWindow::create(
+        settings(title, size).with_scale_factor_override(scale),
+        build(shared, requests, false),
+    )
+    .and_then(|window| window.show().map(|()| window))
+    .map_err(|error| log(&sink, &format!("mui-baseview: window failed ({error})")))
+    .ok()
 }
 
 /// Run a top-level window of `size` logical points at the system scale, until

@@ -127,22 +127,33 @@ pub struct WindowThreadMessage {
 // thread. Time out instead of waiting for that thread to service itself.
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(50);
 const OPEN_TIMEOUT: Duration = Duration::from_millis(250);
-const CLOSE_TIMEOUT: Duration = Duration::from_millis(250);
 
 pub enum HostCallback {
     Resized { new_size: WindowSize, previous: WindowSize },
     Destroyed,
 }
 
-pub struct WindowThreadHandle {
+/// Movable commands and metadata; native state stays on the X11 worker.
+pub struct WindowThreadControl {
     shared: Arc<WindowThreadShared>,
     loop_signal: LoopSignal,
     event_loop_handle: Cell<Option<JoinHandle<()>>>,
-
     request_sender: calloop::channel::SyncSender<WindowThreadMessage>,
+    can_detach: Cell<bool>,
+    close_timeout: Cell<Option<Duration>>,
+}
+
+pub struct WindowThreadHandle {
+    control: WindowThreadControl,
     callback_receiver: Option<mpsc::Receiver<HostCallback>>,
     host_callbacks: Option<RefCell<Box<dyn HostCallbacks>>>,
-    close_timeout: Cell<Option<Duration>>,
+}
+
+fn can_detach(settings: &WindowSettings, host: &crate::host::Host) -> bool {
+    settings.parent.is_none()
+        && !settings.wait_for_parent
+        && host.callbacks.is_none()
+        && host.main_thread.is_none()
 }
 
 // A PIE executable cannot dlopen itself, but unlike a plugin its code cannot
@@ -170,7 +181,65 @@ fn image_is_unload_safe() -> bool {
 }
 
 impl WindowThreadHandle {
+    pub(crate) fn control(&self) -> &WindowThreadControl {
+        &self.control
+    }
+
     pub fn create_window(init: WindowInitializer) -> Result<Self> {
+        let can_detach = can_detach(&init.settings, &init.host);
+        let (control, callback_receiver) = WindowThreadControl::spawn(
+            init.settings,
+            init.builder,
+            init.host.main_thread,
+            can_detach,
+        )?;
+        Ok(Self { control, callback_receiver, host_callbacks: init.host.callbacks })
+    }
+
+    pub fn handle_main_thread_callback(&self) {
+        loop {
+            let Some(receiver) = self.callback_receiver.as_ref() else { return };
+            let Some(callback) = receiver.try_recv().ok() else { return };
+
+            self.handle_main_thread_message(callback);
+        }
+    }
+
+    fn handle_main_thread_message(&self, msg: HostCallback) {
+        let Some(host_callbacks) = self.host_callbacks.as_ref() else { return };
+        let mut host_callbacks = host_callbacks.borrow_mut();
+
+        match msg {
+            HostCallback::Destroyed => host_callbacks.destroyed(),
+            HostCallback::Resized { new_size: new, previous } => {
+                if let Err(e) = host_callbacks.request_resize(new) {
+                    warn!("Host failed to resize parent window: {}. Reverting.", e);
+
+                    if let Err(e) = self.control.resize(previous.physical.into()) {
+                        warn!(
+                            "Failed to revert to previous size while handling previous error: {}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl WindowThreadControl {
+    pub(crate) fn create_without_host(
+        settings: WindowSettings, builder: WindowHandlerBuilder,
+    ) -> Result<Self> {
+        let can_detach = settings.parent.is_none() && !settings.wait_for_parent;
+        let (control, _) = Self::spawn(settings, builder, None, can_detach)?;
+        Ok(control)
+    }
+
+    fn spawn(
+        settings: WindowSettings, builder: WindowHandlerBuilder,
+        main_thread: Option<Box<dyn crate::host::HostMainThreadCaller>>, can_detach: bool,
+    ) -> Result<(Self, Option<mpsc::Receiver<HostCallback>>)> {
         if !image_is_unload_safe() {
             warn!("X11 editor window open refused: could not pin plugin image");
             return Err(PlatformError::CreationFailed("Could not pin X11 editor image".into()));
@@ -178,8 +247,7 @@ impl WindowThreadHandle {
         let (tx, rx) = result_channel();
         let shared = Arc::new(WindowThreadShared::new());
         let (request_sender, request_receiver) = calloop::channel::sync_channel(1);
-        let (main_thread_caller, main_thread_receiver) =
-            MainThreadCaller::new(init.host.main_thread);
+        let (main_thread_caller, main_thread_receiver) = MainThreadCaller::new(main_thread);
 
         let join_handle = {
             let shared = Arc::clone(&shared);
@@ -190,8 +258,8 @@ impl WindowThreadHandle {
                 .spawn(move || {
                     let created = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         WindowThread::create(
-                            init.settings,
-                            init.builder,
+                            settings,
+                            builder,
                             shared,
                             request_receiver,
                             main_thread_caller,
@@ -227,20 +295,27 @@ impl WindowThreadHandle {
                 }
                 // The startup receiver is gone: a late creation will tear down
                 // instead of entering its loop. The image was pinned above.
-                join_bounded(join_handle, Duration::ZERO, || {});
+                if can_detach {
+                    join_bounded(join_handle, Duration::ZERO, || {});
+                } else {
+                    // Returning releases the caller's host/parent lifetime.
+                    let _ = join_handle.join();
+                }
                 return Err(e);
             }
         };
 
-        Ok(WindowThreadHandle {
-            event_loop_handle: Some(join_handle).into(),
-            shared,
-            loop_signal,
-            request_sender,
-            host_callbacks: init.host.callbacks.map(|c| c.into_inner().into()),
-            callback_receiver: main_thread_receiver,
-            close_timeout: Cell::new(None),
-        })
+        Ok((
+            Self {
+                event_loop_handle: Some(join_handle).into(),
+                shared,
+                loop_signal,
+                request_sender,
+                can_detach: Cell::new(can_detach),
+                close_timeout: Cell::new(None),
+            },
+            main_thread_receiver,
+        ))
     }
 
     pub fn size(&self) -> WindowSize {
@@ -315,21 +390,32 @@ impl WindowThreadHandle {
     }
 
     pub fn run_until_closed(&self) -> Result<()> {
-        if !self.shared.stopped.load(Ordering::Relaxed) {
-            self.request(WindowThreadRequest::Show)?;
+        let shown = if self.shared.stopped.load(Ordering::Relaxed) {
+            Ok(())
+        } else {
+            self.request(WindowThreadRequest::Show)
+        };
+        if shown.is_err() {
+            self.shared.stopped_requested_from_host.store(true, Ordering::Release);
+            self.loop_signal.stop();
+            self.loop_signal.wakeup();
         }
+        let joined = self.join_thread();
+        shown.and(joined)
+    }
 
+    fn join_thread(&self) -> Result<()> {
         let Some(thread) = self.event_loop_handle.take() else { return Ok(()) };
-
+        if thread.thread().id() == thread::current().id() {
+            // Self-close completes when the current native callback returns.
+            return Ok(());
+        }
         if let Err(panic) = thread.join() {
             resume_unwind(panic);
         }
-
-        // Ignore poisoned mutex
         if let Some(e) = self.shared.final_error.lock().unwrap_or_else(|g| g.into_inner()).take() {
             return Err(PlatformError::Run(e));
         }
-
         Ok(())
     }
 
@@ -357,55 +443,32 @@ impl WindowThreadHandle {
         self.shared.sizing_strategy().max_size()
     }
 
-    pub fn handle_main_thread_callback(&self) {
-        loop {
-            let Some(receiver) = self.callback_receiver.as_ref() else { return };
-            let Some(callback) = receiver.try_recv().ok() else { return };
-
-            self.handle_main_thread_message(callback);
-        }
-    }
-
     pub fn set_parent(&self, new_parent: ParentWindowHandle) -> Result<()> {
+        self.can_detach.set(false);
         self.request(WindowThreadRequest::SetParent(new_parent))
-    }
-
-    fn handle_main_thread_message(&self, msg: HostCallback) {
-        let Some(host_callbacks) = self.host_callbacks.as_ref() else { return };
-        let mut host_callbacks = host_callbacks.borrow_mut();
-
-        match msg {
-            HostCallback::Destroyed => host_callbacks.destroyed(),
-            HostCallback::Resized { new_size: new, previous } => {
-                if let Err(e) = host_callbacks.request_resize(new) {
-                    warn!("Host failed to resize parent window: {}. Reverting.", e);
-
-                    if let Err(e) = self.resize(previous.physical.into()) {
-                        warn!(
-                            "Failed to revert to previous size while handling previous error: {}",
-                            e
-                        );
-                    }
-                }
-            }
-        }
     }
 }
 
-impl Drop for WindowThreadHandle {
+impl Drop for WindowThreadControl {
     fn drop(&mut self) {
         self.shared.stopped_requested_from_host.store(true, Ordering::Relaxed);
         self.loop_signal.stop();
         self.loop_signal.wakeup();
 
-        if let Some(thread) = self.event_loop_handle.take() {
-            // Preserve normal WillClose/handler teardown when it completes in
-            // budget. After a timeout, no new handler calls may enter.
-            // Pinning was verified before spawn, not while a stalled driver may
-            // hold loader locks at close.
-            join_bounded(thread, self.close_timeout.get().unwrap_or(CLOSE_TIMEOUT), || {
-                self.shared.callbacks_revoked.store(true, Ordering::Release);
-            });
+        if self.can_detach.get() {
+            if let Some(timeout) = self.close_timeout.get() {
+                let Some(thread) = self.event_loop_handle.take() else { return };
+                if thread.thread().id() == thread::current().id() {
+                    return;
+                }
+                join_bounded(thread, timeout, || {
+                    self.shared.callbacks_revoked.store(true, Ordering::Release);
+                });
+                return;
+            }
+        }
+        if let Err(error) = self.join_thread() {
+            warn!("Error while closing X11 window: {}", error);
         }
     }
 }
@@ -485,13 +548,12 @@ mod close_tests {
     fn host_request_times_out_when_window_thread_is_inside_a_callback() {
         let loop_: calloop::EventLoop<'static, ()> = calloop::EventLoop::try_new().unwrap();
         let (request_sender, _waiting) = calloop::channel::sync_channel(1);
-        let handle = WindowThreadHandle {
+        let handle = WindowThreadControl {
             shared: Arc::new(WindowThreadShared::new()),
             loop_signal: loop_.get_signal(),
             event_loop_handle: Cell::new(None),
             request_sender,
-            callback_receiver: None,
-            host_callbacks: None,
+            can_detach: Cell::new(false),
             close_timeout: Cell::new(None),
         };
         let start = Instant::now();

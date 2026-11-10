@@ -896,3 +896,8 @@ fn is_paste(key: &NativeKey, mods: Mods) -> bool {
 
 #[cfg(test)]
 mod tests;
+
+/// Number of text rows represented by one conventional wheel notch.
+pub const NOTCH_LINES: f64 = 10.0;
+/// Default idle interval in seconds after which a wheel roll ends.
+pub const WHEEL_ROLL: f64 = 0.35;

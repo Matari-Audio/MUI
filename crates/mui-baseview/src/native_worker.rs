@@ -1,6 +1,7 @@
 //! Input-only native window adapter. The worker owns no native handle or native context.
 use super::*;
 use mui::vello::host::{BitmapPatch as Patch, HostError, Offscreen};
+use policies::{PointerState, WheelState};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 
 // A model may be reopened with a fresh Requests while its old worker exits.
@@ -78,6 +79,11 @@ pub(super) fn build<V: View + Send + 'static>(
         if let Some(native) = &mut native {
             native.focus(cx.has_focus());
         }
+        #[cfg(target_os = "macos")]
+        let presenter = mac_transport::Presenter::new(&cx).map_err(std::io::Error::other)?;
+        #[cfg(target_os = "linux")]
+        let presenter =
+            mui::vello::software::BitmapWindow::new(cx.clone()).map_err(std::io::Error::other)?;
         let (send, receive) = mpsc::channel();
         let (publish, output) = mpsc::sync_channel(1);
         let stopped = Arc::new(AtomicBool::new(false));
@@ -157,19 +163,22 @@ pub(super) fn build<V: View + Send + 'static>(
             return Err(error.into());
         }
         #[cfg(target_os = "linux")]
-        if let Ok(handle) = cx.window_handle() {
-            let id = match handle.as_raw() {
-                raw_window_handle::RawWindowHandle::Xlib(h) => u32::try_from(h.window).unwrap_or(0),
-                raw_window_handle::RawWindowHandle::Xcb(h) => h.window.get(),
-                _ => 0,
-            };
-            requests.x11_window.store(id, Ordering::Release);
-        }
-        #[cfg(target_os = "macos")]
-        let presenter = mac_transport::Presenter::new(&cx).map_err(std::io::Error::other)?;
-        #[cfg(target_os = "linux")]
-        let presenter =
-            mui::vello::software::BitmapWindow::new(cx.clone()).map_err(std::io::Error::other)?;
+        let x11 = policies::X11Lifetime::new(
+            requests.clone(),
+            cx.window_handle()
+                .ok()
+                .map_or(0, |handle| match handle.as_raw() {
+                    raw_window_handle::RawWindowHandle::Xlib(h) => {
+                        u32::try_from(h.window).unwrap_or(0)
+                    }
+                    raw_window_handle::RawWindowHandle::Xcb(h) => h.window.get(),
+                    _ => 0,
+                }),
+        );
+        let wheel_policy = *requests
+            .wheel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let hook = requests
             .close
             .lock()
@@ -192,6 +201,11 @@ pub(super) fn build<V: View + Send + 'static>(
             capture: Cell::new(false),
             ime: RefCell::new(None),
             cursor: Cell::new(None),
+            pointer: RefCell::new(PointerState::default()),
+            wheel: RefCell::new(WheelState::default()),
+            wheel_policy,
+            #[cfg(target_os = "linux")]
+            x11,
             bitmap: RefCell::new(None),
             expose: RefCell::new(Vec::new()),
             input_pending: Cell::new(true),
@@ -204,7 +218,7 @@ pub(super) fn build<V: View + Send + 'static>(
 }
 
 enum Command {
-    Event(Event),
+    Event(Event, u64),
     Resize(WindowSize),
     Tick(Option<(u64, u64)>),
     Invalidate,
@@ -218,6 +232,8 @@ struct Output {
     capture: bool,
     ime: Option<baseview::ImeConfiguration>,
     cursor: MouseCursor,
+    hide_pointer: bool,
+    input_revision: u64,
     accessibility: Option<mui_access::accesskit::TreeUpdate>,
     demand: baseview::FrameDemand,
     drag: Option<(u64, u64)>,
@@ -245,6 +261,11 @@ pub(super) struct NativeAdapter {
     capture: Cell<bool>,
     ime: RefCell<Option<Option<baseview::ImeConfiguration>>>,
     cursor: Cell<Option<MouseCursor>>,
+    pointer: RefCell<PointerState>,
+    wheel: RefCell<WheelState>,
+    wheel_policy: WheelPolicy,
+    #[cfg(target_os = "linux")]
+    x11: policies::X11Lifetime,
     bitmap: RefCell<Option<Bitmap>>,
     expose: RefCell<Vec<[u32; 4]>>,
     input_pending: Cell<bool>,
@@ -252,7 +273,7 @@ pub(super) struct NativeAdapter {
     flash_rects: RefCell<Vec<[u32; 4]>>,
 }
 impl NativeAdapter {
-    fn blit(&self, rect: [u32; 4], pixels: &[u32]) {
+    fn blit(&self, rect: [u32; 4], pixels: &[u32]) -> bool {
         let decorated = mui::vello::software::damage_flash(pixels, (rect[2], rect[3]));
         if decorated.is_some() {
             self.flash_at
@@ -272,30 +293,30 @@ impl NativeAdapter {
                 *rects = vec![[x, y, x1 - x, y1 - y]];
             }
         }
-        self.blit_raw(rect, decorated.as_deref().unwrap_or(pixels));
+        self.blit_raw(rect, decorated.as_deref().unwrap_or(pixels))
     }
-    fn blit_raw(&self, rect: [u32; 4], pixels: &[u32]) {
+    fn blit_raw(&self, rect: [u32; 4], pixels: &[u32]) -> bool {
         #[cfg(target_os = "windows")]
-        blit(&self.cx, rect, pixels);
+        let result = blit(&self.cx, rect, pixels);
         #[cfg(target_os = "macos")]
-        if let Err(error) = self
+        let result = self
             .presenter
             .borrow_mut()
-            .present(&self.cx, rect, pixels.to_vec())
-        {
-            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
-        }
+            .present(&self.cx, rect, pixels.to_vec());
         #[cfg(target_os = "linux")]
-        if let Err(error) = self.presenter.borrow_mut().present_patch(
+        let result = self.presenter.borrow_mut().present_patch(
             rect,
             pixels,
             (
                 self.cx.size().physical.width,
                 self.cx.size().physical.height,
             ),
-        ) {
+        );
+        if let Err(error) = result {
             mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+            return false;
         }
+        true
     }
     fn stop(&self) {
         if !self.stopped.swap(true, Ordering::AcqRel) {
@@ -312,12 +333,12 @@ impl NativeAdapter {
             let _ = self.send.send(Command::Stop);
             self.requests.bind_requester(None);
             #[cfg(target_os = "linux")]
-            self.requests.x11_window.store(0, Ordering::Release);
+            self.x11.cancel();
         }
     }
     fn send(&self, command: Command) {
         if !self.stopped.load(Ordering::Acquire) {
-            if matches!(command, Command::Event(_) | Command::Resize(_)) {
+            if matches!(command, Command::Event(_, _) | Command::Resize(_)) {
                 self.input_pending.set(true);
             }
             let _ = self.send.send(command);
@@ -367,8 +388,21 @@ impl NativeAdapter {
             self.cx.set_ime_configuration(output.ime.clone());
             *self.ime.borrow_mut() = Some(output.ime);
         }
-        if self.cursor.replace(Some(output.cursor)) != Some(output.cursor) {
-            let _ = self.cx.set_mouse_cursor(output.cursor);
+        let (restore, hidden) = {
+            let mut pointer = self.pointer.borrow_mut();
+            let restore = pointer.apply(output.input_revision, output.hide_pointer);
+            (restore, pointer.hidden())
+        };
+        if let Some(at) = restore {
+            platform::warp_pointer(&self.cx, at.x, at.y, self.cx.size().scale_factor);
+        }
+        let cursor = if hidden {
+            MouseCursor::Hidden
+        } else {
+            output.cursor
+        };
+        if self.cursor.replace(Some(cursor)) != Some(cursor) {
+            let _ = self.cx.set_mouse_cursor(cursor);
         }
         // Native publication may reenter, but never acquires the model lock.
         if let Some(update) = output.accessibility
@@ -383,57 +417,89 @@ impl NativeAdapter {
             self.requests.wake();
             return;
         }
-        #[cfg(target_os = "macos")]
-        if !output.patches.is_empty() {
-            for patch in output.patches {
-                let pixels = patch.pixels;
-                if let Err(error) = self
-                    .presenter
-                    .borrow_mut()
-                    .present(&self.cx, patch.rect, pixels)
-                {
-                    mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
-                }
-            }
-            self.requests
-                .presented(output.size, output.software, output.reason);
-        }
         #[cfg(not(target_os = "macos"))]
-        if !output.patches.is_empty() {
-            let mut bitmap = self.bitmap.borrow_mut();
-            // A full update already owns a completed bitmap: move it into
-            // native retention instead of allocating/copying a full frame here.
-            let mut patches = output.patches;
-            if patches.len() == 1 && patches[0].rect == [0, 0, output.size.0, output.size.1] {
-                let patch = patches.pop().expect("one patch");
-                self.blit(patch.rect, &patch.pixels);
-                *bitmap = Some(Bitmap {
-                    size: output.size,
-                    pixels: patch.pixels,
-                });
-            }
-            if bitmap.as_ref().is_none_or(|b| b.size != output.size) {
-                self.send(Command::Invalidate);
-                self.input_pending.set(true);
-                self.requests.wake();
-                return;
-            }
-            let bitmap = bitmap.as_mut().expect("allocated above");
-            for patch in patches {
-                let [x, y, w, h] = patch.rect;
-                for row in 0..h as usize {
-                    let dest = (y as usize + row) * output.size.0 as usize + x as usize;
-                    let source = row * w as usize;
-                    bitmap.pixels[dest..dest + w as usize]
-                        .copy_from_slice(&patch.pixels[source..source + w as usize]);
+        let mut bitmap = self.bitmap.borrow_mut();
+        let submitted = submit_patches(
+            &self.requests,
+            output.size,
+            output.software,
+            output.reason,
+            output.patches,
+            |patch| {
+                #[cfg(target_os = "macos")]
+                {
+                    match self
+                        .presenter
+                        .borrow_mut()
+                        .present(&self.cx, patch.rect, patch.pixels)
+                    {
+                        Ok(()) => true,
+                        Err(error) => {
+                            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+                            false
+                        }
+                    }
                 }
-                self.blit(patch.rect, &patch.pixels);
-            }
-            self.requests
-                .presented(output.size, output.software, output.reason);
+                #[cfg(not(target_os = "macos"))]
+                {
+                    if patch.rect == [0, 0, output.size.0, output.size.1] {
+                        let success = self.blit(patch.rect, &patch.pixels);
+                        *bitmap = Some(Bitmap {
+                            size: output.size,
+                            pixels: patch.pixels,
+                        });
+                        return success;
+                    }
+                    let Some(bitmap) = bitmap.as_mut().filter(|b| b.size == output.size) else {
+                        return false;
+                    };
+                    let [x, y, w, h] = patch.rect;
+                    for row in 0..h as usize {
+                        let dest = (y as usize + row) * output.size.0 as usize + x as usize;
+                        let source = row * w as usize;
+                        bitmap.pixels[dest..dest + w as usize]
+                            .copy_from_slice(&patch.pixels[source..source + w as usize]);
+                    }
+                    self.blit(patch.rect, &patch.pixels)
+                }
+            },
+        );
+        if !submitted {
+            self.send(Command::Invalidate);
+            self.input_pending.set(true);
+            self.requests.wake();
+            return;
         }
         self.requests.drag.rendered(output.drag);
     }
+}
+fn submit_patches(
+    requests: &Requests,
+    size: (u32, u32),
+    software: bool,
+    reason: &'static str,
+    patches: Vec<Patch>,
+    mut submit: impl FnMut(Patch) -> bool,
+) -> bool {
+    if patches.is_empty() {
+        return true;
+    }
+    if !patches
+        .into_iter()
+        .all(|patch| patch.rect[2] > 0 && patch.rect[3] > 0 && submit(patch))
+    {
+        return false;
+    }
+    let first_gpu = !software && requests.presentation().is_none_or(|old| old.software);
+    requests.presented(size, software, reason);
+    if first_gpu {
+        mui::diagnostics::breadcrumb(
+            "mui-baseview",
+            "gpu_frame_presented",
+            "native GPU-rendered bitmap presentation succeeded",
+        );
+    }
+    true
 }
 impl Drop for NativeAdapter {
     fn drop(&mut self) {
@@ -478,7 +544,7 @@ impl WindowHandler for NativeAdapter {
                         let start = row as usize * bitmap.size.0 as usize + x as usize;
                         pixels.extend_from_slice(&bitmap.pixels[start..start + w as usize]);
                     }
-                    self.blit_raw([x, y, w, h], &pixels);
+                    let _ = self.blit_raw([x, y, w, h], &pixels);
                 }
             }
         }
@@ -546,7 +612,7 @@ impl WindowHandler for NativeAdapter {
             self.send(Command::Tick(drag));
         }
         if self.drag.borrow_mut().drive(&self.requests, &self.cx) {
-            self.send(Command::Event(Event::Window(WindowEvent::Unfocused)));
+            self.on_event(Event::Window(WindowEvent::Unfocused));
         }
         self.requests.idle();
         Ok(())
@@ -576,7 +642,25 @@ impl WindowHandler for NativeAdapter {
         self.requests.wake();
         Ok(())
     }
-    fn on_event(&self, event: Event) -> EventStatus {
+    fn on_event(&self, mut event: Event) -> EventStatus {
+        if !matches!(event, Event::Window(WindowEvent::RedrawRequested)) {
+            self.pointer.borrow_mut().observe(&event);
+        }
+        if matches!(
+            event,
+            Event::Mouse(MouseEvent::CursorLeft | MouseEvent::DragLeft)
+                | Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
+        ) && self.cursor.get() == Some(MouseCursor::Hidden)
+        {
+            self.cursor.set(Some(MouseCursor::Default));
+            let _ = self.cx.set_mouse_cursor(MouseCursor::Default);
+        }
+        if let Event::Mouse(MouseEvent::WheelScrolled { delta, .. }) = &mut event {
+            *delta = self
+                .wheel
+                .borrow_mut()
+                .apply(*delta, self.wheel_policy, Instant::now());
+        }
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
             self.stop();
             return EventStatus::Captured;
@@ -592,7 +676,10 @@ impl WindowHandler for NativeAdapter {
                     .push([0, 0, size.width, size.height]);
             }
         } else {
-            self.send(Command::Event(event.clone()));
+            self.send(Command::Event(
+                event.clone(),
+                self.pointer.borrow().revision,
+            ));
         }
         self.requests.wake();
         match event {
@@ -638,6 +725,7 @@ fn worker<V: View>(
     );
     driver.display_paced = true;
     let mut scale = size.scale_factor;
+    let mut input_revision = 0;
     let mut gpu = None::<Offscreen>;
     let software_only = std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
     let mut init = (!software_only).then(|| GpuInit::new(true));
@@ -660,7 +748,8 @@ fn worker<V: View>(
                 driver.resized((size.physical.width, size.physical.height), scale);
                 continue;
             }
-            Command::Event(event) => {
+            Command::Event(event, revision) => {
+                input_revision = revision;
                 dispatch(&mut driver, shared, requests, scale, event);
                 continue;
             }
@@ -721,7 +810,12 @@ fn worker<V: View>(
         if requests.redraw.swap(false, Ordering::AcqRel) {
             driver.redraw();
         }
-        let (scene, capture, ime, update) = {
+        let pointer_hook = requests
+            .pointer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let (scene, capture, ime, update, hide_pointer) = {
             let mut shared = lock(shared);
             if let Some(a) = &mut accessibility {
                 let requested = a.wants_tree();
@@ -750,6 +844,12 @@ fn worker<V: View>(
                 shared.ui.focus_is_text(),
                 ime,
                 update,
+                pointer_hook.is_some_and(|hook| {
+                    hook.lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)(
+                        &shared.ui
+                    )
+                }),
             )
         };
         let mut patches = Vec::new();
@@ -857,6 +957,8 @@ fn worker<V: View>(
                 capture,
                 ime,
                 cursor: native_cursor(driver.cursor()),
+                hide_pointer,
+                input_revision,
                 accessibility: update,
                 demand: baseview::FrameDemand::At(at),
                 drag,
@@ -1002,7 +1104,7 @@ fn dispatch<V: View>(
     reason = "bounded GDI bitmap blit on the HWND's owning thread"
 )]
 #[cfg(target_os = "windows")]
-fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) {
+fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) -> Result<(), String> {
     #[repr(C)]
     struct Info {
         size: u32,
@@ -1042,13 +1144,11 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) {
         ) -> i32;
     }
     if w == 0 || h == 0 || pixels.len() != w as usize * h as usize {
-        return;
+        return Err("invalid bitmap patch".into());
     }
-    let Ok(handle) = window.window_handle() else {
-        return;
-    };
+    let handle = window.window_handle().map_err(|error| error.to_string())?;
     let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return;
+        return Err("window is not Win32".into());
     };
     let hwnd = handle.hwnd.get() as *mut std::ffi::c_void;
     let info = Info {
@@ -1069,25 +1169,30 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) {
     // w*h 32-bit pixels, and the top-down BITMAPINFO describes those bytes.
     unsafe {
         let dc = GetDC(hwnd);
-        if !dc.is_null() {
-            StretchDIBits(
-                dc,
-                x as i32,
-                y as i32,
-                w as i32,
-                h as i32,
-                0,
-                0,
-                w as i32,
-                h as i32,
-                pixels.as_ptr().cast(),
-                &info,
-                0,
-                0x00cc0020,
-            );
-            ReleaseDC(hwnd, dc);
+        if dc.is_null() {
+            return Err("GetDC failed".into());
+        }
+        let copied = StretchDIBits(
+            dc,
+            x as i32,
+            y as i32,
+            w as i32,
+            h as i32,
+            0,
+            0,
+            w as i32,
+            h as i32,
+            pixels.as_ptr().cast(),
+            &info,
+            0,
+            0x00cc0020,
+        );
+        ReleaseDC(hwnd, dc);
+        if copied == 0 || copied == -1 {
+            return Err("StretchDIBits failed".into());
         }
     }
+    Ok(())
 }
 
 struct WorkerClipboard {
@@ -1121,6 +1226,64 @@ mod mac_transport;
 #[cfg(test)]
 mod gpu_recovery_tests {
     use super::*;
+
+    #[test]
+    fn presentation_requires_every_native_patch_to_succeed() {
+        let requests = Requests::default();
+        let patches = || {
+            vec![
+                Patch {
+                    rect: [0, 0, 1, 1],
+                    pixels: vec![0],
+                },
+                Patch {
+                    rect: [1, 0, 1, 1],
+                    pixels: vec![0],
+                },
+            ]
+        };
+        let mut attempts = 0;
+        assert!(!submit_patches(
+            &requests,
+            (2, 1),
+            false,
+            "gpu",
+            patches(),
+            |_| {
+                attempts += 1;
+                attempts == 1
+            }
+        ));
+        assert!(requests.presentation().is_none());
+        assert!(submit_patches(
+            &requests,
+            (2, 1),
+            false,
+            "gpu",
+            patches(),
+            |_| true
+        ));
+        let presented = requests
+            .presentation()
+            .expect("successful native submission");
+        assert_eq!(presented.frames, 1);
+        assert!(!presented.software);
+        assert!(!submit_patches(
+            &requests,
+            (2, 1),
+            true,
+            "cpu",
+            patches(),
+            |_| false
+        ));
+        assert_eq!(
+            requests
+                .presentation()
+                .expect("prior successful frame")
+                .frames,
+            1
+        );
+    }
 
     #[test]
     fn render_panic_falls_back_to_cpu_and_the_worker_accepts_another_frame() {
@@ -1169,5 +1332,120 @@ mod gpu_recovery_tests {
         }
         drop(commands);
         worker.join().unwrap();
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod native_pointer_tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires an isolated X11 display"]
+    fn native_pointer_release_warps_to_the_hidden_origin() {
+        use x11rb::connection::Connection;
+        use x11rb::protocol::xproto::ConnectionExt;
+
+        struct Empty;
+        impl View for Empty {
+            fn build(&mut self, _: &mut mui::Ui, _: &mui::prelude::Input) -> mui::prelude::El {
+                mui::prelude::block(100., 100.)
+            }
+            fn changed(&mut self) -> bool {
+                false
+            }
+            fn request_resize(&mut self, _: u32, _: u32) -> bool {
+                false
+            }
+        }
+        struct Probe {
+            adapter: NativeAdapter,
+            hide: Arc<AtomicBool>,
+            phase: Cell<u8>,
+            done: Sender<()>,
+        }
+        impl WindowHandler for Probe {
+            fn frame_demand(&self) -> baseview::FrameDemand {
+                self.adapter.frame_demand()
+            }
+            fn on_frame(&self) -> Result<(), HandlerError> {
+                self.adapter.on_frame()?;
+                let move_to = |x, y| {
+                    self.adapter.on_event(Event::Mouse(MouseEvent::CursorMoved {
+                        position: PhysicalPosition::new(x, y),
+                        modifiers: Modifiers::empty(),
+                    }))
+                };
+                match self.phase.get() {
+                    0 => {
+                        platform::warp_pointer(&self.adapter.cx, 20., 30., 1.);
+                        move_to(20., 30.);
+                        self.hide.store(true, Ordering::Release);
+                        self.adapter.requests.redraw();
+                        self.phase.set(1);
+                    }
+                    1 if self.adapter.pointer.borrow().hidden() => {
+                        platform::warp_pointer(&self.adapter.cx, 70., 80., 1.);
+                        move_to(70., 80.);
+                        self.hide.store(false, Ordering::Release);
+                        self.adapter.requests.redraw();
+                        self.phase.set(2);
+                    }
+                    2 if !self.adapter.pointer.borrow().hidden() => {
+                        self.done.send(()).unwrap();
+                        self.phase.set(3);
+                    }
+                    _ => {}
+                }
+                Ok(())
+            }
+            fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+                self.adapter.resized(size)
+            }
+            fn on_event(&self, event: Event) -> EventStatus {
+                self.adapter.on_event(event)
+            }
+        }
+        let requests = Arc::new(Requests::default());
+        let hide = Arc::new(AtomicBool::new(false));
+        let hook_hide = hide.clone();
+        requests.on_pointer(Arc::new(Mutex::new(move |_: &mui::Ui| {
+            hook_hide.load(Ordering::Acquire)
+        })));
+        let shared = Arc::new(Mutex::new(Shared {
+            ui: mui::Ui::default(),
+            view: Empty,
+        }));
+        let (done, receive) = mpsc::channel();
+        let worker_requests = requests.clone();
+        let window = Window::create(
+            settings("MUI native pointer restoration", (100, 100))
+                .with_scale_factor_override(Some(1.)),
+            move |cx| {
+                Ok(Probe {
+                    adapter: build(shared, worker_requests, false)(cx)?,
+                    hide,
+                    phase: Cell::new(0),
+                    done,
+                })
+            },
+        )
+        .expect("pointer fixture window");
+        window.show().expect("show pointer fixture");
+        receive
+            .recv_timeout(Duration::from_secs(10))
+            .expect("pointer restored by native output");
+        let (connection, _) = x11rb::connect(None).expect("pointer query connection");
+        connection.flush().unwrap();
+        let pointer = connection
+            .query_pointer(requests.x11_window().expect("live X11 window"))
+            .unwrap()
+            .reply()
+            .unwrap();
+        window.close();
+        assert_eq!(
+            (pointer.win_x, pointer.win_y),
+            (20, 30),
+            "release restores the hidden origin"
+        );
     }
 }

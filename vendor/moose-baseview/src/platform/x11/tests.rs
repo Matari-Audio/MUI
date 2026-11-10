@@ -303,3 +303,267 @@ fn native_root_visual_checked_creation_zero_size_and_xembed_reparent() {
         conn.conn.free_colormap(map).unwrap().check().unwrap();
     }
 }
+
+#[test]
+fn threaded_controller_is_send_without_unsafe_assertions() {
+    fn assert_send<T: Send>() {}
+    assert_send::<super::window_thread::WindowThreadControl>();
+    assert_send::<crate::ThreadedWindow>();
+}
+
+struct OwnedHandler {
+    context: crate::WindowContext,
+    frames: Arc<AtomicUsize>,
+    dropped: std::sync::mpsc::Sender<thread::ThreadId>,
+    block: Option<(
+        Arc<std::sync::atomic::AtomicBool>,
+        std::sync::mpsc::Sender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+}
+impl WindowHandler for OwnedHandler {
+    fn frame_demand(&self) -> FrameDemand {
+        FrameDemand::Idle
+    }
+    fn poll(&self) {
+        if let Some((block, entered, release)) = &self.block {
+            if block.swap(false, Ordering::AcqRel) {
+                entered.send(()).unwrap();
+                release.recv_timeout(Duration::from_secs(3)).unwrap();
+            }
+        }
+    }
+    fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+        self.frames.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+    fn resized(&self, _: crate::WindowSize) -> std::result::Result<(), HandlerError> {
+        Ok(())
+    }
+    fn on_event(&self, _: crate::Event) -> crate::EventStatus {
+        crate::EventStatus::Ignored
+    }
+}
+impl Drop for OwnedHandler {
+    fn drop(&mut self) {
+        // Reading the non-Send context in Drop also exercises its owner-thread lifetime.
+        let _ = self.context.size();
+        self.dropped.send(thread::current().id()).unwrap();
+    }
+}
+
+fn embedded_settings(parent: u32) -> WindowSettings {
+    let mut settings = WindowSettings::new().with_size(PhysicalSize::new(96u32, 64));
+    settings.parent = Some(crate::ParentWindowHandle {
+        inner: ParentWindowHandle { window_id: NonZeroU32::new(parent).unwrap() },
+    });
+    settings
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_threaded_controller_moves_closes_and_reopens() {
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    conn.map_window(host).unwrap().check().unwrap();
+    for _ in 0..3 {
+        let frames = Arc::new(AtomicUsize::new(0));
+        let handler_frames = Arc::clone(&frames);
+        let (dropped, drop_rx) = std::sync::mpsc::channel();
+        let (owner, owner_rx) = std::sync::mpsc::channel();
+        let window = crate::ThreadedWindow::create(embedded_settings(host), move |context| {
+            owner.send(thread::current().id()).unwrap();
+            Ok(OwnedHandler { context, frames: handler_frames, dropped, block: None })
+        })
+        .unwrap();
+        window.show().unwrap();
+        wait_for_frame(&frames, 0);
+        let wake = window.waker();
+        let visibility = window.visibility_control();
+        assert_eq!(conn.query_tree(host).unwrap().reply().unwrap().children.len(), 1);
+        thread::spawn(move || window.close_bounded(Duration::ZERO)).join().unwrap();
+        assert_eq!(drop_rx.try_recv().unwrap(), owner_rx.recv().unwrap());
+        assert!(conn.query_tree(host).unwrap().reply().unwrap().children.is_empty());
+        let after = frames.load(Ordering::Acquire);
+        wake.request_redraw();
+        wake.request_poll();
+        visibility.set_visible(true);
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(frames.load(Ordering::Acquire), after);
+    }
+    conn.destroy_window(host).unwrap().check().unwrap();
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_embedded_close_waits_for_inflight_callback_and_native_drop() {
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    conn.map_window(host).unwrap().check().unwrap();
+    let block = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handler_block = Arc::clone(&block);
+    let (entered, enter_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let (dropped, drop_rx) = std::sync::mpsc::channel();
+    let window = crate::ThreadedWindow::create(embedded_settings(host), move |context| {
+        Ok(OwnedHandler {
+            context,
+            frames: Arc::new(AtomicUsize::new(0)),
+            dropped,
+            block: Some((handler_block, entered, release_rx)),
+        })
+    })
+    .unwrap();
+    window.show().unwrap();
+    block.store(true, Ordering::Release);
+    window.request_poll().unwrap();
+    enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (closed, close_rx) = std::sync::mpsc::channel();
+    let closer = thread::spawn(move || {
+        window.close_bounded(Duration::ZERO);
+        closed.send(()).unwrap();
+    });
+    assert_eq!(
+        close_rx.recv_timeout(Duration::from_millis(60)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "embedded close returned while a callback still held host/native state"
+    );
+    release.send(()).unwrap();
+    close_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    drop_rx.try_recv().unwrap();
+    assert!(conn.query_tree(host).unwrap().reply().unwrap().children.is_empty());
+    conn.destroy_window(host).unwrap().check().unwrap();
+    closer.join().unwrap();
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_parent_deletion_quiesces_threaded_window() {
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    conn.map_window(host).unwrap().check().unwrap();
+    let frames = Arc::new(AtomicUsize::new(0));
+    let handler_frames = Arc::clone(&frames);
+    let (dropped, drop_rx) = std::sync::mpsc::channel();
+    let window = crate::ThreadedWindow::create(embedded_settings(host), move |context| {
+        Ok(OwnedHandler { context, frames: handler_frames, dropped, block: None })
+    })
+    .unwrap();
+    window.show().unwrap();
+    wait_for_frame(&frames, 0);
+    let wake = window.waker();
+    conn.destroy_window(host).unwrap().check().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while window.is_open() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!window.is_open(), "parent deletion did not stop its child worker");
+    window.close();
+    drop_rx.try_recv().unwrap();
+    let after = frames.load(Ordering::Acquire);
+    wake.request_redraw();
+    thread::sleep(Duration::from_millis(20));
+    assert_eq!(frames.load(Ordering::Acquire), after);
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_embedded_startup_timeout_waits_for_builder_teardown() {
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    let (entered, enter_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let (dropped, drop_rx) = std::sync::mpsc::channel();
+    let (returned, return_rx) = std::sync::mpsc::channel();
+    let opener = thread::spawn(move || {
+        let result = crate::ThreadedWindow::create(embedded_settings(host), move |context| {
+            entered.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            Ok(OwnedHandler {
+                context,
+                frames: Arc::new(AtomicUsize::new(0)),
+                dropped,
+                block: None,
+            })
+        });
+        returned.send(result.is_err()).unwrap();
+    });
+    enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(
+        return_rx.recv_timeout(Duration::from_millis(300)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
+        "startup failure released the parent's lifetime before its builder finished"
+    );
+    release.send(()).unwrap();
+    assert!(return_rx.recv_timeout(Duration::from_secs(2)).unwrap());
+    drop_rx.try_recv().unwrap();
+    assert!(conn.query_tree(host).unwrap().reply().unwrap().children.is_empty());
+    conn.destroy_window(host).unwrap().check().unwrap();
+    opener.join().unwrap();
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_floating_bounded_close_revokes_work_and_allows_late_teardown() {
+    let block = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handler_block = Arc::clone(&block);
+    let (entered, enter_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let (dropped, drop_rx) = std::sync::mpsc::channel();
+    let window = crate::ThreadedWindow::create(WindowSettings::new(), move |context| {
+        Ok(OwnedHandler {
+            context,
+            frames: Arc::new(AtomicUsize::new(0)),
+            dropped,
+            block: Some((handler_block, entered, release_rx)),
+        })
+    })
+    .unwrap();
+    window.show().unwrap();
+    block.store(true, Ordering::Release);
+    window.request_poll().unwrap();
+    enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    let wake = window.waker();
+    let (closed, close_rx) = std::sync::mpsc::channel();
+    let closer = thread::spawn(move || {
+        window.close_bounded(Duration::ZERO);
+        closed.send(()).unwrap();
+    });
+    close_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(drop_rx.try_recv().is_err(), "blocked native callback unexpectedly finished");
+    wake.request_redraw();
+    release.send(()).unwrap();
+    drop_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    closer.join().unwrap();
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_failed_show_stops_worker_before_joining() {
+    let block = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let handler_block = Arc::clone(&block);
+    let (entered, enter_rx) = std::sync::mpsc::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    let (dropped, drop_rx) = std::sync::mpsc::channel();
+    let window = crate::ThreadedWindow::create(WindowSettings::new(), move |context| {
+        Ok(OwnedHandler {
+            context,
+            frames: Arc::new(AtomicUsize::new(0)),
+            dropped,
+            block: Some((handler_block, entered, release_rx)),
+        })
+    })
+    .unwrap();
+    window.show().unwrap();
+    block.store(true, Ordering::Release);
+    window.request_poll().unwrap();
+    enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    window.visibility_control().set_visible(false);
+    let (done, receive) = std::sync::mpsc::channel();
+    let runner = thread::spawn(move || done.send(window.run_until_closed().is_err()).unwrap());
+    thread::sleep(Duration::from_millis(75));
+    release.send(()).unwrap();
+    assert!(receive.recv_timeout(Duration::from_secs(2)).unwrap());
+    drop_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    runner.join().unwrap();
+}

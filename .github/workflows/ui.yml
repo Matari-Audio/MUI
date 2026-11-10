@@ -48,6 +48,16 @@ jobs:
           cargo build -p mui-preview --bin mui-preview --locked 2>&1 | tee ui-results/build.log
           cargo build -p mui-baseview --example native_editor --locked
           cargo build -p mui-winit --example native_windows --locked
+      - name: X11 hidden host reparenting
+        run: >-
+          env -u WAYLAND_DISPLAY xvfb-run -a
+          cargo test --manifest-path vendor/moose-baseview/Cargo.toml --locked
+          --test x11_visibility -- --ignored --test-threads=1
+      - name: Native editor policy ownership and pointer restoration
+        run: >-
+          env -u WAYLAND_DISPLAY xvfb-run -a -s '-screen 0 1280x1024x24 -noreset'
+          cargo test -p mui-baseview --lib --locked native_p
+          -- --ignored --test-threads=1
       - name: Production embedded editor lifecycle
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \

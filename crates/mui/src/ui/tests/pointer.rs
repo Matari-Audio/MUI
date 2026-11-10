@@ -513,6 +513,12 @@ fn shift_drags_a_value_fine_and_a_secondary_click_is_distinguishable() {
         ui.frame(tree(), None, moved, 0.016).unwrap();
         let mut v = 0.0;
         assert!(ui.drag("b", &mut v, 0.0..=1.0, 80.0, false));
+        let mut forced_fine = 0.0;
+        let mut forced_coarse = 0.0;
+        assert!(ui.drag_with_fine("b", &mut forced_fine, 0.0..=1.0, 80.0, false, true));
+        assert!(ui.drag_with_fine("b", &mut forced_coarse, 0.0..=1.0, 80.0, false, false));
+        assert!((forced_fine - FINE_DRAG).abs() < 1e-9);
+        assert!((forced_coarse - 1.0).abs() < 1e-9);
         ui.frame(tree(), None, at(90., 10., false), 0.016).unwrap();
         v
     };

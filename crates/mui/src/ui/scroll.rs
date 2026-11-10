@@ -306,7 +306,7 @@ impl Ui {
         };
         for s in scene.surfaces().rev() {
             let f = s.frame;
-            if !self.inside_surface(s, p) {
+            if !self.inside_surface(s, p) || !self.owns_wheel(scene, s) {
                 continue;
             }
             let wheel = s.local_pose().delta(wheel);
