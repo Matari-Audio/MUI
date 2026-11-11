@@ -30,12 +30,22 @@ git history; this keeps the behaviour and the reasons.
   with a safe default and one diagnostic per image. `mui-truce` and
   `mui-baseview` refuse to build with `panic = "abort"` unless
   `allow-panic-abort` is enabled; release profiles unwind.
-- **CPU first, then GPU.** A native editor presents a CPU frame before GPU
-  initialisation starts on a `mui-gpu-init` worker; the window thread owns the
-  surface throughout. Editors of one image share the device, queue and
-  pipelines through a `Weak` registry; each window keeps its own surface and
-  targets. Device loss rebuilds once and the others adopt it. Above 1 MP the
-  startup frame is background only. A submitted frame is not proof of scanout.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:88400618d1d55a66123a41abc6bda8f857238936761723dd0dafe0e831860b5a -->
+
+- **Native rendering.** The `mui-baseview` native worker polls GPU
+  initialisation before rendering its first frame, so a CPU frame is not
+  guaranteed first. It renders offscreen and sends bitmap patches to the
+  window thread for presentation. The separate surface-based handler starts
+  GPU initialisation after a successful CPU frame and owns its surface on the
+  window thread; its startup frame above 1,048,576 pixels is background only.
+  Compatible pinned editors share device, queue and pipelines through strong
+  static session references, with separate slots where needed; each keeps its
+  own targets. Device loss can trigger a shared context rebuild. A submitted
+  frame is not proof of scanout.
+
+<!-- /coderabbit-ai-generated:v1 -->
 - **Scale belongs to an editor**, never a process global: macOS uses AppKit's
   backing scale, Windows the host's, X11 defaults to 1.
 
@@ -66,10 +76,17 @@ git history; this keeps the behaviour and the reasons.
 - Ported upstream baseview #345 (DPI awareness), #351 (initial resize waits
   for a visible `WM_SHOWWINDOW`; rejection restores the old size) and #347
   (`WM_CAPTURECHANGED`).
-- Children are `WS_CLIPCHILDREN | WS_CLIPSIBLINGS`, created hidden and shown
-  with `SW_SHOWNOACTIVATE` after the handler exists; the first `WM_PAINT` fills
-  a dark placeholder. No `WS_EX_NOREDIRECTIONBITMAP` or `WS_EX_LAYERED`: the
-  GDI CPU presenter needs redirection. Presentation is opaque flip-model.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:1090bd3aa4ec51de3d52c7d3e356c1cac232969e88e76400dd7b3e0b8998afdc -->
+
+- Child windows use `WS_CLIPCHILDREN | WS_CLIPSIBLINGS`. They start hidden,
+  are shown with `SW_SHOWNOACTIVATE` after handler construction, and receive a
+  dark placeholder on the first `WM_PAINT`. They use neither
+  `WS_EX_NOREDIRECTIONBITMAP` nor `WS_EX_LAYERED`: the native worker presents
+  bitmap patches with GDI and needs redirection.
+
+<!-- /coderabbit-ai-generated:v1 -->
 - The pacer thread waits with `DwmFlush` (`Continuous`) or a condition
   variable (`Idle`/`At`); hidden ancestors re-check visibility every 50 ms.
 - Focus is taken only by a user press or an explicit `focus()`; capture
@@ -77,31 +94,54 @@ git history; this keeps the behaviour and the reasons.
 
 ## macOS
 
-- The view's root backing layer is a `CAMetalLayer` (`makeBackingLayer`,
-  `wantsLayer` before insertion), which wgpu adopts instead of adding a
-  sublayer. The initial colour is the window background, never black.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:c736252a1dc86f43887f19422810d24253ca8f08a7cdc096118fe898f4cb0bc5 -->
+
+- The root backing layer is a `CAMetalLayer`, established via
+  `makeBackingLayer` and `wantsLayer` before insertion. The native worker
+  presents bitmap patches in CoreAnimation sublayers; the separate
+  surface-based handler lets wgpu adopt the root. The initial colour is the
+  window background, never black.
+
+<!-- /coderabbit-ai-generated:v1 -->
 - Classes are registered once per view type per image and never disposed.
 - Close revokes wakes, invalidates display links and timers, removes
   observers and tracking areas and restores the previous responder before the
   handler is torn down; the `CADisplayLink` retain cycle is broken on detach.
 - Attaching never steals focus or changes the DAW window's mouse-move
   setting. Pacing: display link on macOS 14+, a run-loop timer before.
-- The flipped child is top-anchored natively; MUI's old per-tick re-anchor was
-  removed because it undid that on flipped parents. Softbuffer's CPU sublayer is
-  removed explicitly when switching to GPU.
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:e6bc3ac21003220fe69ec34a6f05995e147403a855cb70da153501b989dc7d9c -->
+
+- Native top anchoring handles flipped children; the old per-tick MUI
+  re-anchor was removed because it undid that behavior on flipped parents.
+  The surface-based handler removes Softbuffer's CPU sublayer when switching
+  to GPU.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ## Open: host threading (the largest known gap)
 
-On Linux, MUI drives parameter `begin/set/end` and resize from the X11 window
-thread. VST3 requires the host GUI thread for those calls, and truce 6.3
-forwards them synchronously; CLAP parameter writes are queued safely, but CLAP
-resize is not. `HostPump` (in `mui-truce`) queues and coalesces them with
-gesture ends preserved, but it is off by default because nothing pumps it yet.
-The fix belongs in the plugin wrapper: pump `Editor::idle` from VST3's
+<!-- coderabbit-ai-generated:v1 -->
+
+<!-- coderabbit-ai-generated-section:v1:363139674f935786275ca11dc4932e9c3b6def8006ce227dbca091990d9de285 -->
+
+On Linux, the X11 window thread drives parameter `begin/set/end` and resize.
+VST3 requires these calls on the host GUI thread, while truce 6.3 forwards them
+synchronously. CLAP parameter writes are queued safely, but resize is not.
+`HostPump` in `mui-truce` queues and coalesces these operations while preserving
+gesture ends. Native `MuiEditor` attaches and flushes it on the native window
+thread. On X11, host GUI thread delivery also requires changing where the pump
+attaches: a host-thread `Editor::idle` call alone cannot flush a pump attached
+to the window thread. The wrapper must pump `Editor::idle` from VST3's
 `IRunLoop` timer and CLAP's timer/posix-fd support or `on_main_thread`, flush
 outside the editor and model locks, and replay the instance scale when CLAP
-creates a new editor. See `docs/windows-editor-thread.md` for the convergence
-plan with moose.
+creates a new editor. The moose convergence plan is in
+`docs/windows-editor-thread.md`.
+
+<!-- /coderabbit-ai-generated:v1 -->
 
 ## Open: native qualification
 
