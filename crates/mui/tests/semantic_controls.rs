@@ -412,7 +412,7 @@ fn a_still_knob_keeps_its_painted_dial_across_frames() {
         drawn.map(|p| Arc::clone(&p.path)).collect::<Vec<_>>()
     };
     let (a, b) = (paths(&mut ui, 0.5), paths(&mut ui, 0.5));
-    assert_eq!(a.len(), 3);
+    assert_eq!((a.len(), b.len()), (3, 3), "the dial lost a stroke");
     assert!(
         a.iter().zip(&b).all(|(a, b)| Arc::ptr_eq(a, b)),
         "redrawn while still"
