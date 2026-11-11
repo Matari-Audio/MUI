@@ -22,7 +22,7 @@ impl Ui {
     pub fn group_focus_visible(&self, id: impl Into<Id>) -> bool {
         self.focus_visible && self.group_focused(id)
     }
-    fn in_group(&self, group: &str, target: Option<&str>) -> bool {
+    pub(super) fn in_group(&self, group: &str, target: Option<&str>) -> bool {
         let Some(scene) = &self.scene else {
             return false;
         };

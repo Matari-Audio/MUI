@@ -180,6 +180,9 @@ pub struct Ui {
     wheel_turned: Option<f64>,
     wheel_capture: Option<Id>,
     popup_wheel_scopes: Vec<Id>,
+    /// Open modals, innermost last, each with the focus it took over and
+    /// gives back when it goes. Only the innermost holds the keyboard.
+    focus_traps: Vec<(Id, Option<String>)>,
     /// Ids that read [`Ui::wheel`] while the tree now being handed in was
     /// built: no scroll node they sit in takes the wheel over them.
     wheel_claims: Vec<String>,
@@ -316,6 +319,7 @@ impl Ui {
             wheel_turned: None,
             wheel_capture: None,
             popup_wheel_scopes: Vec::new(),
+            focus_traps: Vec::new(),
             wheel_claims: Vec::new(),
             press_at: None,
             last_click: None,
@@ -540,6 +544,16 @@ impl Ui {
             self.popup_wheel_scopes.push(id);
         }
     }
+    /// Keep keyboard focus inside this modal and its descendants while it is
+    /// mounted: focus moves to its first stop, Tab cycles only its stops, and
+    /// whatever was focused before gets focus back when it goes.
+    pub fn trap_focus(&mut self, id: impl Into<Id>) {
+        let id = id.into();
+        if !self.focus_traps.iter().any(|(t, _)| *t == id) {
+            let before = self.focus.clone();
+            self.focus_traps.push((id, before));
+        }
+    }
     /// Retain the last scene in O(1), without borrowing this `Ui`.
     ///
     /// Hosts can take this snapshot under their model lock, then release the
@@ -706,6 +720,13 @@ impl Ui {
             return false;
         };
         if surface.disabled {
+            return false;
+        }
+        // Behind an open modal nothing answers, whatever route asks: the
+        // scrim stops presses and the trap keys, this stops assistive tech.
+        if let Some(trap) = self.focus_trap()
+            && !self.in_group(trap.as_str(), Some(action.id()))
+        {
             return false;
         }
         let role = surface.semantics.as_ref().map(|s| &s.role);
@@ -1295,7 +1316,8 @@ impl Ui {
             .filter_map(|(was, now)| Some((mui_scene::Id::runtime(&now), self.nodes.remove(&was)?)))
             .collect();
         self.nodes.extend(moved);
-        for k in [&mut self.focus, &mut self.double] {
+        let saved = self.focus_traps.iter_mut().map(|(_, f)| f);
+        for k in [&mut self.focus, &mut self.double].into_iter().chain(saved) {
             if let Some(new) = k.as_deref().and_then(to) {
                 *k = Some(new);
             }
@@ -1511,6 +1533,9 @@ impl Ui {
             // Recycling is an allocation optimization, never a scene clone.
             self.resolver.recycle(old);
         }
+        // A field that gets focus back builds its IME caret next frame:
+        // ask for that frame now rather than when input next arrives.
+        animating |= self.settle_focus_trap();
         let repaint_after = self.repaint_after();
         // Widgets read the clock while constructing the tree, before this frame
         // advances it. One catch-up frame makes the blink edge visible now,

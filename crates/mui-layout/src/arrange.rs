@@ -414,7 +414,16 @@ pub(crate) fn arrange<P>(
             continue;
         }
         let (pos, s) = if c.node.float {
-            let (p, s) = cell(c, inner, default);
+            // A pin is placed against the root, so it is sized against it
+            // too: a menu pinned from inside a short row is not squeezed to
+            // that row. Nor does it stretch: it has no flow to fill, so it
+            // takes its content size unless it anchors itself otherwise. Any
+            // other float belongs to this box.
+            let (p, s) = if c.node.rare().pin.is_some() {
+                cell(c, pins.root, (Align::Start, Align::Start))
+            } else {
+                cell(c, inner, default)
+            };
             match c
                 .node
                 .rare()
