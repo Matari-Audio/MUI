@@ -695,7 +695,17 @@ impl Ui {
                 .find(|k| self.in_group(trap.as_str(), Some(k)));
             self.focus_visible = false;
         }
-        self.focus != was
+        if self.focus == was {
+            return false;
+        }
+        // Reused memos would keep the old caret: rebuild both fields.
+        for k in [self.focus.as_deref(), was.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            self.hot.extend(scene.memos_at(k).map(|(id, _)| id));
+        }
+        true
     }
     pub(super) fn cycle_focus(&mut self, back: bool) {
         let Some(scene) = self.scene.as_ref() else {

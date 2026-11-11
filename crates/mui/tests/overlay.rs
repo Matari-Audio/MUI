@@ -317,3 +317,37 @@ fn stacked_dialogs_give_focus_back_in_order() {
     idle(&mut ui, &mut view, Input::default());
     assert!(ui.focused("field"), "the background lost its focus");
 }
+
+#[test]
+fn a_memoised_field_rebuilds_when_a_dialog_gives_focus_back() {
+    let mut ui = Ui::default();
+    let (open, builds) = (Cell::new(false), Cell::new(0));
+    let mut view = |ui: &mut Ui| {
+        let field = ui.memo("form", (), |ui| {
+            builds.set(builds.get() + 1);
+            let mut name = String::new();
+            col([text_input(ui, "name", &mut name).el.into_el()])
+        });
+        let mut root = col([field]).w(Len::Pct(100.)).h(Len::Pct(100.));
+        let mut o = open.get();
+        let body = col![button(ui, "ok", "OK").el.into_el()];
+        if let Some(d) = dialog(ui, "ask", &mut o, body) {
+            root = root.push(d);
+        }
+        open.set(o);
+        root
+    };
+    idle(&mut ui, &mut view, Input::default());
+    ui.focus("name");
+    open.set(true);
+    for _ in 0..3 {
+        idle(&mut ui, &mut view, Input::default());
+    }
+    assert!(ui.focused("ok"));
+    open.set(false);
+    idle(&mut ui, &mut view, Input::default());
+    assert!(ui.focused("name"), "focus did not come back");
+    let before = builds.get();
+    idle(&mut ui, &mut view, Input::default());
+    assert!(builds.get() > before, "the field kept its unfocused build");
+}

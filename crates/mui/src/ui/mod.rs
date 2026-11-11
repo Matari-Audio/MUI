@@ -1316,7 +1316,8 @@ impl Ui {
             .filter_map(|(was, now)| Some((mui_scene::Id::runtime(&now), self.nodes.remove(&was)?)))
             .collect();
         self.nodes.extend(moved);
-        for k in [&mut self.focus, &mut self.double] {
+        let saved = self.focus_traps.iter_mut().map(|(_, f)| f);
+        for k in [&mut self.focus, &mut self.double].into_iter().chain(saved) {
             if let Some(new) = k.as_deref().and_then(to) {
                 *k = Some(new);
             }
