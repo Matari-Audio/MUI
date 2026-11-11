@@ -1,7 +1,5 @@
 name: Material weld reference
 on:
-  pull_request:
-    paths: [tools/material-weld-demo/**, .github/workflows/material-weld-reference.yml]
   push:
     branches: [main]
     paths: [tools/material-weld-demo/**, .github/workflows/material-weld-reference.yml]

@@ -3,8 +3,6 @@ on:
   push:
     branches: [main]
     paths: [crates/**, playground/**, tools/ci/playground.py, Cargo.toml, Cargo.lock, rust-toolchain.toml, .github/workflows/playground.yml]
-  pull_request:
-    paths: [crates/**, playground/**, tools/ci/playground.py, Cargo.toml, Cargo.lock, rust-toolchain.toml, .github/workflows/playground.yml]
   workflow_dispatch:
 permissions:
   contents: read

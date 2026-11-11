@@ -1,0 +1,37 @@
+name: PR
+# The merge gate, nothing more: fmt, then clippy and tests for the packages the
+# branch changed and their dependents (tools/verify.sh pr). Platforms, media,
+# GPU and native UI run after merge (verify.yml).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pr-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: pr
+          workspaces: |
+            . -> target
+            media -> target
+      - run: |
+          cargo fetch --locked
+          cargo fetch --manifest-path media/Cargo.toml --locked
+      - run: ./tools/verify.sh pr
+        env:
+          VERIFY_BASE: origin/${{ github.base_ref || 'main' }}
