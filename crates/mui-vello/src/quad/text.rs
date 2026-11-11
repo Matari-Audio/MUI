@@ -105,7 +105,7 @@ impl Atlas {
         text: &mui_scene::Text,
         xf: Affine,
         template: &Instance,
-        out: &mut Vec<u8>,
+        out: &mut Vec<Instance>,
     ) -> Result<usize, Failure> {
         let mut sink = Sink {
             template,
@@ -237,7 +237,7 @@ fn mask(
 /// as an instance, and fails on anything else.
 struct Sink<'a> {
     template: &'a Instance,
-    out: &'a mut Vec<u8>,
+    out: &'a mut Vec<Instance>,
     count: usize,
     transform: Affine,
     paint_transform: Affine,
@@ -287,9 +287,7 @@ impl glifo::DrawSink for Sink<'_> {
             -cell.x as f32,
             -cell.y as f32,
         ];
-        for v in one.as_flattened() {
-            self.out.extend_from_slice(&v.to_ne_bytes());
-        }
+        self.out.push(one);
         self.count += 1;
     }
     fn push_clip_layer(&mut self, _: &BezPath) {

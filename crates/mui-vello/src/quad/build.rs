@@ -45,6 +45,67 @@ pub fn code(shape: f32, paint: f32) -> f32 {
     shape * 8. + paint
 }
 
+/// No box: what [`union`] starts from, and what overlaps nothing.
+pub const EMPTY: [f32; 4] = [f32::INFINITY, f32::INFINITY, -f32::INFINITY, -f32::INFINITY];
+
+pub fn union(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+    [
+        a[0].min(b[0]),
+        a[1].min(b[1]),
+        a[2].max(b[2]),
+        a[3].max(b[3]),
+    ]
+}
+
+pub fn overlaps(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]
+}
+
+/// The device pixels an instance's quad can reach, a pixel generous, cut to
+/// its device clip. `quad.wgsl` grows a shape's rect by one device pixel in
+/// local units (here bounded above by the Frobenius norm over the
+/// determinant) and half its stroke.
+pub fn device_box(i: &Instance) -> [f32; 4] {
+    let [a, b, c, d] = i[0];
+    let [e, f, ..] = i[1];
+    let shape = ((i[3][0] % 64.) / 8.).floor();
+    let r = if shape == SHAPE_GLYPH {
+        i[2]
+    } else {
+        let mut grow = (a * a + b * b + c * c + d * d).sqrt() / (a * d - b * c).abs();
+        if shape == SHAPE_STROKE {
+            grow += 0.5 * i[3][3];
+        }
+        let [x0, y0, x1, y1] = i[2];
+        let (x0, y0, x1, y1) = (x0 - grow, y0 - grow, x1 + grow, y1 + grow);
+        [(x0, y0), (x1, y0), (x0, y1), (x1, y1)]
+            .map(|(x, y)| {
+                let (px, py) = (a * x + c * y + e, b * x + d * y + f);
+                [px, py, px, py]
+            })
+            .into_iter()
+            .fold(EMPTY, union)
+    };
+    let clip = i[10];
+    [
+        r[0].max(clip[0]) - 1.,
+        r[1].max(clip[1]) - 1.,
+        r[2].min(clip[2]) + 1.,
+        r[3].min(clip[3]) + 1.,
+    ]
+}
+
+/// An instance that covers a `size` target with transparent: drawn without
+/// blending, it clears what the scissor leaves open.
+pub fn clear(size: [u32; 2]) -> Instance {
+    let mut out = [[0.; 4]; SLOTS];
+    out[0] = [1., 0., 0., 1.];
+    out[2] = [-1., -1., size[0] as f32 + 1., size[1] as f32 + 1.];
+    out[3] = [code(SHAPE_FILL, 0.), 0., 0., 0.];
+    out[10] = OPEN;
+    out
+}
+
 /// The largest glyph, in device pixels per em, the atlas takes. A larger run
 /// is [`Reason::TextSize`].
 pub const MAX_GLYPH_PX: f32 = 256.;

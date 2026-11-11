@@ -170,6 +170,9 @@ impl std::error::Error for Error {}
 pub struct Frame {
     /// Whether `render` encoded a render pass at all.
     pub drawn: bool,
+    /// The device rect (`x y w h`) a partial frame redrew; `None` for a
+    /// frame drawn whole or not at all.
+    pub damage: Option<[u32; 4]>,
     /// Instances drawn.
     pub instances: usize,
     /// Draw calls: one, plus one each time an image instance needs a
@@ -199,6 +202,8 @@ const ATTRIBUTES: [wgpu::VertexAttribute; SLOTS] = wgpu::vertex_attr_array![
 /// reused, a glyph atlas texture and one texture per image.
 pub struct QuadRenderer {
     pipeline: wgpu::RenderPipeline,
+    /// The same pass unblended: it draws [`build::clear`] under a scissor.
+    clear: wgpu::RenderPipeline,
     uniform: wgpu::Buffer,
     view_layout: wgpu::BindGroupLayout,
     image_layout: wgpu::BindGroupLayout,
@@ -211,14 +216,16 @@ pub struct QuadRenderer {
     cpu: Instances,
     groups: Vec<wgpu::BindGroup>,
     frame: Frame,
+    retained: Option<Retained>,
     /// A profiling hook: when set, the render pass writes its start and end
     /// to queries 0 and 1 of this set (the device needs `TIMESTAMP_QUERY`).
     pub timestamps: Option<wgpu::QuerySet>,
 }
 
-/// The CPU side of a frame: the walk, the instance bytes it writes and the
-/// glyph atlas, all kept, so a steady frame allocates nothing.
+/// The CPU side of a frame: the walk, the instances it writes and the glyph
+/// atlas, all kept, so a steady frame allocates nothing.
 struct Instances {
+    list: Vec<Instance>,
     bytes: Vec<u8>,
     walk: Walk,
     atlas: text::Atlas,
@@ -226,76 +233,116 @@ struct Instances {
     cache: Cache,
     /// Where each draw call starts, and the image it binds.
     runs: Vec<(u32, Option<mui_scene::Image>)>,
+    /// Each entry's device box, as of the last frame that built it.
+    boxes: Vec<[f32; 4]>,
 }
+
+/// Which entries a build writes, given an entry's index and its box from
+/// the last frame that built it.
+type Keep<'a> = &'a dyn Fn(usize, [f32; 4]) -> bool;
 
 impl Instances {
     fn new(side: u16, pages: usize) -> Self {
         Self {
+            list: Vec::new(),
             bytes: Vec::new(),
             walk: Walk::default(),
             atlas: text::Atlas::new(side, pages),
             cache: Cache::default(),
             runs: Vec::new(),
+            boxes: Vec::new(),
         }
     }
 
-    /// The instance bytes of `paint`, into `self.bytes`; their count. A
-    /// frame the atlas cannot hold empties the atlas and tries once more.
-    fn build(&mut self, paint: &[Painted], transform: Affine) -> Result<usize, Error> {
+    /// Start a frame of builds.
+    fn begin(&mut self, entries: usize) {
         self.cache.tick();
         self.atlas.begin();
         self.atlas.flushed = false;
-        match self.list(paint, transform) {
+        self.boxes.resize(entries, build::EMPTY);
+    }
+
+    /// The instances of the entries of `paint` that `keep` names, into
+    /// `self.list`, each kept entry's box updated; their count. Every entry
+    /// is walked, so an unsupported one is refused whether kept or not. A
+    /// frame the atlas cannot hold empties the atlas and tries once more.
+    fn build(&mut self, paint: &[Painted], transform: Affine, keep: Keep) -> Result<usize, Error> {
+        match self.list(paint, transform, keep) {
             Err(Error::Unsupported {
                 reason: Reason::GlyphBudget,
                 ..
             }) => {
                 self.atlas.flush();
-                self.list(paint, transform)
+                self.list(paint, transform, keep)
             }
             done => done,
         }
     }
 
-    fn list(&mut self, paint: &[Painted], transform: Affine) -> Result<usize, Error> {
-        self.bytes.clear();
+    fn list(&mut self, paint: &[Painted], transform: Affine, keep: Keep) -> Result<usize, Error> {
+        self.list.clear();
         self.runs.clear();
         self.runs.push((0, None));
         self.walk.begin();
         let mut one: Instance = [[0.; 4]; SLOTS];
-        let mut count = 0;
         for (index, p) in paint.iter().enumerate() {
             let refuse = |reason| Error::Unsupported { index, reason };
-            match self.walk.entry(p, transform, &mut one).map_err(refuse)? {
-                Drawn::Nothing => continue,
-                Drawn::One => {}
-                Drawn::Image(image) => match self.runs.last_mut() {
-                    Some((_, held @ None)) => *held = Some(image.clone()),
-                    Some((_, Some(held))) if Arc::ptr_eq(&held.rgba, &image.rgba) => {}
-                    _ => self.runs.push((count as u32, Some(image.clone()))),
-                },
+            let drawn = self.walk.entry(p, transform, &mut one).map_err(refuse)?;
+            if !keep(index, self.boxes[index]) {
+                continue;
+            }
+            let start = self.list.len();
+            match drawn {
+                Drawn::Nothing => {}
+                Drawn::One => self.list.push(one),
+                Drawn::Image(image) => {
+                    match self.runs.last_mut() {
+                        Some((_, held @ None)) => *held = Some(image.clone()),
+                        Some((_, Some(held))) if Arc::ptr_eq(&held.rgba, &image.rgba) => {}
+                        _ => self.runs.push((start as u32, Some(image.clone()))),
+                    }
+                    self.list.push(one);
+                }
                 Drawn::Text(text) => {
                     let xf = crate::placed(transform, p);
-                    count += self
-                        .atlas
-                        .draw(&mut self.cache, text, xf, &one, &mut self.bytes)
+                    self.atlas
+                        .draw(&mut self.cache, text, xf, &one, &mut self.list)
                         .map_err(|f| {
                             refuse(match f {
                                 text::Failure::Colour => Reason::Text,
                                 text::Failure::Full => Reason::GlyphBudget,
                             })
                         })?;
-                    continue;
                 }
             }
-            count += 1;
-            for v in one.as_flattened() {
-                self.bytes.extend_from_slice(&v.to_ne_bytes());
-            }
+            self.boxes[index] = self.list[start..]
+                .iter()
+                .map(build::device_box)
+                .fold(build::EMPTY, build::union);
         }
-        Ok(count)
+        Ok(self.list.len())
+    }
+
+    /// `self.list` as the bytes of the instance buffer.
+    fn encode(&mut self) {
+        self.bytes.clear();
+        for v in self.list.as_flattened().as_flattened() {
+            self.bytes.extend_from_slice(&v.to_ne_bytes());
+        }
     }
 }
+
+/// What the target holds after the last frame drawn on it.
+struct Retained {
+    paint: Vec<Painted>,
+    transform: Affine,
+    size: [u32; 2],
+    target: wgpu::TextureView,
+}
+
+/// A partial frame pays while its damage is at most this share of the
+/// target; past it the frame redraws whole.
+const PARTIAL: f32 = 0.5;
 
 impl QuadRenderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
@@ -369,41 +416,45 @@ impl QuadRenderer {
             dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
             operation: wgpu::BlendOperation::Add,
         };
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("mui quad"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: STRIDE,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &ATTRIBUTES,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState {
-                        color: over,
-                        alpha: over,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = |blend| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("mui quad"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: STRIDE,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &ATTRIBUTES,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let clear = pipeline(None);
+        let pipeline = pipeline(Some(wgpu::BlendState {
+            color: over,
+            alpha: over,
+        }));
         let uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("mui quad view"),
             size: 16,
@@ -423,6 +474,7 @@ impl QuadRenderer {
         cpu.walk.max_image = limits.max_texture_dimension_2d;
         Self {
             pipeline,
+            clear,
             uniform,
             view_layout,
             image_layout,
@@ -434,6 +486,7 @@ impl QuadRenderer {
             cpu,
             groups: Vec::new(),
             frame: Frame::default(),
+            retained: None,
             timestamps: None,
         }
     }
@@ -443,10 +496,22 @@ impl QuadRenderer {
         self.frame
     }
 
-    /// Clear `target` (`size` pixels) to transparent and draw `paint` on it
-    /// under `transform`, the transform [`crate::paint`] takes: the device
-    /// scale, usually. Builds every instance first, so a list with an
-    /// unsupported entry draws nothing and names the first such entry.
+    /// Forget what the last target holds: the next frame redraws whole.
+    /// Call it when something other than this pass drew on the target.
+    pub fn invalidate(&mut self) {
+        self.retained = None;
+    }
+
+    /// Draw `paint` on `target` (`size` pixels, cleared to transparent
+    /// first) under `transform`, the transform [`crate::paint`] takes: the
+    /// device scale, usually. Every entry is checked first, so a list with
+    /// an unsupported entry draws nothing and names the first such entry.
+    ///
+    /// The pass assumes `target` still holds what it drew last, when it is
+    /// the same view (see [`QuadRenderer::invalidate`]). Then a frame whose
+    /// list, transform and size are unchanged draws nothing, and one where
+    /// entries changed in place redraws only the device rect they cover,
+    /// old and new, under a scissor; any other frame redraws whole.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -459,16 +524,55 @@ impl QuadRenderer {
         if size.contains(&0) || !transform.as_coeffs().iter().all(|v| v.is_finite()) {
             return Err(Error::Target);
         }
-        let count = self.cpu.build(paint, transform)?;
+        let kept = self
+            .retained
+            .take()
+            .filter(|r| r.transform == transform && r.size == size && r.target == *target);
+        let atlas_bytes = self.frame.atlas_bytes;
+        self.frame = Frame {
+            atlas_bytes,
+            ..Frame::default()
+        };
+        if kept.as_ref().is_some_and(|r| r.paint == paint) {
+            self.retained = kept;
+            return Ok(());
+        }
+        self.cpu.begin(paint.len());
+        let damage = match &kept {
+            Some(r) => self.damage(&r.paint, paint, transform, size)?,
+            None => None,
+        };
+        let count = match damage {
+            Some(d) => {
+                let d = d.map(|v| v as f32);
+                let rect = [d[0], d[1], d[0] + d[2], d[1] + d[3]];
+                self.cpu
+                    .build(paint, transform, &|_, b| build::overlaps(b, rect))?
+            }
+            None => self.cpu.build(paint, transform, &|_, _| true)?,
+        };
+        let mut retained = kept.map(|r| r.paint).unwrap_or_default();
+        retained.clear();
+        retained.extend_from_slice(paint);
+        self.retained = Some(Retained {
+            paint: retained,
+            transform,
+            size,
+            target: target.clone(),
+        });
         self.upload_glyphs(device, queue);
         self.bind_images(device, queue);
+        if damage.is_some_and(|d| d[2] == 0 || d[3] == 0) {
+            // Changed entries that cover no pixel.
+            return Ok(());
+        }
+        self.cpu.list.push(build::clear(size));
+        self.cpu.encode();
         if self.instances.size() < self.cpu.bytes.len() as u64 {
-            let want = (count as u64).next_power_of_two();
+            let want = (count as u64 + 1).next_power_of_two();
             self.instances = instance_buffer(device, want);
         }
-        if !self.cpu.bytes.is_empty() {
-            queue.write_buffer(&self.instances, 0, &self.cpu.bytes);
-        }
+        queue.write_buffer(&self.instances, 0, &self.cpu.bytes);
         let view = [size[0] as f32, size[1] as f32, 0., 0.];
         queue.write_buffer(&self.uniform, 0, view.map(f32::to_ne_bytes).as_flattened());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -483,7 +587,10 @@ impl QuadRenderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        load: match damage {
+                            Some(_) => wgpu::LoadOp::Load,
+                            None => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        },
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -498,31 +605,79 @@ impl QuadRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if count > 0 {
-                pass.set_pipeline(&self.pipeline);
-                pass.set_bind_group(0, &self.bind, &[]);
-                pass.set_vertex_buffer(0, self.instances.slice(..self.cpu.bytes.len() as u64));
-                let mut groups = self.groups.iter();
-                let runs = &self.cpu.runs;
-                for (i, (start, image)) in runs.iter().enumerate() {
-                    let end = runs.get(i + 1).map_or(count as u32, |r| r.0);
-                    let group = match image {
-                        Some(_) => groups.next().expect("a group per image run"),
-                        None => &self.no_image,
-                    };
-                    if end > *start {
-                        pass.set_bind_group(1, group, &[]);
-                        pass.draw(0..4, *start..end);
-                        draws += 1;
-                    }
+            pass.set_bind_group(0, &self.bind, &[]);
+            pass.set_bind_group(1, &self.no_image, &[]);
+            pass.set_vertex_buffer(0, self.instances.slice(..self.cpu.bytes.len() as u64));
+            if let Some([x, y, w, h]) = damage {
+                pass.set_scissor_rect(x, y, w, h);
+                pass.set_pipeline(&self.clear);
+                pass.draw(0..4, count as u32..count as u32 + 1);
+            }
+            pass.set_pipeline(&self.pipeline);
+            let mut groups = self.groups.iter();
+            let runs = &self.cpu.runs;
+            for (i, (start, image)) in runs.iter().enumerate() {
+                let end = runs.get(i + 1).map_or(count as u32, |r| r.0);
+                let group = match image {
+                    Some(_) => groups.next().expect("a group per image run"),
+                    None => &self.no_image,
+                };
+                if end > *start {
+                    pass.set_bind_group(1, group, &[]);
+                    pass.draw(0..4, *start..end);
+                    draws += 1;
                 }
             }
         }
         queue.submit([encoder.finish()]);
         self.frame.drawn = true;
+        self.frame.damage = damage;
         self.frame.instances = count;
         self.frame.draws = draws;
         Ok(())
+    }
+
+    /// The device rect (`x y w h`) a frame redraws when `paint` replaces
+    /// `old` on a target that holds `old`: the old and new boxes of every
+    /// changed entry, with the changed entries built to learn their new
+    /// boxes. `None` when the frame must redraw whole: the list grew or
+    /// shrank, a clip changed (it moves what is inside it), or the damage
+    /// is past [`PARTIAL`] of the target.
+    fn damage(
+        &mut self,
+        old: &[Painted],
+        paint: &[Painted],
+        transform: Affine,
+        size: [u32; 2],
+    ) -> Result<Option<[u32; 4]>, Error> {
+        if old.len() != paint.len() {
+            return Ok(None);
+        }
+        let clip =
+            |p: &Painted| matches!(p.layer, mui_scene::Layer::Clip | mui_scene::Layer::Unclip);
+        let changed: Vec<usize> = (0..paint.len()).filter(|&i| old[i] != paint[i]).collect();
+        if changed.iter().any(|&i| clip(&old[i]) || clip(&paint[i])) {
+            return Ok(None);
+        }
+        let mut damage = changed
+            .iter()
+            .map(|&i| self.cpu.boxes[i])
+            .fold(build::EMPTY, build::union);
+        self.cpu
+            .build(paint, transform, &|i, _| changed.binary_search(&i).is_ok())?;
+        damage = changed
+            .iter()
+            .map(|&i| self.cpu.boxes[i])
+            .fold(damage, build::union);
+        let [w, h] = size.map(|v| v as f32);
+        let x0 = damage[0].floor().clamp(0., w);
+        let y0 = damage[1].floor().clamp(0., h);
+        let x1 = damage[2].ceil().clamp(x0, w);
+        let y1 = damage[3].ceil().clamp(y0, h);
+        if (x1 - x0) * (y1 - y0) > PARTIAL * w * h {
+            return Ok(None);
+        }
+        Ok(Some([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32)))
     }
 
     /// Bring the atlas texture up to date with what the frame rasterised:

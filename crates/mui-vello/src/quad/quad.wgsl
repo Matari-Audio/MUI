@@ -217,7 +217,14 @@ fn blurred(q: vec2<f32>, c1: vec4<f32>, c2: vec4<f32>, r: vec4<f32>) -> f32 {
     let d_neg = min(max(x0, y0), 0.0);
     let d = d_pos + d_neg - c1.w;
     let min_edge = min(width, height);
-    return c1.z * (erf7(c1.x * (min_edge + d)) - erf7(c1.x * d));
+    let hi = c1.x * (min_edge + d);
+    let lo = c1.x * d;
+    // Deep inside, both terms are within 2e-5 of +-1, far below a u8 step:
+    // skip them, as Rune's `shadow` skips its interior.
+    if hi >= 3.5 && lo <= -3.5 {
+        return 2.0 * c1.z;
+    }
+    return c1.z * (erf7(hi) - erf7(lo));
 }
 
 // The gradient parameter at `q`; `paint` 1 linear, 2 radial, 3 sweep.

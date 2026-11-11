@@ -174,15 +174,53 @@ fn a_steady_frame_reuses_its_buffers() {
         .clip(),
     );
     let mut cpu = Instances::new(1024, 4);
-    let first = cpu.build(&paint, Affine::IDENTITY).expect("supported");
+    let build = |cpu: &mut Instances| {
+        cpu.begin(paint.len());
+        let count = cpu.build(&paint, Affine::IDENTITY, &|_, _| true);
+        cpu.encode();
+        count
+    };
+    let first = build(&mut cpu).expect("supported");
     let (at, capacity) = (cpu.bytes.as_ptr(), cpu.bytes.capacity());
+    let list = (cpu.list.as_ptr(), cpu.list.capacity());
     let clips = cpu.walk.clip_capacity();
     for _ in 0..3 {
-        assert_eq!(cpu.build(&paint, Affine::IDENTITY), Ok(first));
+        assert_eq!(build(&mut cpu), Ok(first));
         assert_eq!((cpu.bytes.as_ptr(), cpu.bytes.capacity()), (at, capacity));
+        assert_eq!((cpu.list.as_ptr(), cpu.list.capacity()), list);
         assert_eq!(cpu.walk.clip_capacity(), clips);
     }
     assert_eq!(cpu.bytes.len(), first * SLOTS * 16);
+}
+
+/// Every instance's quad lies inside its device box, which damage relies
+/// on: the box of each corner the vertex shader can place.
+#[test]
+fn an_instance_box_holds_its_quad() {
+    let mut one = build::clear([10, 10]);
+    // Rotated, scaled, stroked.
+    let (s, c) = 0.7_f32.sin_cos();
+    one[0] = [2. * c, 2. * s, -1.5 * s, 1.5 * c];
+    one[1] = [40., 30., 0., 0.];
+    one[2] = [-5., -3., 12., 9.];
+    one[3] = [build::code(1., 0.), 0., 2., 4.];
+    let b = build::device_box(&one);
+    let [a, bb, cc, d] = one[0];
+    let det = a * d - bb * cc;
+    let e = 0.5 * (a * a + bb * bb + cc * cc + d * d);
+    let grow = (e + (e * e - det * det).max(0.).sqrt()).sqrt() / det.abs() + 2.;
+    for (x, y) in [
+        (-5. - grow, -3. - grow),
+        (12. + grow, -3. - grow),
+        (-5. - grow, 9. + grow),
+        (12. + grow, 9. + grow),
+    ] {
+        let (px, py) = (a * x + cc * y + 40., bb * x + d * y + 30.);
+        assert!(
+            b[0] < px && px < b[2] && b[1] < py && py < b[3],
+            "{px},{py} outside {b:?}"
+        );
+    }
 }
 
 /// Text the atlas cannot hold at the right size or angle is refused, by
