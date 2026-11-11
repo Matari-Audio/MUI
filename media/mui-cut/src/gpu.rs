@@ -204,7 +204,15 @@ impl GpuCanvas {
             self.vello_size = size;
         }
         let sparse = &mut self.inner;
-        sparse.upload(&self.device, &self.queue, assets.images());
+        // Plugin vector captures carry images of their own, not in `assets`.
+        let in_scenes = scenes
+            .iter()
+            .flat_map(|(s, _)| &s.paint)
+            .filter_map(|p| match &p.paint {
+                mui_scene::Paint::Image { image, .. } => Some(&**image),
+                _ => None,
+            });
+        sparse.upload(&self.device, &self.queue, assets.images().chain(in_scenes));
         sparse.scene.reset();
         if let Some((bg, [fw, fh], view)) = background {
             sparse.scene.set_transform(view);

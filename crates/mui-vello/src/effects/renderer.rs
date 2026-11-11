@@ -327,9 +327,8 @@ impl GpuRenderer {
                 .shown
                 .as_ref()
                 .is_some_and(|(paint, at)| *at == xf && *paint == resolved.paint)
-            && resolved
-                .external_welds()
-                .all(|(key, e)| self.welds.is_current(key, &e.material))
+            && crate::quad::visible_welds(resolved, xf, self.size)
+                .all(|(key, material)| self.welds.is_current(key, material))
     }
 
     /// Device rectangles the last successful render changed on `target`.

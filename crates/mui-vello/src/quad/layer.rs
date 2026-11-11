@@ -284,12 +284,17 @@ impl Layers {
         Ok(())
     }
 
-    /// Charge a backdrop's snapshot and its blur's three low targets.
+    /// Charge a backdrop's snapshot and its blur's low targets: two, plus a
+    /// downsampled copy when it blurs at a reduced scale.
     pub fn charge_backdrop(&mut self, id: u16) -> Result<(), Reason> {
         let s = &self.surfaces[usize::from(id)];
         let (full, low) = ([s.rect[2], s.rect[3]], s.texels());
+        let lows = match s.kind {
+            Kind::Backdrop { scale, .. } if scale > 1 => 3,
+            _ => 2,
+        };
         self.charge(full)?;
-        (0..3).try_for_each(|_| self.charge(low))
+        (0..lows).try_for_each(|_| self.charge(low))
     }
 
     /// The innermost layer closes at entry `entry`: folded into its parent,

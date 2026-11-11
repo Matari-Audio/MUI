@@ -166,6 +166,26 @@ fn mask(scale: f64) -> ResolvedScene {
     scene_at(ground(vec![card]), scale)
 }
 
+/// [`mask`] with a six-stop ramp: more stops than one instance carries.
+fn mask_ramp(scale: f64) -> ResolvedScene {
+    let card = block(160., 100.)
+        .radius(8.)
+        .fill(rgba(0.9, 0.9, 0.9, 1.))
+        .mask(Gradient::linear(
+            90.,
+            [
+                (0., rgba(1., 0., 0., 0.9)),
+                (0.2, rgba(1., 1., 0., 0.9)),
+                (0.4, rgba(0., 1., 0., 0.9)),
+                (0.6, rgba(0., 1., 1., 0.9)),
+                (0.8, rgba(0., 0., 1., 0.9)),
+                (1., rgba(1., 0., 1., 0.9)),
+            ],
+        ))
+        .at(80., 50.);
+    scene_at(ground(vec![card]), scale)
+}
+
 /// Frosted panels over stripes: a rounded one and a star, each blur radius
 /// in turn, with a translucent tint.
 fn backdrops(blur: f64) -> impl Fn(f64) -> ResolvedScene {
@@ -251,6 +271,7 @@ fn layers_match_vello_cpu() {
     compare(&mut gpu, f, "blends", corners(32, 0.31), blends);
     compare(&mut gpu, f, "nested", corners(27, 0.24), nested);
     compare(&mut gpu, f, "mask", corners(49, 0.04), mask);
+    compare(&mut gpu, f, "mask ramp", corners(49, 0.04), mask_ramp);
     for (blur, limit) in [
         (2., corners(23, 0.09)),
         (6., corners(25, 0.21)),

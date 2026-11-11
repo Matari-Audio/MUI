@@ -490,21 +490,7 @@ impl QuadRenderer {
         if size.contains(&0) || !transform.as_coeffs().iter().all(|v| v.is_finite()) {
             return Err(Error::Target);
         }
-        let screen = crate::kurbo::Rect::new(0., 0., f64::from(size[0]), f64::from(size[1]));
-        let wanted: Vec<_> = scene
-            .paint
-            .iter()
-            .filter(|p| p.layer == Layer::External)
-            .filter_map(|p| {
-                let e = scene.external_weld(&p.key)?;
-                let b = e.bounds();
-                let local = crate::kurbo::Rect::new(b.x0, b.y0, b.x1, b.y1);
-                let on = crate::placed(transform, p)
-                    .transform_rect_bbox(local)
-                    .overlaps(screen);
-                on.then_some((p.key.as_ref(), &*e.material))
-            })
-            .collect();
+        let wanted: Vec<_> = visible_welds(scene, transform, size).collect();
         let weld = |e: crate::effects::Error| Error::Weld(e.to_string());
         let mut stats = welds.begin(wanted.iter().copied()).map_err(weld)?;
         welds.forget_absent(|k| scene.external_weld(k).is_some());
@@ -745,4 +731,27 @@ impl QuadRenderer {
         self.frame.draws = draws;
         Ok(())
     }
+}
+
+/// The welds of `scene` that land on a `size` target under `transform`:
+/// the only ones [`QuadRenderer::render_scene`] draws.
+pub(crate) fn visible_welds(
+    scene: &ResolvedScene,
+    transform: Affine,
+    size: [u32; 2],
+) -> impl Iterator<Item = (&str, &mui_weld::analytic::AnalyticWeld)> {
+    let screen = crate::kurbo::Rect::new(0., 0., f64::from(size[0]), f64::from(size[1]));
+    scene
+        .paint
+        .iter()
+        .filter(|p| p.layer == Layer::External)
+        .filter_map(move |p| {
+            let e = scene.external_weld(&p.key)?;
+            let b = e.bounds();
+            let local = crate::kurbo::Rect::new(b.x0, b.y0, b.x1, b.y1);
+            let on = crate::placed(transform, p)
+                .transform_rect_bbox(local)
+                .overlaps(screen);
+            on.then_some((p.key.as_ref(), &*e.material))
+        })
 }

@@ -137,6 +137,7 @@ impl Instances {
                     }
                     self.layers.push(at, Bind::None, true);
                     self.list.push(one);
+                    super::ramp::spans(&mut self.list, start, &p.paint);
                 }
                 Drawn::One => {
                     self.layers.push(at, Bind::None, false);
