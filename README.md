@@ -527,7 +527,8 @@ light-theme half because there is nothing in it a mode could contradict.
 [ARCHITECTURE.md](ARCHITECTURE.md) has the crate graph and the scene walk --
 how welds, shells, carves and text become one paint list -- and
 [docs/shape-layout.md](docs/shape-layout.md) the contour-aware layout
-contracts.
+contracts. [docs/platform-notes.md](docs/platform-notes.md) says how the
+native window layer behaves on X11, Windows and macOS, and what is unproven.
 
 ## Preview
 
