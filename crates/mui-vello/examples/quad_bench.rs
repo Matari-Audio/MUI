@@ -1,5 +1,5 @@
 //! The quad pass against the classic-Vello `GpuRenderer` on the same paint
-//! list, one the quad pass draws entirely: about 700 entries of rounded
+//! list, one the quad pass draws entirely: about 1250 entries of rounded
 //! rects, strokes, drop and inset shadows, gradients and clips at 1280x800.
 //!
 //!     cargo run -p mui-vello --profile perf --features gpu-quad,gpu-effects --example quad_bench
@@ -15,6 +15,12 @@
 //! frames after 10 warm-ups, for a static frame and for one where a single
 //! fill changes colour every frame. `GpuRenderer` retains its output, so a
 //! static frame costs it no render at all; the quad pass redraws every frame.
+//!
+//! The second table is the same cards with five labels each (480 glyph
+//! runs, bench-editor density), for: a cold frame (a renderer's first, its
+//! glyph atlas empty; median of 7 fresh renderers), a static frame, a frame
+//! where one label's text changes, and one where everything scrolls by a
+//! fractional offset (0.37 px a frame on both axes).
 
 use std::time::Instant;
 
@@ -30,6 +36,11 @@ const WARM: usize = 10;
 const N: usize = 60;
 
 fn scene() -> ResolvedScene {
+    cards(None)
+}
+
+/// The cards; with `Some(n)`, five labels on each, card 0's first reading `n`.
+fn cards(labels: Option<usize>) -> ResolvedScene {
     let (a, b) = (Color::srgb(0.25, 0.45, 0.9), Color::srgb(0.85, 0.3, 0.5));
     let cards: Vec<El> = (0..96)
         .map(|i| {
@@ -39,7 +50,7 @@ fn scene() -> ResolvedScene {
                 _ => Color::srgb(0.2, 0.22, 0.26).into(),
             };
             let chip = |c: Color| block(18., 10.).radius(5.).fill(c);
-            col![
+            let mut kids = vec![
                 row![chip(a), chip(b), chip(a)].gap(4.),
                 block(100., 8.)
                     .radius(4.)
@@ -48,16 +59,34 @@ fn scene() -> ResolvedScene {
                     .size(80., 12.)
                     .radius(0.)
                     .clip(),
-            ]
-            .gap(6.)
-            .pad(8.)
-            .radius(10.)
-            .fill(fill)
-            .stroke(Color::srgba(1., 1., 1., 0.3))
-            .stroke_width(1.)
-            .shadow(Shadow::soft(6.))
-            .shadow(Shadow::inset(3.))
-            .id(format!("card{i}"))
+            ];
+            if let Some(n) = labels {
+                let ink = Color::srgb(0.9, 0.92, 0.95);
+                let first = if i == 0 {
+                    format!("Cutoff {n} Hz")
+                } else {
+                    format!("Cutoff {i} Hz")
+                };
+                kids.push(text(first).text_size(11.).fill(ink));
+                kids.push(text(format!("Osc {i} saw")).text_size(9.).fill(ink));
+                kids.push(text("Resonance 0.42").text_size(10.).fill(ink));
+                kids.push(
+                    text(format!("{:.1} dB", i as f32 * 0.7))
+                        .text_size(12.)
+                        .fill(ink),
+                );
+                kids.push(text("Env").text_size(14.).fill(ink));
+            }
+            col(kids)
+                .gap(6.)
+                .pad(8.)
+                .radius(10.)
+                .fill(fill)
+                .stroke(Color::srgba(1., 1., 1., 0.3))
+                .stroke_width(1.)
+                .shadow(Shadow::soft(6.))
+                .shadow(Shadow::inset(3.))
+                .id(format!("card{i}"))
         })
         .collect();
     let root = grid(12, cards)
@@ -66,8 +95,14 @@ fn scene() -> ResolvedScene {
         .size(f64::from(W), f64::from(H))
         .radius(0.)
         .fill(Color::srgb(0.06, 0.07, 0.09));
-    mui_scene::resolve(&SceneSpec::new(root).offered(Size::new(f64::from(W), f64::from(H))))
-        .expect("scene resolves")
+    let mut spec = SceneSpec::new(root).offered(Size::new(f64::from(W), f64::from(H)));
+    // One font for every frame, as a host keeps it: a fresh `Font` is a new
+    // face to every glyph cache.
+    static HACK: std::sync::LazyLock<mui_scene::Font> = std::sync::LazyLock::new(|| {
+        mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).expect("font")
+    });
+    spec.font = Some(HACK.clone());
+    mui_scene::resolve(&spec).expect("scene resolves")
 }
 
 fn median(v: &mut [f64]) -> f64 {
@@ -84,11 +119,22 @@ fn time(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     timer: &mut GpuTimer,
+    frame: impl FnMut(usize),
+) -> [f64; 3] {
+    time_n(device, queue, timer, WARM, N, frame)
+}
+
+fn time_n(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    timer: &mut GpuTimer,
+    warm: usize,
+    n: usize,
     mut frame: impl FnMut(usize),
 ) -> [f64; 3] {
     let (mut cpu, mut gpu, mut wait) = (vec![], vec![], vec![]);
     let mut samples = Vec::new();
-    for i in 0..WARM + N {
+    for i in 0..warm + n {
         let mut before = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         let ticket = timer.begin(&mut before).expect("a free timestamp slot");
         queue.submit([before.finish()]);
@@ -106,7 +152,7 @@ fn time(
         let w = ms(t);
         samples.clear();
         timer.collect(device, &mut samples);
-        if i >= WARM {
+        if i >= warm {
             cpu.push(c);
             wait.push(w);
             gpu.push(samples.first().expect("a GPU timing").milliseconds);
@@ -236,6 +282,108 @@ fn main() {
         ("QuadRenderer", "one change", quad_change),
         ("GpuRenderer", "static", vello_static),
         ("GpuRenderer", "one change", vello_change),
+    ] {
+        let [cpu, gpu, wait] = t;
+        println!("{name:<14} {frame:<12} {cpu:9.3} {gpu:9.3} {wait:9.3}");
+    }
+    labelled(&device, &queue, &mut timer, &view, format, &mut vello);
+}
+
+/// The labelled cards through both renderers.
+fn labelled(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    timer: &mut GpuTimer,
+    view: &wgpu::TextureView,
+    format: wgpu::TextureFormat,
+    vello: &mut GpuRenderer,
+) {
+    let base = cards(Some(0));
+    let runs = base.paint.iter().filter(|p| p.text.is_some()).count();
+    let glyphs: usize = base
+        .paint
+        .iter()
+        .filter_map(|p| p.text.as_ref())
+        .map(|t| t.glyphs.len())
+        .sum();
+    assert!(
+        classify(&base.paint).complete(),
+        "labelled cards must be all supported"
+    );
+    let labels: Vec<ResolvedScene> = (0..WARM + N).map(|i| cards(Some(1000 + i * 37))).collect();
+    let scroll = |i: usize| Affine::translate((0.37 * i as f64, 0.37 * i as f64));
+    let mut quad = QuadRenderer::new(device, format);
+    let q = |quad: &mut QuadRenderer, s: &ResolvedScene, xf: Affine| {
+        quad.render(device, queue, &s.paint, xf, view, [W, H])
+            .expect("quad render");
+    };
+    let mut fresh: Vec<QuadRenderer> = (0..7)
+        .map(|_| {
+            let mut r = QuadRenderer::new(device, format);
+            q(&mut r, &cards(None), Affine::IDENTITY);
+            r
+        })
+        .collect();
+    let quad_cold = time_n(device, queue, timer, 0, 7, |i| {
+        q(&mut fresh[i], &base, Affine::IDENTITY);
+    });
+    let cold = fresh[0].frame();
+    let quad_static = time(device, queue, timer, |_| {
+        q(&mut quad, &base, Affine::IDENTITY)
+    });
+    let steady = quad.frame();
+    let quad_label = time(device, queue, timer, |i| {
+        q(&mut quad, &labels[i], Affine::IDENTITY)
+    });
+    let quad_scroll = time(device, queue, timer, |i| q(&mut quad, &base, scroll(i)));
+
+    let v = |r: &mut GpuRenderer, s: &ResolvedScene, xf: Affine| {
+        r.render(s, xf, view).expect("vello render");
+    };
+    let mut fresh: Vec<GpuRenderer> = (0..7)
+        .map(|_| {
+            pollster::block_on(GpuRenderer::new(
+                device,
+                queue,
+                format,
+                [W, H],
+                Budget::default(),
+            ))
+            .expect("GpuRenderer")
+        })
+        .collect();
+    let vello_cold = time_n(device, queue, timer, 0, 7, |i| {
+        v(&mut fresh[i], &base, Affine::IDENTITY)
+    });
+    let vello_static = time(device, queue, timer, |_| v(vello, &base, Affine::IDENTITY));
+    let vello_label = time(device, queue, timer, |i| {
+        v(vello, &labels[i], Affine::IDENTITY)
+    });
+    let vello_scroll = time(device, queue, timer, |i| v(vello, &base, scroll(i)));
+
+    let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    println!(
+        "\nlabelled cards: {} entries, {runs} glyph runs, {glyphs} glyphs; load average: {}",
+        base.paint.len(),
+        load.trim()
+    );
+    println!(
+        "quad cold frame: {} cells rasterised, {} bytes uploaded; steady: {:?}",
+        cold.rasterised, cold.uploaded, steady
+    );
+    println!(
+        "{:<14} {:<12} {:>9} {:>9} {:>9}",
+        "renderer", "frame", "cpu ms", "gpu ms", "wait ms"
+    );
+    for (name, frame, t) in [
+        ("QuadRenderer", "cold", quad_cold),
+        ("QuadRenderer", "static", quad_static),
+        ("QuadRenderer", "label change", quad_label),
+        ("QuadRenderer", "scroll", quad_scroll),
+        ("GpuRenderer", "cold", vello_cold),
+        ("GpuRenderer", "static", vello_static),
+        ("GpuRenderer", "label change", vello_label),
+        ("GpuRenderer", "scroll", vello_scroll),
     ] {
         let [cpu, gpu, wait] = t;
         println!("{name:<14} {frame:<12} {cpu:9.3} {gpu:9.3} {wait:9.3}");
