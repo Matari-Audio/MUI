@@ -6,9 +6,10 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 GPU renderer: the quad pass replaces Vello. Plugin checklist, in order:
 
-1. Cargo features. `gpu-effects` is gone from `mui` and `mui-vello`; ask for
-   `gpu-quad`. Nothing else in a manifest changes (mui-truce and
-   mui-baseview turn it on themselves).
+1. Cargo features. Ask for `gpu-quad`. On `mui`, `gpu-effects` survives as a
+   deprecated alias for it (moose-mui still names it), so an old manifest
+   builds, but rename it; on `mui-vello` it is gone. Nothing else in a
+   manifest changes (mui-truce and mui-baseview turn it on themselves).
 
    ```toml
    # before
@@ -62,14 +63,16 @@ GPU renderer: the quad pass replaces Vello. Plugin checklist, in order:
    the old text).
 
 Nothing changes for a plugin that reaches MUI only through `mui`'s widgets,
-`mui-truce` and `mui-baseview` beyond step 1 (and only if it named
-`gpu-effects`). Checked by: the diff of `crates/mui*/src` outside
+`mui-truce` and `mui-baseview`: no source edit, and the `gpu-effects` rename
+in step 1 is advisable rather than required. Checked by: the diff of `crates/mui*/src` outside
 `mui-vello` since the stage began is empty (only five `Cargo.toml` feature
 lines changed); mui-winit's `present_with_overlay` already took
 `dyn Canvas`; and a grep of KURV, BUFFR, KONTRA, KORREKT and relay finds no
 `Classic`, `GpuRenderer`, `present_with_overlay`, `render_with_overlay`,
 `set_texture` or `mui::vello::vello` use. BUFFR (`Cargo.toml`,
-`crates/buffr-editor/Cargo.toml`) is the only one naming `gpu-effects`.
+`crates/buffr-editor/Cargo.toml`) and moose's `crates/moose-mui` (rev
+`bffa4677`) are the only ones naming `gpu-effects`; moose uses nothing else
+that changed.
 Polaar was not found on this machine and is unchecked.
 
 Breaking (by hand):
