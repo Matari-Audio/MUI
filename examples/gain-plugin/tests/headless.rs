@@ -72,8 +72,10 @@ fn a_scripted_drag_reports_its_gesture_bracket_and_repeats_exactly() {
 
 #[test]
 fn every_committed_script_runs() {
+    let tree = std::env::temp_dir().join("mui-headless-gain-scripts-tree.json");
     for s in ["gain-toggle", "gain-knob-drag", "gain-hover"] {
         let path = format!("{}/../scripts/{s}.json", env!("CARGO_MANIFEST_DIR"));
-        run(&["--script", &path, "--tree", "/dev/null"]);
+        run(&["--script", &path, "--tree", tree.to_str().unwrap()]);
     }
+    std::fs::remove_file(tree).unwrap();
 }
