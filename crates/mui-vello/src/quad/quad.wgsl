@@ -261,7 +261,9 @@ fn ramp_t(q: vec2<f32>, paint: f32, g: vec4<f32>) -> f32 {
         return length(q - g.xy) / g.z;
     }
     let v = q - g.xy;
-    var angle = atan2(v.y, v.x);
+    // At the centre `vello_cpu` clears its 0/0 slope to an angle of 0;
+    // WGSL leaves atan2(0, 0) undefined.
+    var angle = select(atan2(v.y, v.x), 0.0, all(v == vec2<f32>(0.0)));
     if angle < 0.0 {
         angle += 6.283185307179586;
     }

@@ -132,6 +132,89 @@ fn rounded(scale: f64) -> ResolvedScene {
     scene_at(ground(kids), scale)
 }
 
+/// Ramps of more than four stops, one instance per span: a hue wheel's
+/// seven, hard stops, a ramp starting late and ending early, translucent
+/// stops, radial ones, and the same on a stroke and in a faded layer.
+fn ramps(scale: f64) -> ResolvedScene {
+    let hue = |n: usize| {
+        (0..n).map(move |i| {
+            let t = i as f32 / (n - 1) as f32;
+            let c = |o: f32| 0.5 + 0.5 * (6.283 * (t + o)).cos();
+            (t, Color::srgb(c(0.), c(0.33), c(0.67)))
+        })
+    };
+    let (red, blue) = (Color::srgb(0.95, 0.2, 0.1), Color::srgb(0.1, 0.3, 0.95));
+    let green = Color::srgb(0.2, 0.9, 0.3);
+    let fills: Vec<Fill> = vec![
+        Gradient::linear(90., hue(7)).into(),
+        Gradient::linear(
+            30.,
+            [
+                (0., red),
+                (0.4, red),
+                (0.4, green),
+                (0.6, green),
+                (0.6, blue),
+                (1., blue),
+            ],
+        )
+        .into(),
+        Gradient::linear(
+            200.,
+            [
+                (0.15, red),
+                (0.3, green),
+                (0.5, rgba(0.1, 0.3, 0.95, 0.4)),
+                (0.7, red),
+                (0.85, blue),
+            ],
+        )
+        .into(),
+        Gradient::radial((0.4, 0.6), 0.7, hue(6)).into(),
+        Gradient::radial(
+            (0.5, 0.5),
+            0.5,
+            [
+                (0., rgba(1., 1., 1., 0.)),
+                (0.2, red),
+                (0.4, rgba(0., 0., 0., 0.3)),
+                (0.6, green),
+                (0.8, blue),
+                (1., rgba(0., 0., 0., 0.)),
+            ],
+        )
+        .into(),
+    ];
+    let mut kids: Vec<El> = fills
+        .into_iter()
+        .enumerate()
+        .map(|(i, fill)| {
+            let (x, y) = (12. + 76. * (i % 4) as f64, 14. + 92. * (i / 4) as f64);
+            block(66., 78.).radius(9.).fill(fill).at(x, y)
+        })
+        .collect();
+    // No conic: a span picks its colour the same way for every kind, and
+    // the pixels next to a conic's centre differ by up to 204 (vello_cpu's
+    // angle there), which would hide what this case measures.
+    kids.push(
+        block(60., 70.)
+            .radius(14.)
+            .stroke(Gradient::linear(0., hue(8)))
+            .stroke_width(5.)
+            .at(240., 110.),
+    );
+    kids.push(
+        stack![
+            block(60., 70.)
+                .radius(6.)
+                .fill(Gradient::linear(135., hue(5)))
+        ]
+        .opacity(0.6)
+        .at(91., 110.),
+    );
+    scene_at(ground(kids), scale)
+}
+
 fn gradients(scale: f64) -> ResolvedScene {
     let (red, blue) = (Color::srgb(0.95, 0.2, 0.1), Color::srgb(0.1, 0.3, 0.95));
     let fills: Vec<Fill> = vec![
@@ -362,6 +445,9 @@ fn the_quad_pass_matches_vello_cpu() {
     compare(&mut gpu, f, "square", TIGHT, square);
     compare(&mut gpu, f, "rounded", corners(60, 0.23), rounded);
     compare(&mut gpu, f, "gradients", corners(53, 0.11), gradients);
+    // Measured 54 / 0.130: rounded corners' antialiasing, as in
+    // `gradients`; inside the shapes the spans match vello_cpu exactly.
+    compare(&mut gpu, f, "ramps", corners(55, 0.14), ramps);
     compare(&mut gpu, f, "shadows", corners(51, 0.15), shadows);
     compare(&mut gpu, f, "clips", corners(45, 0.005), clips);
     compare(&mut gpu, f, "overlap", corners(37, 0.18), overlap);

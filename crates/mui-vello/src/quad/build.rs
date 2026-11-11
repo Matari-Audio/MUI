@@ -8,8 +8,8 @@ use super::path::{Fail, Store};
 use crate::kurbo::{Affine, BezPath, Rect};
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ShadowKind};
 
-/// Gradient stops one instance carries. A longer ramp is
-/// [`Reason::GradientStops`], not truncated.
+/// Gradient stops one instance carries. A longer ramp draws one instance
+/// per span: see [`spans`].
 pub const MAX_STOPS: usize = 4;
 
 /// One instance: fourteen `vec4<f32>` slots, the vertex attributes of
@@ -650,6 +650,42 @@ pub fn fade(i: &mut Instance, alpha: f32) {
     }
 }
 
+/// A ramp of more than [`MAX_STOPS`] stops, drawn as `list[start..]`
+/// with its first four: each instance again once per span between two
+/// stops, as `(a, a, b, b)` with no colour outside `[a, b)` but the pads at
+/// the ends. The shader picks a span by the same comparisons in each, so
+/// every pixel takes its colour from exactly one instance and the rest add
+/// exact zeros.
+pub fn spans(list: &mut Vec<Instance>, start: usize, paint: &Paint) {
+    let Paint::Gradient { stops, .. } = paint else {
+        return;
+    };
+    let ramp = |i: &Instance| (1. ..=3.).contains(&(i[3][0] % 8.));
+    if stops.len() <= MAX_STOPS || !list[start..].iter().all(ramp) {
+        return;
+    }
+    let colour = |c| premul(crate::srgb(c).components).map(|v| v.clamp(0., 1.));
+    let last = stops.len() - 2;
+    let drawn = list.split_off(start);
+    for k in 0..=last {
+        let ((a, ca), (b, cb)) = (stops[k], stops[k + 1]);
+        if a == b && k != 0 && k != last {
+            continue;
+        }
+        let zero = [0.; 4];
+        let (ca, cb) = (colour(ca), colour(cb));
+        for one in &drawn {
+            let mut one = *one;
+            one[4] = if k == 0 { ca } else { zero };
+            one[5] = ca;
+            one[6] = cb;
+            one[7] = if k == last { cb } else { zero };
+            one[8] = [a, a, b, b];
+            list.push(one);
+        }
+    }
+}
+
 /// A premultiplied colour, as `vello_cpu` premultiplies it.
 fn premul([r, g, b, a]: [f32; 4]) -> [f32; 4] {
     [r * a, g * a, b * a, a]
@@ -726,9 +762,6 @@ fn paint(out: &mut Instance, paint: &Paint, bounds: Rect) -> Result<(f32, f32), 
     if stops.len() == 1 || !ordered || !in_range {
         return solid(out, first);
     }
-    if stops.len() > MAX_STOPS {
-        return Err(Reason::GradientStops);
-    }
     let mid = bounds.center();
     let (code, geom) = match *kind {
         GradientKind::Linear { angle } => {
@@ -785,19 +818,14 @@ fn degenerate(a: f64, b: f64) -> bool {
 /// `vello_common::encode::determine_lut_size`, over the ranges its encoder
 /// makes: the stops, padded out to 0 and 1.
 pub(super) fn lut_size(stops: &[(f32, mui_scene::Color)]) -> usize {
-    let mut padded = [0.0_f32; MAX_STOPS + 2];
-    let mut n = 0;
-    let mut add = |t: f32| {
-        padded[n] = t;
-        n += 1;
-    };
-    if stops[0].0 != 0. {
-        add(0.);
-    }
-    stops.iter().for_each(|s| add(s.0));
-    if stops[stops.len() - 1].0 != 1. {
-        add(1.);
-    }
+    let (first, last) = (stops[0].0, stops[stops.len() - 1].0);
+    let padded: Vec<f32> = (first != 0.)
+        .then_some(0.)
+        .into_iter()
+        .chain(stops.iter().map(|s| s.0))
+        .chain((last != 1.).then_some(1.))
+        .collect();
+    let n = padded.len();
     let mut size = match n - 1 {
         1 => 256,
         2 => 512,

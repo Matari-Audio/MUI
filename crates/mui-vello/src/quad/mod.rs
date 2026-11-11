@@ -79,8 +79,6 @@ pub enum Reason {
     /// A rounded or rotated clip inside another, or a path clip inside
     /// another: an instance carries one of each.
     ClipDepth,
-    /// A gradient with more than [`MAX_STOPS`] stops.
-    GradientStops,
     /// A blend layer's end with none open, a layer never closed, or a mask
     /// outside any layer: a malformed list (found when drawn).
     Layer,
@@ -96,7 +94,7 @@ pub enum Reason {
 }
 
 impl Reason {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 14] = [
         Self::Text,
         Self::TextTransform,
         Self::TextSize,
@@ -107,7 +105,6 @@ impl Reason {
         Self::Path,
         Self::PathBudget,
         Self::ClipDepth,
-        Self::GradientStops,
         Self::Layer,
         Self::External,
         Self::Offscreen,
@@ -406,6 +403,7 @@ impl Instances {
                 Drawn::One => {
                     self.layers.push(at, Bind::None, false);
                     self.list.push(one);
+                    build::spans(&mut self.list, start, &p.paint);
                 }
                 Drawn::Image(image) => {
                     self.layers.push(at, Bind::Image(image.clone()), false);
@@ -455,6 +453,7 @@ impl Instances {
                                 text::Failure::Full => Reason::GlyphBudget,
                             })
                         })?;
+                    build::spans(&mut self.list, start, &p.paint);
                 }
             }
             self.boxes[index] = self.list[start..]

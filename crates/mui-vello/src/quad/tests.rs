@@ -156,11 +156,6 @@ fn what_the_pass_cannot_draw_is_counted_by_reason() {
     let coverage = classify(&paint);
     assert_eq!(coverage.unsupported(Reason::Path), 1, "{coverage:?}");
     assert_eq!(coverage.unsupported(Reason::ClipDepth), 1, "{coverage:?}");
-    assert_eq!(
-        coverage.unsupported(Reason::GradientStops),
-        1,
-        "{coverage:?}"
-    );
     let refused: usize = coverage.unsupported.iter().sum();
     assert_eq!(coverage.supported + refused, paint.len());
 }
