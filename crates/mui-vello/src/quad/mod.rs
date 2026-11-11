@@ -327,8 +327,8 @@ impl Instances {
     fn encode(&mut self) {
         let floats = self.list.as_flattened().as_flattened();
         self.bytes.resize(floats.len() * 4, 0);
-        for (out, v) in self.bytes.chunks_exact_mut(4).zip(floats) {
-            out.copy_from_slice(&v.to_ne_bytes());
+        for (out, v) in self.bytes.as_chunks_mut::<4>().0.iter_mut().zip(floats) {
+            *out = v.to_ne_bytes();
         }
     }
 }
