@@ -271,7 +271,9 @@ fn layers_match_vello_cpu() {
     compare(&mut gpu, f, "blends", corners(32, 0.31), blends);
     compare(&mut gpu, f, "nested", corners(27, 0.24), nested);
     compare(&mut gpu, f, "mask", corners(49, 0.04), mask);
-    compare(&mut gpu, f, "mask ramp", corners(49, 0.04), mask_ramp);
+    // Mean 0.021 on Vulkan, 0.072 on DX12 WARP (same max): its gradient
+    // interpolation rounds differently across the six-stop ramp.
+    compare(&mut gpu, f, "mask ramp", corners(49, 0.08), mask_ramp);
     for (blur, limit) in [
         (2., corners(23, 0.09)),
         (6., corners(25, 0.21)),
