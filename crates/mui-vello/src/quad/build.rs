@@ -53,6 +53,8 @@ struct General {
     inverse: [f32; 6],
     rect: [f32; 4],
     radius: f32,
+    /// Chords per corner, as `vello_cpu` flattens them.
+    chords: f32,
 }
 
 impl Clip {
@@ -63,7 +65,7 @@ impl Clip {
 
     /// This clip narrowed by `rect` (rounded by `radius`) under `xf`, or
     /// `None` when the result needs a second general clip.
-    fn push(self, rect: Rect, radius: f64, xf: Affine) -> Option<Self> {
+    fn push(self, rect: Rect, radius: f64, chords: f32, xf: Affine) -> Option<Self> {
         let [a, b, c, d, ..] = xf.as_coeffs();
         let det = a * d - b * c;
         if det == 0. {
@@ -95,6 +97,7 @@ impl Clip {
                 inverse,
                 rect: rect4(rect),
                 radius: radius as f32,
+                chords,
             }),
             ..self
         })
@@ -105,7 +108,8 @@ impl Clip {
         if let Some(g) = self.general {
             let [a, b, c, d, e, f] = g.inverse;
             out[11] = [a, b, c, d];
-            out[12] = [e, f, g.radius, 1.];
+            // Never zero: the chord count doubles as the "on" flag.
+            out[12] = [e, f, g.radius, g.chords.max(1.)];
             out[13] = g.rect;
         } else {
             out[11] = [0.; 4];
@@ -119,10 +123,101 @@ fn rect4(r: Rect) -> [f32; 4] {
     [r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32]
 }
 
-/// The walk's state across one list: the clip stack, reused frame to frame.
+/// The walk's state across one list: the clip stack, reused frame to frame,
+/// and the corner chord counts it has measured.
 #[derive(Default)]
 pub struct Walk {
     clips: Vec<Clip>,
+    chords: Chords,
+}
+
+/// How many chords `vello_cpu` flattens a rounded corner into: a fill's
+/// outline, or the outer and inner offsets kurbo makes of a stroke. Asked of
+/// kurbo's stroker and `vello_common`'s own flattener, once per (radius,
+/// half width) in device pixels: a scene has a handful of distinct ones, so
+/// after warm-up this is a lookup and allocates nothing.
+#[derive(Default)]
+struct Chords {
+    seen: Vec<([u32; 2], [f32; 2])>,
+    lines: Vec<vello_common::flatten::Line>,
+    ctx: vello_common::flatten::FlattenCtx,
+    stroke: crate::kurbo::StrokeCtx,
+}
+
+impl Chords {
+    /// Distinct corners kept; past this the oldest is replaced.
+    const KEEP: usize = 64;
+
+    /// (outer, inner) chords per corner of a centreline radius `r` stroked
+    /// `2 h` wide; for a fill, `h` is zero and both are the outline's.
+    fn get(&mut self, r: f64, h: f64) -> [f32; 2] {
+        let key = [(r as f32).to_bits(), (h as f32).to_bits()];
+        if let Some(&(_, n)) = self.seen.iter().find(|(k, _)| *k == key) {
+            return n;
+        }
+        let n = self.measure(r, h);
+        if self.seen.len() == Self::KEEP {
+            self.seen.remove(0);
+        }
+        self.seen.push((key, n));
+        n
+    }
+
+    fn measure(&mut self, r: f64, h: f64) -> [f32; 2] {
+        // A rounded rect with long straight sides, already in device pixels.
+        let side = 4. * (r + h) + 8.;
+        let Ok(rr) = mui_geometry::RoundedRect::new(Rect::new(0., 0., side, side), r) else {
+            return [1.; 2];
+        };
+        let Ok(path) = crate::bez_path(&rr.path(), crate::ARC_TOLERANCE) else {
+            return [1.; 2];
+        };
+        let all = vello_common::geometry::RectU16::new(0, 0, u16::MAX, u16::MAX);
+        let level = vello_common::fearless_simd::Level::new();
+        if h > 0. {
+            vello_common::flatten::stroke(
+                level,
+                path.iter(),
+                &crate::kurbo::Stroke::new(2. * h),
+                Affine::IDENTITY,
+                &mut self.lines,
+                &mut self.ctx,
+                &mut self.stroke,
+                all,
+            );
+        } else {
+            vello_common::flatten::fill(level, path.iter(), Affine::IDENTITY, &mut self.lines, &mut self.ctx, all);
+        }
+        // Chords of the top-left corner: segments with both ends strictly
+        // inside its quarter, told apart by which side of the centreline.
+        let o = (r as f32, r as f32);
+        let (mut outer, mut inner) = (0, 0);
+        for l in &self.lines {
+            let corner = |p: vello_common::flatten::Point| p.x < o.0 - 1e-3 && p.y < o.1 - 1e-3;
+            let (a, b) = (l.p0, l.p1);
+            if !(corner(a) || corner(b)) {
+                continue;
+            }
+            let dist = (0.5 * (a.x + b.x) - o.0).hypot(0.5 * (a.y + b.y) - o.1);
+            if dist > r as f32 {
+                outer += 1;
+            } else {
+                inner += 1;
+            }
+        }
+        // A segment reaching into the quarter from a straight side counts
+        // too: one more than the corner's own chords on each side that has
+        // any. Never below one, the flag the shader divides by.
+        let chords = |n: usize| n.saturating_sub(1).max(1) as f32;
+        [chords(outer), chords(inner)]
+    }
+}
+
+/// The radius `r` takes on the device under the linear part of `xf`: the
+/// geometric mean of its stretch.
+fn device(r: f64, xf: Affine) -> f64 {
+    let [a, b, c, d, ..] = xf.as_coeffs();
+    r * (a * d - b * c).abs().sqrt()
 }
 
 impl Walk {
@@ -160,7 +255,8 @@ impl Walk {
                     self.clips.push(top);
                     return Err(Reason::ClipPath);
                 };
-                return match top.push(rr.bounds(), rr.radius(), xf) {
+                let [chords, _] = self.chords.get(device(rr.radius(), xf), 0.);
+                return match top.push(rr.bounds(), rr.radius(), chords, xf) {
                     Some(next) => {
                         self.clips.push(next);
                         Ok(false)
@@ -205,16 +301,20 @@ impl Walk {
         let bounds = rr.bounds();
         let radius = rr.radius();
         out[0] = [a as f32, b as f32, c as f32, d as f32];
-        out[1] = [e as f32, f as f32, 0., 0.];
         self.clip().write(out);
         if blurred {
             // Both backends blur with the solid stand-in of a gradient.
             let colour = premul(crate::srgb(p.paint.solid()).components);
             let invert = matches!(p.layer, Layer::Shadow(ShadowKind::Inset));
+            out[1] = [e as f32, f as f32, 1., 1.];
             blur(out, bounds, radius as f32, p.blur as f32, colour, invert);
             return Ok(true);
         }
         let shape = if p.width > 0.0 { SHAPE_STROKE } else { SHAPE_FILL };
+        // A stroke's outline is its two offsets; a fill's, the rect itself.
+        let half = if shape == SHAPE_STROKE { p.width / 2. } else { 0. };
+        let [outer, inner] = self.chords.get(device(radius, xf), device(half, xf));
+        out[1] = [e as f32, f as f32, outer, inner];
         out[2] = rect4(bounds);
         let (kind, scale) = paint(out, &p.paint, bounds)?;
         out[3] = [shape * 4. + kind, scale, radius as f32, p.width as f32];

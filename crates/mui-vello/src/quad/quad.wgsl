@@ -33,7 +33,9 @@ struct Instance {
 
 struct Varying {
     @builtin(position) pos: vec4<f32>,
-    @location(0) q: vec2<f32>,
+    // Local position, then the chord counts of the outline's corners (the
+    // outer and inner one of a stroke): constant across the quad.
+    @location(0) q: vec4<f32>,
     @location(1) @interpolate(flat) ji: vec4<f32>,
     @location(2) @interpolate(flat) rect: vec4<f32>,
     @location(3) @interpolate(flat) kind: vec4<f32>,
@@ -78,7 +80,7 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
     let p = vec2<f32>(a * q.x + c * q.y + i.xt.x, b * q.x + d * q.y + i.xt.y);
     var o: Varying;
     o.pos = vec4<f32>(p.x / view.size.x * 2.0 - 1.0, 1.0 - p.y / view.size.y * 2.0, 0.0, 1.0);
-    o.q = q;
+    o.q = vec4<f32>(q, i.xt.z, i.xt.w);
     // Inverse of the linear part, rows (x, y) and (z, w): local = ji * device.
     o.ji = vec4<f32>(d, -c, -b, a) / det;
     o.rect = i.rect;
@@ -132,7 +134,9 @@ fn edge(s: f32, g: vec2<f32>, ji: vec4<f32>) -> f32 {
 }
 
 // Coverage of a rounded rect (`r` = x0 y0 x1 y1, local) at local point `q`.
-fn rounded(q: vec2<f32>, r: vec4<f32>, radius: f32, ji: vec4<f32>) -> f32 {
+// `vello_cpu` flattens each corner into `n` chords evenly spaced in angle,
+// and it is that polygon, not the circle, whose area it covers.
+fn rounded(q: vec2<f32>, r: vec4<f32>, radius: f32, n: f32, ji: vec4<f32>) -> f32 {
     if r.z <= r.x || r.w <= r.y {
         return 0.0;
     }
@@ -147,8 +151,48 @@ fn rounded(q: vec2<f32>, r: vec4<f32>, radius: f32, ji: vec4<f32>) -> f32 {
     if v.x == 0.0 || v.y == 0.0 {
         return box;
     }
-    let len = length(v);
-    return min(box, edge(radius - len, v / len, ji));
+    let a = abs(v);
+    let step = 1.5707963267948966 / n;
+    let k = min(floor(atan2(a.y, a.x) / step), n - 1.0);
+    // The chord the centre faces and its neighbours: a pixel near a vertex
+    // is cut by two, and the polygon is convex, so the least is the closer.
+    var cov = box;
+    for (var j = max(k - 1.0, 0.0); j <= min(k + 1.0, n - 1.0); j += 1.0) {
+        let mid = (j + 0.5) * step;
+        let u = vec2<f32>(cos(mid), sin(mid));
+        cov = min(cov, edge(radius * cos(0.5 * step) - dot(a, u), u * sign(v), ji));
+    }
+    return cov;
+}
+
+// Where a stroke is wider than twice its corner radius, kurbo's inner
+// offset of the corner overshoots and loops back: a sliver between the
+// inner corner and the centreline wound twice. `vello_cpu` sums signed area
+// per pixel before clamping, so the sliver counts twice and the inner corner
+// pixel comes out fuller than the band's true area. This is that extra.
+// `r` is the centreline rect, `h` the half width; the sliver is the square
+// from the corner's centre `o` a distance `d` inward, minus the inner offset
+// (a diagonal at a sharp corner, a reversed arc of radius `d` otherwise).
+fn overlap(q: vec2<f32>, r: vec4<f32>, radius: f32, h: f32, n: f32, ji: vec4<f32>) -> f32 {
+    let d = h - radius;
+    if d <= 0.0 {
+        return 0.0;
+    }
+    let mid = 0.5 * (r.xy + r.zw);
+    let s = select(vec2<f32>(-1.0), vec2<f32>(1.0), q > mid);
+    let o = mid + s * (0.5 * (r.zw - r.xy) - vec2<f32>(radius));
+    let far = o - s * d;
+    let square = rounded(q, vec4<f32>(min(o, far), max(o, far)), 0.0, 1.0, ji);
+    if square <= 0.0 {
+        return 0.0;
+    }
+    let a = (q - o) * -s;
+    if radius <= 0.0 {
+        let g = -s * 0.7071067811865476;
+        return min(square, edge((a.x + a.y - d) * 0.7071067811865476, g, ji));
+    }
+    let len = max(length(a), 1e-6);
+    return min(square, edge(len - d, -s * a / len, ji));
 }
 
 // `vello_common::math::compute_erf7`, term for term.
@@ -228,14 +272,14 @@ fn span(lo: f32, hi: f32, p: f32) -> f32 {
 
 fn clip(p: vec2<f32>, v: Varying) -> f32 {
     var cov = span(v.dclip.x, v.dclip.z, p.x) * span(v.dclip.y, v.dclip.w, p.y);
-    if v.cxt.w != 0.0 && cov > 0.0 {
+    if v.cxt.w > 0.0 && cov > 0.0 {
         let q = vec2<f32>(
             v.cxf.x * p.x + v.cxf.z * p.y + v.cxt.x,
             v.cxf.y * p.x + v.cxf.w * p.y + v.cxt.y,
         );
         // Rows of the clip's inverse linear part, as `edge` wants them.
         let ji = vec4<f32>(v.cxf.x, v.cxf.z, v.cxf.y, v.cxf.w);
-        cov *= rounded(q, v.crect, v.cxt.z, ji);
+        cov *= rounded(q, v.crect, v.cxt.z, round(v.cxt.w), ji);
     }
     return cov;
 }
@@ -246,16 +290,17 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
     let paint = v.kind.x - 4.0 * shape;
     let radius = v.kind.z;
     let width = v.kind.w;
-    let q = v.q;
+    let q = v.q.xy;
+    let chords = round(v.q.zw);
     var cov: f32;
     if shape == SHAPE_STROKE {
         let h = 0.5 * width;
-        let outer = rounded(q, v.rect + vec4<f32>(-h, -h, h, h), radius + h, v.ji);
-        let inner = rounded(q, v.rect + vec4<f32>(h, h, -h, -h), max(radius - h, 0.0), v.ji);
-        cov = max(outer - inner, 0.0);
+        let outer = rounded(q, v.rect + vec4<f32>(-h, -h, h, h), radius + h, chords.x, v.ji);
+        let inner = rounded(q, v.rect + vec4<f32>(h, h, -h, -h), max(radius - h, 0.0), chords.y, v.ji);
+        cov = clamp(outer - inner + overlap(q, v.rect, radius, h, chords.y, v.ji), 0.0, 1.0);
     } else {
         // A blurred rect paints its inflated box, sharp-edged.
-        cov = rounded(q, v.rect, select(radius, 0.0, shape >= SHAPE_BLUR), v.ji);
+        cov = rounded(q, v.rect, select(radius, 0.0, shape >= SHAPE_BLUR), chords.x, v.ji);
     }
     cov *= clip(v.pos.xy, v);
     if cov <= 0.0 {
@@ -273,5 +318,6 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
     } else {
         colour = ramp(ramp_t(q, paint, v.geom), v.kind.y, v);
     }
-    return colour * cov;
+    // `vello_cpu` holds its paint as premultiplied u8 before covering it.
+    return floor(colour * 255.0 + 0.5) / 255.0 * cov;
 }

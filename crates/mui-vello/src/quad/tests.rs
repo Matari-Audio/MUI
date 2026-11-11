@@ -154,3 +154,5 @@ fn the_lookup_table_is_sized_as_vello_common_sizes_it() {
     // A hard stop: a zero-width range.
     assert_eq!(size(&[0., 0.5, 0.5, 1.]), 4096);
 }
+
+
