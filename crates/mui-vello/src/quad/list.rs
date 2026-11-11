@@ -141,7 +141,7 @@ impl Instances {
                 Drawn::One => {
                     self.layers.push(at, Bind::None, false);
                     self.list.push(one);
-                    build::spans(&mut self.list, start, &p.paint);
+                    super::ramp::spans(&mut self.list, start, &p.paint);
                 }
                 Drawn::Image(image) => {
                     self.layers.push(at, Bind::Image(image.clone()), false);
@@ -191,7 +191,7 @@ impl Instances {
                                 text::Failure::Full => Reason::GlyphBudget,
                             })
                         })?;
-                    build::spans(&mut self.list, start, &p.paint);
+                    super::ramp::spans(&mut self.list, start, &p.paint);
                 }
             }
             self.boxes[index] = self.list[start..]

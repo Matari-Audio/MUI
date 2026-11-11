@@ -25,7 +25,8 @@
 //! A layer at opacity 0 draws nothing at all.
 
 use super::Reason;
-use super::build::{EMPTY, Instance, PAINT_SCREEN, SLOTS, code, device_box, fade, overlaps, union};
+use super::build::{EMPTY, Instance, PAINT_SCREEN, SLOTS, code, device_box, overlaps, union};
+use super::ramp::fade;
 use std::sync::Arc;
 
 /// Instances past which a group layer is not tested for overlap: it takes

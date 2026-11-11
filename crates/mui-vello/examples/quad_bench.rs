@@ -38,6 +38,8 @@ use mui_scene::prelude::*;
 use mui_scene::{Layer, Paint, ResolvedScene};
 
 mod bench_scene;
+#[expect(dead_code, reason = "shared by several examples; each calls a subset")]
+mod gpu_support;
 use mui_vello::effects::{Budget, GpuRenderer, GpuTimer};
 use mui_vello::kurbo::Affine;
 use mui_vello::quad::{QuadRenderer, classify};
@@ -467,8 +469,14 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     note("cold", cold);
     note("knob turning", turned);
     note("scroll", scrolled);
-    pngs(gpu, &still, "");
-    pngs(gpu, &under_menu(&still), "-under-menu");
+    pngs(gpu, &still, "", &mut gpu.quad(), &mut gpu.vello());
+    pngs(
+        gpu,
+        &under_menu(&still),
+        "-under-menu",
+        &mut gpu.quad(),
+        &mut gpu.vello(),
+    );
 }
 
 /// A 1,000-point polyline that changes every frame, over 300 static cards.
@@ -532,89 +540,28 @@ fn dense(gpu: &Gpu, timer: &mut GpuTimer) {
     note("wave changing", quad.frame());
 }
 
-/// The static editor frame from both renderers, as PNGs in the temp
-/// directory.
-fn pngs(gpu: &Gpu, scene: &ResolvedScene, tag: &str) {
-    pngs_to(gpu, scene, tag, &mut gpu.quad(), &mut gpu.vello());
-}
-
-fn pngs_to(
+/// `scene` from both renderers, as `quad-bench-editor{tag}-{quad,vello}.png`
+/// in the temp directory.
+fn pngs(
     gpu: &Gpu,
     scene: &ResolvedScene,
     tag: &str,
     quad: &mut QuadRenderer,
     vello: &mut GpuRenderer,
 ) {
-    let texture = || {
-        gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("quad bench png"),
-            size: wgpu::Extent3d {
-                width: W,
-                height: H,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        })
-    };
-    let (q, v) = (texture(), texture());
+    let (q, v) = (
+        gpu_support::target(&gpu.device, [W, H]),
+        gpu_support::target(&gpu.device, [W, H]),
+    );
     let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
     gpu.quad_frame(quad, scene, Affine::IDENTITY, &view(&q));
     vello_frame(vello, scene, Affine::IDENTITY, &view(&v));
     for (name, t) in [("quad", &q), ("vello", &v)] {
         let path = std::env::temp_dir().join(format!("quad-bench-editor{tag}-{name}.png"));
-        save_png(gpu, t, &path);
+        let rgba = gpu_support::readback(&gpu.device, &gpu.queue, t, [W, H]).expect("readback");
+        gpu_support::save(&path, [W, H], &rgba).expect("write png");
         println!("wrote {}", path.display());
     }
-}
-
-fn save_png(gpu: &Gpu, texture: &wgpu::Texture, path: &std::path::Path) {
-    let stride = (W * 4).next_multiple_of(256);
-    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: u64::from(stride * H),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = gpu
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: Some(H),
-            },
-        },
-        texture.size(),
-    );
-    gpu.queue.submit([encoder.finish()]);
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, |r| r.expect("map png"));
-    gpu.device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("poll");
-    let mapped = buffer.slice(..).get_mapped_range().expect("mapped");
-    let rgba: Vec<u8> = mapped
-        .chunks(stride as usize)
-        .flat_map(|row| &row[..W as usize * 4])
-        .copied()
-        .collect();
-    let file = std::io::BufWriter::new(std::fs::File::create(path).expect("create png"));
-    let mut png = png::Encoder::new(file, W, H);
-    png.set_color(png::ColorType::Rgba);
-    png.set_depth(png::BitDepth::Eight);
-    png.write_header()
-        .and_then(|mut w| w.write_image_data(&rgba))
-        .expect("write png");
 }
 
 fn shapes(gpu: &Gpu, timer: &mut GpuTimer) {
@@ -797,7 +744,7 @@ fn modal(gpu: &Gpu, timer: &mut GpuTimer) {
     let id = Affine::IDENTITY;
     let (qv, vv) = (gpu.target(), gpu.target());
     let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
-    pngs_to(gpu, &frames[20], "-modal", &mut quad, &mut vello);
+    pngs(gpu, &frames[20], "-modal", &mut quad, &mut vello);
     let mut rows = Vec::new();
     let mut passes = std::collections::BTreeMap::<usize, usize>::new();
     let jobs = both(

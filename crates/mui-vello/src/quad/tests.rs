@@ -163,8 +163,9 @@ fn what_the_pass_cannot_draw_is_counted_by_reason() {
 #[test]
 fn the_lookup_table_is_sized_as_vello_common_sizes_it() {
     let c = Color::srgb(0., 0., 0.);
-    let size =
-        |offsets: &[f32]| build::lut_size(&offsets.iter().map(|&t| (t, c)).collect::<Vec<_>>());
+    let size = |offsets: &[f32]| {
+        super::ramp::lut_size(&offsets.iter().map(|&t| (t, c)).collect::<Vec<_>>())
+    };
     assert_eq!(size(&[0., 1.]), 256);
     assert_eq!(size(&[0., 0.5, 1.]), 512);
     // Padded out to 0 and 1: three ranges.

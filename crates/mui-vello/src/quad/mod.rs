@@ -30,6 +30,7 @@ mod layer;
 mod list;
 mod offscreen;
 mod path;
+mod ramp;
 #[cfg(test)]
 mod tests;
 mod text;
