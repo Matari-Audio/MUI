@@ -451,7 +451,9 @@ fn the_quad_pass_matches_vello_cpu() {
     compare(&mut gpu, f, "shadows", corners(51, 0.15), shadows);
     compare(&mut gpu, f, "clips", corners(45, 0.005), clips);
     compare(&mut gpu, f, "overlap", corners(37, 0.18), overlap);
-    compare(&mut gpu, f, "rotated", corners(49, 0.03), rotated);
+    // Mean 0.030 on Vulkan, 0.0306 on DX12 WARP at 1x (max 29 there): the
+    // same rotated corner edges, rounded differently by a software rasteriser.
+    compare(&mut gpu, f, "rotated", corners(49, 0.035), rotated);
     compare(&mut gpu, f, "scaled", corners(80, 0.09), scaled);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     if let Some(error) = pollster::block_on(scope.pop()) {
