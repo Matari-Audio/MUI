@@ -479,7 +479,10 @@ fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
 /// to redo every frame, so each renderer's [`Cache`] keeps the result.
 #[cfg_attr(
     not(any(test, feature = "cpu", feature = "gpu-quad")),
-    expect(dead_code, reason = "only the CPU renderer, the quad pass and tests call it")
+    expect(
+        dead_code,
+        reason = "only the CPU renderer, the quad pass and tests call it"
+    )
 )]
 fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
     size(img).map(|(w, h)| premultiplied(img, w, h))

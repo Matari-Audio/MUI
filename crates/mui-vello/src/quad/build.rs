@@ -329,7 +329,9 @@ impl Walk {
             return Ok(Drawn::Nothing);
         }
         // glifo's test for a run it can take from its atlas.
-        let uniform = a > 0. && (a - d).abs() <= NEARLY_ZERO && b.abs() <= NEARLY_ZERO
+        let uniform = a > 0.
+            && (a - d).abs() <= NEARLY_ZERO
+            && b.abs() <= NEARLY_ZERO
             && c.abs() <= NEARLY_ZERO;
         if !uniform {
             return Err(Reason::TextTransform);

@@ -8,7 +8,9 @@
 use super::build::{Instance, SHAPE_GLYPH, code};
 use crate::Cache;
 use crate::kurbo::{Affine, BezPath, Rect, Shape as _};
-use glifo::atlas::{AtlasCommand, AtlasConfig, AtlasSlot, GlyphAtlas, GlyphCacheConfig, ImageCache};
+use glifo::atlas::{
+    AtlasCommand, AtlasConfig, AtlasSlot, GlyphAtlas, GlyphCacheConfig, ImageCache,
+};
 use glifo::{AtlasCacher, AtlasPaint, Glyph, GlyphPrepCache, GlyphRun, GlyphRunBackend};
 use vello_common::paint::{Image, ImageId, ImageSource, PaintType, Tint, TintMode};
 use vello_common::peniko::color::{AlphaColor, Srgb, palette::css::BLACK};
@@ -162,7 +164,8 @@ impl Atlas {
                 rect,
                 at: self.bytes.len(),
             });
-            self.bytes.resize(self.bytes.len() + (rect[2] * rect[3]) as usize, 0);
+            self.bytes
+                .resize(self.bytes.len() + (rect[2] * rect[3]) as usize, 0);
         }
         let side = f64::from(self.side());
         let (raster, resources) = (&mut self.raster, &mut self.resources);

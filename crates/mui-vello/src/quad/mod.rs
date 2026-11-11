@@ -311,7 +311,8 @@ impl QuadRenderer {
         while side > 64 && (side * side) as usize > budget {
             side /= 2;
         }
-        let pages = (budget / (side * side) as usize).clamp(1, limits.max_texture_array_layers as usize);
+        let pages =
+            (budget / (side * side) as usize).clamp(1, limits.max_texture_array_layers as usize);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mui quad"),
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
@@ -525,7 +526,8 @@ impl QuadRenderer {
             let next = atlas_texture(device, side, layers);
             if !atlas.flushed {
                 // The old pages, copied before this frame's cells land.
-                let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
                 encoder.copy_texture_to_texture(
                     self.atlas.as_image_copy(),
                     next.as_image_copy(),

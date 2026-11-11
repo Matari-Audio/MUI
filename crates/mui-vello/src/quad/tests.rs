@@ -184,3 +184,28 @@ fn a_steady_frame_reuses_its_buffers() {
     }
     assert_eq!(cpu.bytes.len(), first * SLOTS * 16);
 }
+
+/// Text the atlas cannot hold at the right size or angle is refused, by
+/// reason; upright text at any uniform scale is not.
+#[test]
+fn text_under_rotation_or_past_the_atlas_size_is_refused() {
+    let mut spec = SceneSpec::new(
+        stack![
+            text("upright").text_size(14.),
+            text("turned").text_size(14.).rotation(0.3).at(0., 40.),
+            text("huge").text_size(300.).at(0., 80.),
+        ]
+        .size(320., 200.),
+    )
+    .offered(Size::new(320., 200.));
+    spec.font = Some(mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+    let paint = mui_scene::resolve(&spec).expect("resolves").paint;
+    let coverage = classify(&paint);
+    assert_eq!(
+        coverage.unsupported(Reason::TextTransform),
+        1,
+        "{coverage:?}"
+    );
+    assert_eq!(coverage.unsupported(Reason::TextSize), 1, "{coverage:?}");
+    assert_eq!(coverage.supported + 2, paint.len(), "{coverage:?}");
+}

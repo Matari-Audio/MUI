@@ -11,217 +11,10 @@
 use mui_scene::prelude::*;
 use mui_scene::{Layer, ResolvedScene, ShadowKind};
 use mui_vello::kurbo::Affine;
-use mui_vello::quad::{Error, QuadRenderer, Reason, classify};
-use std::{sync::mpsc, time::Duration};
+use mui_vello::quad::{Error, QuadRenderer, Reason};
 
-const W: f64 = 320.;
-const H: f64 = 200.;
-const SCALES: [f64; 3] = [1., 1.5, 2.];
-
-fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    pollster::block_on(async {
-        let adapter =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
-                .await
-                .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
-                .ok()?;
-        eprintln!("adapter: {:?}", adapter.get_info());
-        adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| eprintln!("SKIPPED: no wgpu device ({e})"))
-            .ok()
-    })
-}
-
-fn readback(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    size: [u32; 2],
-) -> Vec<u8> {
-    let stride = (size[0] * 4).next_multiple_of(256);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: None,
-        size: u64::from(stride) * u64::from(size[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-    encoder.copy_texture_to_buffer(
-        texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
-            buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(stride),
-                rows_per_image: Some(size[1]),
-            },
-        },
-        texture.size(),
-    );
-    queue.submit([encoder.finish()]);
-    let (send, recv) = mpsc::sync_channel(1);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = send.send(r);
-    });
-    device
-        .poll(wgpu::PollType::wait_indefinitely())
-        .expect("poll");
-    recv.recv_timeout(Duration::from_secs(10))
-        .expect("mapped")
-        .expect("map");
-    let mapped = buffer.slice(..).get_mapped_range().expect("mapped range");
-    let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);
-    for row in mapped.chunks(stride as usize).take(size[1] as usize) {
-        pixels.extend_from_slice(&row[..size[0] as usize * 4]);
-    }
-    pixels
-}
-
-fn save(path: &std::path::Path, size: [u32; 2], rgba: &[u8]) {
-    let file = std::io::BufWriter::new(std::fs::File::create(path).expect("create png"));
-    let mut encoder = png::Encoder::new(file, size[0], size[1]);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder
-        .write_header()
-        .and_then(|mut w| w.write_image_data(rgba))
-        .expect("write png");
-}
-
-/// The largest per-channel difference allowed, and the mean over every
-/// channel of every pixel.
-#[derive(Clone, Copy)]
-struct Limit {
-    max: u8,
-    mean: f64,
-}
-
-/// A scene with no curve in it. Both rasterisers compute exact box-filter
-/// area coverage of the same shapes and blend premultiplied sRGB-encoded
-/// values; what is left is u8 rounding (measured on RADV: max 2, mean 0.114).
-const TIGHT: Limit = Limit { max: 2, mean: 0.12 };
-
-/// A scene with rounded corners. The pass covers the exact circle;
-/// `vello_cpu` covers the polygon its flattener makes of the arc, whose
-/// chords sit up to 0.25 device px inside it. A corner pixel cut by a chord
-/// therefore differs by up to about a quarter of its area (64 levels), and
-/// a stroke narrower than twice its radius adds kurbo's inner-offset loop,
-/// counted twice by the non-zero rule. Matching that would mean fitting
-/// the reference's chords rather than the shape, so these cases take a
-/// looser maximum instead, set just above what each measured; the mean
-/// stays low because only corner pixels move. Each `max` is the case's
-/// measured worst over the three scales, rounded up.
-const fn corners(max: u8, mean: f64) -> Limit {
-    Limit { max, mean }
-}
-
-struct Gpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    quad: QuadRenderer,
-}
-
-/// `scene` (resolved at each scale) through both renderers.
-fn compare(
-    gpu: &mut Gpu,
-    failures: &mut Vec<String>,
-    name: &str,
-    limit: Limit,
-    scene: impl Fn(f64) -> ResolvedScene,
-) {
-    for scale in SCALES {
-        let scene = scene(scale);
-        let coverage = classify(&scene.paint);
-        assert!(coverage.complete(), "{name}: {coverage:?}");
-        let size = [(W * scale).round() as u32, (H * scale).round() as u32];
-        let transform = Affine::scale(scale);
-        let mut cpu = mui_vello::software::Renderer::new((size[0], size[1])).expect("cpu");
-        cpu.render(&scene, transform).expect("cpu render");
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size: wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        gpu.quad
-            .render(
-                &gpu.device,
-                &gpu.queue,
-                &scene.paint,
-                transform,
-                &view,
-                size,
-            )
-            .expect("quad render");
-        let actual = readback(&gpu.device, &gpu.queue, &texture, size);
-        let reference = cpu.pixels();
-        let diff: Vec<u8> = actual
-            .iter()
-            .zip(reference)
-            .map(|(a, b)| a.abs_diff(*b))
-            .collect();
-        let worst = diff.iter().copied().max().unwrap_or(0);
-        let mean = diff.iter().map(|&v| f64::from(v)).sum::<f64>() / diff.len() as f64;
-        println!(
-            "PIXELS {name} scale={scale} max={worst}/{} mean={mean:.4}/{}",
-            limit.max, limit.mean
-        );
-        if worst > limit.max || mean > limit.mean {
-            let dir = std::env::temp_dir().join("mui-quad-pixels");
-            std::fs::create_dir_all(&dir).expect("temp dir");
-            let file = |kind: &str| dir.join(format!("{name}-{scale}-{kind}.png"));
-            save(&file("cpu"), size, reference);
-            save(&file("gpu"), size, &actual);
-            let (channels, _) = diff.as_chunks::<4>();
-            let visible: Vec<u8> = channels
-                .iter()
-                .flat_map(|p| {
-                    let m = p.iter().copied().max().unwrap_or(0).saturating_mul(16);
-                    [m, m, m, 255]
-                })
-                .collect();
-            save(&file("diff"), size, &visible);
-            failures.push(format!(
-                "{name} at {scale}x: max {worst} > {} or mean {mean:.4} > {}; images in {}",
-                limit.max,
-                limit.mean,
-                dir.display()
-            ));
-        }
-    }
-}
-
-fn resolve(root: El, scale: f64) -> ResolvedScene {
-    mui_scene::resolve(&SceneSpec::new(root).offered(Size::new(W, H)).scale(scale))
-        .expect("resolves")
-}
-
-/// The scene's root: a square, opaque ground the size of the target.
-fn ground(children: Vec<El>) -> El {
-    stack(children)
-        .size(W, H)
-        .radius(0.)
-        .fill(Color::srgb(0.06, 0.07, 0.09))
-}
-
-fn rgba(r: f32, g: f32, b: f32, a: f32) -> Color {
-    Color::srgba(r, g, b, a)
-}
+mod quad_support;
+use quad_support::*;
 
 /// No curve anywhere: square fills, strokes with square joins, gradients,
 /// shadows of square boxes, square clips and translucent overlap. What is
@@ -297,7 +90,7 @@ fn square(scale: f64) -> ResolvedScene {
         .clip()
         .at(235., 75.),
     );
-    resolve(ground(kids), scale)
+    scene_at(ground(kids), scale)
 }
 
 fn rounded(scale: f64) -> ResolvedScene {
@@ -336,7 +129,7 @@ fn rounded(scale: f64) -> ResolvedScene {
             .stroke_width(2.)
             .at(272., 60.),
     );
-    resolve(ground(kids), scale)
+    scene_at(ground(kids), scale)
 }
 
 fn gradients(scale: f64) -> ResolvedScene {
@@ -381,7 +174,7 @@ fn gradients(scale: f64) -> ResolvedScene {
             block(66., 78.).radius(9.).fill(fill).at(x, y)
         })
         .collect();
-    resolve(ground(kids), scale)
+    scene_at(ground(kids), scale)
 }
 
 fn shadows(scale: f64) -> ResolvedScene {
@@ -419,7 +212,7 @@ fn shadows(scale: f64) -> ResolvedScene {
         recess(10., 4., -3.).at(110., 116.),
         recess(6., 0., 0.).radius(0.).at(210., 116.),
     ];
-    resolve(ground(kids), scale)
+    scene_at(ground(kids), scale)
 }
 
 fn clips(scale: f64) -> ResolvedScene {
@@ -458,7 +251,7 @@ fn clips(scale: f64) -> ResolvedScene {
     .radius(24.)
     .clip()
     .at(210., 40.);
-    resolve(ground(vec![outer, rounded_outside]), scale)
+    scene_at(ground(vec![outer, rounded_outside]), scale)
 }
 
 /// Overlapping translucent fills: order and blending.
@@ -477,7 +270,7 @@ fn overlap(scale: f64) -> ResolvedScene {
         .size(W, H)
         .radius(0.)
         .fill(rgba(0.5, 0.5, 0.6, 0.3));
-    resolve(root, scale)
+    scene_at(root, scale)
 }
 
 /// A rotated subtree: its fills, strokes, gradients, shadows and rounded
@@ -512,13 +305,13 @@ fn rotated(scale: f64) -> ResolvedScene {
     .clip()
     .rotation(0.35)
     .at(70., 40.);
-    resolve(ground(vec![panel]), scale)
+    scene_at(ground(vec![panel]), scale)
 }
 
 /// A subtree under a non-integer scale and a fractional translation, set by
 /// hand: the DSL has no subtree scale.
 fn scaled(scale: f64) -> ResolvedScene {
-    let mut scene = resolve(
+    let mut scene = scene_at(
         ground(vec![
             block(70., 40.)
                 .radius(9.)
