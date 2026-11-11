@@ -287,7 +287,7 @@ impl Instances {
             Err(Error::Unsupported {
                 reason: Reason::GlyphBudget,
                 ..
-            }) => {
+            }) if !self.atlas.flushed => {
                 self.atlas.flush();
                 self.build(paint, transform, keep)
             }

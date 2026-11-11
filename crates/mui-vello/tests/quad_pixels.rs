@@ -384,7 +384,12 @@ fn an_unsupported_entry_is_refused_by_index_and_reason() {
         .iter()
         .position(|p| p.layer == Layer::Fill)
         .expect("a fill");
+    // Drawn from its path from now on; a path the geometry kernel refuses
+    // (a line with no start) is not.
     scene.paint[at].rect = None;
+    scene.paint[at].path = std::sync::Arc::new(mui_geometry::Path {
+        commands: vec![mui_geometry::PathCommand::LineTo(Point::new(1., 1.))],
+    });
     let mut quad = QuadRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: None,
