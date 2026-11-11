@@ -1,11 +1,12 @@
 name: Verify
-# Every update checks Linux, Windows and macOS; platform cfgs are part of the gate.
+# The full gate: Linux, Windows and macOS, media, GPU and native UI. It runs
+# after merge, nightly and on demand; a PR waits only for pr.yml (the same
+# `tools/verify.sh pr` that gates a local merge). A failure here opens an issue.
 on:
-  pull_request:
-    types: [opened, synchronize, reopened]
   push:
     branches: [main]
-  merge_group:
+  schedule:
+    - cron: '17 3 * * *'
   # `gh workflow run verify.yml --ref <branch>`
   workflow_dispatch:
 permissions:
@@ -13,7 +14,7 @@ permissions:
 concurrency:
   # A dispatch cannot supersede a push or merge queue run.
   group: verify-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
@@ -155,3 +156,16 @@ jobs:
           rustup target add x86_64-pc-windows-gnu
       - name: GNU cross-target lint
         run: cargo clippy --workspace --all-features --all-targets --target x86_64-pc-windows-gnu --locked -- -D warnings
+
+  # main is red: say so where it is seen, with the run that found it.
+  alert:
+    if: failure() && github.event_name != 'workflow_dispatch'
+    needs: [linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: gh issue create -R "$GITHUB_REPOSITORY" --title "Verify failed on main at ${GITHUB_SHA::8}" --body "$GITHUB_EVENT_NAME run: $RUN"

@@ -5,12 +5,30 @@ cd "$ROOT"
 
 # One gate. CI splits media-test into disjoint CUT and native package groups;
 # local media-test/all still run the whole media workspace.
+# `pr` is the merge gate (local and PR CI): fmt, then lint and test only the
+# packages the branch changed and their dependents. The full gate runs on
+# main after merge and nightly (.github/workflows/verify.yml).
 section="${1:-all}"
 case "$section" in
-  root-lint | root-test | media-lint | media-test | media-cut-test | media-native-test | all) ;;
-  *) echo "usage: $0 [root-lint|root-test|media-lint|media-test|media-cut-test|media-native-test|all]" >&2; exit 2 ;;
+  pr | root-lint | root-test | media-lint | media-test | media-cut-test | media-native-test | all) ;;
+  *) echo "usage: $0 [pr|root-lint|root-test|media-lint|media-test|media-cut-test|media-native-test|all]" >&2; exit 2 ;;
 esac
 on() { [ "$section" = all ] || [ "$section" = "$1" ]; }
+
+if [ "$section" = pr ]; then
+base="${VERIFY_BASE:-origin/main}"
+cargo fmt --all -- --check
+read -r -a scope <<< "$(python3 tools/ci/changed_packages.py "$base")"
+if [ "${#scope[@]}" -gt 0 ]; then
+cargo clippy "${scope[@]}" --all-features --all-targets --locked --offline -- -D warnings
+cargo test "${scope[@]}" --all-features --locked --offline
+fi
+if ! git diff --quiet "$base"...HEAD -- media; then
+cargo fmt --manifest-path media/Cargo.toml --all -- --check
+cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings
+fi
+exit 0
+fi
 
 if on root-lint; then
 python3 tools/test_verify.py
