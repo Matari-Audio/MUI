@@ -53,8 +53,8 @@ pub mod prelude {
         BinAxis, BinEdit, Bins, ColorFormat, ColorOpts, Control, CurveEdit, ListEvent, ListItem,
         ListOptions, ListRow, ListState, Newline, OklchPicker, PickerShape, Response, ScrollTo,
         Setting, TextEdit, TextOpts, Variant, bins, bins_hover, button, color_picker, curve,
-        drag_value, group, knob, oklch_picker, setting, slider, stepped, text_edit, text_input,
-        toggle, uniform_list, variable_list,
+        dialog, drag_value, group, knob, menu, oklch_picker, popover, select, setting, slider,
+        stepped, text_edit, text_input, toggle, uniform_list, variable_list,
     };
     pub use crate::{Edit, Frame, Interaction, MotionPolicy, SemanticAction, Ui};
     pub use mui_input::{
