@@ -400,7 +400,7 @@ fn compact_macro_style_knob_keeps_its_value_inside_and_its_name_accessible() {
 #[test]
 fn a_still_knob_keeps_its_painted_dial_across_frames() {
     let mut ui = Ui::default();
-    let mut paths = |ui: &mut Ui, mut value: f64| {
+    let paths = |ui: &mut Ui, mut value: f64| {
         let control = knob(ui, "dial", "Mix", &mut value, 0.0..=1.0);
         ui.frame(control.into_el(), None, Input::default(), 0.016)
             .unwrap();
