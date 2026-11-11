@@ -188,7 +188,7 @@ pub trait Canvas {
     }
 }
 
-#[cfg(feature = "cpu")]
+#[cfg(any(feature = "cpu", feature = "gpu-quad"))]
 fn run(
     origin: mui_geometry::Point,
     glyphs: &[mui_scene::TextGlyph],
@@ -226,7 +226,7 @@ pub struct Cache {
 }
 
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    not(any(feature = "cpu", feature = "gpu-effects", feature = "gpu-quad", test)),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 #[derive(Clone, Copy)]
@@ -238,7 +238,7 @@ struct Frames {
 /// How long an unused font keeps its [`FontData`], and with it Vello's
 /// hinted outlines: glifo's own glyph atlas ages entries out after as many.
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    not(any(feature = "cpu", feature = "gpu-effects", feature = "gpu-quad", test)),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 const FONT_FRAMES: u64 = 64;
@@ -253,10 +253,13 @@ enum Stored {
     /// Only the GPU canvas stores these.
     #[cfg(feature = "gpu-effects")]
     Image(vello::peniko::ImageData),
+    /// The quad pass's image texture, bound as its own group.
+    #[cfg(feature = "gpu-quad")]
+    Texture(wgpu::BindGroup),
 }
 
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects")),
+    not(any(feature = "cpu", feature = "gpu-effects", feature = "gpu-quad")),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 impl Cache {
@@ -475,8 +478,8 @@ fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
 /// what a decoder produces -- and premultiplying a photo is far too much work
 /// to redo every frame, so each renderer's [`Cache`] keeps the result.
 #[cfg_attr(
-    not(any(test, feature = "cpu")),
-    expect(dead_code, reason = "only the CPU renderer and tests call it")
+    not(any(test, feature = "cpu", feature = "gpu-quad")),
+    expect(dead_code, reason = "only the CPU renderer, the quad pass and tests call it")
 )]
 fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
     size(img).map(|(w, h)| premultiplied(img, w, h))
@@ -746,7 +749,7 @@ pub(crate) fn replay(
 /// The box a gradient or image paint is fitted to. A text layer carries its
 /// ink as glyphs and leaves `path` empty, so its box comes from the run.
 // ponytail: the last glyph's own advance is estimated at the em size.
-fn paint_box(p: &Painted, path: &BezPath) -> Rect {
+pub(crate) fn paint_box(p: &Painted, path: &BezPath) -> Rect {
     let Some(t) = &p.text else {
         return path.bounding_box();
     };

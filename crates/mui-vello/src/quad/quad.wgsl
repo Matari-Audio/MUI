@@ -1,7 +1,8 @@
-// One instanced quad per paint entry: a rounded rect filled, stroked or
-// blurred, painted solid or with a gradient, clipped by at most one device
-// rectangle and one rounded rect. Coverage is analytic box-filter area, as
-// `vello_cpu` computes it, so the two agree to a few levels of 8-bit.
+// One instanced quad per paint entry, or per glyph: a rounded rect filled,
+// stroked or blurred, or a glyph's atlas cell, painted solid, with a
+// gradient or with an image, clipped by at most one device rectangle and
+// one rounded rect. Shape coverage is analytic box-filter area; a glyph's is
+// its atlas cell, read one texel a pixel.
 //
 // Colours arrive premultiplied, in sRGB-encoded space: `vello_cpu` blends
 // encoded values, and so does this pass (the target is a non-sRGB format).
@@ -12,6 +13,11 @@ struct View {
 }
 
 @group(0) @binding(0) var<uniform> view: View;
+// Glyph coverage, one layer a page.
+@group(0) @binding(1) var atlas: texture_2d_array<f32>;
+@group(0) @binding(2) var linear: sampler;
+// Premultiplied RGBA.
+@group(1) @binding(0) var image: texture_2d<f32>;
 
 // See `Instance` in build.rs for what each slot holds.
 struct Instance {
@@ -52,6 +58,16 @@ struct Varying {
 const SHAPE_STROKE: f32 = 1.0;
 const SHAPE_BLUR: f32 = 2.0;
 const SHAPE_BLUR_INVERT: f32 = 3.0;
+const SHAPE_GLYPH: f32 = 4.0;
+const PAINT_IMAGE: f32 = 4.0;
+
+// The instance code, `page * 64 + shape * 8 + paint`, as (page, shape, paint).
+fn decode(code: f32) -> vec3<f32> {
+    let page = floor(code / 64.0);
+    let rest = code - 64.0 * page;
+    let shape = floor(rest / 8.0);
+    return vec3<f32>(page, shape, rest - 8.0 * shape);
+}
 
 @vertex
 fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
@@ -66,7 +82,7 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
     let e = 0.5 * (a * a + b * b + c * c + d * d);
     let smax = sqrt(e + sqrt(max(e * e - det * det, 0.0)));
     let margin = smax / abs(det);
-    let shape = floor(i.kind.x / 4.0);
+    let shape = decode(i.kind.x).y;
     var grow = margin;
     if shape == SHAPE_STROKE {
         grow += 0.5 * i.kind.w;
@@ -74,8 +90,14 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
     let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
     let lo = i.rect.xy - vec2<f32>(grow);
     let hi = i.rect.zw + vec2<f32>(grow);
-    let q = mix(lo, hi, corner);
-    let p = vec2<f32>(a * q.x + c * q.y + i.xt.x, b * q.x + d * q.y + i.xt.y);
+    var q = mix(lo, hi, corner);
+    var p = vec2<f32>(a * q.x + c * q.y + i.xt.x, b * q.x + d * q.y + i.xt.y);
+    if shape == SHAPE_GLYPH {
+        // The cell, in device pixels; `q` maps back to local for the paint.
+        p = mix(i.rect.xy, i.rect.zw, corner);
+        let r = p - i.xt.xy;
+        q = vec2<f32>(d * r.x - c * r.y, a * r.y - b * r.x) / det;
+    }
     var o: Varying;
     o.pos = vec4<f32>(p.x / view.size.x * 2.0 - 1.0, 1.0 - p.y / view.size.y * 2.0, 0.0, 1.0);
     o.q = q;
@@ -245,27 +267,31 @@ fn clip(p: vec2<f32>, v: Varying) -> f32 {
 
 @fragment
 fn fs(v: Varying) -> @location(0) vec4<f32> {
-    let shape = floor(v.kind.x / 4.0);
-    let paint = v.kind.x - 4.0 * shape;
+    let code = decode(v.kind.x);
+    let shape = code.y;
+    let paint = code.z;
     let radius = v.kind.z;
     let width = v.kind.w;
     let q = v.q;
     var cov: f32;
-    if shape == SHAPE_STROKE {
+    if shape == SHAPE_GLYPH {
+        let texel = vec2<i32>(floor(v.pos.xy - v.rect.xy + v.kind.zw));
+        cov = textureLoad(atlas, texel, i32(code.x), 0).r;
+    } else if shape == SHAPE_STROKE {
         let h = 0.5 * width;
         let outer = rounded(q, v.rect + vec4<f32>(-h, -h, h, h), radius + h, v.ji);
         let inner = rounded(q, v.rect + vec4<f32>(h, h, -h, -h), max(radius - h, 0.0), v.ji);
         cov = max(outer - inner, 0.0);
     } else {
         // A blurred rect paints its inflated box, sharp-edged.
-        cov = rounded(q, v.rect, select(radius, 0.0, shape >= SHAPE_BLUR), v.ji);
+        cov = rounded(q, v.rect, select(radius, 0.0, shape == SHAPE_BLUR || shape == SHAPE_BLUR_INVERT), v.ji);
     }
     cov *= clip(v.pos.xy, v);
     if cov <= 0.0 {
         discard;
     }
     var colour: vec4<f32>;
-    if shape >= SHAPE_BLUR {
+    if shape == SHAPE_BLUR || shape == SHAPE_BLUR_INVERT {
         var z = blurred(q, v.c1, v.c2, v.c3);
         if shape == SHAPE_BLUR_INVERT {
             z = 1.0 - z;
@@ -273,6 +299,10 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
         colour = v.c0 * z;
     } else if paint == 0.0 {
         colour = v.c0;
+    } else if paint == PAINT_IMAGE {
+        // Image pixels from the box's local space; bilinear, edges clamped.
+        let at = (q - v.geom.xy) / v.geom.zw;
+        colour = textureSampleLevel(image, linear, at / vec2<f32>(textureDimensions(image)), 0.0);
     } else {
         colour = ramp(ramp_t(q, paint, v.geom), v.kind.y, v);
     }

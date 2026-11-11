@@ -4,8 +4,8 @@
 //! the `Cpu` canvas, and whatever it cannot is reported, never approximated.
 
 use super::Reason;
-use crate::kurbo::{Affine, Rect};
-use mui_scene::{GradientKind, Layer, Paint, Painted, ShadowKind};
+use crate::kurbo::{Affine, BezPath, Rect};
+use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ShadowKind};
 
 /// Gradient stops one instance carries. A longer ramp is
 /// [`Reason::GradientStops`], not truncated.
@@ -19,13 +19,17 @@ pub const MAX_STOPS: usize = 4;
 /// | 0 | local-to-device affine `a b c d` |
 /// | 1 | affine `e f`, unused, unused |
 /// | 2 | the rect (`x0 y0 x1 y1`, local); a blur's inflated box |
-/// | 3 | `shape * 4 + paint`, gradient table scale, radius, stroke width |
+/// | 3 | code, gradient table scale, radius, stroke width; glyph: code, scale, atlas `x y` |
 /// | 4-7 | premultiplied colour stops; blur: colour, params, params, rect |
 /// | 8 | stop offsets |
-/// | 9 | gradient geometry |
+/// | 9 | gradient geometry; image: placement `tx ty sx sy` |
 /// | 10 | device clip rect |
 /// | 11-12 | rounded clip: device-to-local affine `a b c d`, `e f radius on` |
 /// | 13 | rounded clip rect |
+///
+/// The code is `page * 64 + shape * 8 + paint`. A glyph's rect (slot 2) is
+/// in device pixels, a whole-pixel box over its atlas cell; its affine still
+/// maps the entry's local space, where a gradient lives.
 pub type Instance = [[f32; 4]; SLOTS];
 pub const SLOTS: usize = 14;
 
@@ -33,6 +37,33 @@ const SHAPE_FILL: f32 = 0.;
 const SHAPE_STROKE: f32 = 1.;
 const SHAPE_BLUR: f32 = 2.;
 const SHAPE_BLUR_INVERT: f32 = 3.;
+pub const SHAPE_GLYPH: f32 = 4.;
+const PAINT_IMAGE: f32 = 4.;
+
+/// The instance code of `shape` painted with `paint`.
+pub fn code(shape: f32, paint: f32) -> f32 {
+    shape * 8. + paint
+}
+
+/// The largest glyph, in device pixels per em, the atlas takes. A larger run
+/// is [`Reason::TextSize`].
+pub const MAX_GLYPH_PX: f32 = 256.;
+
+/// glifo's tolerance for a uniform, unskewed scale.
+const NEARLY_ZERO: f64 = 1. / 4096.;
+
+/// What one entry of the list asks of the renderer.
+#[derive(Debug)]
+pub enum Drawn<'p> {
+    /// Nothing to draw: bookkeeping, or no area.
+    Nothing,
+    /// The instance in `out`.
+    One,
+    /// The instance in `out`, sampling this image.
+    Image(&'p mui_scene::Image),
+    /// A glyph run: `out` is the template every glyph's instance starts from.
+    Text(&'p mui_scene::Text),
+}
 
 /// No device clip at all: far past any target.
 const OPEN: [f32; 4] = [-1e9, -1e9, 1e9, 1e9];
@@ -120,9 +151,20 @@ fn rect4(r: Rect) -> [f32; 4] {
 }
 
 /// The walk's state across one list: the clip stack, reused frame to frame.
-#[derive(Default)]
 pub struct Walk {
     clips: Vec<Clip>,
+    /// The largest image side a texture can take; images past it are
+    /// [`Reason::ImageSize`].
+    pub max_image: u32,
+}
+
+impl Default for Walk {
+    fn default() -> Self {
+        Self {
+            clips: Vec::new(),
+            max_image: u32::MAX,
+        }
+    }
 }
 
 impl Walk {
@@ -139,17 +181,16 @@ impl Walk {
         self.clips.last().copied().unwrap_or(Clip::NONE)
     }
 
-    /// `p` under the caller's `transform`: `Ok(true)` when `out` now holds
-    /// an instance to draw, `Ok(false)` for an entry that draws nothing
-    /// (bookkeeping, or what `one` leaves out). The clip stack moves even
+    /// `p` under the caller's `transform`: what it draws, with `out` holding
+    /// its instance (or a glyph run's template). The clip stack moves even
     /// for an unsupported clip, so the rest of the list still classifies
     /// against the right state.
-    pub fn entry(
+    pub fn entry<'p>(
         &mut self,
-        p: &Painted,
+        p: &'p Painted,
         transform: Affine,
         out: &mut Instance,
-    ) -> Result<bool, Reason> {
+    ) -> Result<Drawn<'p>, Reason> {
         *out = [[0.; 4]; SLOTS];
         let xf = crate::placed(transform, p);
         if !xf.as_coeffs().iter().all(|v| v.is_finite()) {
@@ -162,7 +203,7 @@ impl Walk {
         match p.layer {
             Layer::Unclip => {
                 self.clips.pop();
-                return Ok(false);
+                return Ok(Drawn::Nothing);
             }
             Layer::Clip => {
                 let top = self.clip();
@@ -173,7 +214,7 @@ impl Walk {
                 let next = top.push(rr.bounds(), rr.radius(), xf);
                 self.clips.push(next.unwrap_or(top));
                 return if next.is_some() {
-                    Ok(false)
+                    Ok(Drawn::Nothing)
                 } else {
                     Err(Reason::ClipDepth)
                 };
@@ -181,16 +222,18 @@ impl Walk {
             Layer::Blend { .. } | Layer::Unblend | Layer::Mask => return Err(Reason::Layer),
             Layer::Backdrop => return Err(Reason::Backdrop),
             Layer::External => return Err(Reason::External),
-            Layer::Text => return Err(Reason::Text),
-            Layer::Shadow(_) | Layer::Fill | Layer::Shell(_) | Layer::Stroke | Layer::Draw(_) => {}
+            Layer::Text
+            | Layer::Shadow(_)
+            | Layer::Fill
+            | Layer::Shell(_)
+            | Layer::Stroke
+            | Layer::Draw(_) => {}
         }
-        if p.text.is_some() {
-            return Err(Reason::Text);
+        if let Paint::Vector { .. } = p.paint {
+            return Err(Reason::Vector);
         }
-        match p.paint {
-            Paint::Image { .. } => return Err(Reason::Image),
-            Paint::Vector { .. } => return Err(Reason::Vector),
-            Paint::Solid(_) | Paint::Gradient { .. } => {}
+        if let Some(text) = &p.text {
+            return self.text(p, text, xf, out);
         }
         let blurred = p.blur > 0.0;
         let Some(rr) = p.rect else {
@@ -199,7 +242,7 @@ impl Walk {
             return if crate::path_shadow(p) {
                 Err(Reason::PathShadow)
             } else if blurred {
-                Ok(false)
+                Ok(Drawn::Nothing)
             } else {
                 Err(Reason::Path)
             };
@@ -207,19 +250,46 @@ impl Walk {
         let [a, b, c, d, e, f] = xf.as_coeffs();
         if a * d - b * c == 0. {
             // Collapsed to a line: no area, nothing for `vello_cpu` to cover.
-            return Ok(false);
+            return Ok(Drawn::Nothing);
         }
         let bounds = rr.bounds();
         let radius = rr.radius();
         out[0] = [a as f32, b as f32, c as f32, d as f32];
-        self.clip().write(out);
+        let mut clip = self.clip();
+        // An image is placed on the box as `one` places it; `Contain` also
+        // clips to the rect the image occupies, so the padded edge does not
+        // smear across the letterbox.
+        let image = match &p.paint {
+            Paint::Image { image, .. } if image.texture.is_some() => {
+                return Err(Reason::ImageTexture);
+            }
+            // A buffer that does not match its size paints the solid stand-in.
+            Paint::Image { image, fit } if crate::size(image).is_some() => {
+                if image.width.max(image.height) > self.max_image {
+                    return Err(Reason::ImageSize);
+                }
+                let t = crate::image_transform(image, *fit, bounds);
+                if *fit == Fit::Contain {
+                    let r = t.transform_rect_bbox(Rect::new(
+                        0.,
+                        0.,
+                        f64::from(image.width),
+                        f64::from(image.height),
+                    ));
+                    clip = clip.push(r, 0., xf).ok_or(Reason::ClipDepth)?;
+                }
+                Some((image, t))
+            }
+            _ => None,
+        };
+        clip.write(out);
         if blurred {
             // Both backends blur with the solid stand-in of a gradient.
             let colour = premul(crate::srgb(p.paint.solid()).components);
             let invert = matches!(p.layer, Layer::Shadow(ShadowKind::Inset));
             out[1] = [e as f32, f as f32, 0., 0.];
             blur(out, bounds, radius as f32, p.blur as f32, colour, invert);
-            return Ok(true);
+            return Ok(Drawn::One);
         }
         let shape = if p.width > 0.0 {
             SHAPE_STROKE
@@ -228,9 +298,53 @@ impl Walk {
         };
         out[1] = [e as f32, f as f32, 0., 0.];
         out[2] = rect4(bounds);
+        let (kind, scale) = match image {
+            Some((_, t)) => {
+                let [sx, _, _, sy, tx, ty] = t.as_coeffs();
+                out[9] = [tx as f32, ty as f32, sx as f32, sy as f32];
+                (PAINT_IMAGE, 0.)
+            }
+            None => paint(out, &p.paint, bounds)?,
+        };
+        out[3] = [code(shape, kind), scale, radius as f32, p.width as f32];
+        Ok(image.map_or(Drawn::One, |(image, _)| Drawn::Image(image)))
+    }
+
+    /// A glyph run's template: its paint, clip and local-to-device affine.
+    /// The atlas draws glyphs under translation and uniform scale only;
+    /// anything else is refused rather than drawn from a mask at the wrong
+    /// size or angle.
+    fn text<'p>(
+        &self,
+        p: &Painted,
+        text: &'p mui_scene::Text,
+        xf: Affine,
+        out: &mut Instance,
+    ) -> Result<Drawn<'p>, Reason> {
+        if let Paint::Image { .. } = p.paint {
+            return Err(Reason::Image);
+        }
+        let [a, b, c, d, e, f] = xf.as_coeffs();
+        if a * d - b * c == 0. || text.glyphs.is_empty() {
+            return Ok(Drawn::Nothing);
+        }
+        // glifo's test for a run it can take from its atlas.
+        let uniform = a > 0. && (a - d).abs() <= NEARLY_ZERO && b.abs() <= NEARLY_ZERO
+            && c.abs() <= NEARLY_ZERO;
+        if !uniform {
+            return Err(Reason::TextTransform);
+        }
+        if text.size * a as f32 > MAX_GLYPH_PX {
+            return Err(Reason::TextSize);
+        }
+        out[0] = [a as f32, b as f32, c as f32, d as f32];
+        out[1] = [e as f32, f as f32, 0., 0.];
+        self.clip().write(out);
+        // The brush box comes from the run, as `paint` fits it.
+        let bounds = crate::paint_box(p, &BezPath::new());
         let (kind, scale) = paint(out, &p.paint, bounds)?;
-        out[3] = [shape * 4. + kind, scale, radius as f32, p.width as f32];
-        Ok(true)
+        out[3] = [code(SHAPE_GLYPH, kind), scale, 0., 0.];
+        Ok(Drawn::Text(text))
     }
 }
 
@@ -267,7 +381,7 @@ fn blur(out: &mut Instance, rect: Rect, radius: f32, std_dev: f32, colour: [f32;
         SHAPE_BLUR
     };
     out[2] = rect4(rect.inflate(kernel, kernel));
-    out[3] = [shape * 4., 0., 0., 0.];
+    out[3] = [code(shape, 0.), 0., 0., 0.];
     out[4] = colour;
     out[5] = [inv, exponent, scale, r1];
     out[6] = [w, h, 0., 0.];
@@ -296,7 +410,8 @@ fn paint(out: &mut Instance, paint: &Paint, bounds: Rect) -> Result<(f32, f32), 
     let (kind, stops) = match paint {
         Paint::Solid(c) => return solid(out, *c),
         Paint::Gradient { kind, stops } => (kind, stops),
-        Paint::Image { .. } => return Err(Reason::Image),
+        // An image this pass cannot place paints its stand-in, as `one` does.
+        Paint::Image { .. } => return solid(out, paint.solid()),
         Paint::Vector { .. } => return Err(Reason::Vector),
     };
     // `vello_common::encode::validate`: what it refuses paints solid.

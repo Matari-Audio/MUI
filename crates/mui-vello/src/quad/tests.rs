@@ -173,7 +173,7 @@ fn a_steady_frame_reuses_its_buffers() {
         .radius(8.)
         .clip(),
     );
-    let mut cpu = Instances::default();
+    let mut cpu = Instances::new(1024, 4);
     let first = cpu.build(&paint, Affine::IDENTITY).expect("supported");
     let (at, capacity) = (cpu.bytes.as_ptr(), cpu.bytes.capacity());
     let clips = cpu.walk.clip_capacity();

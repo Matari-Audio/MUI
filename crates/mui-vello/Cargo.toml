@@ -11,9 +11,10 @@ default = []
 test-support = []
 reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
 gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
-# The instanced SDF quad pass: rounded rects, strokes, analytic shadows and
-# clips in one draw with no compute. Independent of classic Vello.
-gpu-quad = ["wgpu/wgsl"]
+# The instanced SDF quad pass: rounded rects, strokes, analytic shadows,
+# clips, glyph-atlas text and images, with no compute. Independent of
+# classic Vello; `vello_cpu` only rasterises glyph masks for its atlas.
+gpu-quad = ["wgpu/wgsl", "dep:vello_cpu", "dep:glifo"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
