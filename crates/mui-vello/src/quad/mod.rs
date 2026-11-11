@@ -126,7 +126,10 @@ impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unsupported { index, reason } => {
-                write!(f, "paint entry {index} is unsupported by the quad pass: {reason}")
+                write!(
+                    f,
+                    "paint entry {index} is unsupported by the quad pass: {reason}"
+                )
             }
             Self::Target => f.write_str("quad pass target is empty or its transform is not finite"),
         }
@@ -136,6 +139,13 @@ impl std::fmt::Display for Error {
 impl std::error::Error for Error {}
 
 const STRIDE: u64 = (SLOTS * 16) as u64;
+
+const ATTRIBUTES: [wgpu::VertexAttribute; SLOTS] = wgpu::vertex_attr_array![
+    0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
+    4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
+    8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4,
+    12 => Float32x4, 13 => Float32x4,
+];
 
 /// The pass: one pipeline, one uniform, one instance buffer that grows and
 /// is then reused.
@@ -202,12 +212,6 @@ impl QuadRenderer {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        const ATTRIBUTES: [wgpu::VertexAttribute; SLOTS] = wgpu::vertex_attr_array![
-            0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
-            4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
-            8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4,
-            12 => Float32x4, 13 => Float32x4,
-        ];
         // Premultiplied source-over, on encoded values, as `vello_cpu` blends.
         let over = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::One,
@@ -297,11 +301,7 @@ impl QuadRenderer {
             queue.write_buffer(&self.instances, 0, &self.cpu.bytes);
         }
         let view = [size[0] as f32, size[1] as f32, 0., 0.];
-        let mut uniform = [0u8; 16];
-        for (chunk, v) in uniform.chunks_exact_mut(4).zip(view) {
-            chunk.copy_from_slice(&v.to_ne_bytes());
-        }
-        queue.write_buffer(&self.uniform, 0, &uniform);
+        queue.write_buffer(&self.uniform, 0, view.map(f32::to_ne_bytes).as_flattened());
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("mui quad"),
         });

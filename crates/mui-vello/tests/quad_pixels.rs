@@ -105,10 +105,7 @@ struct Limit {
 /// A scene with no curve in it. Both rasterisers compute exact box-filter
 /// area coverage of the same shapes and blend premultiplied sRGB-encoded
 /// values; what is left is u8 rounding (measured on RADV: max 2, mean 0.114).
-const TIGHT: Limit = Limit {
-    max: 2,
-    mean: 0.12,
-};
+const TIGHT: Limit = Limit { max: 2, mean: 0.12 };
 
 /// A scene with rounded corners. The pass covers the exact circle;
 /// `vello_cpu` covers the polygon its flattener makes of the arc, whose
@@ -162,7 +159,14 @@ fn compare(
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         gpu.quad
-            .render(&gpu.device, &gpu.queue, &scene.paint, transform, &view, size)
+            .render(
+                &gpu.device,
+                &gpu.queue,
+                &scene.paint,
+                transform,
+                &view,
+                size,
+            )
             .expect("quad render");
         let actual = readback(&gpu.device, &gpu.queue, &texture, size);
         let reference = cpu.pixels();
@@ -227,7 +231,11 @@ fn square(scale: f64) -> ResolvedScene {
     let fills: Vec<Fill> = vec![
         Color::srgb(0.9, 0.3, 0.2).into(),
         Gradient::linear(90., [(0., red), (1., blue)]).into(),
-        Gradient::linear(30., [(0., red), (0.4, rgba(0.2, 0.9, 0.3, 0.5)), (1., blue)]).into(),
+        Gradient::linear(
+            30.,
+            [(0., red), (0.4, rgba(0.2, 0.9, 0.3, 0.5)), (1., blue)],
+        )
+        .into(),
         Gradient::radial((0.4, 0.6), 0.7, [(0., red), (1., blue)]).into(),
         Gradient::conic(20., [(0., red), (0.5, blue), (1., red)]).into(),
     ];
@@ -256,19 +264,33 @@ fn square(scale: f64) -> ResolvedScene {
             .shadow(Shadow::inset(6.))
             .at(14., 76.),
     );
-    for (i, c) in [rgba(1., 0.2, 0.1, 0.5), rgba(0.1, 0.9, 0.3, 0.4), rgba(0.2, 0.3, 1., 0.65)]
-        .into_iter()
-        .enumerate()
+    for (i, c) in [
+        rgba(1., 0.2, 0.1, 0.5),
+        rgba(0.1, 0.9, 0.3, 0.4),
+        rgba(0.2, 0.3, 1., 0.65),
+    ]
+    .into_iter()
+    .enumerate()
     {
-        kids.push(block(70., 50.).radius(0.).fill(c).at(110. + 25. * i as f64, 70. + 15. * i as f64));
+        kids.push(
+            block(70., 50.)
+                .radius(0.)
+                .fill(c)
+                .at(110. + 25. * i as f64, 70. + 15. * i as f64),
+        );
     }
     kids.push(
         stack![
-            stack![block(200., 30.).radius(0.).fill(Color::srgb(0.9, 0.8, 0.2)).at(-30., 10.)]
-                .size(60., 50.)
-                .radius(0.)
-                .clip()
-                .at(10., 10.)
+            stack![
+                block(200., 30.)
+                    .radius(0.)
+                    .fill(Color::srgb(0.9, 0.8, 0.2))
+                    .at(-30., 10.)
+            ]
+            .size(60., 50.)
+            .radius(0.)
+            .clip()
+            .at(10., 10.)
         ]
         .size(70., 80.)
         .radius(0.)
@@ -321,7 +343,11 @@ fn gradients(scale: f64) -> ResolvedScene {
     let (red, blue) = (Color::srgb(0.95, 0.2, 0.1), Color::srgb(0.1, 0.3, 0.95));
     let fills: Vec<Fill> = vec![
         Gradient::linear(90., [(0., red), (1., blue)]).into(),
-        Gradient::linear(45., [(0., red), (0.5, Color::srgb(0.2, 0.9, 0.3)), (1., blue)]).into(),
+        Gradient::linear(
+            45.,
+            [(0., red), (0.5, Color::srgb(0.2, 0.9, 0.3)), (1., blue)],
+        )
+        .into(),
         Gradient::linear(180., [(0.2, red), (0.8, blue)]).into(),
         Gradient::linear(
             300.,
@@ -334,10 +360,18 @@ fn gradients(scale: f64) -> ResolvedScene {
         )
         .into(),
         Gradient::radial((0.5, 0.5), 0.5, [(0., red), (1., blue)]).into(),
-        Gradient::radial((0.3, 0.7), 0.8, [(0., rgba(1., 1., 1., 0.9)), (1., rgba(0., 0., 0., 0.))])
-            .into(),
+        Gradient::radial(
+            (0.3, 0.7),
+            0.8,
+            [(0., rgba(1., 1., 1., 0.9)), (1., rgba(0., 0., 0., 0.))],
+        )
+        .into(),
         Gradient::conic(0., [(0., red), (1., blue)]).into(),
-        Gradient::conic(30., [(0., red), (0.5, Color::srgb(0.2, 0.9, 0.3)), (1., blue)]).into(),
+        Gradient::conic(
+            30.,
+            [(0., red), (0.5, Color::srgb(0.2, 0.9, 0.3)), (1., blue)],
+        )
+        .into(),
     ];
     let kids = fills
         .into_iter()
@@ -399,15 +433,26 @@ fn clips(scale: f64) -> ResolvedScene {
     .radius(18.)
     .clip()
     .at(-10., 10.);
-    let middle = stack![inner].size(170., 120.).radius(0.).clip().at(20.5, 15.25);
-    let outer = stack![middle].size(150., 150.).radius(0.).clip().at(30., 20.);
+    let middle = stack![inner]
+        .size(170., 120.)
+        .radius(0.)
+        .clip()
+        .at(20.5, 15.25);
+    let outer = stack![middle]
+        .size(150., 150.)
+        .radius(0.)
+        .clip()
+        .at(30., 20.);
     // A square clip inside a rounded one, the other way round.
     let rounded_outside = stack![
-        stack![bar(10., Color::srgb(0.9, 0.8, 0.2)), bar(40., Color::srgb(0.8, 0.2, 0.9))]
-            .size(60., 60.)
-            .radius(0.)
-            .clip()
-            .at(-10., 0.)
+        stack![
+            bar(10., Color::srgb(0.9, 0.8, 0.2)),
+            bar(40., Color::srgb(0.8, 0.2, 0.9))
+        ]
+        .size(60., 60.)
+        .radius(0.)
+        .clip()
+        .at(-10., 0.)
     ]
     .size(80., 80.)
     .radius(24.)
@@ -428,7 +473,10 @@ fn overlap(scale: f64) -> ResolvedScene {
     .map(|(c, x, y)| block(120., 80.).radius(16.).fill(c).at(x, y))
     .collect();
     // The ground itself translucent, so the target keeps alpha.
-    let root = stack(kids).size(W, H).radius(0.).fill(rgba(0.5, 0.5, 0.6, 0.3));
+    let root = stack(kids)
+        .size(W, H)
+        .radius(0.)
+        .fill(rgba(0.5, 0.5, 0.6, 0.3));
     resolve(root, scale)
 }
 
@@ -438,7 +486,13 @@ fn rotated(scale: f64) -> ResolvedScene {
     let panel = stack![
         block(90., 30.)
             .radius(8.)
-            .fill(Gradient::linear(90., [(0., Color::srgb(0.9, 0.2, 0.2)), (1., Color::srgb(0.2, 0.2, 0.9))]))
+            .fill(Gradient::linear(
+                90.,
+                [
+                    (0., Color::srgb(0.9, 0.2, 0.2)),
+                    (1., Color::srgb(0.2, 0.2, 0.9))
+                ]
+            ))
             .at(10., 10.),
         block(60., 40.)
             .radius(0.)
@@ -476,7 +530,14 @@ fn scaled(scale: f64) -> ResolvedScene {
                 .at(20., 20.),
             block(60., 60.)
                 .radius(30.)
-                .fill(Gradient::radial((0.5, 0.5), 0.5, [(0., Color::srgb(1., 1., 1.)), (1., Color::srgb(0.1, 0.4, 0.9))]))
+                .fill(Gradient::radial(
+                    (0.5, 0.5),
+                    0.5,
+                    [
+                        (0., Color::srgb(1., 1., 1.)),
+                        (1., Color::srgb(0.1, 0.4, 0.9)),
+                    ],
+                ))
                 .id("b")
                 .at(110., 30.),
         ]),
@@ -548,7 +609,14 @@ fn an_unsupported_entry_is_refused_by_index_and_reason() {
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let error = quad
-        .render(&device, &queue, &scene.paint, Affine::IDENTITY, &view, [8, 8])
+        .render(
+            &device,
+            &queue,
+            &scene.paint,
+            Affine::IDENTITY,
+            &view,
+            [8, 8],
+        )
         .expect_err("refused");
     assert_eq!(
         error,

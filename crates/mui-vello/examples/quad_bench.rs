@@ -41,7 +41,9 @@ fn scene() -> ResolvedScene {
             let chip = |c: Color| block(18., 10.).radius(5.).fill(c);
             col![
                 row![chip(a), chip(b), chip(a)].gap(4.),
-                block(100., 8.).radius(4.).fill(Color::srgb(0.35, 0.37, 0.4)),
+                block(100., 8.)
+                    .radius(4.)
+                    .fill(Color::srgb(0.35, 0.37, 0.4)),
                 stack![block(160., 12.).radius(6.).fill(b).at(-20., 0.)]
                     .size(80., 12.)
                     .radius(0.)
@@ -116,7 +118,10 @@ fn time(
 fn main() {
     let base = scene();
     let coverage = classify(&base.paint);
-    assert!(coverage.complete(), "bench scene must be all supported: {coverage:?}");
+    assert!(
+        coverage.complete(),
+        "bench scene must be all supported: {coverage:?}"
+    );
     let count = |l: fn(&Layer) -> bool| base.paint.iter().filter(|p| l(&p.layer)).count();
     println!(
         "scene: {} entries ({} fills, {} strokes, {} shadows, {} clips, {} gradients)",

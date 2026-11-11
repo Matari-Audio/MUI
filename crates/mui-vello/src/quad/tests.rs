@@ -135,7 +135,11 @@ fn what_the_pass_cannot_draw_is_counted_by_reason() {
     let coverage = classify(&paint);
     assert_eq!(coverage.unsupported(Reason::Path), 1, "{coverage:?}");
     assert_eq!(coverage.unsupported(Reason::ClipDepth), 1, "{coverage:?}");
-    assert_eq!(coverage.unsupported(Reason::GradientStops), 1, "{coverage:?}");
+    assert_eq!(
+        coverage.unsupported(Reason::GradientStops),
+        1,
+        "{coverage:?}"
+    );
     let refused: usize = coverage.unsupported.iter().sum();
     assert_eq!(coverage.supported + refused, paint.len());
 }
@@ -143,7 +147,8 @@ fn what_the_pass_cannot_draw_is_counted_by_reason() {
 #[test]
 fn the_lookup_table_is_sized_as_vello_common_sizes_it() {
     let c = Color::srgb(0., 0., 0.);
-    let size = |offsets: &[f32]| build::lut_size(&offsets.iter().map(|&t| (t, c)).collect::<Vec<_>>());
+    let size =
+        |offsets: &[f32]| build::lut_size(&offsets.iter().map(|&t| (t, c)).collect::<Vec<_>>());
     assert_eq!(size(&[0., 1.]), 256);
     assert_eq!(size(&[0., 0.5, 1.]), 512);
     // Padded out to 0 and 1: three ranges.
@@ -154,8 +159,6 @@ fn the_lookup_table_is_sized_as_vello_common_sizes_it() {
     // A hard stop: a zero-width range.
     assert_eq!(size(&[0., 0.5, 0.5, 1.]), 4096);
 }
-
-
 
 #[test]
 fn a_steady_frame_reuses_its_buffers() {

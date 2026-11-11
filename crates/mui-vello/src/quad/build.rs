@@ -144,7 +144,12 @@ impl Walk {
     /// (bookkeeping, or what `one` leaves out). The clip stack moves even
     /// for an unsupported clip, so the rest of the list still classifies
     /// against the right state.
-    pub fn entry(&mut self, p: &Painted, transform: Affine, out: &mut Instance) -> Result<bool, Reason> {
+    pub fn entry(
+        &mut self,
+        p: &Painted,
+        transform: Affine,
+        out: &mut Instance,
+    ) -> Result<bool, Reason> {
         *out = [[0.; 4]; SLOTS];
         let xf = crate::placed(transform, p);
         if !xf.as_coeffs().iter().all(|v| v.is_finite()) {
@@ -165,15 +170,12 @@ impl Walk {
                     self.clips.push(top);
                     return Err(Reason::ClipPath);
                 };
-                return match top.push(rr.bounds(), rr.radius(), xf) {
-                    Some(next) => {
-                        self.clips.push(next);
-                        Ok(false)
-                    }
-                    None => {
-                        self.clips.push(top);
-                        Err(Reason::ClipDepth)
-                    }
+                let next = top.push(rr.bounds(), rr.radius(), xf);
+                self.clips.push(next.unwrap_or(top));
+                return if next.is_some() {
+                    Ok(false)
+                } else {
+                    Err(Reason::ClipDepth)
                 };
             }
             Layer::Blend { .. } | Layer::Unblend | Layer::Mask => return Err(Reason::Layer),
@@ -219,7 +221,11 @@ impl Walk {
             blur(out, bounds, radius as f32, p.blur as f32, colour, invert);
             return Ok(true);
         }
-        let shape = if p.width > 0.0 { SHAPE_STROKE } else { SHAPE_FILL };
+        let shape = if p.width > 0.0 {
+            SHAPE_STROKE
+        } else {
+            SHAPE_FILL
+        };
         out[1] = [e as f32, f as f32, 0., 0.];
         out[2] = rect4(bounds);
         let (kind, scale) = paint(out, &p.paint, bounds)?;
@@ -255,7 +261,11 @@ fn blur(out: &mut Instance, rect: Rect, radius: f32, std_dev: f32, colour: [f32;
     let w = width + delta.min(0.0);
     let h = height - delta.max(0.0);
     let scale = 0.5 * erf7(inv * 0.5 * (w.max(h) - 0.5 * radius));
-    let shape = if invert { SHAPE_BLUR_INVERT } else { SHAPE_BLUR };
+    let shape = if invert {
+        SHAPE_BLUR_INVERT
+    } else {
+        SHAPE_BLUR
+    };
     out[2] = rect4(rect.inflate(kernel, kernel));
     out[3] = [shape * 4., 0., 0., 0.];
     out[4] = colour;
@@ -309,7 +319,10 @@ fn paint(out: &mut Instance, paint: &Paint, bounds: Rect) -> Result<(f32, f32), 
             let (s, c) = (a.sin(), -a.cos());
             let len = (bounds.width() * s).abs() + (bounds.height() * c).abs();
             let half = (s * len / 2.0, c * len / 2.0);
-            let (p0, p1) = ((mid.x - half.0, mid.y - half.1), (mid.x + half.0, mid.y + half.1));
+            let (p0, p1) = (
+                (mid.x - half.0, mid.y - half.1),
+                (mid.x + half.0, mid.y + half.1),
+            );
             if degenerate(p0.0, p1.0) && degenerate(p0.1, p1.1) {
                 return solid(out, first);
             }
