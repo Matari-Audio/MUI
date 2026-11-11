@@ -93,7 +93,7 @@ pub enum Reason {
     /// [`QuadRenderer::render_scene`]), or naming a weld the scene does not
     /// hold (found when drawn).
     External,
-    /// More offscreen target than the budget allows (see
+    /// Offscreen surface identities exhausted, or more target bytes than the budget allows (see
     /// [`QuadRenderer::set_offscreen_budget`]; found when drawn).
     Offscreen,
     /// A non-finite transform.

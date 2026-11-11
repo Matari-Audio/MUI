@@ -106,7 +106,9 @@ impl Instances {
             let start = self.list.len();
             match drawn {
                 Drawn::Open { mix, opacity } => {
-                    self.layers.open(index, start as u32, mix, opacity);
+                    self.layers
+                        .open(index, start as u32, mix, opacity)
+                        .map_err(refuse)?;
                     continue;
                 }
                 Drawn::Close => {
@@ -158,7 +160,10 @@ impl Instances {
                     sigma,
                 } => {
                     let kind = Kind::Backdrop { scale, sigma };
-                    let id = self.layers.backdrop(index, at, region, kind);
+                    let id = self
+                        .layers
+                        .backdrop(index, at, region, kind)
+                        .map_err(refuse)?;
                     self.layers.charge_backdrop(id).map_err(refuse)?;
                     self.list.push(one);
                 }

@@ -211,15 +211,20 @@ impl Layers {
         }
     }
 
+    /// The next surface identity, refused before it can wrap onto the frame.
+    fn next_surface(&self) -> Result<u16, Reason> {
+        u16::try_from(self.surfaces.len()).map_err(|_| Reason::Offscreen)
+    }
+
     /// A group layer opens at entry `entry`, its first instance at `first`.
-    pub fn open(&mut self, entry: usize, first: u32, mix: u32, opacity: f32) {
+    pub fn open(&mut self, entry: usize, first: u32, mix: u32, opacity: f32) -> Result<(), Reason> {
         let hidden = self.hidden > 0 || opacity.is_nan() || opacity <= 0.;
-        self.hidden += usize::from(hidden);
         let surface = if hidden {
             u16::MAX
         } else {
-            self.surfaces.len() as u16
+            self.next_surface()?
         };
+        self.hidden += usize::from(hidden);
         self.open.push(Open {
             entry,
             hidden,
@@ -231,7 +236,7 @@ impl Layers {
             isolate: mix != 0,
         });
         if hidden {
-            return;
+            return Ok(());
         }
         self.surfaces.push(Surface {
             kind: Kind::Group,
@@ -241,6 +246,7 @@ impl Layers {
             upto: first,
             dirty: true,
         });
+        Ok(())
     }
 
     /// A mask is drawn next: its layer needs a target. `false` outside any
@@ -253,7 +259,14 @@ impl Layers {
     /// `region` it samples is the frame's runs and every open layer's
     /// before it. Every open layer needs a target, so that what each drew
     /// so far is in it unfolded.
-    pub fn backdrop(&mut self, entry: usize, at: u32, region: [u32; 4], kind: Kind) -> u16 {
+    pub fn backdrop(
+        &mut self,
+        entry: usize,
+        at: u32,
+        region: [u32; 4],
+        kind: Kind,
+    ) -> Result<u16, Reason> {
+        let id = self.next_surface()?;
         let mut sources = vec![0];
         for o in &mut self.open {
             // Only reached outside hidden layers, where every open one has
@@ -261,7 +274,6 @@ impl Layers {
             o.isolate = true;
             sources.push(o.surface);
         }
-        let id = self.surfaces.len() as u16;
         self.surfaces.push(Surface {
             kind,
             entries: [entry, entry],
@@ -272,7 +284,7 @@ impl Layers {
         });
         self.passes.push(id);
         self.push(at, Bind::Surface(id), false);
-        id
+        Ok(id)
     }
 
     /// Charge `texels` of target to the budget.
@@ -364,12 +376,12 @@ impl Layers {
         let bind = if o.mix == 0 {
             Bind::Surface(id)
         } else {
+            let under = self.next_surface()?;
             // It blends with what its parent drew before it, so the parent
             // cannot be folded into what is under it.
             if let Some(p) = self.open.last_mut() {
                 p.isolate = true;
             }
-            let under = self.surfaces.len() as u16;
             self.surfaces.push(Surface {
                 kind: Kind::Under,
                 entries: [entry, entry],
@@ -477,5 +489,62 @@ impl Layers {
                 Kind::Folded => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn folded_surfaces(count: usize) -> Layers {
+        let mut layers = Layers::default();
+        layers.begin([8, 8]);
+        let mut list = Vec::new();
+        for entry in 0..count {
+            layers.open(entry, 0, 0, 1.).unwrap();
+            layers.close(entry, &mut list, [8, 8]).unwrap();
+        }
+        assert_eq!(layers.bytes, 0);
+        layers
+    }
+
+    /// Empty groups consume identities even though they consume no target bytes.
+    #[test]
+    fn surface_capacity_refuses_groups_and_backdrops_without_wrapping() {
+        let mut layers = folded_surfaces(usize::from(u16::MAX));
+        assert_eq!(layers.surfaces.len(), 65_536);
+        assert_eq!(layers.open(99, 0, 0, 1.), Err(Reason::Offscreen));
+        assert!(layers.open.is_empty());
+        assert_eq!(
+            layers.backdrop(
+                99,
+                0,
+                [0, 0, 8, 8],
+                Kind::Backdrop {
+                    scale: 1,
+                    sigma: 1.
+                }
+            ),
+            Err(Reason::Offscreen)
+        );
+        assert_eq!(layers.surfaces.len(), 65_536);
+        assert!(layers.passes.is_empty());
+        // Hidden groups need no identity, even at capacity.
+        layers.open(100, 0, 0, 0.).unwrap();
+        layers.close(101, &mut Vec::new(), [8, 8]).unwrap();
+        layers.finish().unwrap();
+    }
+
+    /// A blending group's snapshot has its own identity admission check.
+    #[test]
+    fn surface_capacity_refuses_blend_snapshots_without_wrapping() {
+        let mut layers = folded_surfaces(usize::from(u16::MAX) - 1);
+        layers.open(99, 0, 1, 1.).unwrap();
+        layers.push(0, Bind::None, false);
+        let mut list = vec![super::super::build::clear([8, 8])];
+        assert_eq!(layers.close(100, &mut list, [8, 8]), Err(Reason::Offscreen));
+        assert_eq!(layers.surfaces.len(), 65_536);
+        assert!(layers.passes.is_empty());
+        assert_eq!(list.len(), 1);
     }
 }
