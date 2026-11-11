@@ -394,7 +394,7 @@ fn editor_frames(frames: usize, turn: bool) -> Vec<ResolvedScene> {
     (0..frames)
         .map(|i| {
             if turn {
-                app.knobs[5] = (0.2 + 0.013 * i as f64) % 1.;
+                app.knobs[7] = (0.2 + 0.013 * i as f64) % 1.;
             }
             frame(&mut ui, &mut app)
         })

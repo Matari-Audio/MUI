@@ -78,7 +78,7 @@ pub fn editor(ui: &mut Ui, app: &mut App) -> El {
     if vectors() {
         return grid(
             8,
-            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[5] * 2.0).h(50.0)),
+            (0..96).map(|i| curve(f64::from(i) * 0.13 + app.knobs[7] * 2.0).h(50.0)),
         )
         .gap(2.0)
         .pad(4.0)
