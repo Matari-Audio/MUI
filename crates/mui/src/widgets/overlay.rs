@@ -57,7 +57,9 @@ pub fn popover(
 fn item(id: Id, label: &str, checked: bool) -> El {
     let weight = if checked { Role::Primary } else { Role::Ink };
     row([text(label).fill(weight)])
-        .pad((10.0, 6.0))
+        .h(ROW)
+        .align(Align::Center)
+        .pad((10.0, 0.0))
         .radius(6.0)
         .w(Len::Pct(100.0))
         .on(State::Hover, |s| s.fill(Role::Field))
@@ -70,7 +72,14 @@ fn item(id: Id, label: &str, checked: bool) -> El {
 }
 
 /// The rows of a menu, each `"{id}/{index}"`; returns the index activated.
-fn items(ui: &Ui, id: &Id, labels: &[&str], checked: Option<usize>) -> (El, Option<usize>) {
+/// A list taller than the room beside `anchor` scrolls inside that room.
+fn items(
+    ui: &Ui,
+    id: &Id,
+    anchor: &str,
+    labels: &[&str],
+    checked: Option<usize>,
+) -> (El, Option<usize>) {
     let mut chosen = None;
     let rows = labels.iter().enumerate().map(|(i, label)| {
         let key = Id::runtime(&format!("{}/{i}", id.as_str()));
@@ -79,8 +88,29 @@ fn items(ui: &Ui, id: &Id, labels: &[&str], checked: Option<usize>) -> (El, Opti
         }
         item(key, label, checked == Some(i))
     });
-    let list = col(rows.collect::<Vec<_>>()).min_w(140.0);
+    let mut list = col(rows.collect::<Vec<_>>()).min_w(140.0);
+    let tall = ROW * labels.len() as f64;
+    if let Some(room) = room(ui, anchor).filter(|&room| tall > room) {
+        list = list.h(room).scroll();
+    }
     (list, chosen)
+}
+
+/// A menu row's height: fixed, so a list knows its height before it is laid
+/// out and scrolls only when it would not fit.
+const ROW: f64 = 32.0;
+
+/// The larger of the window's room below and above `anchor`, less the
+/// popover's gap and padding, as last frame laid them out.
+fn room(ui: &Ui, anchor: &str) -> Option<f64> {
+    let scene = ui.scene()?;
+    let window = *scene.layout.all().first()?;
+    let a = scene.surface(anchor)?.frame;
+    // The gap, the card's padding above and below, and a margin to the edge.
+    let spare = 4.0 * 8.0;
+    let below = window.size.height - (a.y + a.size.height) - spare;
+    let above = a.y - window.y - spare;
+    Some(below.max(above).max(ROW))
 }
 
 /// A list of `labels` in a [`popover`] under `anchor`, while `*open`.
@@ -102,7 +132,7 @@ pub fn menu(
     labels: &[&str],
 ) -> Response<Option<usize>, Option<El>> {
     let id: Id = id.into();
-    let (list, chosen) = items(ui, &id, labels, None);
+    let (list, chosen) = items(ui, &id, anchor, labels, None);
     if chosen.is_some() {
         *open = false;
     }
@@ -138,7 +168,7 @@ pub fn select(
     if toggle.changed {
         open = !open;
     }
-    let (list, chosen) = items(ui, &list_id, options, Some(*selected));
+    let (list, chosen) = items(ui, &list_id, id.as_str(), options, Some(*selected));
     let changed = chosen.is_some_and(|i| i != *selected);
     if let Some(i) = chosen {
         *selected = i;
@@ -157,7 +187,9 @@ pub fn select(
 
 /// `content` in a card centred over a dimmed window, while `*open`. The dim
 /// takes every press, so nothing under it responds; a press on it or Escape
-/// sets `*open` false. Push it as the last child of the root.
+/// sets `*open` false. Keyboard focus stays inside it while it is up and
+/// goes back to what had it when it closes. Push it as the last child of
+/// the root.
 ///
 /// ```
 /// use mui::prelude::*;
@@ -175,6 +207,7 @@ pub fn dialog(ui: &mut Ui, id: impl Into<Id>, open: &mut bool, content: impl Int
         return None;
     }
     ui.capture_popup_wheel(id.clone());
+    ui.trap_focus(id.clone());
     let body = col([content.into_el()])
         .pad(M)
         .preset(card())
