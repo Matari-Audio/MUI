@@ -8,10 +8,12 @@ there is no FPS column (see `docs/rendering-investigation.md`).
 
 **History note.** Every row labelled `vello_hybrid` or `vello (classic)`, and
 the `--features cpu,bench-classic` table, is history: measured while the GPU
-canvas was `vello_hybrid` or compute-shader Vello. Both are gone. The GPU path
-is now the instanced SDF quad pass behind `effects::GpuRenderer`; `bench` runs
-`vello_cpu` plus the `gpu-quad` rows. The old rows stay as measured, not
-re-run, and the Vello code that produced them is deleted.
+canvas was `vello_hybrid` or compute-shader Vello. `vello_hybrid` is gone.
+Compute-shader Vello survives only as `effects::VelloRenderer` behind
+`vello-classic` (for mui-cut's classic engine and comparison benches). The GPU
+path every consumer gets is the instanced SDF quad pass behind
+`effects::GpuRenderer`; `bench` runs `vello_cpu` plus the `gpu-quad` rows. The
+old rows stay as measured, not re-run.
 
 ## Quad pass against classic Vello, the last head-to-head (2026-11-11)
 

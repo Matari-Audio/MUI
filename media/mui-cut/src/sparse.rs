@@ -1,6 +1,6 @@
 //! MUI's paint walk onto `vello_gpu` (Vello's sparse-strips GPU renderer,
 //! ex `vello_hybrid`): paths are tiled on the CPU, strips are drawn with
-//! plain vertex/fragment shaders, so it runs where classic Vello's compute
+//! plain vertex/fragment shaders, so it runs where compute
 //! shaders cannot (WebGL2) as well as on WebGPU and native.
 //!
 //! `vello_gpu` lives on Vello git main with its own `vello_common`, while

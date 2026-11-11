@@ -1,8 +1,7 @@
 // The viewport renderer, off the main thread, the first that opens of:
-// WebGPU (Vello, engine per `WEBGPU_ENGINE`), WebGL2 (vello_gpu: no
-// compute shaders there, so classic Vello cannot run), then Vello CPU into
-// the canvas's 2D context. `?renderer=classic|gpu|webgl2|cpu` in the
-// editor's URL forces one. Draws are requested one at a time; the editor
+// WebGPU (vello_gpu), WebGL2 (vello_gpu), then Vello CPU into the canvas's
+// 2D context. `?renderer=gpu|webgl2|cpu` in the editor's URL forces one
+// (`classic` still works, as `gpu`). Draws are requested one at a time; the editor
 // sends the next only after `drawn`, so a slow frame never queues up.
 //
 // Exports run here too: every frame of every scene drawn at project size
@@ -12,8 +11,7 @@
 import init, { Cut, GpuView, lastPanic } from './pkg/mui_cut.js';
 import { Mp4 } from './mp4.js';
 
-// The WebGPU default, from the benchmark in the README.
-const WEBGPU_ENGINE = 'classic';
+const WEBGPU_ENGINE = 'gpu';
 
 let gpu = null, cpu = null, ctx = null, canvas = null;
 let gpuKind = null;     // [api, engine] the viewport opened with; exports use the same

@@ -26,7 +26,7 @@ cargo run --manifest-path media/Cargo.toml -p mui-cut -- \
 
 ```sh
 mui-cut render PROJECT -o out.mp4|null [--scene NAME] [--mb N] [--size WxH]
-                      [--renderer classic|gpu|cpu|blender] [--threads N] [--stats]
+                      [--renderer gpu|cpu|blender] [--threads N] [--stats]
                       [--engine eevee|cycles] [--samples N]   # blender only
                       [--codec h264|h265|av1] [--encoder auto|vaapi|software]
                       [--crf N | --bitrate 12M [--maxrate 20M]] [--preset P]
@@ -72,11 +72,11 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
   subframes across a 180-degree shutter and averages them in linear light
   (mui-reel's shutter). `--size` scales the whole frame. `-o null` renders
   without writing a file (ffmpeg's null muxer), for benchmarks.
-- `--renderer` picks what draws: `classic` (the default: MUI's
-  `GpuRenderer`, classic Vello in compute shaders), `gpu` (`vello_gpu`,
-  Vello's sparse-strips renderer: strips built on the CPU, raster in plain
-  render passes) or `cpu` (Vello CPU; `--cpu` is the same). No GPU adapter
-  falls back to the CPU. Both GPU engines stay alive across frames; motion
+- `--renderer` picks what draws: `gpu` (the default: `vello_gpu`, Vello's
+  sparse-strips renderer: strips built on the CPU, raster in plain render
+  passes; `classic`, the retired compute-shader engine's name, is an alias)
+  or `cpu` (Vello CPU; `--cpu` is the same). No GPU adapter falls back to
+  the CPU. The GPU engine stays alive across frames; motion
   blur adds each subframe into an `Rgba16Float` texture
   (`src/shutter.wgsl`), one readback per output frame through a ring of
   three staging buffers, so the GPU draws the next frame while the last
@@ -89,14 +89,14 @@ mui-cut schema | check | sheet | strip | diff | gen | mcp
 
   | renderer | `--mb 1` | `--mb 8` |
   | --- | --- | --- |
-  | classic (default) | 302 | 204 |
-  | gpu (`vello_gpu`) | 289 | 180 |
+  | classic (compute Vello, retired; history) | 302 | 204 |
+  | gpu (`vello_gpu`, now the default) | 289 | 180 |
   | cpu, frame pool (default) | 274 | 41 |
   | cpu, one frame on 16 threads (`--threads 1`) | 159 | 7.6 |
   | cpu before this pool (serial) | 98 | 2.2 |
 
   `--mb 1` on the GPU is bound by the pipe to ffmpeg. The first GPU frames
-  carry pipeline creation (classic: up to 1.6 s under load).
+  carry pipeline creation (the retired classic engine: up to 1.6 s under load).
 - `still` is the agent's eyes: one PNG of one scene at one time, seconds from
   the scene's start.
 - `eval` prints what the evaluator computes at a time, for checking numbers
@@ -848,10 +848,10 @@ explodes two levels in 3D: panels, then their controls.
 ## The web editor
 
 - **Viewport**: the scene at the playhead, drawn in a worker on an
-  `OffscreenCanvas`, by the first that opens of: WebGPU (classic Vello),
-  WebGL2 (`vello_gpu`; classic Vello needs compute shaders), Vello CPU (a
+  `OffscreenCanvas`, by the first that opens of: WebGPU (`vello_gpu`),
+  WebGL2 (`vello_gpu`), Vello CPU (a
   SIMD128 build). The header names the API (`WebGPU`/`WebGL2`/`CPU`), its
-  tooltip the engine. `?renderer=classic|gpu|webgl2|cpu` forces one.
+  tooltip the engine. `?renderer=gpu|webgl2|cpu` forces one (`classic` is an alias of `gpu`).
 - **Playback** runs on a monotonic clock from the moment play (or a seek)
   started, sampled for when the frame will be shown, so a slow draw drops
   frames rather than slowing time; only the newest frame is ever drawn.
@@ -1105,7 +1105,7 @@ mui-cut gen    SCRIPT.rhai [-o OUT.cut.json] [--seed N] [--into PROJECT [--scene
 mui-cut mcp    [PROJECT]            # Model Context Protocol server on stdio
 ```
 
-The pictures take `--renderer classic|gpu|cpu` like `still`, default to
+The pictures take `--renderer gpu|cpu` like `still`, default to
 `PROJECT` with `.sheet.png` / `.ID.strip.png` / `.diff.png` next to it, and
 are sized to be read by a model (1600 px wide).
 

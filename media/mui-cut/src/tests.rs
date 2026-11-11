@@ -218,8 +218,7 @@ fn gpu_frames_match_the_cpu_in_order() {
         .iter()
         .map(|subs| shutter(&mut cpu, &mut Vec::new(), subs).unwrap())
         .collect();
-    let mut engines = Vec::new();
-    for engine in [Engine::Classic, Engine::Sparse] {
+    for engine in [Engine::Sparse] {
         let mut gpu = match Offline::new([320, 180], engine) {
             Ok(g) => g,
             Err(e) => return eprintln!("skipped: no GPU ({e})"),
@@ -240,15 +239,6 @@ fn gpu_frames_match_the_cpu_in_order() {
                 "{engine:?} frame {i}: {off} channels differ from the CPU"
             );
         }
-        engines.push(got);
-    }
-    // vello_gpu is a drop-in for classic Vello.
-    for (i, (s, c)) in engines[1].iter().zip(&engines[0]).enumerate() {
-        let off = differing(s, c);
-        assert!(
-            off < c.len() / 1000,
-            "frame {i}: {off} channels differ from classic"
-        );
     }
 }
 
@@ -666,35 +656,22 @@ fn square(layer: &str, scene: &str, t: f64) -> (Project, Frame) {
     (p, f)
 }
 
-/// Straight RGBA of each output frame (a list of subframes) on the GPU, on
-/// both engines: they must agree (edges aside), so effects hold on each.
+/// Straight RGBA of each output frame (a list of subframes) on the GPU.
 #[cfg(not(target_arch = "wasm32"))]
 fn gpu_frames(frames: &[Vec<Frame>]) -> Option<Vec<Vec<u8>>> {
-    let run = |engine| {
-        let mut g = match Offline::new([160, 90], engine) {
-            Ok(g) => g,
-            Err(e) => {
-                eprintln!("skipped: no GPU ({e})");
-                return None;
-            }
-        };
-        let mut out = Vec::new();
-        for subs in frames {
-            out.extend(g.push(subs).unwrap());
+    let mut g = match Offline::new([160, 90], Engine::Sparse) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("skipped: no GPU ({e})");
+            return None;
         }
-        out.extend(g.finish().unwrap());
-        Some(out)
     };
-    let classic = run(Engine::Classic)?;
-    let sparse = run(Engine::Sparse)?;
-    for (c, s) in classic.iter().zip(&sparse) {
-        let off = c.iter().zip(s).filter(|(a, b)| a.abs_diff(**b) > 8).count();
-        assert!(
-            off < c.len() / 100,
-            "the engines disagree on {off} channels"
-        );
+    let mut out = Vec::new();
+    for subs in frames {
+        out.extend(g.push(subs).unwrap());
     }
-    Some(classic)
+    out.extend(g.finish().unwrap());
+    Some(out)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -1611,7 +1588,7 @@ fn a_plugin_in_a_3d_scene_draws_like_its_2d_self() {
     let flat = eval(&p, &p.scenes[0], 0.);
     p.scenes[0].mode = Mode::ThreeD;
     let deep = eval(&p, &p.scenes[0], 0.);
-    let mut g = match Offline::new(p.size, Engine::Classic) {
+    let mut g = match Offline::new(p.size, Engine::Sparse) {
         Ok(g) => g,
         Err(e) => return eprintln!("skipped: no GPU ({e})"),
     };

@@ -359,7 +359,7 @@ pub struct GpuView {
 
 #[wasm_bindgen]
 impl GpuView {
-    /// `api` is `webgpu` or `webgl2`, `engine` `classic` or `gpu`
+    /// `api` is `webgpu` or `webgl2`, `engine` `gpu` (`classic` is an alias)
     /// (vello_gpu); WebGL2 has no compute shaders, so it always gets
     /// vello_gpu. Fails when there is no such adapter or device; the canvas
     /// then holds that API's context, so probe before calling.
@@ -370,8 +370,7 @@ impl GpuView {
     ) -> Result<GpuView, String> {
         let (backends, engine) = match (api, engine) {
             ("webgl2", _) => (wgpu::Backends::GL, Engine::Sparse),
-            ("webgpu", "gpu") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Sparse),
-            ("webgpu", "classic") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Classic),
+                        ("webgpu", "classic" | "gpu") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Sparse),
             _ => return Err(format!("no GPU view for {api} with {engine}")),
         };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -430,7 +429,7 @@ impl GpuView {
             shutter: None,
         })
     }
-    /// `classic` or `vello_gpu`.
+    /// Always `vello_gpu`.
     pub fn engine(&self) -> String {
         self.canvas.engine().name().into()
     }

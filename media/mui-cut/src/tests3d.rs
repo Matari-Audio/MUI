@@ -200,7 +200,7 @@ fn an_unturned_unlit_3d_scene_draws_like_its_2d_self() {
         let flat = eval(&p, &s, 1.);
         s.mode = Mode::ThreeD;
         let deep = eval(&p, &s, 1.);
-        for engine in [Engine::Classic, Engine::Sparse] {
+        for engine in [Engine::Sparse] {
             let Some(mut g) = offline(&p, engine) else {
                 return;
             };
@@ -232,7 +232,7 @@ fn shadowed_3d_frames_are_deterministic_and_drawn() {
         .map(|k| eval(&p, s, 3. + f64::from(k) * 0.01))
         .collect();
     let mut engines = Vec::new();
-    for engine in [Engine::Classic, Engine::Sparse] {
+    for engine in [Engine::Sparse] {
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -266,7 +266,7 @@ fn a_refined_preview_is_the_beauty_export() {
     let mut p = Project::load(STAGE3D).unwrap();
     p.size = [480, 270];
     let f = eval(&p, &p.scenes[0], 3.);
-    let Some(mut g) = offline(&p, Engine::Classic) else {
+    let Some(mut g) = offline(&p, Engine::Sparse) else {
         return;
     };
     let plain = frame(&mut g, &[f.clone(), f.clone()]);
@@ -317,7 +317,7 @@ fn the_orbit_preview_swings_about_the_target_and_keeps_zero_as_is() {
 #[test]
 fn an_export_refuses_to_draw_a_3d_shot_flat() {
     let p = scene3d(r#"{"id":"a","kind":"rect","x":320,"y":180}"#);
-    let Some(mut g) = offline(&p, Engine::Classic) else {
+    let Some(mut g) = offline(&p, Engine::Sparse) else {
         return;
     };
     g.canvas.three_d = false;
@@ -339,7 +339,7 @@ fn a_3d_scene_runs_its_effects_on_the_3d_pass() {
     fx.scenes[0].effects =
         serde_json::from_str(r#"[{"type": "levels", "saturation": 0}]"#).unwrap();
     let centre = (180 * 640 + 320) * 4;
-    for engine in [Engine::Classic, Engine::Sparse] {
+    for engine in [Engine::Sparse] {
         let Some(mut g) = offline(&plain, engine) else {
             return;
         };
@@ -390,7 +390,7 @@ fn an_overlay_draws_flat_over_the_3d_pass_and_its_effects() {
     // `ry` 60 would squeeze it to half its width in 3D: flat, it spans
     // x 260..380.
     let edge = at(372, 180);
-    for engine in [Engine::Classic, Engine::Sparse] {
+    for engine in [Engine::Sparse] {
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -480,7 +480,7 @@ fn a_layers_effects_run_on_its_slab_with_room_to_spread() {
     );
     let at = |x: usize, y: usize| (y * 640 + x) * 4;
     let rgb = |px: &[u8], i: usize| [0, 1, 2].map(|k| i32::from(px[i + k]));
-    for engine in [Engine::Classic, Engine::Sparse] {
+    for engine in [Engine::Sparse] {
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -656,7 +656,7 @@ fn nothing_lighter_shows_behind_a_dark_exploded_part() {
             {"group": "background", "rect": [0, 0, 200, 100], "src": "img/bg.png"},
             {"group": "a", "rect": [10, 10, 180, 80], "src": "img/a.png"},
         ]});
-        let Some(mut g) = offline(&p, Engine::Classic) else {
+        let Some(mut g) = offline(&p, Engine::Sparse) else {
             return;
         };
         g.assets
@@ -985,7 +985,7 @@ fn a_gltf_model_shows_its_maps_and_animates() {
            {"id":"key","kind":"light","rx":-30,"ry":20},
            {"id":"fill","kind":"light","type":"ambient","intensity":0.6}"#,
     );
-    for engine in [Engine::Classic, Engine::Sparse] {
+    for engine in [Engine::Sparse] {
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -1032,7 +1032,7 @@ fn a_sky_is_seen_behind_a_3d_scene() {
     assert!((s.sun[0] - 0.866).abs() < 1e-3 && (s.sun[1] - 0.5).abs() < 1e-3);
     assert!(s.sun[2].abs() < 1e-3);
     assert_eq!(s.drift, [0.25, 0.]);
-    let Some(mut g) = offline(&p, Engine::Classic) else {
+    let Some(mut g) = offline(&p, Engine::Sparse) else {
         return;
     };
     let px = frame(&mut g, &[eval(&p, &p.scenes[0], 1.)]);
@@ -1070,7 +1070,7 @@ fn a_physical_sky_draws_a_sunrise() {
         dawn[0] / dawn[2] > 3. * noon[0] / noon[2],
         "{dawn:?} {noon:?}"
     );
-    let Some(mut g) = offline(&p, Engine::Classic) else {
+    let Some(mut g) = offline(&p, Engine::Sparse) else {
         return;
     };
     let at =
@@ -1141,7 +1141,7 @@ fn bloom_makes_a_sun_in_frame_glow() {
     };
     let glow = |bloom: &str| {
         let p = Project::load(&src(bloom)).unwrap();
-        let mut g = offline(&p, Engine::Classic)?;
+        let mut g = offline(&p, Engine::Sparse)?;
         let px = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
         // Round the sun at the frame's middle, out where the sky is not white.
         let at = |x: usize, y: usize| u32::from(px[(y * 320 + x) * 4 + 1]);
@@ -1178,7 +1178,7 @@ fn an_emissive_face_glows_in_the_dark() {
             {{"id":"r","kind":"rect","x":320,"y":180,"width":200,"height":120,"fill":"#4080c0",
               "material":{{"roughness":1{emission}}}}}"##
         ));
-        let mut g = offline(&p, Engine::Classic)?;
+        let mut g = offline(&p, Engine::Sparse)?;
         let f = frame(&mut g, &[eval(&p, &p.scenes[0], 0.)]);
         let i = (180 * 640 + 320) * 4;
         Some([f[i], f[i + 1], f[i + 2]])
