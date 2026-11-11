@@ -139,7 +139,7 @@ fn ramps(scale: f64) -> ResolvedScene {
     let hue = |n: usize| {
         (0..n).map(move |i| {
             let t = i as f32 / (n - 1) as f32;
-            let c = |o: f32| 0.5 + 0.5 * (6.283 * (t + o)).cos();
+            let c = |o: f32| 0.5 + 0.5 * (std::f32::consts::TAU * (t + o)).cos();
             (t, Color::srgb(c(0.), c(0.33), c(0.67)))
         })
     };

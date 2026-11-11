@@ -24,20 +24,23 @@
 //! images, or one image, is one draw call.
 
 mod build;
+mod damage;
 mod gpu;
 mod layer;
+mod list;
 mod offscreen;
 mod path;
 #[cfg(test)]
 mod tests;
 mod text;
 
-use crate::Cache;
 use crate::effects::WeldTextures;
 use crate::kurbo::Affine;
-use build::{Drawn, Instance, SLOTS, Walk};
+use build::{Instance, SLOTS, Walk};
+use damage::Retained;
 use gpu::{atlas_texture, image_group, image_texture, instance_buffer, path_texture, view_group};
-use layer::{Bind, Kind, Layers};
+use layer::Kind;
+use list::{Instances, Welds};
 use mui_scene::{Layer, Painted, ResolvedScene};
 use offscreen::{Draw, Offscreen, Slots};
 use rustc_hash::FxHashMap;
@@ -271,224 +274,6 @@ struct Host {
     group: Option<wgpu::BindGroup>,
 }
 
-/// Where a frame's welds come from: the scene's placements, and the pool
-/// that holds their textures.
-#[derive(Clone, Copy)]
-struct Welds<'a> {
-    scene: &'a ResolvedScene,
-    pool: &'a WeldTextures,
-}
-
-/// The CPU side of a frame: the walk, the instances it writes and the glyph
-/// atlas, all kept, so a steady frame allocates nothing.
-struct Instances {
-    list: Vec<Instance>,
-    bytes: Vec<u8>,
-    walk: Walk,
-    atlas: text::Atlas,
-    /// Fonts, and each image's bind group, keyed on the app's buffer.
-    cache: Cache,
-    /// Each entry's device box, as of the last frame that built it.
-    boxes: Vec<[f32; 4]>,
-    /// Which target each instance is drawn into, and what it binds.
-    layers: Layers,
-}
-
-/// Which entries a build writes, given an entry's index and its box from
-/// the last frame that built it.
-type Keep<'a> = &'a dyn Fn(usize, [f32; 4]) -> bool;
-
-impl Instances {
-    fn new(side: u16, pages: usize) -> Self {
-        Self {
-            list: Vec::new(),
-            bytes: Vec::new(),
-            walk: Walk::default(),
-            atlas: text::Atlas::new(side, pages),
-            cache: Cache::default(),
-            boxes: Vec::new(),
-            layers: Layers::default(),
-        }
-    }
-
-    /// Start a frame of builds.
-    fn begin(&mut self, entries: usize) {
-        self.cache.tick();
-        self.walk.paths.begin();
-        self.atlas.begin();
-        self.atlas.flushed = false;
-        self.boxes.resize(entries, build::EMPTY);
-    }
-
-    /// The instances of the entries of `paint` that `keep` names, into
-    /// `self.list`, each kept entry's box updated; their count. Every entry
-    /// is walked, so an unsupported one is refused whether kept or not. A
-    /// frame the glyph atlas or the path texture cannot hold empties it and
-    /// tries once more.
-    fn build(
-        &mut self,
-        paint: &[Painted],
-        transform: Affine,
-        keep: Keep,
-        welds: Option<Welds>,
-    ) -> Result<usize, Error> {
-        match self.list(paint, transform, keep, welds) {
-            Err(Error::Unsupported {
-                reason: Reason::GlyphBudget,
-                ..
-            }) if !self.atlas.flushed => {
-                self.atlas.flush();
-                self.build(paint, transform, keep, welds)
-            }
-            Err(Error::Unsupported {
-                reason: Reason::PathBudget,
-                ..
-            }) if !self.walk.paths.flushed => {
-                self.walk.paths.flush();
-                self.build(paint, transform, keep, welds)
-            }
-            done => done,
-        }
-    }
-
-    fn list(
-        &mut self,
-        paint: &[Painted],
-        transform: Affine,
-        keep: Keep,
-        welds: Option<Welds>,
-    ) -> Result<usize, Error> {
-        self.list.clear();
-        self.layers.begin(self.walk.size);
-        self.walk.begin();
-        let mut one: Instance = [[0.; 4]; SLOTS];
-        for (index, p) in paint.iter().enumerate() {
-            let refuse = |reason| Error::Unsupported { index, reason };
-            let drawn = self.walk.entry(p, transform, &mut one).map_err(refuse)?;
-            let start = self.list.len();
-            match drawn {
-                Drawn::Open { mix, opacity } => {
-                    self.layers.open(index, start as u32, mix, opacity);
-                    continue;
-                }
-                Drawn::Close => {
-                    let size = self.walk.size;
-                    let (blend, b) = self
-                        .layers
-                        .close(index, &mut self.list, size)
-                        .map_err(refuse)?;
-                    self.boxes[blend] = b;
-                    self.boxes[index] = b;
-                    continue;
-                }
-                _ => {}
-            }
-            if self.layers.hidden() {
-                self.boxes[index] = build::EMPTY;
-                continue;
-            }
-            if !keep(index, self.boxes[index]) {
-                continue;
-            }
-            let at = start as u32;
-            match drawn {
-                Drawn::Nothing | Drawn::Open { .. } | Drawn::Close => {}
-                Drawn::One if p.layer == Layer::Mask => {
-                    if !self.layers.mask() {
-                        return Err(refuse(Reason::Layer));
-                    }
-                    self.layers.push(at, Bind::None, true);
-                    self.list.push(one);
-                }
-                Drawn::One => {
-                    self.layers.push(at, Bind::None, false);
-                    self.list.push(one);
-                    build::spans(&mut self.list, start, &p.paint);
-                }
-                Drawn::Image(image) => {
-                    self.layers.push(at, Bind::Image(image.clone()), false);
-                    self.list.push(one);
-                }
-                Drawn::Host(key) => {
-                    self.layers.push(at, Bind::Host(key), false);
-                    self.list.push(one);
-                }
-                Drawn::Backdrop {
-                    region,
-                    scale,
-                    sigma,
-                } => {
-                    let kind = Kind::Backdrop { scale, sigma };
-                    let id = self.layers.backdrop(index, at, region, kind);
-                    self.layers.charge_backdrop(id).map_err(refuse)?;
-                    self.list.push(one);
-                }
-                Drawn::External => {
-                    let w = welds.ok_or(refuse(Reason::External))?;
-                    let e = w
-                        .scene
-                        .external_weld(&p.key)
-                        .ok_or(refuse(Reason::External))?;
-                    // No texture: a weld off the target, never drawn.
-                    if let Some((id, texture, used)) = w.pool.texture(&p.key) {
-                        let b = e.bounds();
-                        let [uw, uh] = used.map(|v| v as f32);
-                        one[2] = [b.x0, b.y0, b.x1, b.y1].map(|v| v as f32);
-                        one[3] = [build::code(0., build::PAINT_IMAGE), 0., 0., 0.];
-                        one[4] = [1., uw, uh, 0.];
-                        let (w, h) = (b.width() as f32, b.height() as f32);
-                        one[9] = [b.x0 as f32, b.y0 as f32, w / uw, h / uh];
-                        self.layers.push(at, Bind::Weld(id, texture.clone()), false);
-                        self.list.push(one);
-                    }
-                }
-                Drawn::Text(text) => {
-                    self.layers.push(at, Bind::None, false);
-                    let xf = crate::placed(transform, p);
-                    self.atlas
-                        .draw(&mut self.cache, text, xf, &one, &mut self.list)
-                        .map_err(|f| {
-                            refuse(match f {
-                                text::Failure::Colour => Reason::Text,
-                                text::Failure::Full => Reason::GlyphBudget,
-                            })
-                        })?;
-                    build::spans(&mut self.list, start, &p.paint);
-                }
-            }
-            self.boxes[index] = self.list[start..]
-                .iter()
-                .map(build::device_box)
-                .fold(build::EMPTY, build::union);
-        }
-        self.layers
-            .finish()
-            .map_err(|(index, reason)| Error::Unsupported { index, reason })?;
-        Ok(self.list.len())
-    }
-
-    /// `self.list` as the bytes of the instance buffer.
-    fn encode(&mut self) {
-        let floats = self.list.as_flattened().as_flattened();
-        self.bytes.resize(floats.len() * 4, 0);
-        for (out, v) in self.bytes.as_chunks_mut::<4>().0.iter_mut().zip(floats) {
-            *out = v.to_ne_bytes();
-        }
-    }
-}
-
-/// What the target holds after the last frame drawn on it.
-struct Retained {
-    paint: Vec<Painted>,
-    transform: Affine,
-    size: [u32; 2],
-    target: wgpu::TextureView,
-}
-
-/// A partial frame pays while its damage is at most this share of the
-/// target; past it the frame redraws whole.
-const PARTIAL: f32 = 0.5;
-
 impl QuadRenderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self::with_budgets(device, format, ATLAS_BUDGET, PATH_BUDGET)
@@ -660,7 +445,7 @@ impl QuadRenderer {
     /// (the weld pass `GpuRenderer` uses) when it changed, and sampled
     /// straight from there in its slot. A weld that changed redraws its
     /// slot, and whatever samples it: a backdrop over it, a layer it is in.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "render's arguments and the weld pool"
     )]
@@ -724,7 +509,7 @@ impl QuadRenderer {
         done
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "render's arguments and the welds"
     )]
@@ -929,129 +714,4 @@ impl QuadRenderer {
         self.frame.draws = draws;
         Ok(())
     }
-
-    /// The device rect (`x y w h`) a frame redraws when `paint` replaces
-    /// `old` on a target that holds `old`: the old and new boxes of every
-    /// changed entry, with the changed entries built to learn their new
-    /// boxes. `None` when the frame must redraw whole: the list grew or
-    /// shrank, a clip changed (it moves what is inside it), or the damage
-    /// is past [`PARTIAL`] of the target.
-    fn damage(
-        &mut self,
-        old: &[Painted],
-        paint: &[Painted],
-        transform: Affine,
-        size: [u32; 2],
-        touched: &[u64],
-    ) -> Result<Option<[u32; 4]>, Error> {
-        if old.len() != paint.len() {
-            return Ok(None);
-        }
-        let changed = self.changed(old, paint, touched);
-        if changed.iter().any(|&i| clip(&old[i]) || clip(&paint[i])) {
-            return Ok(None);
-        }
-        let mut damage = changed
-            .iter()
-            .map(|&i| self.cpu.boxes[i])
-            .fold(build::EMPTY, build::union);
-        self.cpu.build(
-            paint,
-            transform,
-            &|i, _| changed.binary_search(&i).is_ok(),
-            None,
-        )?;
-        damage = changed
-            .iter()
-            .map(|&i| self.cpu.boxes[i])
-            .fold(damage, build::union);
-        Ok(partial(damage, size))
-    }
-
-    /// [`QuadRenderer::damage`] for a list with layers, backdrops or welds:
-    /// built whole, for which targets it needs and what each holds, and
-    /// the damage carried through them (see [`Layers::propagate`]).
-    // ponytail: builds every entry even for a partial frame; build only
-    // what the damage, the dirty layers and the dirty backdrops' snapshots
-    // reach if a large layered list's CPU time matters.
-    fn layered(
-        &mut self,
-        paint: &[Painted],
-        old: Option<&[Painted]>,
-        transform: Affine,
-        size: [u32; 2],
-        welds: Option<Welds>,
-        touched: &[u64],
-    ) -> Result<Option<[u32; 4]>, Error> {
-        let old = old.filter(|old| old.len() == paint.len());
-        let before = old.map(|_| self.cpu.boxes.clone());
-        self.cpu.build(paint, transform, &|_, _| true, welds)?;
-        // Without what the target held, every target is drawn (as `begin`
-        // marks them) and the frame whole.
-        let (Some(old), Some(before)) = (old, before) else {
-            return Ok(None);
-        };
-        let mut hit = self.changed(old, paint, touched);
-        if hit.iter().any(|&i| clip(&old[i]) || clip(&paint[i])) {
-            return Ok(None);
-        }
-        // A changed `Blend` changes pixels where its layer composites, at
-        // its `Unblend`: not under a backdrop inside it.
-        let mut closes = vec![0; paint.len()];
-        let mut open = Vec::new();
-        for (i, p) in paint.iter().enumerate() {
-            match p.layer {
-                Layer::Blend { .. } => open.push(i),
-                Layer::Unblend => closes[open.pop().unwrap_or(i)] = i,
-                _ => {}
-            }
-        }
-        let boxes = &self.cpu.boxes;
-        let mut damage: Vec<_> = hit
-            .iter()
-            .map(|&i| {
-                let at = if closes[i] > i { closes[i] } else { i };
-                (at, build::union(before[i], boxes[i]))
-            })
-            .collect();
-        self.cpu
-            .layers
-            .propagate(&mut hit, &mut damage, boxes, &|i| before[i]);
-        let all = damage
-            .iter()
-            .fold(build::EMPTY, |a, d| build::union(a, d.1));
-        Ok(partial(all, size))
-    }
-
-    /// The entries of `paint` that differ from `old`, or sample a host
-    /// texture set since, or a weld redrawn this frame.
-    fn changed(&self, old: &[Painted], paint: &[Painted], touched: &[u64]) -> Vec<usize> {
-        let samples = |p: &Painted| match &p.paint {
-            mui_scene::Paint::Image { image, .. } => {
-                image.texture.is_some_and(|k| touched.contains(&k))
-            }
-            _ => p.layer == Layer::External && self.redrawn.iter().any(|k| **k == *p.key.as_ref()),
-        };
-        (0..paint.len())
-            .filter(|&i| old[i] != paint[i] || samples(&paint[i]))
-            .collect()
-    }
-}
-
-fn clip(p: &Painted) -> bool {
-    matches!(p.layer, Layer::Clip | Layer::Unclip)
-}
-
-/// `damage` (a device box) in whole pixels on a `size` target, or `None`
-/// past [`PARTIAL`] of it.
-fn partial(damage: [f32; 4], size: [u32; 2]) -> Option<[u32; 4]> {
-    let [w, h] = size.map(|v| v as f32);
-    let x0 = damage[0].floor().clamp(0., w);
-    let y0 = damage[1].floor().clamp(0., h);
-    let x1 = damage[2].ceil().clamp(x0, w);
-    let y1 = damage[3].ceil().clamp(y0, h);
-    if (x1 - x0) * (y1 - y0) > PARTIAL * w * h {
-        return None;
-    }
-    Some([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32))
 }

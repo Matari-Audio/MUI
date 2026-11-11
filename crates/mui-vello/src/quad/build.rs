@@ -554,19 +554,16 @@ impl Walk {
         out[0] = [a as f32, b as f32, c as f32, d as f32];
         out[1] = [e as f32, f as f32, 0., 0.];
         self.clip().write(out);
-        let local = match p.rect {
-            Some(rr) => {
-                out[3] = [code(SHAPE_FILL, PAINT_SCREEN), 0., rr.radius() as f32, 0.];
-                rr.bounds()
-            }
-            None => {
-                let found = self.paths.find(&p.path, xf, 0.).map_err(refuse)?;
-                let Some(record) = found.record else {
-                    return Ok(Drawn::Nothing);
-                };
-                out[3] = [code(SHAPE_PATH, PAINT_SCREEN), 0., record as f32, 0.];
-                found.bounds
-            }
+        let local = if let Some(rr) = p.rect {
+            out[3] = [code(SHAPE_FILL, PAINT_SCREEN), 0., rr.radius() as f32, 0.];
+            rr.bounds()
+        } else {
+            let found = self.paths.find(&p.path, xf, 0.).map_err(refuse)?;
+            let Some(record) = found.record else {
+                return Ok(Drawn::Nothing);
+            };
+            out[3] = [code(SHAPE_PATH, PAINT_SCREEN), 0., record as f32, 0.];
+            found.bounds
         };
         out[2] = rect4(local);
         let scene = p

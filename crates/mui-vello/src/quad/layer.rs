@@ -57,8 +57,7 @@ impl Bind {
     fn same(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Image(a), Self::Image(b)) => Arc::ptr_eq(&a.rgba, &b.rgba),
-            (Self::Host(a), Self::Host(b)) => a == b,
-            (Self::Weld(a, _), Self::Weld(b, _)) => a == b,
+            (Self::Host(a), Self::Host(b)) | (Self::Weld(a, _), Self::Weld(b, _)) => a == b,
             (Self::Surface(a), Self::Surface(b)) => a == b,
             (Self::Blend(a, x), Self::Blend(b, y)) => a == b && x == y,
             _ => false,

@@ -50,8 +50,13 @@ impl Slots {
     pub fn push(&mut self, values: [f32; 8]) -> u32 {
         let at = self.bytes.len();
         self.bytes.resize(at + SLOT as usize, 0);
-        for (out, v) in self.bytes[at..].chunks_exact_mut(4).zip(values) {
-            out.copy_from_slice(&v.to_ne_bytes());
+        for (out, v) in self.bytes[at..]
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(values)
+        {
+            *out = v.to_ne_bytes();
         }
         at as u32
     }
@@ -362,7 +367,7 @@ impl Offscreen {
     /// what the box average and the composite's bilinear tent already add
     /// (variances `(s^2 - 1) / 12 s^2` and `1 / 6` texel squared), so the
     /// three together have the deviation asked for.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "one frame's state, passed through"
     )]
@@ -422,7 +427,7 @@ impl Offscreen {
         draws
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "one pass's state, passed through"
     )]

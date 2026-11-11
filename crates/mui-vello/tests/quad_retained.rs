@@ -538,7 +538,7 @@ fn a_kept_target_matches_a_whole_redraw_as_textures_change() {
     let spec = SceneSpec::new(ground(vec![root])).offered(Size::new(W, H));
     let mut scene =
         mui_scene::resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu)).expect("scene");
-    let mut check = |k: &mut Kept, welds: &mut WeldTextures, scene: &ResolvedScene, what: &str| {
+    let check = |k: &mut Kept, welds: &mut WeldTextures, scene: &ResolvedScene, what: &str| {
         let id = Affine::IDENTITY;
         k.quad
             .render_scene(&k.device, &k.queue, scene, welds, id, &k.view, SIZE)
