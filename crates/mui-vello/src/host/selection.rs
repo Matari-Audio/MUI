@@ -152,12 +152,7 @@ mod tests {
     fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
         let limits = wgpu::Limits::default();
         let validate = |info: &wgpu::AdapterInfo| {
-            validate_renderer_requirements_with_warp(
-                info,
-                &limits,
-                &limits,
-                false,
-            )
+            validate_renderer_requirements_with_warp(info, &limits, &limits, false)
         };
         let mut info = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, wgpu::Backend::Dx12);
         info.name = "Microsoft Basic Render Driver".into();
@@ -165,15 +160,7 @@ mod tests {
         info.device = 0x008c;
         info.driver = "10.0.26100.33438".into();
         assert!(validate(&info).unwrap_err().contains("WARP"));
-        assert!(
-            validate_renderer_requirements_with_warp(
-                &info,
-                &limits,
-                &limits,
-                true,
-            )
-            .is_ok()
-        );
+        assert!(validate_renderer_requirements_with_warp(&info, &limits, &limits, true,).is_ok());
         info.backend = wgpu::Backend::Vulkan;
         assert!(validate(&info).is_ok());
         info.backend = wgpu::Backend::Dx12;
@@ -235,14 +222,7 @@ mod tests {
         let info = wgpu::AdapterInfo::new(wgpu::DeviceType::IntegratedGpu, wgpu::Backend::Gl);
         let webgl2 = wgpu::Limits::downlevel_webgl2_defaults();
         let requested = requested_limits(&webgl2);
-        assert!(
-            validate_renderer_requirements(
-                &info,
-                &requested,
-                &webgl2
-            )
-            .is_ok()
-        );
+        assert!(validate_renderer_requirements(&info, &requested, &webgl2).is_ok());
         assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
         assert_eq!(requested.max_compute_invocations_per_workgroup, 0);
         for field in [
@@ -261,12 +241,9 @@ mod tests {
                 "max_uniform_buffer_binding_size" => supported.max_uniform_buffer_binding_size -= 1,
                 _ => unreachable!(),
             }
-            let error = validate_renderer_requirements(
-                &info,
-                &requested_limits(&supported),
-                &supported,
-            )
-            .unwrap_err();
+            let error =
+                validate_renderer_requirements(&info, &requested_limits(&supported), &supported)
+                    .unwrap_err();
             assert!(error.contains(field), "{error}");
         }
     }
@@ -277,7 +254,9 @@ mod tests {
         let requested = requested_limits(&wgpu::Limits::default());
         assert!(crate::quad::INSTANCE_SLOTS as u32 <= requested.max_vertex_attributes);
         assert!(crate::quad::INSTANCE_SLOTS as u32 <= requested.max_inter_stage_shader_variables);
-        assert!(16 * crate::quad::INSTANCE_SLOTS as u32 <= requested.max_vertex_buffer_array_stride);
+        assert!(
+            16 * crate::quad::INSTANCE_SLOTS as u32 <= requested.max_vertex_buffer_array_stride
+        );
         assert!(
             mui_weld::boundary::BOUNDARY_BYTES as u64 <= requested.max_uniform_buffer_binding_size
         );

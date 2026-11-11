@@ -39,8 +39,10 @@ pub(crate) use vello::with_pipeline_creation as gate;
 #[cfg(not(feature = "vello-classic"))]
 pub(crate) fn gate<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> T {
     static DX12: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _serial = (device.adapter_info().backend == wgpu::Backend::Dx12)
-        .then(|| DX12.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+    let _serial = (device.adapter_info().backend == wgpu::Backend::Dx12).then(|| {
+        DX12.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    });
     create()
 }
 

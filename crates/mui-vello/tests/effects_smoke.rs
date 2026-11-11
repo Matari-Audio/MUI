@@ -674,7 +674,11 @@ fn a_change_beside_a_backdrop_renders_only_its_box() {
     ) else {
         return;
     };
-    assert!(stats.rendered_pixels < AREA / 4, "{}", stats.rendered_pixels);
+    assert!(
+        stats.rendered_pixels < AREA / 4,
+        "{}",
+        stats.rendered_pixels
+    );
     same_pixels(&part, &whole);
 }
 

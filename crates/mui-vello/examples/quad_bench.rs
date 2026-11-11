@@ -349,7 +349,11 @@ fn table(title: &str, rows: &[Row]) {
         "renderer", "frame", "cpu ms", "span ms", "pass ms", "wait ms"
     );
     let mut rows = rows.to_vec();
-    rows.sort_by_key(|r| ["QuadRenderer", "GpuRenderer", "VelloRenderer"].iter().position(|n| *n == r.0));
+    rows.sort_by_key(|r| {
+        ["QuadRenderer", "GpuRenderer", "VelloRenderer"]
+            .iter()
+            .position(|n| *n == r.0)
+    });
     for (name, frame, [cpu, span, pass, wait]) in rows {
         println!("{name:<14} {frame:<13} {cpu:8.3} {span:8.3} {pass:8.3} {wait:8.3}");
     }

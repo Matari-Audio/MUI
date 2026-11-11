@@ -381,11 +381,7 @@ fn select_candidate<A, T>(
                 candidate.stage = GpuStage::Ready;
                 diagnostics.candidates.push(candidate);
                 let chosen = diagnostics.candidates.last().expect("selected candidate");
-                crate::diagnostics::gpu_candidate(
-                    "gpu_ready",
-                    "quad pass ready",
-                    &chosen.adapter,
-                );
+                crate::diagnostics::gpu_candidate("gpu_ready", "quad pass ready", &chosen.adapter);
                 return Ok((selected, diagnostics));
             }
             Ok(Err(error)) => candidate.failure = Some(error),
@@ -1284,7 +1280,11 @@ mod tests {
         assert_eq!(requested.max_texture_dimension_2d, 16384);
         assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
         assert!(requested.check_limits(&supported));
-        assert!(requested.check_limits(&wgpu::Limits::downlevel_webgl2_defaults().using_resolution(supported)));
+        assert!(
+            requested.check_limits(
+                &wgpu::Limits::downlevel_webgl2_defaults().using_resolution(supported)
+            )
+        );
     }
 
     #[test]
