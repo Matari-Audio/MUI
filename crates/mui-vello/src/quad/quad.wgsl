@@ -373,9 +373,9 @@ fn path_stroke(rec: u32, r: vec2<f32>, hw: f32, ji: vec4<f32>) -> f32 {
     }
     let d = sqrt(best);
     // The direction away from the nearest point; across the segment on it.
-    var n = vec2<f32>(-along.y, along.x);
+    var n = normalize(vec2<f32>(-along.y, along.x));
     if d > 1e-6 {
-        n = near;
+        n = near / d;
     }
     // The slab either side of the segment: its two edges, box-filtered.
     return clamp(edge(hw - d, n, ji) - edge(-hw - d, n, ji), 0.0, 1.0);
