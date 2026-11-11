@@ -1,5 +1,6 @@
 //! Frames on the GPU, on one of two Vello engines behind [`GpuCanvas`]:
-//! MUI's retained `GpuRenderer` (classic Vello, compute shaders) or
+//! classic Vello through MUI's `VelloRenderer` (compute shaders; kept for
+//! this engine behind mui-vello's `vello-classic`) or
 //! `vello_gpu` (sparse strips, plain render passes, also on WebGL2; see
 //! `sparse.rs`). Each layer's tree is painted under its affine over the
 //! scene background. [`GpuCanvas`] draws into any texture view (the web
@@ -8,7 +9,7 @@
 //! GPU renders the next frame while the last one is piped to ffmpeg.
 use mui_scene::ResolvedScene;
 use mui_scene::prelude::*;
-use mui_vello::effects::{Budget, GpuRenderer};
+use mui_vello::effects::{Budget, VelloRenderer};
 use mui_vello::kurbo::{Affine, Rect};
 
 use crate::render::{Assets, color};
@@ -18,7 +19,7 @@ use crate::{Frame, Quad, Rgba};
 /// Which Vello draws on the GPU.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
-    /// Classic Vello through MUI's `GpuRenderer`: compute shaders, so
+    /// Classic Vello through MUI's `VelloRenderer` (`vello-classic`): compute shaders, so
     /// WebGPU/Vulkan/Metal/DX12 only.
     Classic,
     /// `vello_gpu`: CPU-side strips, GPU raster in render passes.
@@ -38,7 +39,7 @@ enum Inner {
     /// With the base scene of the last frame: the background, or a clear
     /// one for the 3D atlas (it only changes with the scene).
     Classic(
-        Box<GpuRenderer>,
+        Box<VelloRenderer>,
         Option<(Option<Rgba>, [u32; 2], Box<ResolvedScene>)>,
     ),
     Sparse(Box<Sparse>),
@@ -87,7 +88,7 @@ impl GpuCanvas {
         let inner = match engine {
             Engine::Classic => Inner::Classic(
                 Box::new(
-                    GpuRenderer::new(device, queue, format, size, Budget::default())
+                    VelloRenderer::new(device, queue, format, size, Budget::default())
                         .await
                         .map_err(|e| e.to_string())?,
                 ),
