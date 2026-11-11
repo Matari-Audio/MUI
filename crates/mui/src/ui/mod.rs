@@ -722,6 +722,13 @@ impl Ui {
         if surface.disabled {
             return false;
         }
+        // Behind an open modal nothing answers, whatever route asks: the
+        // scrim stops presses and the trap keys, this stops assistive tech.
+        if let Some(trap) = self.focus_trap()
+            && !self.in_group(trap.as_str(), Some(action.id()))
+        {
+            return false;
+        }
         let role = surface.semantics.as_ref().map(|s| &s.role);
         let sign = if matches!(action, SemanticAction::Decrement { .. }) {
             -1.0

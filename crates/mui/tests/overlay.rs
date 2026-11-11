@@ -219,10 +219,14 @@ fn a_dialog_holds_the_keyboard_and_gives_focus_back() {
         }],
         ..Input::default()
     };
-    for _ in 0..3 {
+    for want in ["no", "ok", "no"] {
         idle(&mut ui, &mut view, tab());
+        assert!(ui.focused(want), "Tab did not reach {want}");
         assert!(!ui.focused("name"));
     }
+    // Assistive tech cannot reach past it either.
+    assert!(!ui.request_action(SemanticAction::Focus { id: "name".into() }));
+    assert!(ui.request_action(SemanticAction::Activate { id: "ok".into() }));
     open.set(false);
     idle(&mut ui, &mut view, Input::default());
     idle(&mut ui, &mut view, Input::default());
