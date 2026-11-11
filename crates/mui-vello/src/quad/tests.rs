@@ -1,57 +1,66 @@
 use super::*;
 use mui_scene::prelude::*;
 
-/// The pass must build for a GLES 3 / WebGL2 device: valid WGSL with no
-/// optional capability, no compute stage, no storage buffer, and a GLSL ES
-/// 3.00 translation of both stages.
+/// Every pipeline the pass builds must build for a GLES 3 / WebGL2 device:
+/// valid WGSL with no optional capability, no compute stage, no storage
+/// buffer, and a GLSL ES 3.00 translation of every entry point. The quad
+/// shader, the backdrop blur, and the weld pass whose textures it samples.
 #[test]
-fn naga_validates_the_shader_for_a_downlevel_device() {
-    let module = naga::front::wgsl::parse_str(SHADER).expect("WGSL parse");
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
-    )
-    .validate(&module)
-    .expect("WGSL validates with no optional capability");
-    for (_, global) in module.global_variables.iter() {
-        assert!(
-            matches!(
-                global.space,
-                naga::AddressSpace::Uniform | naga::AddressSpace::Handle
-            ),
-            "{:?} is neither a uniform nor a texture",
-            global.name
-        );
-    }
-    let stages: Vec<_> = module.entry_points.iter().map(|e| e.stage).collect();
-    assert_eq!(
-        stages,
-        [naga::ShaderStage::Vertex, naga::ShaderStage::Fragment]
-    );
-    let options = naga::back::glsl::Options {
-        version: naga::back::glsl::Version::Embedded {
-            version: 300,
-            is_webgl: true,
-        },
-        ..Default::default()
-    };
-    for entry in &module.entry_points {
-        let pipeline = naga::back::glsl::PipelineOptions {
-            shader_stage: entry.stage,
-            entry_point: entry.name.clone(),
-            multiview: None,
-        };
-        let mut out = String::new();
-        naga::back::glsl::Writer::new(
-            &mut out,
-            &module,
-            &info,
-            &options,
-            &pipeline,
-            naga::proc::BoundsCheckPolicies::default(),
+fn naga_validates_the_shaders_for_a_downlevel_device() {
+    for (name, source) in [
+        ("quad", SHADER),
+        ("blur", BLUR_SHADER),
+        ("weld", crate::effects::WELD_SHADER),
+    ] {
+        let module = naga::front::wgsl::parse_str(source).expect("WGSL parse");
+        let info = naga::valid::Validator::new(
+            naga::valid::ValidationFlags::all(),
+            naga::valid::Capabilities::empty(),
         )
-        .and_then(|mut w| w.write())
-        .unwrap_or_else(|e| panic!("GLSL ES 3.00 {}: {e}", entry.name));
+        .validate(&module)
+        .unwrap_or_else(|e| panic!("{name}: WGSL validates with no optional capability: {e:?}"));
+        for (_, global) in module.global_variables.iter() {
+            assert!(
+                matches!(
+                    global.space,
+                    naga::AddressSpace::Uniform | naga::AddressSpace::Handle
+                ),
+                "{name}: {:?} is neither a uniform nor a texture",
+                global.name
+            );
+        }
+        assert!(
+            module
+                .entry_points
+                .iter()
+                .all(|e| e.stage != naga::ShaderStage::Compute),
+            "{name}: a compute stage"
+        );
+        let options = naga::back::glsl::Options {
+            version: naga::back::glsl::Version::Embedded {
+                version: 300,
+                is_webgl: true,
+            },
+            ..Default::default()
+        };
+        for entry in &module.entry_points {
+            let pipeline = naga::back::glsl::PipelineOptions {
+                shader_stage: entry.stage,
+                entry_point: entry.name.clone(),
+                multiview: None,
+            };
+            let mut out = String::new();
+            naga::back::glsl::Writer::new(
+                &mut out,
+                &module,
+                &info,
+                &options,
+                &pipeline,
+                naga::proc::BoundsCheckPolicies::default(),
+            )
+            .and_then(|mut w| w.write())
+            .unwrap_or_else(|e| panic!("{name}: GLSL ES 3.00 {}: {e}", entry.name));
+        }
     }
 }
 

@@ -13,6 +13,14 @@ pub const H: f64 = 200.;
 pub const SCALES: [f64; 3] = [1., 1.5, 2.];
 
 pub fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+    device_with(|_| wgpu::Limits::downlevel_webgl2_defaults())
+}
+
+/// A device with the limits `limits` picks from the adapter's: the
+/// compute-shader `GpuRenderer` needs more than WebGL2 allows.
+pub fn device_with(
+    limits: impl FnOnce(wgpu::Limits) -> wgpu::Limits,
+) -> Option<(wgpu::Device, wgpu::Queue)> {
     pollster::block_on(async {
         let adapter =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
@@ -23,7 +31,7 @@ pub fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
         eprintln!("adapter: {:?}", adapter.get_info());
         adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+                required_limits: limits(adapter.limits()),
                 ..Default::default()
             })
             .await
