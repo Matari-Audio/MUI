@@ -151,7 +151,17 @@ fn unbounded_inputs_are_refused_and_outputs_find_their_way() {
     // Missing directories are made, and a first-frame click is a change.
     let dir = tmp("nested/a/b");
     let _ = std::fs::remove_dir_all(tmp("nested"));
+    // Removed on the way out, pass or panic.
+    struct Cleanup(Vec<String>);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            for p in &self.0 {
+                let _ = std::fs::remove_dir_all(p).or_else(|_| std::fs::remove_file(p));
+            }
+        }
+    }
     let script = tmp("first.json");
+    let _cleanup = Cleanup(vec![tmp("nested"), script.clone()]);
     std::fs::write(&script, r#"[{"t":0,"type":"click","key":"bypass"}]"#).unwrap();
     let r = go(&[
         "--script",
@@ -165,6 +175,4 @@ fn unbounded_inputs_are_refused_and_outputs_find_their_way() {
     let first = std::fs::read_to_string(format!("{dir}/trace.jsonl")).unwrap();
     let first: crate::Value = serde_json::from_str(first.lines().next().unwrap()).unwrap();
     assert!(!first["changed"].as_array().unwrap().is_empty(), "{first}");
-    let _ = std::fs::remove_dir_all(tmp("nested"));
-    let _ = std::fs::remove_file(script);
 }
