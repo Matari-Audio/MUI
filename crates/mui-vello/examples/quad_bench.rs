@@ -1,8 +1,17 @@
 //! The quad pass against the classic-Vello `GpuRenderer` on the same paint
-//! lists, ones the quad pass draws entirely, at 1280x800: 96 cards of
+//! lists, ones the quad pass draws entirely, at 1280x800. The headline: the
+//! synth-editor scene the other benches share (`bench_scene`: 40 knobs, a
+//! welded body clipping everything, labels, curves), cold, static, with
+//! one knob turning and scrolling. Then a dense case (a 1,000-point
+//! polyline redrawn every frame over 300 static cards), 96 cards of
 //! rounded rects, strokes, drop and inset shadows, gradients and clips
-//! (about 1250 entries), then the same cards with five labels each (576
-//! glyph runs, bench-editor density).
+//! (about 1250 entries), and the same cards with five labels each (576
+//! glyph runs).
+//!
+//! It also writes the static editor frame from both renderers to
+//! `quad-bench-editor-{quad,vello}.png` in the temp directory, and the same
+//! frame without the menu float that covers it to
+//! `quad-bench-editor-under-menu-{quad,vello}.png`.
 //!
 //!     cargo run -p mui-vello --profile perf --features gpu-quad,gpu-effects --example quad_bench
 //!
@@ -25,6 +34,8 @@ use std::time::Instant;
 
 use mui_scene::prelude::*;
 use mui_scene::{Layer, Paint, ResolvedScene};
+
+mod bench_scene;
 use mui_vello::effects::{Budget, GpuRenderer, GpuTimer};
 use mui_vello::kurbo::Affine;
 use mui_vello::quad::{QuadRenderer, classify};
@@ -344,8 +355,233 @@ fn main() {
         device,
         queue,
     };
+    editor(&gpu, &mut timer);
+    dense(&gpu, &mut timer);
     shapes(&gpu, &mut timer);
     labelled(&gpu, &mut timer);
+}
+
+/// The editor scene: `frames` frames of a `Ui` in which knob 5 turns (none
+/// with `turn` off), after enough frames for every tween to settle.
+fn editor_frames(frames: usize, turn: bool) -> Vec<ResolvedScene> {
+    let mut ui = mui::Ui::default().font(HACK.clone());
+    let mut app = bench_scene::App::new();
+    let frame = |ui: &mut mui::Ui, app: &mut bench_scene::App| {
+        let root = bench_scene::editor(ui, app);
+        ui.frame(
+            root,
+            Some(Size::new(f64::from(W), f64::from(H))),
+            mui::prelude::PointerInput::default(),
+            0.016,
+        )
+        .expect("scene resolves")
+        .scene
+        .clone()
+    };
+    for _ in 0..120 {
+        frame(&mut ui, &mut app);
+    }
+    (0..frames)
+        .map(|i| {
+            if turn {
+                app.knobs[5] = (0.2 + 0.013 * i as f64) % 1.;
+            }
+            frame(&mut ui, &mut app)
+        })
+        .collect()
+}
+
+/// What the quad pass's frame drew and holds, after the timing rows.
+fn note(name: &str, f: mui_vello::quad::Frame) {
+    println!(
+        "  quad {name}: {} instances, {} draw calls, {} path records built, {} B paths uploaded, \
+         cache {} B (glyph atlas {} + paths {})",
+        f.instances,
+        f.draws,
+        f.paths_built,
+        f.path_uploaded,
+        f.atlas_bytes + f.path_bytes,
+        f.atlas_bytes,
+        f.path_bytes
+    );
+}
+
+fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
+    let still = editor_frames(1, false).remove(0);
+    let coverage = classify(&still.paint);
+    assert!(coverage.complete(), "editor: {coverage:?}");
+    let turning = editor_frames(WARM + N, true);
+    let id = Affine::IDENTITY;
+    let scroll = |i: usize| Affine::translate((0.37 * i as f64, 0.37 * i as f64));
+    let (qv, vv) = (gpu.target(), gpu.target());
+    let mut rows = Vec::new();
+    let mut fresh_quads: Vec<QuadRenderer> = (0..7).map(|_| gpu.quad()).collect();
+    let mut fresh_vellos: Vec<GpuRenderer> = (0..7).map(|_| gpu.vello()).collect();
+    let jobs = both(
+        |i| gpu.quad_frame(&mut fresh_quads[i], &still, id, &qv),
+        |i| vello_frame(&mut fresh_vellos[i], &still, id, &vv),
+    );
+    rounds(gpu, timer, "cold", jobs, 0, 7, &mut rows);
+    let cold = fresh_quads[0].frame();
+    drop((fresh_quads, fresh_vellos));
+    let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
+    let jobs = both(
+        |_| gpu.quad_frame(&mut quad, &still, id, &qv),
+        |_| vello_frame(&mut vello, &still, id, &vv),
+    );
+    rounds(gpu, timer, "static", jobs, WARM, N, &mut rows);
+    let jobs = both(
+        |i| gpu.quad_frame(&mut quad, &turning[i], id, &qv),
+        |i| vello_frame(&mut vello, &turning[i], id, &vv),
+    );
+    rounds(gpu, timer, "knob turning", jobs, WARM, N, &mut rows);
+    let turned = quad.frame();
+    let jobs = both(
+        |i| gpu.quad_frame(&mut quad, &still, scroll(i), &qv),
+        |i| vello_frame(&mut vello, &still, scroll(i), &vv),
+    );
+    rounds(gpu, timer, "scroll", jobs, WARM, N, &mut rows);
+    let scrolled = quad.frame();
+    table(
+        &format!("editor: {} entries, all drawn by the quad pass", still.paint.len()),
+        &rows,
+    );
+    note("cold", cold);
+    note("knob turning", turned);
+    note("scroll", scrolled);
+    pngs(gpu, &still, "");
+    // The scene's last float, the menu, lays out over the whole window and
+    // hides the editor in every renderer: the same frame without it.
+    let mut under = still.clone();
+    under.paint.retain(|p| !(&*p.key == "/3" || p.key.starts_with("/3/")));
+    pngs(gpu, &under, "-under-menu");
+}
+
+/// A 1,000-point polyline that changes every frame, over 300 static cards.
+fn dense_scene(t: f64) -> ResolvedScene {
+    let wave = canvas(move |s: Size| {
+        let pts = (0..1000).map(|i| {
+            let x = s.width * f64::from(i) / 999.;
+            let k = f64::from(i);
+            let y = s.height * (0.5 + 0.4 * ((k * 0.05 + t).sin() * (k * 0.37 + 2. * t).cos()));
+            Point::new(x, y)
+        });
+        vec![Draw::stroke(Path::polyline(pts, false), Color::srgb(0.4, 1., 0.6), 1.5)]
+    })
+    .size(1200., 200.)
+    .at(40., 560.);
+    let mut kids: Vec<El> = (0..300)
+        .map(|i| {
+            block(56., 24.)
+                .radius(6.)
+                .fill(Color::srgb(0.2 + 0.002 * i as f32, 0.22, 0.26))
+                .at(8. + 63. * (i % 20) as f64, 8. + 34. * (i / 20) as f64)
+        })
+        .collect();
+    kids.push(wave);
+    let root = stack(kids)
+        .size(f64::from(W), f64::from(H))
+        .radius(0.)
+        .fill(Color::srgb(0.06, 0.07, 0.09));
+    let spec = SceneSpec::new(root).offered(Size::new(f64::from(W), f64::from(H)));
+    mui_scene::resolve(&spec).expect("scene resolves")
+}
+
+fn dense(gpu: &Gpu, timer: &mut GpuTimer) {
+    let frames: Vec<ResolvedScene> = (0..WARM + N).map(|i| dense_scene(0.05 * i as f64)).collect();
+    assert!(classify(&frames[0].paint).complete(), "dense scene must be all supported");
+    let id = Affine::IDENTITY;
+    let (qv, vv) = (gpu.target(), gpu.target());
+    let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
+    let mut rows = Vec::new();
+    let jobs = both(
+        |i| gpu.quad_frame(&mut quad, &frames[i], id, &qv),
+        |i| vello_frame(&mut vello, &frames[i], id, &vv),
+    );
+    rounds(gpu, timer, "wave changing", jobs, WARM, N, &mut rows);
+    table(
+        &format!(
+            "dense: {} entries, a 1,000-point polyline changing every frame",
+            frames[0].paint.len()
+        ),
+        &rows,
+    );
+    note("wave changing", quad.frame());
+}
+
+/// The static editor frame from both renderers, as PNGs in the temp
+/// directory.
+fn pngs(gpu: &Gpu, scene: &ResolvedScene, tag: &str) {
+    let texture = || {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("quad bench png"),
+            size: wgpu::Extent3d {
+                width: W,
+                height: H,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let (q, v) = (texture(), texture());
+    let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
+    gpu.quad_frame(&mut gpu.quad(), scene, Affine::IDENTITY, &view(&q));
+    vello_frame(&mut gpu.vello(), scene, Affine::IDENTITY, &view(&v));
+    for (name, t) in [("quad", &q), ("vello", &v)] {
+        let path = std::env::temp_dir().join(format!("quad-bench-editor{tag}-{name}.png"));
+        save_png(gpu, t, &path);
+        println!("wrote {}", path.display());
+    }
+}
+
+fn save_png(gpu: &Gpu, texture: &wgpu::Texture, path: &std::path::Path) {
+    let stride = (W * 4).next_multiple_of(256);
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(stride * H),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: Some(H),
+            },
+        },
+        texture.size(),
+    );
+    gpu.queue.submit([encoder.finish()]);
+    buffer
+        .slice(..)
+        .map_async(wgpu::MapMode::Read, |r| r.expect("map png"));
+    gpu.device
+        .poll(wgpu::PollType::wait_indefinitely())
+        .expect("poll");
+    let mapped = buffer.slice(..).get_mapped_range().expect("mapped");
+    let rgba: Vec<u8> = mapped
+        .chunks(stride as usize)
+        .flat_map(|row| &row[..W as usize * 4])
+        .copied()
+        .collect();
+    let file = std::io::BufWriter::new(std::fs::File::create(path).expect("create png"));
+    let mut png = png::Encoder::new(file, W, H);
+    png.set_color(png::ColorType::Rgba);
+    png.set_depth(png::BitDepth::Eight);
+    png.write_header()
+        .and_then(|mut w| w.write_image_data(&rgba))
+        .expect("write png");
 }
 
 fn shapes(gpu: &Gpu, timer: &mut GpuTimer) {
