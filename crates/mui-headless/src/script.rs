@@ -109,6 +109,8 @@ fn key(name: &str) -> Result<Key, Error> {
 /// The longest a script may run, and so any time or duration in it: an
 /// hour of frames, so no time can ask for an unbounded run or event list.
 pub const MAX_SECS: f64 = 3600.0;
+/// The fastest virtual clock: with `MAX_SECS` it bounds a script's frames.
+pub const MAX_FPS: u32 = 1000;
 
 /// A time or duration in `0..=MAX_SECS`.
 pub(crate) fn bounded(secs: f64) -> Result<f64, Error> {
@@ -236,6 +238,9 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
 
 impl Script {
     pub fn parse(src: &str, fps: u32) -> Result<Self, Error> {
+        if !(1..=MAX_FPS).contains(&fps) {
+            return Err(Error::new(format!("fps {fps} is outside 1..={MAX_FPS}")));
+        }
         let v: Value = serde_json::from_str(src)?;
         let list = match &v {
             Value::Array(a) => a,

@@ -37,7 +37,7 @@ headless agent tooling: no window, no GPU, a fixed virtual clock
   --out DIR               where --frames writes (default: frames)
   --size WxH --scale S    logical size and device scale (default: the scene's, 1)
   --theme dark|light      the palette's mode
-  --fps N                 the virtual clock's frame rate (default 60)
+  --fps N                 the virtual clock's frame rate (default 60, at most 1000)
   --cost                  add wall-clock cost_us to trace records (the one
                           non-deterministic field; off by default)
 

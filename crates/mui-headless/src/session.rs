@@ -96,8 +96,11 @@ impl Session {
         theme: Option<Mode>,
         fps: u32,
     ) -> Result<Self, Error> {
-        if fps == 0 || !(scale.is_finite() && scale > 0.0) {
-            return Err(Error::new("fps and scale must be positive"));
+        if !(1..=crate::script::MAX_FPS).contains(&fps) || !(scale.is_finite() && scale > 0.0) {
+            return Err(Error::new(format!(
+                "fps must be 1..={} and scale positive",
+                crate::script::MAX_FPS
+            )));
         }
         let Scene {
             name,

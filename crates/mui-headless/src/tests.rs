@@ -145,6 +145,7 @@ fn unbounded_inputs_are_refused_and_outputs_find_their_way() {
     assert!(refuse(&["--at", "1e300"]).is_some());
     assert!(refuse(&["--at", "inf"]).is_some());
     assert!(refuse(&["--size", "60000x60000"]).is_some());
+    assert!(refuse(&["--fps", "4000000000"]).is_some());
     assert!(refuse(&["--frames", "100000", "--strip", &tmp("big.png")]).is_some());
     assert!(Script::parse(r#"[{"type":"drag","key":"gain","dur":1e9}]"#, 60).is_err());
     assert!(Script::parse(r#"[{"type":"wait","t":3000,"dur":3000}]"#, 60).is_err());
