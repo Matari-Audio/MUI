@@ -14,7 +14,11 @@ fn wgpu_backend_env_reaches_the_instance() {
         return;
     }
     let status = std::process::Command::new(std::env::current_exe().expect("test exe"))
-        .args(["--exact", "wgpu_backend_env_reaches_the_instance", "--nocapture"])
+        .args([
+            "--exact",
+            "wgpu_backend_env_reaches_the_instance",
+            "--nocapture",
+        ])
         .env("WGPU_BACKEND", "dx12")
         .env("MUI_BACKEND_ENV_CHILD", "1")
         .status()
