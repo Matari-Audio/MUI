@@ -325,9 +325,10 @@ impl Instances {
 
     /// `self.list` as the bytes of the instance buffer.
     fn encode(&mut self) {
-        self.bytes.clear();
-        for v in self.list.as_flattened().as_flattened() {
-            self.bytes.extend_from_slice(&v.to_ne_bytes());
+        let floats = self.list.as_flattened().as_flattened();
+        self.bytes.resize(floats.len() * 4, 0);
+        for (out, v) in self.bytes.chunks_exact_mut(4).zip(floats) {
+            out.copy_from_slice(&v.to_ne_bytes());
         }
     }
 }
