@@ -2,7 +2,7 @@
 //! the weld pass into its pool texture, in the weld's slot of the paint
 //! list; and a host texture registered under a key. Neither has a CPU
 //! reference (`crate::paint` refuses external material), so the checks are
-//! reference-free, and the weld is also compared with `GpuRenderer`.
+//! reference-free, and the weld is also compared with classic Vello.
 #![cfg(all(feature = "gpu-quad", feature = "cpu"))]
 
 mod quad_support;
@@ -162,11 +162,11 @@ fn a_weld_paints_its_texture_in_its_slot() {
     }
 }
 
-/// The same scene through `GpuRenderer`, which copies the weld's texture
+/// The same scene through classic Vello (`VelloRenderer`), which copies the weld's texture
 /// into Vello's atlas and samples it there.
 #[cfg(feature = "vello-classic")]
 #[test]
-fn a_weld_matches_gpu_renderer() {
+fn a_weld_matches_classic_vello() {
     let Some((device, queue)) = device_with(|adapter| adapter) else {
         return;
     };
@@ -187,14 +187,14 @@ fn a_weld_matches_gpu_renderer() {
     )
     .expect("quad");
     let got = readback(&device, &queue, &a, SIZE);
-    let mut vello = pollster::block_on(mui_vello::effects::GpuRenderer::new(
+    let mut vello = pollster::block_on(mui_vello::effects::VelloRenderer::new(
         &device,
         &queue,
         FORMAT,
         SIZE,
         Budget::default(),
     ))
-    .expect("GpuRenderer");
+    .expect("VelloRenderer");
     let b = target(&device);
     let view = b.create_view(&wgpu::TextureViewDescriptor::default());
     vello

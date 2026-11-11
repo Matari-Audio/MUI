@@ -1,4 +1,4 @@
-//! GPU/CPU oracle plus eager compilation of every Vello AA and MUI pipeline.
+//! GPU/CPU oracle: the GPU renderer (the quad pass) against `vello_cpu`.
 use mui_scene::prelude::*;
 use mui_vello::{
     effects::{Budget, GpuRenderer},
@@ -29,17 +29,6 @@ async fn run() -> gpu_support::Result<()> {
     );
     std::fs::create_dir_all(&dir)?;
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    // The production renderer uses area AA only. This additional renderer
-    // compiles every vendored Vello pipeline, including both MSAA variants.
-    eprintln!("STAGE all_pipelines_begin");
-    let _all_pipelines = mui_vello::vello::Renderer::new(
-        &device,
-        mui_vello::vello::RendererOptions {
-            antialiasing_support: mui_vello::vello::AaSupport::all(),
-            ..Default::default()
-        },
-    )?;
-    eprintln!("STAGE all_pipelines_ready");
     for scale in [1., 1.5, 2.] {
         let size = [
             (f64::from(gpu_support::W) * scale) as u32,
@@ -82,7 +71,7 @@ async fn run() -> gpu_support::Result<()> {
             Budget::default(),
         )
         .await?;
-        // Bgra targets construct the other set of MUI present/blur pipelines.
+        // Bgra targets construct the other present pipelines.
         eprintln!("STAGE rgba_renderer_ready scale={scale}");
         let _bgra = GpuRenderer::new(
             &device,
@@ -116,7 +105,7 @@ fn compare(
     // Explicit per-backend 8-bit channel tolerances. All pixels participate;
     // mean error prevents widespread small errors from hiding behind edge AA.
     let (maximum, mean_limit) = match backend {
-        wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal => {
+        wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal | wgpu::Backend::Gl => {
             (if scale == 1.5 { 48 } else { 4 }, 0.01)
         }
         other => return Err(format!("unqualified pixel backend {other:?}").into()),

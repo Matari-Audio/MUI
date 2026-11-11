@@ -1,4 +1,4 @@
-//! The quad pass against the classic-Vello `GpuRenderer` on the same paint
+//! The quad pass against classic Vello's `VelloRenderer` on the same paint
 //! lists, ones the quad pass draws entirely, at 1280x800. The headline: the
 //! synth-editor scene the other benches share (`bench_scene`: 40 knobs, a
 //! welded body clipping everything, labels, curves), cold, static, with
@@ -15,22 +15,24 @@
 //! over the editor through a backdrop blur, every frame a new opacity, with
 //! its first frame as `quad-bench-editor-modal-{quad,vello}.png`.
 //!
-//!     cargo run -p mui-vello --profile perf --features gpu-quad,gpu-effects --example quad_bench
+//!     cargo run -p mui-vello --profile perf --features vello-classic --example quad_bench
 //!
 //! Per frame, medians of `N` frames after `WARM` warm-ups:
 //! - `cpu`: the `render` call (build, upload, encode, submit).
 //! - `span`: GPU time between timestamps written in encoders submitted just
 //!   before and just after `render`. It includes any time the GPU sat idle
 //!   while `render` ran on the CPU, so it is an upper bound on GPU work.
-//!   `GpuRenderer::render` waits on the device itself (Vello reads back its
+//!   `VelloRenderer::render` waits on the device itself (Vello reads back its
 //!   allocation counts), so its `cpu` column includes GPU time too.
 //! - `pass`: the quad render pass's own begin/end timestamps: its true GPU
 //!   time, upload copies excluded. Zero when `render` drew no pass.
 //! - `wait`: wall time from the `render` return until the device is idle.
 //!
 //! The renderers alternate frame by frame within each scenario, each on its
-//! own target, so machine load hits both alike. `GpuRenderer` skips a frame
-//! whose list, transform and target are unchanged.
+//! own target, so machine load hits both alike. `VelloRenderer` skips a frame
+//! whose list, transform and target are unchanged. On the editor a third
+//! renderer runs too: `GpuRenderer`, the quad pass as hosts get it (behind
+//! its retained frame and present pass), to show the wiring costs nothing.
 
 use std::time::Instant;
 
@@ -40,7 +42,7 @@ use mui_scene::{Layer, Paint, ResolvedScene};
 mod bench_scene;
 #[expect(dead_code, reason = "shared by several examples; each calls a subset")]
 mod gpu_support;
-use mui_vello::effects::{Budget, GpuRenderer, GpuTimer};
+use mui_vello::effects::{Budget, GpuRenderer, GpuTimer, VelloRenderer};
 use mui_vello::kurbo::Affine;
 use mui_vello::quad::{QuadRenderer, classify};
 
@@ -162,7 +164,7 @@ impl Gpu {
         quad
     }
 
-    fn vello(&self) -> GpuRenderer {
+    fn wired(&self) -> GpuRenderer {
         pollster::block_on(GpuRenderer::new(
             &self.device,
             &self.queue,
@@ -171,6 +173,17 @@ impl Gpu {
             Budget::default(),
         ))
         .expect("GpuRenderer")
+    }
+
+    fn vello(&self) -> VelloRenderer {
+        pollster::block_on(VelloRenderer::new(
+            &self.device,
+            &self.queue,
+            FORMAT,
+            [W, H],
+            Budget::default(),
+        ))
+        .expect("VelloRenderer")
     }
 
     /// The quad pass's last begin-to-end time, in ms; 0 when it drew none.
@@ -204,13 +217,23 @@ impl Gpu {
 }
 
 fn vello_frame(
-    r: &mut GpuRenderer,
+    r: &mut VelloRenderer,
     s: &ResolvedScene,
     xf: Affine,
     view: &wgpu::TextureView,
 ) -> bool {
     r.render(s, xf, view).expect("vello render");
     true
+}
+
+fn wired_frame(
+    r: &mut GpuRenderer,
+    s: &ResolvedScene,
+    xf: Affine,
+    view: &wgpu::TextureView,
+) -> bool {
+    r.render(s, xf, view).expect("wired render");
+    r.quad_frame().drawn
 }
 
 /// A renderer's frame `i` of a scenario; whether it drew a pass. `quad`
@@ -281,7 +304,7 @@ fn rounds(
     }
 }
 
-/// The quad pass and `GpuRenderer`, alternating.
+/// The quad pass and `VelloRenderer`, alternating.
 fn both<'a>(
     quad: impl FnMut(usize) -> bool + 'a,
     vello: impl FnMut(usize) -> bool + 'a,
@@ -293,11 +316,29 @@ fn both<'a>(
             run: Box::new(quad),
         },
         Job {
-            name: "GpuRenderer",
+            name: "VelloRenderer",
             quad: false,
             run: Box::new(vello),
         },
     ]
+}
+
+/// [`both`] with the wired `GpuRenderer` between them.
+fn three<'a>(
+    quad: impl FnMut(usize) -> bool + 'a,
+    wired: impl FnMut(usize) -> bool + 'a,
+    vello: impl FnMut(usize) -> bool + 'a,
+) -> Vec<Job<'a>> {
+    let mut jobs = both(quad, vello);
+    jobs.insert(
+        1,
+        Job {
+            name: "GpuRenderer",
+            quad: false,
+            run: Box::new(wired),
+        },
+    );
+    jobs
 }
 
 fn table(title: &str, rows: &[Row]) {
@@ -308,7 +349,7 @@ fn table(title: &str, rows: &[Row]) {
         "renderer", "frame", "cpu ms", "span ms", "pass ms", "wait ms"
     );
     let mut rows = rows.to_vec();
-    rows.sort_by_key(|r| r.0 == "GpuRenderer");
+    rows.sort_by_key(|r| ["QuadRenderer", "GpuRenderer", "VelloRenderer"].iter().position(|n| *n == r.0));
     for (name, frame, [cpu, span, pass, wait]) in rows {
         println!("{name:<14} {frame:<13} {cpu:8.3} {span:8.3} {pass:8.3} {wait:8.3}");
     }
@@ -433,7 +474,7 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     let (qv, vv) = (gpu.target(), gpu.target());
     let mut rows = Vec::new();
     let mut fresh_quads: Vec<QuadRenderer> = (0..7).map(|_| gpu.quad()).collect();
-    let mut fresh_vellos: Vec<GpuRenderer> = (0..7).map(|_| gpu.vello()).collect();
+    let mut fresh_vellos: Vec<VelloRenderer> = (0..7).map(|_| gpu.vello()).collect();
     let jobs = both(
         |i| gpu.quad_frame(&mut fresh_quads[i], &still, id, &qv),
         |i| vello_frame(&mut fresh_vellos[i], &still, id, &vv),
@@ -442,19 +483,23 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     let cold = fresh_quads[0].frame();
     drop((fresh_quads, fresh_vellos));
     let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
-    let jobs = both(
+    let (mut wired, wv) = (gpu.wired(), gpu.target());
+    let jobs = three(
         |_| gpu.quad_frame(&mut quad, &still, id, &qv),
+        |_| wired_frame(&mut wired, &still, id, &wv),
         |_| vello_frame(&mut vello, &still, id, &vv),
     );
     rounds(gpu, timer, "static", jobs, WARM, N, &mut rows);
-    let jobs = both(
+    let jobs = three(
         |i| gpu.quad_frame(&mut quad, &turning[i], id, &qv),
+        |i| wired_frame(&mut wired, &turning[i], id, &wv),
         |i| vello_frame(&mut vello, &turning[i], id, &vv),
     );
     rounds(gpu, timer, "knob turning", jobs, WARM, N, &mut rows);
     let turned = quad.frame();
-    let jobs = both(
+    let jobs = three(
         |i| gpu.quad_frame(&mut quad, &still, scroll(i), &qv),
+        |i| wired_frame(&mut wired, &still, scroll(i), &wv),
         |i| vello_frame(&mut vello, &still, scroll(i), &vv),
     );
     rounds(gpu, timer, "scroll", jobs, WARM, N, &mut rows);
@@ -547,7 +592,7 @@ fn pngs(
     scene: &ResolvedScene,
     tag: &str,
     quad: &mut QuadRenderer,
-    vello: &mut GpuRenderer,
+    vello: &mut VelloRenderer,
 ) {
     let (q, v) = (
         gpu_support::target(&gpu.device, [W, H]),
@@ -651,7 +696,7 @@ fn labelled(gpu: &Gpu, timer: &mut GpuTimer) {
             r
         })
         .collect();
-    let mut fresh_vellos: Vec<GpuRenderer> = (0..7).map(|_| gpu.vello()).collect();
+    let mut fresh_vellos: Vec<VelloRenderer> = (0..7).map(|_| gpu.vello()).collect();
     let jobs = both(
         |i| gpu.quad_frame(&mut fresh_quads[i], &base, id, &qv),
         |i| vello_frame(&mut fresh_vellos[i], &base, id, &vv),
@@ -692,7 +737,7 @@ fn labelled(gpu: &Gpu, timer: &mut GpuTimer) {
 /// A dialog fading in over the editor: a frosted panel blurring what is
 /// under it, a title and two buttons, at a new opacity every frame. The
 /// quad pass keeps the panel's blur and its group and draws the window
-/// again with them; `GpuRenderer` replays the editor under the blur every
+/// again with them; `VelloRenderer` replays the editor under the blur every
 /// frame.
 fn modal(gpu: &Gpu, timer: &mut GpuTimer) {
     let ink = Color::srgb(0.95, 0.95, 0.97);

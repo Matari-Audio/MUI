@@ -88,7 +88,7 @@ required-features = ["gpu-quad"]
 
 [[example]]
 name = "bench"
-required-features = ["vello-classic"]
+required-features = ["gpu-quad"]
 
 [[example]]
 name = "quad_coverage"
@@ -116,4 +116,4 @@ mach-dxcompiler-rs = { version = "=0.1.4", default-features = false }
 
 [[example]]
 name = "gpu_pixels"
-required-features = ["vello-classic"]
+required-features = ["gpu-quad"]

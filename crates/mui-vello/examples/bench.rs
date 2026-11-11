@@ -1,7 +1,7 @@
 //! What a frame costs on a synth-sized editor, on the CPU rasteriser and on
 //! the retained GPU renderer.
 //!
-//!     cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench
+//!     cargo run -p mui-vello --profile perf --features gpu-quad --example bench
 //!
 //! One scene, both backends, four cases. Each frame is split into resolve
 //! (`Ui::frame`: styling, layout, text shaping, the paint list), encode (the
