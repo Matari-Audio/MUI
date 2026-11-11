@@ -459,6 +459,64 @@ fn the_quad_pass_matches_vello_cpu() {
     }
 }
 
+/// A conic gradient's angle wraps from a full turn back to zero along the ray
+/// from its centre towards +x. When the centre sits on a pixel centre (1.5x
+/// does it) the row on that ray has `y == 0` only up to the rounding of the
+/// interpolated position, and the sign of that rounding picked the end of the
+/// turn or its start: a 200-level difference on one row, seen on Metal (RADV
+/// happened to interpolate exactly). The shader reads a row within 1e-3 of the
+/// centre as exactly on it, so the seam row must not depend on the sign or
+/// size of a sub-pixel nudge.
+#[test]
+fn a_conic_seam_through_a_pixel_centre_does_not_depend_on_rounding() {
+    let Some((device, queue)) = device() else {
+        return;
+    };
+    let quad = QuadRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let mut gpu = Gpu {
+        device,
+        queue,
+        quad,
+    };
+    let scale = 1.5;
+    let red = Color::srgb(0.95, 0.2, 0.1);
+    let blue = Color::srgb(0.1, 0.3, 0.95);
+    let size = sized(scale);
+    let render = |gpu: &mut Gpu, nudge: f64| {
+        let mut scene = scene_at(
+            ground(vec![
+                block(66., 78.)
+                    .fill(Gradient::conic(0., [(0., red), (1., blue)]))
+                    .id("c")
+                    .at(12., 14.),
+            ]),
+            scale,
+        );
+        for p in &mut scene.paint {
+            if p.key.as_ref() == "c" {
+                p.transform = Affine::translate((0., nudge)) * p.transform;
+            }
+        }
+        gpu_pixels(gpu, &scene.paint, Affine::scale(scale), size)
+    };
+    let exact = render(&mut gpu, 0.);
+    // Centre (45, 53) is device (67.5, 79.5): the seam row is 79, x > 67.
+    let row = |p: &[u8], x: usize| {
+        let at = (79 * size[0] as usize + x) * 4;
+        [p[at], p[at + 1], p[at + 2]]
+    };
+    for nudge in [-3e-4, -3e-5, 3e-5, 3e-4] {
+        let pixels = render(&mut gpu, nudge);
+        for x in [80, 100, 120] {
+            let (a, b) = (row(&exact, x), row(&pixels, x)); eprintln!("DBG {nudge} {x} {a:?} {b:?} up={:?}", { let at=(78*size[0] as usize+x)*4; [pixels[at],pixels[at+2]] });
+            assert!(
+                a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2),
+                "nudge {nudge}: seam row at x={x} is {b:?}, exact centre gives {a:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn an_unsupported_entry_is_refused_by_index_and_reason() {
     let Some((device, queue)) = device() else {
