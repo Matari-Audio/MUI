@@ -4,13 +4,15 @@ use mui_scene::prelude::*;
 /// Every pipeline the pass builds must build for a GLES 3 / WebGL2 device:
 /// valid WGSL with no optional capability, no compute stage, no storage
 /// buffer, and a GLSL ES 3.00 translation of every entry point. The quad
-/// shader, the backdrop blur, and the weld pass whose textures it samples.
+/// shader, the backdrop blur, the weld pass whose textures it samples, and
+/// the present that puts `GpuRenderer`'s frame on the window.
 #[test]
 fn naga_validates_the_shaders_for_a_downlevel_device() {
     for (name, source) in [
         ("quad", SHADER),
         ("blur", BLUR_SHADER),
         ("weld", crate::effects::WELD_SHADER),
+        ("present", crate::effects::PRESENT_SHADER),
     ] {
         let module = naga::front::wgsl::parse_str(source).expect("WGSL parse");
         let info = naga::valid::Validator::new(

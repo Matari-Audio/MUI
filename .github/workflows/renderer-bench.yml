@@ -194,7 +194,7 @@ jobs:
           lscpu > renderer-results/host.txt
           git rev-parse HEAD >> renderer-results/host.txt
       - name: Build existing benchmark
-        run: cargo build --profile perf -p mui-vello --example bench --features cpu,gpu-effects --locked 2>&1 | tee renderer-results/build.log
+        run: cargo build --profile perf -p mui-vello --example bench --features gpu-quad --locked 2>&1 | tee renderer-results/build.log
       - name: Full editor and vector-heavy editor
         run: |
           for scene in editor vectors; do

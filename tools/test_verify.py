@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert "continue-on-error" not in native_ui
     assert all(name in native_ui for name in ("ubuntu-24.04", "windows-latest", "macos-latest", "StaticDxc", "Fxc"))
     assert "MUI_TEST_ALLOW_WARP: '1'" in native_ui
-    assert "mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-effects" in native_ui
+    assert "mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-quad" in native_ui
     assert "cargo clippy --workspace --all-features --all-targets --target x86_64-pc-windows-gnu" in workflow
     assert "needs: [gate, platforms, windows-gnu, ui]" in workflow
     assert 'test "$UI_RESULT" = success' in workflow
@@ -59,7 +59,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert "continue-on-error" not in embedded, "embedded CPU lifecycle must be required"
     assert "windows-2025" in embedded and "macos-15" in embedded
     assert "MUI_RENDERER: cpu" in embedded and "WGPU_BACKEND: ${{ matrix.unavailable }}" in embedded
-    assert "WARP compute shader compilation can crash" in embedded
+    assert "WARP shader compilation can crash" in embedded
     assert "target/debug/examples/native_editor" in embedded and "--timeout 60" in embedded
     assert "weston --backend=headless-backend.so" in ui_workflow and "WINIT_UNIX_BACKEND=wayland" in ui_workflow
     browser = (ROOT / ".github/workflows/playground.yml").read_text()
