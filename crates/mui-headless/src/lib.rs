@@ -49,6 +49,8 @@ use mui::prelude::*;
 pub use cli::{USAGE, run, slug, wants};
 pub use render::{Raster, contact_sheet, write_png};
 pub use script::Script;
+/// The JSON type reports and trees are returned as.
+pub use serde_json::{self, Value};
 pub use session::{Session, Step};
 
 /// Why a run failed. The message says what to change.

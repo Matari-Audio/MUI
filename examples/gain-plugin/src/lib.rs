@@ -62,37 +62,49 @@ impl PurePluginLogic for Gain {
     }
 
     fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-        // Both preludes export a `Theme`; the default one is `Ui::default()`,
-        // so neither is named here. Name it as `mui::prelude::Theme` if needed.
-        let mut ui = Ui::default();
-        // Bundled, so this cannot fail short of a corrupt build.
-        if let Ok(font) = Font::new(epaint_default_fonts::HACK_REGULAR) {
-            ui = ui.font(font);
-        }
-        MuiEditor::new(params, ui, (300, 200), |ui, bridge| {
-            let gain = bridge.knob(ui, P::Gain).size(L);
-            let bypass = bridge.toggle(ui, P::Bypass);
-            let level = meter(ui, "level", bridge.meter(P::Level)).w(200);
-            col![
-                row![
-                    gain,
-                    col![
-                        title(bridge.text(P::Gain)),
-                        row![caption("Bypass"), bypass].gap(S).center(),
-                    ]
-                    .gap(S),
-                ]
-                .gap(L)
-                .center(),
-                level,
-            ]
-            .gap(M)
-            .pad(L)
-            .fill(Role::Surface)
-        })
-        .resizable((260, 180))
-        .into_editor()
+        MuiEditor::new(params, ui(), SIZE, view)
+            .resizable((260, 180))
+            .into_editor()
     }
+}
+
+/// The editor's logical size.
+pub const SIZE: (u32, u32) = (300, 200);
+
+/// The editor's `Ui`: theme and font. Shared with the headless binary.
+pub fn ui() -> Ui {
+    // Both preludes export a `Theme`; the default one is `Ui::default()`,
+    // so neither is named here. Name it as `mui::prelude::Theme` if needed.
+    let mut ui = Ui::default();
+    // Bundled, so this cannot fail short of a corrupt build.
+    if let Ok(font) = Font::new(epaint_default_fonts::HACK_REGULAR) {
+        ui = ui.font(font);
+    }
+    ui
+}
+
+/// The editor's tree, built every frame. The host and `examples/headless.rs`
+/// both call this, so what an agent snaps is what ships.
+pub fn view(ui: &mut Ui, bridge: &mut mui_truce::Bridge<GainParams>) -> El {
+    let gain = bridge.knob(ui, P::Gain).size(L);
+    let bypass = bridge.toggle(ui, P::Bypass);
+    let level = meter(ui, "level", bridge.meter(P::Level)).w(200);
+    col![
+        row![
+            gain,
+            col![
+                title(bridge.text(P::Gain)),
+                row![caption("Bypass"), bypass].gap(S).center(),
+            ]
+            .gap(S),
+        ]
+        .gap(L)
+        .center(),
+        level,
+    ]
+    .gap(M)
+    .pad(L)
+    .fill(Role::Surface)
 }
 
 truce::plugin! {

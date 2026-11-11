@@ -192,3 +192,48 @@ pub fn tree(s: &Session) -> Result<Value, Error> {
         "surfaces": surfaces,
     }))
 }
+
+/// Pretty JSON with arrays of plain values on one line (`"rect": [1, 2, 3, 4]`),
+/// so a surface is a dozen lines and a diff names the field that moved.
+pub fn pretty(v: &Value) -> String {
+    fn go(v: &Value, ind: usize, out: &mut String) {
+        let pad = |n: usize| "  ".repeat(n);
+        match v {
+            Value::Array(a) if a.iter().all(|x| !x.is_object() && !x.is_array()) => {
+                out.push('[');
+                for (i, x) in a.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    out.push_str(&x.to_string());
+                }
+                out.push(']');
+            }
+            Value::Array(a) => {
+                out.push_str("[\n");
+                for (i, x) in a.iter().enumerate() {
+                    out.push_str(&pad(ind + 1));
+                    go(x, ind + 1, out);
+                    out.push_str(if i + 1 < a.len() { ",\n" } else { "\n" });
+                }
+                out.push_str(&pad(ind));
+                out.push(']');
+            }
+            Value::Object(o) if !o.is_empty() => {
+                out.push_str("{\n");
+                for (i, (k, x)) in o.iter().enumerate() {
+                    out.push_str(&format!("{}{}: ", pad(ind + 1), Value::from(k.as_str())));
+                    go(x, ind + 1, out);
+                    out.push_str(if i + 1 < o.len() { ",\n" } else { "\n" });
+                }
+                out.push_str(&pad(ind));
+                out.push('}');
+            }
+            other => out.push_str(&other.to_string()),
+        }
+    }
+    let mut s = String::new();
+    go(v, 0, &mut s);
+    s.push('\n');
+    s
+}

@@ -1,0 +1,5 @@
+[
+  {"t": 0.1, "type": "drag", "key": "param/0", "dx": 0, "dy": -40, "dur": 0.4},
+  {"t": 0.7, "type": "key", "name": "ArrowDown"},
+  {"t": 1.0, "type": "mark", "name": "end"}
+]

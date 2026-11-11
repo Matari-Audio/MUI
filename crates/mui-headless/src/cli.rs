@@ -302,7 +302,7 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
 
     if let Some(p) = &a.tree {
         let v = tree_json.unwrap_or(Value::Null);
-        std::fs::write(p, serde_json::to_string_pretty(&v)? + "\n")?;
+        std::fs::write(p, crate::tree::pretty(&v))?;
         wrote.push(p.display().to_string());
     }
     if let Some(p) = &a.trace {
