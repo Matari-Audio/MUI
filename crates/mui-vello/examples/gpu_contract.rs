@@ -62,7 +62,21 @@ async fn run() -> gpu_support::Result<()> {
         assert_eq!(changed.uniform_upload_bytes, 16);
         assert_eq!(changed.effect_draws, 1);
         assert_eq!(changed.texture_allocations, 0);
-        assert_eq!(changed.encoded_scenes, 0);
+        // The quad pass has no encoded scene to keep: a morph tick redraws one
+        // damage box from the retained records (it was 0 under Vello, which
+        // kept an encoded scene). What it must not do: rebuild a path record,
+        // touch the glyph atlas, or redraw the whole frame.
+        assert_eq!((changed.encoded_scenes, changed.renders), (1, 1));
+        assert!(
+            changed.rendered_pixels < u64::from(size[0]) * u64::from(size[1]),
+            "a morph tick redrew the whole frame"
+        );
+        let frame = renderer.quad_frame();
+        assert_eq!(
+            (frame.paths_built, frame.path_uploaded, frame.uploaded),
+            (0, 0, 0),
+            "a morph tick rebuilt path or glyph data"
+        );
         let b = gpu_support::readback(&device, &queue, &texture, size)?;
         assert_ne!(a, b, "morph did not update pixels");
         let f = scene.surface("front").expect("front").frame;

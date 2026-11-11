@@ -197,7 +197,8 @@ unvalidated FPS. The example intentionally isolates morph-only updates from full
 input/geometry rebuilds.
 
 `gpu_contract` is a real device test, not an ignored unit test. It checks static
-pixel identity and zero extra effect work; a 16-byte morph update; no layout or
+pixel identity and zero extra effect work; a 16-byte morph update that redraws one
+damage box (one quad frame, no path or glyph data rebuilt, no allocation); no layout or
 paint-list change; visible pixel change; later floating-content order; a clipping
 sample; and native validation errors at 1x/1.5x/2x. Failure to obtain an adapter
 fails the command. Software adapters may be used for correctness, but are named.
