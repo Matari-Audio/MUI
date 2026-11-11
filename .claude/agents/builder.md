@@ -19,9 +19,8 @@ Environment:
   any, for every cargo command.
 - Prefer Bash (cat, sed -n, grep, python3 heredoc scripts) for reading and
   editing. The shell errors on unquoted globs: quote them.
-- The GPU path is classic Vello, vendored and patched at `vendor/vello`
-  (0.10.0 ported to wgpu 30; `vendor/vello/PATCHES.md` lists the MUI
-  patches). Read that, not the registry copy. The CPU path's sources are
+- The GPU path is the instanced SDF quad pass in `crates/mui-vello/src/quad/`
+  (no Vello GPU code remains). The CPU path's sources are
   under ~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ (vello_cpu-0.2.0,
   vello_common-0.2.0, glifo-0.3.0). `vello_hybrid` is no longer used.
 - `media/` (mui-stage, mui-reel, mui-motion-bridge) is its own workspace:

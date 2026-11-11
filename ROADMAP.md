@@ -17,10 +17,11 @@ public function and a test behind it.
       Oklch palette with checked legibility, the tree walk to a z-ordered
       paint list, `Spring`.
 - [x] Input: hit testing against painted paths, capture, hover, click, drag.
-- [x] Vello: one `Canvas` trait over classic `vello` (vendored, wgpu 30,
-      `effects::GpuRenderer`) and `vello_cpu`, CSS-angle gradients, analytic
-      blurred shadows, a CPU pixel snapshot test. (Shipped first over
-      `vello_hybrid`; that backend is gone, see MIGRATION.md.)
+- [x] Vello CPU: one `Canvas` trait over `vello_cpu`, CSS-angle gradients,
+      analytic blurred shadows, a CPU pixel snapshot test. The GPU path is
+      the instanced SDF quad pass behind `effects::GpuRenderer`, tested
+      against `vello_cpu`. (Shipped first over `vello_hybrid`, then compute
+      Vello; both are gone, see MIGRATION.md.)
 - [x] `mui::Ui`: the per-frame runtime with spring-smoothed hover and press;
       `slider`, `knob`, `toggle`, `button` as compositions of flex shares.
 - [x] Preview: the gallery is one `mui` tree, sidebar included, its text
@@ -62,8 +63,8 @@ public function and a test behind it.
       begin/set/end. `examples/gain-plugin` passes pluginval's editor tests.
 - [x] Images: `Image::rgba` + `Fill::Image` with `Cover`/`Contain`/`Fill`,
       and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
-      paints the pixmap; classic `vello` uploads it into its image atlas
-      once and paints by id.
+      paints the pixmap; the quad pass uploads it once as a texture and
+      samples it.
 - [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
       and the preview feeds it to an `accesskit_winit::Adapter`.
 - [x] `mui_vello::PathCache` / `paint_cached`: measured at ~0.08 ms a frame
@@ -299,8 +300,9 @@ public function and a test behind it.
 - [ ] No fuzzing or property campaigns over layout, welding or text input.
 - [ ] A shipping synth rewritten on MUI: the first real plugin editor on this stack, and
       the only honest test of whether the DSL survives a product.
-- [ ] Classic `vello` (the GPU path since `vello_hybrid` was dropped)
-      re-measured on Windows: the switch was made on Linux numbers only.
+- [ ] The quad pass (the GPU path since compute Vello was deleted)
+      measured on Windows, macOS, integrated GPUs and GLES/WebGL2: every
+      number so far is one Linux machine with an AMD RX 6600.
 - [ ] A welded shadow is the union of the children's blurred rects, not the
       blur of the welded outline: the seams are rounded where the outline is
       straight or concave-filleted. A blur filter layer

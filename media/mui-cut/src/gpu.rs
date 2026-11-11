@@ -6,10 +6,9 @@
 //! summed in an `Rgba16Float` target) and a ring of staging buffers, so the
 //! GPU renders the next frame while the last one is piped to ffmpeg.
 use mui_scene::ResolvedScene;
-use mui_scene::prelude::*;
 use mui_vello::kurbo::{Affine, Rect};
 
-use crate::render::{Assets, color};
+use crate::render::Assets;
 use crate::sparse::Sparse;
 use crate::{Frame, Quad, Rgba};
 

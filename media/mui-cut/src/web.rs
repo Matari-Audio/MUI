@@ -370,7 +370,7 @@ impl GpuView {
     ) -> Result<GpuView, String> {
         let (backends, engine) = match (api, engine) {
             ("webgl2", _) => (wgpu::Backends::GL, Engine::Sparse),
-                        ("webgpu", "classic" | "gpu") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Sparse),
+            ("webgpu", "classic" | "gpu") => (wgpu::Backends::BROWSER_WEBGPU, Engine::Sparse),
             _ => return Err(format!("no GPU view for {api} with {engine}")),
         };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {

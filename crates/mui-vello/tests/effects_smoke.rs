@@ -1135,4 +1135,3 @@ fn vector_partial_repaint_matches_full_frame_at_nonzero_origin() {
         same_pixels(&part, &whole);
     }
 }
-

@@ -438,9 +438,7 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     let qv = gpu.target();
     let mut rows = Vec::new();
     let mut fresh_quads: Vec<QuadRenderer> = (0..7).map(|_| gpu.quad()).collect();
-    let jobs = solo(
-        |i| gpu.quad_frame(&mut fresh_quads[i], &still, id, &qv),
-    );
+    let jobs = solo(|i| gpu.quad_frame(&mut fresh_quads[i], &still, id, &qv));
     rounds(gpu, timer, "cold", jobs, 0, 7, &mut rows);
     let cold = fresh_quads[0].frame();
     drop(fresh_quads);
@@ -523,9 +521,7 @@ fn dense(gpu: &Gpu, timer: &mut GpuTimer) {
     let qv = gpu.target();
     let mut quad = gpu.quad();
     let mut rows = Vec::new();
-    let jobs = solo(
-        |i| gpu.quad_frame(&mut quad, &frames[i], id, &qv),
-    );
+    let jobs = solo(|i| gpu.quad_frame(&mut quad, &frames[i], id, &qv));
     rounds(gpu, timer, "wave changing", jobs, WARM, N, &mut rows);
     table(
         &format!(
@@ -599,13 +595,9 @@ fn shapes(gpu: &Gpu, timer: &mut GpuTimer) {
         run: Box::new(|_| gpu.quad_frame(&mut quad, &empty, id, &qv)),
     }];
     rounds(gpu, timer, "empty list", jobs, WARM, N, &mut rows);
-    let jobs = solo(
-        |_| gpu.quad_frame(&mut quad, &base, id, &qv),
-    );
+    let jobs = solo(|_| gpu.quad_frame(&mut quad, &base, id, &qv));
     rounds(gpu, timer, "static", jobs, WARM, N, &mut rows);
-    let jobs = solo(
-        |i| gpu.quad_frame(&mut quad, &frames[i], id, &qv),
-    );
+    let jobs = solo(|i| gpu.quad_frame(&mut quad, &frames[i], id, &qv));
     rounds(gpu, timer, "one change", jobs, WARM, N, &mut rows);
     table(&format!("shapes: {} entries", base.paint.len()), &rows);
 }
@@ -638,24 +630,16 @@ fn labelled(gpu: &Gpu, timer: &mut GpuTimer) {
             r
         })
         .collect();
-    let jobs = solo(
-        |i| gpu.quad_frame(&mut fresh_quads[i], &base, id, &qv),
-    );
+    let jobs = solo(|i| gpu.quad_frame(&mut fresh_quads[i], &base, id, &qv));
     rounds(gpu, timer, "cold", jobs, 0, 7, &mut rows);
     let cold = fresh_quads[0].frame();
     let mut quad = gpu.quad();
-    let jobs = solo(
-        |_| gpu.quad_frame(&mut quad, &base, id, &qv),
-    );
+    let jobs = solo(|_| gpu.quad_frame(&mut quad, &base, id, &qv));
     rounds(gpu, timer, "static", jobs, WARM, N, &mut rows);
     let steady = quad.frame();
-    let jobs = solo(
-        |i| gpu.quad_frame(&mut quad, &labels[i], id, &qv),
-    );
+    let jobs = solo(|i| gpu.quad_frame(&mut quad, &labels[i], id, &qv));
     rounds(gpu, timer, "label change", jobs, WARM, N, &mut rows);
-    let jobs = solo(
-        |i| gpu.quad_frame(&mut quad, &base, scroll(i), &qv),
-    );
+    let jobs = solo(|i| gpu.quad_frame(&mut quad, &base, scroll(i), &qv));
     rounds(gpu, timer, "scroll", jobs, WARM, N, &mut rows);
     println!(
         "\nquad cold frame: {} cells rasterised, {} bytes uploaded; steady: {steady:?}",
@@ -727,13 +711,11 @@ fn modal(gpu: &Gpu, timer: &mut GpuTimer) {
     pngs(gpu, &frames[20], "-modal", &mut quad);
     let mut rows = Vec::new();
     let mut passes = std::collections::BTreeMap::<usize, usize>::new();
-    let jobs = solo(
-        |i| {
-            let drew = gpu.quad_frame(&mut quad, &frames[i], id, &qv);
-            *passes.entry(quad.frame().passes).or_default() += 1;
-            drew
-        },
-    );
+    let jobs = solo(|i| {
+        let drew = gpu.quad_frame(&mut quad, &frames[i], id, &qv);
+        *passes.entry(quad.frame().passes).or_default() += 1;
+        drew
+    });
     rounds(gpu, timer, "modal fading", jobs, WARM, N, &mut rows);
     table(
         &format!(

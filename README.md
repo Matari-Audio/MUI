@@ -36,7 +36,8 @@ Run locally with `./playground/build.sh` (requires the WASM Rust target and
 
 MUI owns layout, contours, input, animation and the paint list. Vello renders it:
 `mui-vello` provides CPU rendering (`vello_cpu`) and `GpuRenderer`, a retained
-renderer over classic Vello on wgpu 30. The host must keep the `GpuRenderer`
+instanced-SDF renderer on wgpu 30 (render pipelines only: no compute shaders,
+no storage buffers). A frame it cannot draw is rasterised by `vello_cpu`. The host must keep the `GpuRenderer`
 alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
@@ -91,7 +92,7 @@ let frame = ui
     .frame(root, Some(Size::new(280.0, 120.0)), Input::default(), 1.0 / 60.0)
     .unwrap();
 assert!(frame.scene.paint.len() > 5);
-// mui::vello::paint(&mut Gpu { scene, resources, cache, atlas: None }, frame.scene, Affine::IDENTITY)?;
+// gpu_renderer.render(frame.scene, Affine::IDENTITY, &target_view)?;
 ```
 
 `Ui::frame` takes an `Input` — pointer, wheel, key presses and typed text —
@@ -471,8 +472,8 @@ stretched (`Fill`). Decoding is the host's job: no library crate takes an
 image dependency. `Path::from_svg_data` turns an icon's `d` attribute into a
 `Path` (arcs included), so a symbol is geometry like everything else.
 
-`vello_cpu` paints the pixmap itself. `GpuRenderer` converts each image
-buffer once into a Vello image that Vello uploads and samples; a GPU texture
+`vello_cpu` paints the pixmap itself. `GpuRenderer` uploads each image
+buffer once as a texture the quad pass samples; a GPU texture
 registered with `GpuRenderer::set_texture` is sampled in place. What was uploaded (or premultiplied, on the CPU) lives in a
 `mui_vello::Cache` owned beside the renderer. It holds only a `Weak` to each
 buffer and sweeps the entries the app has dropped on the next image lookup,
@@ -537,7 +538,7 @@ cargo run -p mui-preview
 The whole window is one tree: the sidebar's scene list, toggles and sliders
 are `mui` widgets, the specimen is an anchored child of the stage, and a drag
 on the stage pans it through an offset. Text reaches the pixels as a hinted glyph
-run, not a filled outline: the host hands `paint` a `mui_vello::Gpu`.
+run, not a filled outline: the host hands `paint` a `mui_vello::Cpu` or `GpuRenderer`.
 `bacon` rebuilds and relaunches on save. Point `MUI_PREVIEW_FONT` at a
 variable font and the Glyph scene grows a slider per axis; point
 `MUI_PREVIEW_THEME` at a `key = value` file and the palette reloads while the

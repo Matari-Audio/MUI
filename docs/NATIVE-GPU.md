@@ -5,8 +5,9 @@
 11 November 2026: the GPU path is the instanced SDF quad pass
 (`mui_vello::quad`, feature `gpu-quad`) on wgpu 30, behind the one retained
 renderer, `effects::GpuRenderer`: no compute shaders, no storage buffers.
-Classic Vello survives only as `effects::VelloRenderer` behind `vello-classic`,
-for benches and comparisons, until `vendor/vello` is deleted.
+Classic Vello (compute shaders) is deleted, with `effects::VelloRenderer` and
+the `vello-classic` feature; the last head-to-head numbers are in
+`BENCHMARKS.md`.
 
 **Status: builds, passes its tests, and runs on a physical device.** The
 workspace builds and its test suite passes (including the Naga validation test
@@ -206,9 +207,8 @@ Its current pixel assertions are targeted, not exhaustive CPU/GPU parity.
 
 The whole-editor comparison is the `bench` example
 (`cargo run -p mui-vello --profile perf --features gpu-quad --example bench`,
-`vello_cpu` and `GpuRenderer` rows) and, against classic Vello,
-`quad_bench` (`--features vello-classic`): the bare quad pass, the wired
-`GpuRenderer` and `VelloRenderer` on the same paint lists. See
+`vello_cpu` and `GpuRenderer` rows) and `quad_bench` (`--features gpu-quad`):
+the bare quad pass and the wired `GpuRenderer` on the same paint lists. See
 `BENCHMARKS.md` for numbers; they are CPU-side and GPU-span timings on one
 RX 6600 (RADV/Vulkan), not presented latency, and power, thermals, real
 audio underruns and integrated GPUs remain unmeasured.

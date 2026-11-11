@@ -9,7 +9,7 @@ public MUI hosted runners; real-device qualification remains separate.
 **11 November 2026: the GPU renderer is now the quad pass** (`mui_vello::quad`
 behind `effects::GpuRenderer`): render pipelines only, no compute shaders, no
 storage buffers, no workgroup memory. What below was only true of classic
-Vello (checked compute shaders, workgroup zeroing, the tile-allocation patch,
+Vello, since deleted (checked compute shaders, workgroup zeroing, the tile-allocation patch,
 the coarse shader's 8 storage buffers / 256 invocations / 16 KiB workgroup
 storage) is gone with it. Adapter selection now asks WebGL2-class limits at
 the adapter's own texture size and the texture usages the pass creates

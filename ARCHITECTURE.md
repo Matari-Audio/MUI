@@ -213,11 +213,10 @@ the solver knows nothing of style, so the edge points one way.
 `mui-playground` is the browser playground's DSL, straight over `mui-scene` and
 `mui-vello`.
 
-`vendor/vello` is classic Vello 0.10 ported to wgpu 30 with MUI's patches
-(`vendor/vello/PATCHES.md`). Nothing ships on it any more: `mui-vello`'s
-`vello-classic` keeps it as `effects::VelloRenderer` for benches, comparison
-tests and mui-cut's classic engine, until it is deleted. `gpu-quad` is the GPU
-feature.
+The GPU renderer is the quad pass (`mui-vello`'s `gpu-quad` feature). Classic
+Vello, the compute-shader renderer MUI used before it, is gone: `vendor/vello`
+and `vendor/vello_encoding` are deleted, and `vendor/vello_cpu` is the CPU
+renderer and the pixel reference the quad pass is tested against.
 
 ### media/: a second workspace
 
@@ -237,8 +236,8 @@ media/mui-motion-bridge   a live editor as browser-transformable surfaces,
                           for `tools/film` (over mui, mui-vello `cpu`)
 media/mui-cut             keyframe motion editor: a *.cut.json project, a pure
                           evaluator, a render/still CLI and a WASM web editor
-                          (over mui-scene, mui-vello `cpu` and, for its
-                          classic engine, `vello-classic`; mui-reel's shutter)
+                          (over mui-scene, mui-vello `cpu`; its GPU engine is
+                          `vello_gpu`; mui-reel's shutter)
 ```
 
 `tools/film` is the JS/Python film pipeline driving `mui-motion-bridge`; it is

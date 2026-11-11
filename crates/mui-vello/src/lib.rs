@@ -35,14 +35,14 @@ mod damage;
 pub mod diagnostics;
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
-#[cfg(feature = "cpu")]
-pub mod software;
 #[cfg(feature = "gpu-quad")]
 pub mod effects;
 #[cfg(feature = "gpu-quad")]
 pub mod host;
 #[cfg(feature = "gpu-quad")]
 pub mod quad;
+#[cfg(feature = "cpu")]
+pub mod software;
 
 /// The path conversion painting uses, the same one input hit-tests with.
 pub use mui_geometry::{ARC_TOLERANCE, bez_path, bez_path_into};

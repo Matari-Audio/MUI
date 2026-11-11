@@ -135,7 +135,11 @@ fn a_weld_paints_its_texture_in_its_slot() {
                 // An antialiased edge: the premultiplied texel over what
                 // is under it (the orange block, or the cleared target).
                 let orange = (30..90).contains(&dx) && (20..180).contains(&dy);
-                let under = if orange { [230., 153., 26., 255.] } else { [0.; 4] };
+                let under = if orange {
+                    [230., 153., 26., 255.]
+                } else {
+                    [0.; 4]
+                };
                 let keep = f64::from(255 - texel[3]) / 255.;
                 for c in 0..4 {
                     let want = f64::from(texel[c]) + under[c] * keep;

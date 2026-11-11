@@ -1494,10 +1494,7 @@ mod tests {
         )
         .err()
         .unwrap();
-        assert!(
-            e.contains("is 2D") && e.contains("gpu or cpu"),
-            "{e}"
-        );
+        assert!(e.contains("is 2D") && e.contains("gpu or cpu"), "{e}");
         let e = Options::new(Some("workbench"), None, 1, [64, 36]).unwrap_err();
         assert!(e.contains("eevee or cycles"), "{e}");
     }
