@@ -27,6 +27,16 @@ fn tmp(name: &str) -> String {
     d.join(name).to_str().unwrap().to_owned()
 }
 
+/// Removes its paths on the way out of a test, pass or panic.
+struct Cleanup(Vec<String>);
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        for p in &self.0 {
+            let _ = std::fs::remove_dir_all(p).or_else(|_| std::fs::remove_file(p));
+        }
+    }
+}
+
 const CLICK: &str =
     r#"[{"t":0.1,"type":"click","key":"bypass"},{"t":0.5,"type":"mark","name":"end"}]"#;
 
@@ -151,15 +161,6 @@ fn unbounded_inputs_are_refused_and_outputs_find_their_way() {
     // Missing directories are made, and a first-frame click is a change.
     let dir = tmp("nested/a/b");
     let _ = std::fs::remove_dir_all(tmp("nested"));
-    // Removed on the way out, pass or panic.
-    struct Cleanup(Vec<String>);
-    impl Drop for Cleanup {
-        fn drop(&mut self) {
-            for p in &self.0 {
-                let _ = std::fs::remove_dir_all(p).or_else(|_| std::fs::remove_file(p));
-            }
-        }
-    }
     let script = tmp("first.json");
     let _cleanup = Cleanup(vec![tmp("nested"), script.clone()]);
     std::fs::write(&script, r#"[{"t":0,"type":"click","key":"bypass"}]"#).unwrap();
