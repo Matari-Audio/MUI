@@ -3,6 +3,8 @@ use mui_weld::analytic::{AnalyticWeld, PARAM_BYTES, dirty_ranges};
 use mui_weld::boundary::BOUNDARY_BYTES;
 use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
+use super::gate;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     pub max_surfaces: usize,
@@ -28,7 +30,7 @@ pub struct EffectStats {
     pub effect_draws: u64,
     pub effect_pixels: u64,
     pub encoded_scenes: u64,
-    /// Vello render passes recorded: 0 on a frame that left the target as
+    /// Quad render passes recorded: 0 on a frame that left the target as
     /// the previous one did.
     pub renders: u64,
     /// The pixels those renders drew of the frame: all of it, or the box
@@ -148,7 +150,7 @@ impl WeldTextures {
             label: Some("MUI analytic weld"),
             source: wgpu::ShaderSource::Wgsl(super::WELD_SHADER.into()),
         });
-        let pipeline = vello::with_pipeline_creation(device, || {
+        let pipeline = gate(device, || {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("MUI analytic weld"),
                 layout: Some(&pipeline_layout),

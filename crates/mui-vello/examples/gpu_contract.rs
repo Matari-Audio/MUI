@@ -11,11 +11,9 @@ fn main() -> gpu_support::Result<()> {
 async fn run() -> gpu_support::Result<()> {
     let (info, device, queue) = gpu_support::device().await?;
     println!("ADAPTER {info:?}");
-    let dir = std::path::PathBuf::from(
-        std::env::args()
-            .nth(1)
-            .unwrap_or_else(|| "gpu-contract".into()),
-    );
+    let dir = std::env::args_os()
+        .nth(1)
+        .map_or_else(|| std::env::temp_dir().join("gpu-contract"), Into::into);
     std::fs::create_dir_all(&dir)?;
     for scale in [1., 1.5, 2.] {
         let size = [
@@ -62,9 +60,36 @@ async fn run() -> gpu_support::Result<()> {
         assert_eq!(changed.uniform_upload_bytes, 16);
         assert_eq!(changed.effect_draws, 1);
         assert_eq!(changed.texture_allocations, 0);
-        assert_eq!(changed.encoded_scenes, 0);
+        // The quad pass has no encoded scene to keep: a morph tick redraws one
+        // damage box from the retained records (it was 0 under Vello, which
+        // kept an encoded scene). What it must not do: rebuild a path record,
+        // touch the glyph atlas, or redraw the whole frame.
+        assert_eq!((changed.encoded_scenes, changed.renders), (1, 1));
+        assert!(
+            changed.rendered_pixels < u64::from(size[0]) * u64::from(size[1]),
+            "a morph tick redrew the whole frame"
+        );
+        let frame = renderer.quad_frame();
+        assert_eq!(
+            (frame.paths_built, frame.path_uploaded, frame.uploaded),
+            (0, 0, 0),
+            "a morph tick rebuilt path or glyph data"
+        );
         let b = gpu_support::readback(&device, &queue, &texture, size)?;
         assert_ne!(a, b, "morph did not update pixels");
+        // Further ticks reuse the slot: a morph never allocates a texture
+        // (or anything else) after the first draw.
+        for tick in [0.25, 0.5, 0.75] {
+            scene.set_weld_morph("join", tick)?;
+            let more = renderer.render(&scene, Affine::scale(scale), &view)?;
+            assert_eq!(more.texture_allocations, 0, "morph {tick} allocated");
+            assert_eq!(more.uniform_upload_bytes, 16, "morph {tick}");
+            assert_eq!(more.effect_draws, 1, "morph {tick}");
+            assert_eq!(renderer.quad_frame().paths_built, 0, "morph {tick}");
+        }
+        scene.set_weld_morph("join", 0.)?;
+        renderer.render(&scene, Affine::scale(scale), &view)?;
+        assert_eq!(b, gpu_support::readback(&device, &queue, &texture, size)?);
         let f = scene.surface("front").expect("front").frame;
         let white = gpu_support::pixel(
             &b,

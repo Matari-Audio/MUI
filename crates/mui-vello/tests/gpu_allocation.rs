@@ -1,4 +1,4 @@
-#![cfg(feature = "gpu-effects")]
+#![cfg(feature = "gpu-quad")]
 //! First-open, changed, full-redraw and resized frames must survive GPU overflow.
 use mui_scene::prelude::*;
 use mui_vello::{
@@ -113,71 +113,4 @@ async fn run() -> gpu_support::Result<()> {
         );
     }
     Ok(())
-}
-
-#[test]
-fn cpu_coarse_stages_preserve_download_and_render_contract() {
-    pollster::block_on(async {
-        let (_, device, queue) = match gpu_support::device().await {
-            Ok(device) => device,
-            Err(error) => {
-                eprintln!("SKIPPED: no GPU device ({error})");
-                return;
-            }
-        };
-        let size = [64, 64];
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("CPU coarse output"),
-            size: wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let mut renderer = vello::Renderer::new(
-            &device,
-            vello::RendererOptions {
-                use_cpu: true,
-                ..vello::RendererOptions::default()
-            },
-        )
-        .unwrap();
-        let mut scene = vello::Scene::new();
-        scene.fill(
-            vello::peniko::Fill::NonZero,
-            Affine::IDENTITY,
-            vello::peniko::Color::WHITE,
-            None,
-            &mui_vello::kurbo::Rect::new(0., 0., 64., 64.),
-        );
-        renderer
-            .render_to_texture(
-                &device,
-                &queue,
-                &scene,
-                &target.create_view(&wgpu::TextureViewDescriptor::default()),
-                &vello::RenderParams {
-                    base_color: vello::peniko::Color::BLACK,
-                    width: size[0],
-                    height: size[1],
-                    antialiasing_method: vello::AaConfig::Area,
-                },
-            )
-            .unwrap();
-        let pixels = gpu_support::readback(&device, &queue, &target, size).unwrap();
-        assert!(
-            pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .all(|pixel| *pixel == [255; 4]),
-            "CPU coarse stages must render every pixel"
-        );
-    });
 }

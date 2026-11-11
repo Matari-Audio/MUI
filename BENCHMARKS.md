@@ -6,12 +6,52 @@ caches and shims, the scene and runtime split, `mui-widgets` folded into
 `mui`). Every number is a median. No row is a sum of per-phase medians and
 there is no FPS column (see `docs/rendering-investigation.md`).
 
-**History note.** Every row labelled `vello_hybrid`, and the
-`--features cpu,bench-classic` table, is history: measured while the GPU
-canvas was `vello_hybrid`. That backend is gone. The GPU path is now classic
-Vello (vendored at `vendor/vello`, wgpu 30) behind `effects::GpuRenderer`, and
-`bench` runs `vello_cpu` plus the `gpu-effects` rows. The old rows stay as
-measured, not re-run.
+**History note.** Every row labelled `vello_hybrid` or `vello (classic)`, and
+the `--features cpu,bench-classic` table, is history: measured while the GPU
+canvas was `vello_hybrid` or compute-shader Vello. `vello_hybrid` is gone.
+Compute-shader Vello is gone too: `effects::VelloRenderer` and the
+`vello-classic` feature were removed, so any command below that names them is
+history and no longer builds. The GPU
+path every consumer gets is the instanced SDF quad pass behind
+`effects::GpuRenderer`; `bench` runs `vello_cpu` plus the `gpu-quad` rows. The
+old rows stay as measured, not re-run.
+
+## Quad pass against classic Vello, the last head-to-head (2026-11-11)
+
+Measured on **one Linux machine** (Ryzen 7 7800X3D, AMD Radeon RX 6600 / RADV
+NAVI23, Vulkan, Mesa 26.2.6) **under load**: load average 7.7 to 9.5 on 16
+threads while it ran (other builds), one run, no repeats. Treat differences
+under about 10% as noise. Nothing here was measured on Windows, macOS, an
+integrated GPU or a GLES/WebGL2 device.
+
+`cargo run -p mui-vello --profile perf --features vello-classic --example
+quad_bench` at `c8e10904`, the last tree that still had `VelloRenderer`; the
+full output is kept at
+`/data/dev/workspace/PluginArtifacts/mui-quad-final-headtohead/quad_bench.txt`.
+Medians per frame at 1280x800, milliseconds; `cpu` is the `render` call (Vello's
+includes its own wait on the device), `span` is GPU time between timestamps
+around `render` (an upper bound).
+
+| scene / frame | quad cpu | quad span | Vello cpu | Vello span |
+|---|---:|---:|---:|---:|
+| editor (652 entries), cold | 5.184 | 7.919 | 5.627 | **6.387** |
+| editor, static | 0.009 | 0.029 | 0.012 | 0.033 |
+| editor, one knob turning | 0.187 | 0.293 | 0.595 | 0.895 |
+| editor, scroll | 0.654 | 1.605 | 1.769 | 2.474 |
+| dense polyline changing each frame | 0.366 | 0.651 | 0.652 | 0.824 |
+| 1249 shapes, one change | 0.209 | 0.269 | 0.723 | 0.875 |
+| labelled cards (576 glyph runs), cold | 3.054 | 5.564 | 5.017 | 6.825 |
+| labelled cards, label change | 0.310 | 0.470 | 0.792 | 1.011 |
+| labelled cards, scroll | 0.930 | 2.349 | 2.267 | 3.771 |
+| blurred modal fading in | 0.650 | 0.874 | 1.962 | 2.387 |
+
+The quad pass is 2 to 4 times cheaper on interactive frames, equal on a static
+frame (both skip it), and slower on the editor's cold frame by span (7.9 against
+6.4 ms: first-use glyph atlas and path uploads, one frame at open). The quad
+pass's own render pass is 0.04 ms for a knob turning and 0.84 ms for a full
+scroll redraw. Both use one draw call for the editor; the modal costs 3 draws
+in 5 passes on the frames that blur. No compute shader and no storage buffer
+is involved.
 
 ## mui-weld CPU bake (2026-09-26)
 
@@ -119,8 +159,8 @@ for the same binary across runs), because the GPU was shared too.
 
 ```
 cargo run -p mui-scene --profile perf --example stress
-cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench
-cargo run -p mui-vello --profile perf --features cpu-threads,gpu-effects --example bench
+cargo run -p mui-vello --profile perf --features cpu,gpu-quad --example bench
+cargo run -p mui-vello --profile perf --features cpu-threads,gpu-quad --example bench
 cargo test -p mui-preview --profile perf --test frame_cost -- --nocapture
 ```
 

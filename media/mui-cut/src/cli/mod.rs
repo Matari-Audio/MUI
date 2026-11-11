@@ -43,7 +43,7 @@ const USAGE: &str = "usage:
                  [--segment SECONDS] [--range 3.2s-5.0s]   (the segment cache)
   mui-cut still  PROJECT --t SECONDS -o OUT.png [--scene NAME] [--size WxH] [--renderer R] [--variant NAME]
     render and still: [--quality normal|beauty] [--samples N] [--glass raster|trace|rt|rt-path [--glass-samples N]]
-    R: classic (default; Vello compute on the GPU), gpu (vello_gpu), cpu (Vello CPU),
+    R: gpu (vello_gpu, the default; `classic` is an alias), cpu (Vello CPU),
        blender (3D scenes through Blender: [--engine eevee|cycles] [--samples N]);
     --quality beauty (or --samples N) on a GPU renderer: 3D frames are the mean of N
        samples (64 by default), each with its own pixel offset, lens point (depth of
@@ -423,7 +423,7 @@ fn load_assets(p: &Project, project: &Path, assets: &mut Assets) -> Vec<String> 
     errs
 }
 
-/// Where frames are drawn: a Vello engine on the GPU (classic by default),
+/// Where frames are drawn: `vello_gpu` on the GPU (`classic` is an alias),
 /// or Vello CPU with `--renderer cpu` or when no GPU adapter opens, or
 /// Blender. Frames come back as straight RGBA, or as `Yuv` planes for an
 /// encoder.
@@ -470,7 +470,7 @@ impl Backend {
         Ok(b)
     }
     /// [`Backend::open`] without the command line: `renderer` is
-    /// `classic` (the default), `gpu` or `cpu`.
+    /// `gpu` (the default; `classic` is an alias) or `cpu`.
     fn open_at(
         p: &Project,
         project: &Path,
@@ -480,8 +480,9 @@ impl Backend {
         yuv: Option<Yuv>,
     ) -> Result<Self> {
         let engine = match renderer {
-            None | Some("classic") => Some(Engine::Classic),
-            Some("gpu") => Some(Engine::Sparse),
+            // `classic` was MUI's compute-shader Vello, retired with it; the
+            // name still selects the GPU engine.
+            None | Some("classic" | "gpu") => Some(Engine::Sparse),
             Some("cpu") => None,
             Some("blender") => return Err("--renderer blender works with render and still".into()),
             Some(r) => {
@@ -544,8 +545,8 @@ impl Backend {
         };
         let fx = if jobs.iter().any(|(s, _)| s.composites_over_blender()) {
             let gpu = match yuv {
-                Some(y) => Offline::with_yuv(size, Engine::Classic, y),
-                None => Offline::new(size, Engine::Classic),
+                Some(y) => Offline::with_yuv(size, Engine::Sparse, y),
+                None => Offline::new(size, Engine::Sparse),
             };
             gpu.map_err(|e| {
                 eprintln!(

@@ -12,7 +12,7 @@ external-xdnd = ["winit/external-xdnd"]
 [dependencies]
 # Reuse the plugin-image pin rather than duplicating loader FFI.
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview", default-features = false }
-mui = { workspace = true, features = ["gpu-effects", "software-window"] }
+mui = { workspace = true, features = ["gpu-quad", "software-window"] }
 mui-access.workspace = true
 wgpu = { workspace = true, features = ["default"] }
 winit = "0.30"

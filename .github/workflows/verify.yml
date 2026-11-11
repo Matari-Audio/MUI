@@ -125,6 +125,17 @@ jobs:
           WGPU_BACKEND: ${{ runner.os == 'Windows' && 'dx12' || 'metal' }}
           WGPU_DX12_COMPILER: StaticDxc
           MUI_TEST_ALLOW_WARP: '1'
+      # The quad pixel tests write cpu/gpu/diff images of a failing case here.
+      - name: Quad pixel images
+        if: failure()
+        shell: bash
+        run: mkdir -p quad-pixels && cp -R "${TMPDIR:-${RUNNER_TEMP}}/mui-quad-pixels/." quad-pixels/ 2>/dev/null || cp -R "$(cygpath -u "${TEMP}")/mui-quad-pixels/." quad-pixels/ 2>/dev/null || true
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: quad-pixels-${{ matrix.os }}
+          path: quad-pixels
+          if-no-files-found: ignore
       - name: Remove developer driver before caching
         if: always() && runner.os == 'Windows'
         uses: ./.github/actions/warp-cleanup

@@ -75,59 +75,6 @@ impl Regions {
     }
 }
 
-/// Shelf packing is bounded by 16 regions, with tile-aligned placements so
-/// the rasterizer sees the same coordinates modulo whole tiles.
-#[cfg(feature = "gpu-effects")]
-pub(crate) struct PackedRegions {
-    pub(crate) offsets: [[u32; 2]; 16],
-    pub(crate) size: [u32; 2],
-}
-impl Regions {
-    #[cfg(feature = "gpu-effects")]
-    pub(crate) fn packed(&self, limit: u32) -> Option<PackedRegions> {
-        let mut order = std::array::from_fn::<_, 16, _>(|i| i);
-        order[..self.len].sort_unstable_by_key(|&i| std::cmp::Reverse(self.rects[i][3]));
-        let widest = self.rects[..self.len]
-            .iter()
-            .map(|r| r[2].next_multiple_of(16))
-            .max()?;
-        let mut best: Option<PackedRegions> = None;
-        let mut width = 0;
-        for &i in &order[..self.len] {
-            width += self.rects[i][2].next_multiple_of(16);
-            if width < widest || width > limit {
-                continue;
-            }
-            let mut offsets = [[0; 2]; 16];
-            let (mut x, mut y, mut row) = (0, 0, 0);
-            for &j in &order[..self.len] {
-                let r = self.rects[j];
-                let w = r[2].next_multiple_of(16);
-                let h = r[3].next_multiple_of(16);
-                if x + w > width {
-                    y += row;
-                    x = 0;
-                    row = 0;
-                }
-                offsets[j] = [x, y];
-                x += w;
-                row = row.max(h);
-            }
-            let size = [width, y + row];
-            let pixels = |s: [u32; 2]| u64::from(s[0]) * u64::from(s[1]);
-            if size[1] <= limit && best.as_ref().is_none_or(|b| pixels(size) < pixels(b.size)) {
-                best = Some(PackedRegions { offsets, size });
-            }
-        }
-        best
-    }
-}
-
-/// Pack sparse patches only when their atlas fits within this share of the
-/// target; otherwise render the same regions separately, never a full frame.
-#[cfg(feature = "gpu-effects")]
-pub(crate) const PARTIAL: f64 = 0.5;
-
 /// The empty box: what `Rect::union` leaves unchanged.
 pub(crate) const NOTHING: Rect = Rect::new(
     f64::INFINITY,

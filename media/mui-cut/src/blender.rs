@@ -475,7 +475,7 @@ pub fn describe(
     if scene.mode != Mode::ThreeD {
         return Err(format!(
             "scene `{}` is 2D: --renderer blender draws 3D scenes (\"mode\": \"3d\"); \
-             render 2D with classic, gpu or cpu",
+             render 2D with gpu or cpu",
             scene.name
         ));
     }
@@ -1494,10 +1494,7 @@ mod tests {
         )
         .err()
         .unwrap();
-        assert!(
-            e.contains("is 2D") && e.contains("classic, gpu or cpu"),
-            "{e}"
-        );
+        assert!(e.contains("is 2D") && e.contains("gpu or cpu"), "{e}");
         let e = Options::new(Some("workbench"), None, 1, [64, 36]).unwrap_err();
         assert!(e.contains("eevee or cycles"), "{e}");
     }

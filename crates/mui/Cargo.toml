@@ -10,7 +10,10 @@ default = []
 # Opt-in native integration-fixture hooks, omitted from shipping builds.
 test-support = ["mui-vello/test-support"]
 reporting = ["mui-vello/reporting"]
-gpu-effects = ["mui-vello/gpu-effects"]
+gpu-quad = ["mui-vello/gpu-quad"]
+# Deprecated alias for `gpu-quad` (no Vello): moose-mui and plugins pinned
+# before the rename still name it. ponytail: drop once they ask for gpu-quad.
+gpu-effects = ["gpu-quad"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
 software-window = ["mui-vello/software-window"]

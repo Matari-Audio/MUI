@@ -24,7 +24,7 @@ schemars = "1"
 # Load errors name the JSON path that failed (`scenes[0].layers[2].x`).
 serde_path_to_error = "0.1"
 mui-scene = { path = "../../crates/mui-scene" }
-mui-vello = { workspace = true, features = ["cpu", "gpu-effects"] }
+mui-vello = { workspace = true, features = ["cpu"] }
 pollster.workspace = true
 vello_cpu = { path = "../../vendor/vello_cpu", default-features = false, features = ["std", "u8_pipeline", "text", "png"] }
 # The ImageId mui-vello's brushes carry.

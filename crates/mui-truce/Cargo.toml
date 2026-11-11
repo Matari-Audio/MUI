@@ -11,7 +11,7 @@ license.workspace = true
 allow-panic-abort = ["mui-baseview/allow-panic-abort"]
 
 [dependencies]
-mui = { workspace = true, features = ["gpu-effects"] }
+mui = { workspace = true, features = ["gpu-quad"] }
 truce-core = "6.3"
 truce-params = "6.3"
 

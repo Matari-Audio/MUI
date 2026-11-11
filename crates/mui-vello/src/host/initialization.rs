@@ -7,7 +7,7 @@ use super::*;
 use std::sync::mpsc;
 
 // DX12 HWND and DirectComposition surfaces require different instance options.
-// Other backends can share one compute context regardless of surface alpha.
+// Other backends can share one device regardless of surface alpha.
 static SHARED: Mutex<[Option<Arc<Session>>; 2]> = Mutex::new([None, None]);
 
 fn session_slot(transparency: Transparency) -> usize {
@@ -55,7 +55,7 @@ struct Context {
     queue: wgpu::Queue,
     errors: Arc<DeviceErrors>,
     diagnostics: GpuDiagnostics,
-    vello: crate::effects::retained::SharedVello,
+    shared: crate::effects::renderer::Shared,
     generation: u64,
     trial: Arc<crash_guard::Attempt>,
 }
@@ -140,13 +140,15 @@ impl Session {
         let started = run(self.detached, move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut descriptor = session_descriptor(transparency);
-                // Vello cannot render through GL. Vulkan WSI accepts each window's
-                // own X connection; no process-wide borrowed display is retained.
+                // GL (EGL) binds surfaces to the display its instance was made
+                // with, which this window-less session cannot hold; a window's
+                // own Host::open_native still reaches GL. Vulkan WSI accepts each
+                // window's own X connection; no process-wide display is retained.
                 descriptor.backends &=
                     wgpu::Backends::PRIMARY & wgpu::Instance::enabled_backend_features();
                 if descriptor.backends.is_empty() {
                     return Err(HostError::Unavailable {
-                        message: "no compute-capable native backend enabled".into(),
+                        message: "no native GPU backend enabled".into(),
                         class: FailureClass::Permanent,
                     });
                 }
@@ -186,7 +188,7 @@ impl Session {
                     queue: gpu.queue,
                     errors: gpu.errors,
                     diagnostics: gpu.diagnostics,
-                    vello: gpu.renderer.shared_vello(),
+                    shared: gpu.renderer.shared(),
                     generation,
                 }))
             }))
@@ -391,7 +393,7 @@ impl GpuInit {
         self.retry.fail(Instant::now(), error.failure_class());
     }
     /// Poll without waiting. Only `create` and configure touch the native view,
-    /// on the caller's window thread, after all heavy compute pipelines are ready.
+    /// on the caller's window thread, after all pipelines are ready.
     /// The caller must hold its native callback/ownership lease across this call
     /// and drop the returned Host before native destruction. An image pin only
     /// preserves code; it does not preserve an HWND, AppKit view or X11 drawable.
@@ -455,7 +457,7 @@ impl GpuInit {
                         wgpu::TextureFormat::Bgra8Unorm,
                         [width, height],
                         Budget::default(),
-                        Some(context.vello.clone()),
+                        Some(context.shared.clone()),
                     ))
                     .map_err(HostError::Render)?;
                     Ok(OnDevice {
@@ -656,7 +658,7 @@ impl GpuInit {
                 wgpu::TextureFormat::Bgra8Unorm,
                 [size.0, size.1],
                 Budget::default(),
-                Some(context.vello.clone()),
+                Some(context.shared.clone()),
             ))
             .map_err(HostError::Render)?;
             renderer.incremental_output();
@@ -976,7 +978,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a native compute adapter"]
+    #[ignore = "requires a native adapter"]
     fn close_before_gpu_result_publication_never_creates_a_native_surface() {
         let gate = InitGate::default();
         let mut init = GpuInit::new(true);
@@ -1015,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires native compute adapter"]
+    #[ignore = "requires a native adapter"]
     fn editors_adopt_one_device_and_rebuilt_generation() {
         let editor = Session::private(false, Transparency::Opaque, Vec::new());
         let second = editor.clone();

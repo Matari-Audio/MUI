@@ -8,8 +8,7 @@ publish = false
 [workspace]
 
 [features]
-default = ["classic", "vello-gpu", "vello-cpu", "skia-cpu"]
-classic = ["dep:classic", "dep:wgpu", "dep:kurbo"]
+default = ["vello-gpu", "vello-cpu", "skia-cpu"]
 vello-gpu = ["dep:vello_gpu", "dep:wgpu"]
 vello-cpu = ["dep:vello_cpu", "dep:kurbo"]
 skia-cpu = ["dep:skia-safe"]
@@ -24,7 +23,6 @@ libc = "0.2"
 env_logger = "0.11"
 kurbo = { version = "0.13", optional = true }
 wgpu = { version = "30", optional = true }
-classic = { package = "vello", path = "../../vendor/vello", optional = true }
 vello_cpu = { git = "https://github.com/linebender/vello", rev = "96d4643cca622259acad44e9e715e3e3fac3c09f", optional = true }
 vello_gpu = { git = "https://github.com/linebender/vello", rev = "96d4643cca622259acad44e9e715e3e3fac3c09f", features = ["wgpu"], optional = true }
 skia-safe = { version = "=0.153.3", optional = true }

@@ -14,7 +14,7 @@ allow-panic-abort = []
 
 [dependencies]
 matari-audio-drag-and-drop = { git = "https://github.com/Matari-Audio/matari-audio-drag-and-drop", rev = "cdf658f67ba5a17b7370dd0577a347ab41a88978" }
-mui = { workspace = true, features = ["gpu-effects", "software-window"] }
+mui = { workspace = true, features = ["gpu-quad", "software-window"] }
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
 mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }

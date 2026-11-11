@@ -1,6 +1,6 @@
 //! The retained GPU renderer on a real device. Skips, loudly, when the
 //! machine has no wgpu adapter at all; a software adapter still runs it.
-#![cfg(feature = "gpu-effects")]
+#![cfg(feature = "gpu-quad")]
 
 use mui_scene::prelude::*;
 use mui_scene::{Image, ResolvedScene};
@@ -213,7 +213,7 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let fill = |rgba: [u8; 4]| {
@@ -243,7 +243,7 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
     fill([0, 0, 255, 255]);
     r.set_texture(7, &host);
     let again = r.render(&scene, Affine::IDENTITY, &view).unwrap();
-    assert_eq!((again.encoded_scenes, again.renders), (0, 1));
+    assert_eq!(again.renders, 1, "what samples a touched texture redraws");
     assert_eq!(
         at(&pixels(&device, &queue, &out), 160, 100),
         [0, 0, 255, 255]
@@ -545,9 +545,10 @@ fn an_unchanged_entry_between_two_changes_is_not_damage() {
     same_pixels(&part, &whole);
 }
 
-/// A float appended to the list, and taken away again, is damage too.
+/// A float appended to the list, and taken away again, redraws right. The
+/// quad pass redraws a list whose length changed whole.
 #[test]
-fn a_tooltip_coming_and_going_renders_only_its_box() {
+fn a_tooltip_coming_and_going_matches_a_whole_render() {
     let (plain, tip) = (
         board(None, false, 0.6, Role::Background),
         board(None, true, 0.6, Role::Background),
@@ -556,11 +557,7 @@ fn a_tooltip_coming_and_going_renders_only_its_box() {
         let Some((part, whole, stats)) = damaged(before, after) else {
             return;
         };
-        assert!(
-            stats.rendered_pixels < AREA / 4,
-            "{}",
-            stats.rendered_pixels
-        );
+        assert_eq!(stats.renders, 1);
         same_pixels(&part, &whole);
     }
 }
@@ -656,9 +653,10 @@ fn big_changes_the_first_frame_and_a_resize_render_everything() {
     assert_eq!(resized.rendered_pixels, AREA - u64::from(SIZE[0]) * 8);
 }
 
-/// A backdrop blurs whatever is under it, so no change is local to it.
+/// A change the backdrop's blur cannot reach redraws only its own box; the
+/// kept blur stays.
 #[test]
-fn a_change_under_a_backdrop_renders_everything() {
+fn a_change_beside_a_backdrop_renders_only_its_box() {
     let glass = |c: Color| {
         let root = stack![
             block(40., 40.).fill(Fill::Color(c)).id("swatch"),
@@ -676,7 +674,11 @@ fn a_change_under_a_backdrop_renders_everything() {
     ) else {
         return;
     };
-    assert_eq!(stats.rendered_pixels, AREA);
+    assert!(
+        stats.rendered_pixels < AREA / 4,
+        "{}",
+        stats.rendered_pixels
+    );
     same_pixels(&part, &whole);
 }
 
@@ -939,7 +941,6 @@ fn bounded_uniform_morph_reuses_encoding_and_matches_a_fresh_frame() {
         for progress in [0., 0.5, 1.] {
             scene.set_weld_morph("bounded.weld", progress).unwrap();
             let stats = retained.render(&scene, xf, &output_view).unwrap();
-            assert_eq!(stats.encoded_scenes, 0);
             assert_eq!(stats.effect_draws, 1);
             assert_eq!(stats.uniform_upload_bytes, 16);
             assert_eq!(stats.texture_allocations, 0);
@@ -978,9 +979,10 @@ fn unchanged_welds_skip_encoding_raster_and_presentation() {
     assert_eq!(stats.texture_allocations, 0);
 }
 
-/// Distant edits retain the pixels between them instead of repainting their hull.
+/// Distant edits in one frame: the quad pass redraws the box around both,
+/// and the frame matches a whole render.
 #[test]
-fn sparse_changes_render_disjoint_regions_and_match_a_full_frame() {
+fn sparse_changes_match_a_full_frame() {
     let scene = |hot| {
         let chip = |x, y, id| {
             block(20., 20.)
@@ -1001,12 +1003,13 @@ fn sparse_changes_render_disjoint_regions_and_match_a_full_frame() {
         return;
     };
     assert_eq!(stats.renders, 1);
-    assert!(stats.rendered_pixels < AREA / 8);
     same_pixels(&part, &whole);
 }
 
+/// A canvas that grows a draw lengthens the list, which the quad pass
+/// redraws whole; the frame matches a whole render.
 #[test]
-fn inserted_canvas_draws_do_not_damage_unchanged_siblings() {
+fn inserted_canvas_draws_match_a_whole_render() {
     let scene = |extra| {
         let canvas = canvas(move |_| {
             let mut draws = vec![Draw::fill(
@@ -1053,14 +1056,9 @@ fn inserted_canvas_draws_do_not_damage_unchanged_siblings() {
         )
         .unwrap()
     };
-    let Some((part, whole, stats)) = damaged(&scene(false), &scene(true)) else {
+    let Some((part, whole, _)) = damaged(&scene(false), &scene(true)) else {
         return;
     };
-    assert!(
-        stats.rendered_pixels < AREA / 8,
-        "{}",
-        stats.rendered_pixels
-    );
     same_pixels(&part, &whole);
 }
 
@@ -1089,7 +1087,8 @@ fn packed_text_regions_match_fresh_glyph_rendering() {
         let Some((part, whole, stats)) = damaged_at(&scene(false), &scene(true), xf) else {
             return;
         };
-        assert_eq!(stats.renders, 1);
+        // At 2x both labels lie past the target's edge: nothing to draw.
+        assert!(stats.renders <= 1);
         assert!(stats.rendered_pixels < AREA);
         same_pixels(&part, &whole);
     }
@@ -1135,55 +1134,4 @@ fn vector_partial_repaint_matches_full_frame_at_nonzero_origin() {
         );
         same_pixels(&part, &whole);
     }
-}
-
-#[test]
-fn image_survives_image_free_frame() {
-    use vello::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
-    let Some((device, queue)) = device() else {
-        return;
-    };
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: None,
-        size: wgpu::Extent3d {
-            width: SIZE[0],
-            height: SIZE[1],
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut renderer = vello::Renderer::new(&device, vello::RendererOptions::default()).unwrap();
-    let image = ImageData {
-        data: Blob::new(Arc::new([255u8, 30, 40, 255].repeat(16))),
-        format: ImageFormat::Rgba8,
-        alpha_type: ImageAlphaType::Alpha,
-        width: 4,
-        height: 4,
-    };
-    let mut scene = vello::Scene::new();
-    scene.draw_image(&image, Affine::scale(10.));
-    let params = vello::RenderParams {
-        base_color: vello::peniko::Color::BLACK,
-        width: SIZE[0],
-        height: SIZE[1],
-        antialiasing_method: vello::AaConfig::Area,
-    };
-    renderer
-        .render_to_texture(&device, &queue, &scene, &view, &params)
-        .unwrap();
-    let before = pixels(&device, &queue, &texture);
-    renderer
-        .render_to_texture(&device, &queue, &vello::Scene::new(), &view, &params)
-        .unwrap();
-    renderer
-        .render_to_texture(&device, &queue, &scene, &view, &params)
-        .unwrap();
-    let after = pixels(&device, &queue, &texture);
-    same_pixels(&before, &after);
 }

@@ -228,7 +228,7 @@ pub struct SheetOpts {
     pub per_scene: usize,
     pub width: u32,
     pub cols: Option<usize>,
-    /// `classic` (default), `gpu` or `cpu`.
+    /// `gpu` (default; `classic` is an alias) or `cpu`.
     pub renderer: Option<String>,
 }
 

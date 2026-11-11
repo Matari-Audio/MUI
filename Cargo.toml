@@ -20,8 +20,6 @@ members = [
   "crates/mui-native-dialog",
   "crates/mui-symbols",
   "examples/gain-plugin",
-  "vendor/vello",
-  "vendor/vello_encoding",
 ]
 exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit", "vendor/accesskit_unix", "vendor/vello_cpu"]
 resolver = "2"
@@ -62,7 +60,9 @@ color = "0.3"
 i_overlay = "8.1"
 rustc-hash = "2"
 kurbo = "0.13.1"
-wgpu = { version = "30", default-features = false, features = ["static-dxc"] }
+# "std" makes wgpu read WGPU_BACKEND, WGPU_DX12_COMPILER and the other WGPU_*
+# variables (CI forces GPU failure with them); without it every env read is None.
+wgpu = { version = "30", default-features = false, features = ["static-dxc", "std"] }
 pollster = "0.4"
 png = "0.18"
 epaint_default_fonts = "0.36"
@@ -71,8 +71,7 @@ vello_cpu = { version = "0.3", path = "vendor/vello_cpu", default-features = fal
 unicode-segmentation = "1.13"
 truce = { version = "6.3", default-features = false }
 
-# Every member opts in with `[lints] workspace = true`. The vendored vello keeps
-# upstream's own table. Pedantic is a curated slice: the lints that catch a real
+# Every member opts in with `[lints] workspace = true`. Pedantic is a curated slice: the lints that catch a real
 # mistake or a real simplification, not the ones that argue about taste.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

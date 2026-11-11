@@ -3,7 +3,7 @@ status = "candidate-unqualified"
 [family.mui]
 repository = "https://github.com/Matari-Audio/MUI"
 revision = "1d7e29cb567289ba73023b04820a6995b7dc853f"
-packages = ["accesskit-unix-image-a", "accesskit-unix-image-b", "accesskit-unix-image-probe", "accesskit_macos", "accesskit_unix", "accesskit_winit", "fixture-moose", "fixture-moose-tone", "fixture-nice", "fixture-nice-own", "fixture-nice-private", "fixture-nice-tone", "fixture-patched", "fixture-plain", "fixture-plain-bare", "fixture-truce", "fixture-truce-tone", "moose-baseview", "mui", "mui-access", "mui-accesskit-image-a", "mui-accesskit-image-b", "mui-baseview", "mui-cut", "mui-gain-plugin", "mui-geometry", "mui-gpui-host-probe", "mui-input", "mui-layout", "mui-material", "mui-migrate", "mui-motion", "mui-motion-bridge", "mui-native-dialog", "mui-playground", "mui-preview", "mui-reel", "mui-renderer-bench", "mui-scene", "mui-stage", "mui-stage-rt", "mui-style", "mui-symbols", "mui-text", "mui-truce", "mui-vello", "mui-weld", "mui-winit", "vello", "vello_cpu", "vello_encoding", "xim-ctext", "xim-gen", "xim-parser", "zed-xim"]
+packages = ["accesskit-unix-image-a", "accesskit-unix-image-b", "accesskit-unix-image-probe", "accesskit_macos", "accesskit_unix", "accesskit_winit", "fixture-moose", "fixture-moose-tone", "fixture-nice", "fixture-nice-own", "fixture-nice-private", "fixture-nice-tone", "fixture-patched", "fixture-plain", "fixture-plain-bare", "fixture-truce", "fixture-truce-tone", "moose-baseview", "mui", "mui-access", "mui-accesskit-image-a", "mui-accesskit-image-b", "mui-baseview", "mui-cut", "mui-gain-plugin", "mui-geometry", "mui-gpui-host-probe", "mui-input", "mui-layout", "mui-material", "mui-migrate", "mui-motion", "mui-motion-bridge", "mui-native-dialog", "mui-playground", "mui-preview", "mui-reel", "mui-renderer-bench", "mui-scene", "mui-stage", "mui-stage-rt", "mui-style", "mui-symbols", "mui-text", "mui-truce", "mui-vello", "mui-weld", "mui-winit", "vello_cpu", "xim-ctext", "xim-gen", "xim-parser", "zed-xim"]
 
 [family.moose]
 repository = "https://github.com/Matari-Audio/moose"
@@ -12,11 +12,6 @@ packages = ["cargo-moose", "moose", "moose-au", "moose-baseview", "moose-build",
 
 [aliases]
 kontra-native-host = "mui-baseview"
-
-[[upstream_coexistence]]
-package = "vello_encoding"
-version = "0.11.0"
-parent = "vello_shaders"
 
 [[upstream_coexistence]]
 package = "vello_cpu"

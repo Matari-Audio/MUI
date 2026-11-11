@@ -48,7 +48,7 @@ jobs:
           mkdir -p ui-results
           exec > >(tee -a ui-results/build.log) 2>&1
           cargo build -p mui-baseview -p mui-winit -p mui-preview -p mui-vello \
-            --examples --bins --features mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-effects --locked
+            --examples --bins --features mui-baseview/test-support,mui-vello/cpu,mui-vello/gpu-quad --locked
       - name: Capture native Windows fault evidence
         if: runner.os == 'Windows'
         shell: pwsh

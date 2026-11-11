@@ -23,7 +23,7 @@ def main():
         ("gallery-gpu", [f"target/debug/mui-preview{suffix}", "--test-ui"],
          ["--gallery", "--renderer", "gpu"]),
         ("effects", ["cargo", "test", "-p", "mui-vello", "--test", "effects_smoke",
-                     "--features", "cpu,gpu-effects,test-support", "--locked", "--",
+                     "--features", "gpu-quad,test-support", "--locked", "--",
                      "--test-threads=1"], []),
     ]
     failed = False

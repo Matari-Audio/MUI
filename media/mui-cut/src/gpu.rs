@@ -1,54 +1,36 @@
-//! Frames on the GPU, on one of two Vello engines behind [`GpuCanvas`]:
-//! MUI's retained `GpuRenderer` (classic Vello, compute shaders) or
-//! `vello_gpu` (sparse strips, plain render passes, also on WebGL2; see
-//! `sparse.rs`). Each layer's tree is painted under its affine over the
+//! Frames on the GPU through `vello_gpu` (sparse strips, plain render
+//! passes, also on WebGL2; see `sparse.rs`) behind [`GpuCanvas`]. Each
+//! layer's tree is painted under its affine over the
 //! scene background. [`GpuCanvas`] draws into any texture view (the web
 //! editor's canvas surface); native [`Offline`] adds the shutter (subframes
 //! summed in an `Rgba16Float` target) and a ring of staging buffers, so the
 //! GPU renders the next frame while the last one is piped to ffmpeg.
 use mui_scene::ResolvedScene;
-use mui_scene::prelude::*;
-use mui_vello::effects::{Budget, GpuRenderer};
 use mui_vello::kurbo::{Affine, Rect};
 
-use crate::render::{Assets, color};
+use crate::render::Assets;
 use crate::sparse::Sparse;
 use crate::{Frame, Quad, Rgba};
 
-/// Which Vello draws on the GPU.
+/// Which Vello draws on the GPU. The compute-shader `classic` engine is
+/// gone; `classic` on the command line and the web still names this one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Engine {
-    /// Classic Vello through MUI's `GpuRenderer`: compute shaders, so
-    /// WebGPU/Vulkan/Metal/DX12 only.
-    Classic,
     /// `vello_gpu`: CPU-side strips, GPU raster in render passes.
     Sparse,
 }
 
 impl Engine {
     pub fn name(self) -> &'static str {
-        match self {
-            Self::Classic => "classic",
-            Self::Sparse => "vello_gpu",
-        }
+        "vello_gpu"
     }
-}
-
-enum Inner {
-    /// With the base scene of the last frame: the background, or a clear
-    /// one for the 3D atlas (it only changes with the scene).
-    Classic(
-        Box<GpuRenderer>,
-        Option<(Option<Rgba>, [u32; 2], Box<ResolvedScene>)>,
-    ),
-    Sparse(Box<Sparse>),
 }
 
 /// A GPU renderer kept alive across frames.
 pub struct GpuCanvas {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    inner: Inner,
+    inner: Box<Sparse>,
     format: wgpu::TextureFormat,
     size: [u32; 2],
     /// The size the Vello engine is set up for: the target's, or the 3D
@@ -84,17 +66,8 @@ impl GpuCanvas {
         size: [u32; 2],
         engine: Engine,
     ) -> Result<Self, String> {
-        let inner = match engine {
-            Engine::Classic => Inner::Classic(
-                Box::new(
-                    GpuRenderer::new(device, queue, format, size, Budget::default())
-                        .await
-                        .map_err(|e| e.to_string())?,
-                ),
-                None,
-            ),
-            Engine::Sparse => Inner::Sparse(Box::new(Sparse::new(device, format, size)?)),
-        };
+        let Engine::Sparse = engine;
+        let inner = Box::new(Sparse::new(device, format, size)?);
         Ok(Self {
             device: device.clone(),
             queue: queue.clone(),
@@ -112,10 +85,7 @@ impl GpuCanvas {
         })
     }
     pub fn engine(&self) -> Engine {
-        match self.inner {
-            Inner::Classic(..) => Engine::Classic,
-            Inner::Sparse(_) => Engine::Sparse,
-        }
+        Engine::Sparse
     }
     pub fn size(&self) -> [u32; 2] {
         self.size
@@ -230,63 +200,36 @@ impl GpuCanvas {
         target: &wgpu::TextureView,
     ) -> Result<(), String> {
         if self.vello_size != size {
-            match &mut self.inner {
-                Inner::Classic(r, _) => r.resize(size).map_err(|e| e.to_string())?,
-                Inner::Sparse(s) => s.resize(&self.device, size)?,
-            }
+            self.inner.resize(&self.device, size)?;
             self.vello_size = size;
         }
+        let sparse = &mut self.inner;
+        // Plugin vector captures carry images of their own, not in `assets`.
+        let in_scenes = scenes
+            .iter()
+            .flat_map(|(s, _)| &s.paint)
+            .filter_map(|p| match &p.paint {
+                mui_scene::Paint::Image { image, .. } => Some(&**image),
+                _ => None,
+            });
+        sparse.upload(&self.device, &self.queue, assets.images().chain(in_scenes));
+        sparse.scene.reset();
+        if let Some((bg, [fw, fh], view)) = background {
+            sparse.scene.set_transform(view);
+            let [r, g, b, a] = bg.0;
+            sparse
+                .scene
+                .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
+            sparse.scene.fill_rect(&Rect::new(0., 0., fw, fh));
+        }
+        let mut c = sparse.canvas();
         let mut failed = None;
-        let mut paint = |c: &mut dyn FnMut(&ResolvedScene, Affine) -> Result<(), String>| {
-            for (scene, place) in scenes {
-                if let Err(e) = c(scene, *place) {
-                    failed = Some(e);
-                }
-            }
-        };
-        match &mut self.inner {
-            Inner::Classic(renderer, base) => {
-                let (colour, [fw, fh], view) = match background {
-                    Some((c, wh, v)) => (Some(c), wh, v),
-                    None => (None, size.map(f64::from), Affine::IDENTITY),
-                };
-                let key = (colour, [fw as u32, fh as u32]);
-                if base.as_ref().is_none_or(|b| (b.0, b.1) != key) {
-                    let bg = block(fw, fh).radius(0.);
-                    let bg = match colour {
-                        Some(c) => bg.fill(color(c)),
-                        None => bg,
-                    };
-                    let scene = resolve(&SceneSpec::new(bg)).map_err(|e| e.to_string())?;
-                    *base = Some((key.0, key.1, Box::new(scene)));
-                }
-                let base = &base.as_ref().expect("set above").2;
-                renderer
-                    .render_with_overlay(base, view, target, |c| {
-                        paint(&mut |s, t| {
-                            mui_vello::paint(c, s, t).map_err(|e| format!("paint: {e:?}"))
-                        });
-                    })
-                    .map_err(|e| e.to_string())?;
-            }
-            Inner::Sparse(sparse) => {
-                sparse.upload(&self.device, &self.queue, assets.images());
-                sparse.scene.reset();
-                if let Some((bg, [fw, fh], view)) = background {
-                    sparse.scene.set_transform(view);
-                    let [r, g, b, a] = bg.0;
-                    sparse
-                        .scene
-                        .set_paint(mui_vello::peniko::Color::from_rgba8(r, g, b, a));
-                    sparse.scene.fill_rect(&Rect::new(0., 0., fw, fh));
-                }
-                let mut c = sparse.canvas();
-                paint(&mut |s, t| {
-                    mui_vello::paint(&mut c, s, t).map_err(|e| format!("paint: {e:?}"))
-                });
-                sparse.render(&self.device, &self.queue, target)?;
+        for (scene, place) in scenes {
+            if let Err(e) = mui_vello::paint(&mut c, scene, *place) {
+                failed = Some(format!("paint: {e:?}"));
             }
         }
+        sparse.render(&self.device, &self.queue, target)?;
         failed.map_or(Ok(()), Err)
     }
 

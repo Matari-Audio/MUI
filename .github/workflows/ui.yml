@@ -93,7 +93,7 @@ jobs:
         run: |
           xvfb-run -a -s '-screen 0 1600x1200x24' dbus-run-session -- \
             /usr/bin/python3 tools/ci/ui.py --output ui-results/device-loss -- \
-            cargo test -p mui-vello --lib --features gpu-effects --locked host::tests -- --ignored --test-threads=1
+            cargo test -p mui-vello --lib --features gpu-quad --locked host::tests -- --ignored --test-threads=1
           rg -q 'a_destroyed_device_is_seen_and_a_new_one_renders .*ok' ui-results/device-loss/stdout.log
           rg -q 'a_failed_replacement_state_requires_a_surface_before_presenting .*ok' ui-results/device-loss/stdout.log
       - name: CPU fallback when every GPU backend is unavailable
@@ -212,7 +212,7 @@ jobs:
           WGPU_BACKEND: dx12
         run: |
           python3 tools/ci/ui.py --output ui-results/warp-cpu --timeout 60 -- target/debug/examples/native_editor
-          grep -q 'WARP compute shader compilation can crash' ui-results/warp-cpu/stderr.log
+          grep -q 'WARP shader compilation can crash' ui-results/warp-cpu/stderr.log
       - name: Retain editor lifecycle and fallback evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

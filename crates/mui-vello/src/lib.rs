@@ -19,8 +19,6 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Weak};
-#[cfg(feature = "gpu-effects")]
-pub use vello;
 #[cfg(feature = "cpu")]
 use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
 /// The brush type [`Canvas::set_paint`] takes, so the trait can be
@@ -32,21 +30,19 @@ use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::{PixelMetadata, Pixmap};
 pub use vello_common::{kurbo, peniko};
-#[cfg(any(feature = "cpu", feature = "gpu-effects"))]
+#[cfg(feature = "cpu")]
 mod damage;
 pub mod diagnostics;
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
-#[cfg(feature = "gpu-effects")]
-mod classic;
+#[cfg(feature = "gpu-quad")]
+pub mod effects;
+#[cfg(feature = "gpu-quad")]
+pub mod host;
+#[cfg(feature = "gpu-quad")]
+pub mod quad;
 #[cfg(feature = "cpu")]
 pub mod software;
-#[cfg(feature = "gpu-effects")]
-pub use classic::Classic;
-#[cfg(feature = "gpu-effects")]
-pub mod effects;
-#[cfg(feature = "gpu-effects")]
-pub mod host;
 
 /// The path conversion painting uses, the same one input hit-tests with.
 pub use mui_geometry::{ARC_TOLERANCE, bez_path, bez_path_into};
@@ -135,8 +131,7 @@ pub trait Canvas {
     fn set_paint_transform(&mut self, _t: Affine) {}
     fn reset_paint_transform(&mut self) {}
     /// This image as a brush, or `None` for [`mui_scene::Paint::solid`]'s
-    /// stand-in. `vello_cpu` takes the pixmap itself, [`Classic`] the
-    /// buffer as Vello's image. A canvas with no image support keeps this
+    /// stand-in. `vello_cpu` takes the pixmap itself. A canvas with no image support keeps this
     /// default and paints the stand-in.
     fn image(&mut self, _img: &mui_scene::Image) -> Option<PaintType> {
         None
@@ -186,7 +181,7 @@ pub trait Canvas {
     }
 }
 
-#[cfg(feature = "cpu")]
+#[cfg(any(feature = "cpu", feature = "gpu-quad"))]
 fn run(
     origin: mui_geometry::Point,
     glyphs: &[mui_scene::TextGlyph],
@@ -224,7 +219,7 @@ pub struct Cache {
 }
 
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    not(any(feature = "cpu", feature = "gpu-quad", test)),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 #[derive(Clone, Copy)]
@@ -236,7 +231,7 @@ struct Frames {
 /// How long an unused font keeps its [`FontData`], and with it Vello's
 /// hinted outlines: glifo's own glyph atlas ages entries out after as many.
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", test)),
+    not(any(feature = "cpu", feature = "gpu-quad", test)),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 const FONT_FRAMES: u64 = 64;
@@ -248,13 +243,13 @@ enum Stored {
         expect(dead_code, reason = "only the CPU canvas builds it")
     )]
     Pixmap(Arc<Pixmap>),
-    /// Only the GPU canvas stores these.
-    #[cfg(feature = "gpu-effects")]
-    Image(vello::peniko::ImageData),
+    /// The quad pass's image texture, bound as its own group.
+    #[cfg(feature = "gpu-quad")]
+    Texture(wgpu::BindGroup),
 }
 
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects")),
+    not(any(feature = "cpu", feature = "gpu-quad")),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 impl Cache {
@@ -473,8 +468,11 @@ fn srgb(c: mui_scene::Color) -> AlphaColor<Srgb> {
 /// what a decoder produces -- and premultiplying a photo is far too much work
 /// to redo every frame, so each renderer's [`Cache`] keeps the result.
 #[cfg_attr(
-    not(any(test, feature = "cpu")),
-    expect(dead_code, reason = "only the CPU renderer and tests call it")
+    not(any(test, feature = "cpu", feature = "gpu-quad")),
+    expect(
+        dead_code,
+        reason = "only the CPU renderer, the quad pass and tests call it"
+    )
 )]
 fn premultiply(img: &mui_scene::Image) -> Option<Pixmap> {
     size(img).map(|(w, h)| premultiplied(img, w, h))
@@ -744,7 +742,7 @@ pub(crate) fn replay(
 /// The box a gradient or image paint is fitted to. A text layer carries its
 /// ink as glyphs and leaves `path` empty, so its box comes from the run.
 // ponytail: the last glyph's own advance is estimated at the em size.
-fn paint_box(p: &Painted, path: &BezPath) -> Rect {
+pub(crate) fn paint_box(p: &Painted, path: &BezPath) -> Rect {
     let Some(t) = &p.text else {
         return path.bounding_box();
     };
@@ -799,19 +797,6 @@ fn mix(m: mui_scene::Mix) -> peniko::Mix {
         M::Color => peniko::Mix::Color,
         M::Luminosity => peniko::Mix::Luminosity,
     }
-}
-
-/// The colour of an entry [`one`] would only fill or stroke with: solid,
-/// sharp and no text. See `GpuRenderer::encode`, which keeps its encoding.
-#[cfg(feature = "gpu-effects")]
-pub(crate) fn plain(p: &Painted) -> Option<AlphaColor<Srgb>> {
-    let Paint::Solid(c) = p.paint else {
-        return None;
-    };
-    // Sharp as `one` reads it: a NaN blur is none.
-    let sharp = p.blur.is_nan() || p.blur <= 0.0;
-    let plain = matches!(p.layer, Layer::Fill | Layer::Draw(_)) && p.text.is_none() && sharp;
-    plain.then(|| srgb(c))
 }
 
 /// Replay retained vector paths under the element and device transforms.
@@ -1300,27 +1285,6 @@ mod snapshot {
                 "glyphs must paint in their rotated region at{scale}x"
             );
         }
-        #[cfg(feature = "gpu-effects")]
-        {
-            let mut encoded = vello::Scene::new();
-            let mut cache = Cache::default();
-            let textures = classic::Textures::default();
-            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [80, 80]);
-            paint(&mut gpu, &rotated, Affine::scale(2.)).unwrap();
-            assert_eq!(
-                gpu.images.len(),
-                1,
-                "only authored bitmap uploads; vector and text stay vector/glyph paint"
-            );
-            assert!(!encoded.encoding().path_tags.is_empty());
-            let mut unchanged = vello::Scene::new();
-            let mut gpu = Classic::new(&mut unchanged, &mut cache, &textures, [80, 80]);
-            paint(&mut gpu, &plain, Affine::scale(2.)).unwrap();
-            assert_ne!(
-                encoded.encoding().transforms,
-                unchanged.encoding().transforms
-            );
-        }
     }
 
     /// The whole stack on the CPU: a filled card reaches the pixels, its ink
@@ -1560,16 +1524,6 @@ mod snapshot {
             assert_eq!(at(24, 16).a, 0, "even-odd hole lost at {scale}x");
             assert_eq!(at(24, 30).a, 0, "group clip lost at {scale}x");
         }
-        #[cfg(feature = "gpu-effects")]
-        {
-            let mut encoded = vello::Scene::new();
-            let mut cache = Cache::default();
-            let textures = classic::Textures::default();
-            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [96, 64]);
-            paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
-            assert!(gpu.images.is_empty(), "vector became a bitmap upload");
-            assert!(!encoded.encoding().path_tags.is_empty());
-        }
     }
 
     #[test]
@@ -1647,16 +1601,6 @@ mod snapshot {
             scene.paint, ready_scene.paint,
             "ready pixels on same vector Arc must invalidate retained GPU paint"
         );
-        #[cfg(feature = "gpu-effects")]
-        {
-            let mut encoded = vello::Scene::new();
-            let mut cache = Cache::default();
-            let textures = classic::Textures::default();
-            let mut gpu = Classic::new(&mut encoded, &mut cache, &textures, [40, 30]);
-            paint(&mut gpu, &scene, Affine::scale(2.)).unwrap();
-            assert_eq!(gpu.images.len(), 1);
-            assert_eq!(source.requests.lock().unwrap().last(), Some(&(40, 30)));
-        }
     }
 
     /// A gradient shadow keeps its alpha. Both backends paint opaque black
@@ -1903,8 +1847,8 @@ mod snapshot {
 }
 
 // Reuse the adapter/pixel contracts in targeted --lib validation too.
-#[cfg(all(test, feature = "gpu-effects"))]
+#[cfg(all(test, feature = "gpu-quad"))]
 extern crate self as mui_vello;
-#[cfg(all(test, feature = "gpu-effects"))]
+#[cfg(all(test, feature = "gpu-quad"))]
 #[path = "../tests/effects_smoke.rs"]
 mod retained_gpu_contract;

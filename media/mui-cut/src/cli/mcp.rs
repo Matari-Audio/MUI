@@ -284,7 +284,7 @@ struct Still {
     /// Pixels wide (default 960).
     #[serde(default)]
     width: Option<u32>,
-    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    /// `gpu` (vello_gpu, the default; `classic` is an alias) or `cpu`.
     #[serde(default)]
     renderer: Option<String>,
     /// 3D beauty: the mean of this many jittered samples (soft shadows,
@@ -309,7 +309,7 @@ struct Sheet {
     width: Option<u32>,
     #[serde(default)]
     cols: Option<usize>,
-    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    /// `gpu` (vello_gpu, the default; `classic` is an alias) or `cpu`.
     #[serde(default)]
     renderer: Option<String>,
 }
@@ -324,7 +324,7 @@ struct Strip {
     n: Option<usize>,
     #[serde(default)]
     width: Option<u32>,
-    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    /// `gpu` (vello_gpu, the default; `classic` is an alias) or `cpu`.
     #[serde(default)]
     renderer: Option<String>,
 }
@@ -344,7 +344,7 @@ struct Diff {
     n: Option<usize>,
     #[serde(default)]
     width: Option<u32>,
-    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    /// `gpu` (vello_gpu, the default; `classic` is an alias) or `cpu`.
     #[serde(default)]
     renderer: Option<String>,
 }
@@ -374,7 +374,7 @@ struct Render {
     /// `WxH`.
     #[serde(default)]
     size: Option<String>,
-    /// `classic` (default), `gpu` (vello_gpu) or `cpu`.
+    /// `gpu` (vello_gpu, the default; `classic` is an alias) or `cpu`.
     #[serde(default)]
     renderer: Option<String>,
 }
