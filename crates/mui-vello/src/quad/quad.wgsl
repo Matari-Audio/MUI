@@ -263,7 +263,10 @@ fn ramp_t(q: vec2<f32>, paint: f32, g: vec4<f32>) -> f32 {
     let v = q - g.xy;
     // At the centre `vello_cpu` clears its 0/0 slope to an angle of 0;
     // WGSL leaves atan2(0, 0) undefined.
-    var angle = select(atan2(v.y, v.x), 0.0, all(v == vec2<f32>(0.0)));
+    // The start edge runs along +x: a row within interpolation noise of it
+    // (either sign) is the start of the turn, not a wrap to a full one.
+    let on_edge = (v.x >= 0.0 && abs(v.y) < 1e-4) || all(v == vec2<f32>(0.0));
+    var angle = select(atan2(v.y, v.x), 0.0, on_edge);
     if angle < 0.0 {
         angle += 6.283185307179586;
     }
