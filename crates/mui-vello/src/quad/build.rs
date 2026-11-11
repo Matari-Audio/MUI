@@ -4,6 +4,7 @@
 //! the `Cpu` canvas, and whatever it cannot is reported, never approximated.
 
 use super::Reason;
+use super::path::{Fail, Store};
 use crate::kurbo::{Affine, BezPath, Rect};
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ShadowKind};
 
@@ -19,25 +20,31 @@ pub const MAX_STOPS: usize = 4;
 /// | 0 | local-to-device affine `a b c d` |
 /// | 1 | affine `e f`, unused, unused |
 /// | 2 | the rect (`x0 y0 x1 y1`, local); a blur's inflated box |
-/// | 3 | code, gradient table scale, radius, stroke width; glyph: code, scale, atlas `x y` |
-/// | 4-7 | premultiplied colour stops; blur: colour, params, params, rect |
+/// | 3 | code, gradient table scale, radius, stroke width; glyph: code, scale, atlas `x y`; path: radius is the record |
+/// | 4-7 | premultiplied colour stops; blur: colour, params, params, rect; path blur: colour, std dev |
 /// | 8 | stop offsets |
 /// | 9 | gradient geometry; image: placement `tx ty sx sy` |
 /// | 10 | device clip rect |
 /// | 11-12 | rounded clip: device-to-local affine `a b c d`, `e f radius on` |
 /// | 13 | rounded clip rect |
+/// | 14 | path clip: fill record, translation `e f`, on |
 ///
-/// The code is `page * 64 + shape * 8 + paint`. A glyph's rect (slot 2) is
+/// The code is `page * 64 + shape * 8 + paint`. A path's rect is its local
+/// bounding box (a blur's inflated by its reach) and its record (see
+/// [`super::path`]) holds the outline. A glyph's rect (slot 2) is
 /// in device pixels, a whole-pixel box over its atlas cell; its affine still
 /// maps the entry's local space, where a gradient lives.
 pub type Instance = [[f32; 4]; SLOTS];
-pub const SLOTS: usize = 14;
+pub const SLOTS: usize = 15;
 
 const SHAPE_FILL: f32 = 0.;
 const SHAPE_STROKE: f32 = 1.;
 const SHAPE_BLUR: f32 = 2.;
 const SHAPE_BLUR_INVERT: f32 = 3.;
 pub const SHAPE_GLYPH: f32 = 4.;
+const SHAPE_PATH: f32 = 5.;
+const SHAPE_PATH_STROKE: f32 = 6.;
+const SHAPE_PATH_BLUR: f32 = 7.;
 const PAINT_IMAGE: f32 = 4.;
 
 /// The instance code of `shape` painted with `paint`.
@@ -73,7 +80,7 @@ pub fn device_box(i: &Instance) -> [f32; 4] {
         i[2]
     } else {
         let mut grow = (a * a + b * b + c * c + d * d).sqrt() / (a * d - b * c).abs();
-        if shape == SHAPE_STROKE {
+        if shape == SHAPE_STROKE || shape == SHAPE_PATH_STROKE {
             grow += 0.5 * i[3][3];
         }
         let [x0, y0, x1, y1] = i[2];
@@ -130,13 +137,15 @@ pub enum Drawn<'p> {
 const OPEN: [f32; 4] = [-1e9, -1e9, 1e9, 1e9];
 
 /// The clip state in force: the intersection of every axis-aligned clip as
-/// one device rect, and at most one other clip, rounded or rotated, carried
-/// exactly in its own space. Both multiply into coverage, as `vello_cpu`'s
-/// clip masks do.
+/// one device rect, at most one other rounded or rotated rect carried
+/// exactly in its own space, and at most one path. All multiply into
+/// coverage, as `vello_cpu`'s clip masks do.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Clip {
     device: [f32; 4],
     general: Option<General>,
+    /// A path's fill record, and the device translation it stands at.
+    path: Option<(u32, [f32; 2])>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -151,6 +160,14 @@ impl Clip {
     pub const NONE: Self = Self {
         device: OPEN,
         general: None,
+        path: None,
+    };
+
+    /// A clip with no area: it hides everything inside it.
+    const HIDDEN: Self = Self {
+        device: [0.; 4],
+        general: None,
+        path: None,
     };
 
     /// This clip narrowed by `rect` (rounded by `radius`) under `xf`, or
@@ -159,11 +176,7 @@ impl Clip {
         let [a, b, c, d, ..] = xf.as_coeffs();
         let det = a * d - b * c;
         if det == 0. {
-            // A clip with no area hides everything inside it.
-            return Some(Self {
-                device: [0.; 4],
-                general: None,
-            });
+            return Some(Self::HIDDEN);
         }
         if radius == 0. && b == 0. && c == 0. {
             let r = xf.transform_rect_bbox(rect);
@@ -192,18 +205,37 @@ impl Clip {
         })
     }
 
+    /// This clip narrowed by the path of fill record `record` (`None`: a
+    /// path that covers nothing) under `xf`, or `None` when the result
+    /// needs a second general clip.
+    fn push_path(self, record: Option<u32>, xf: Affine) -> Option<Self> {
+        let [a, b, c, d, e, f] = xf.as_coeffs();
+        let Some(record) = record.filter(|_| a * d - b * c != 0.) else {
+            return Some(Self::HIDDEN);
+        };
+        if self.path.is_some() {
+            return None;
+        }
+        Some(Self {
+            path: Some((record, [e as f32, f as f32])),
+            ..self
+        })
+    }
+
     fn write(self, out: &mut Instance) {
         out[10] = self.device;
-        if let Some(g) = self.general {
-            let [a, b, c, d, e, f] = g.inverse;
-            out[11] = [a, b, c, d];
-            out[12] = [e, f, g.radius, 1.];
-            out[13] = g.rect;
-        } else {
-            out[11] = [0.; 4];
-            out[12] = [0.; 4];
-            out[13] = [0.; 4];
-        }
+        (out[11], out[12], out[13]) = match self.general {
+            Some(General {
+                inverse: [a, b, c, d, e, f],
+                rect,
+                radius,
+            }) => ([a, b, c, d], [e, f, radius, 1.], rect),
+            None => ([0.; 4], [0.; 4], [0.; 4]),
+        };
+        out[14] = match self.path {
+            Some((record, [e, f])) => [record as f32, e, f, 1.],
+            None => [0.; 4],
+        };
     }
 }
 
@@ -211,12 +243,14 @@ fn rect4(r: Rect) -> [f32; 4] {
     [r.x0 as f32, r.y0 as f32, r.x1 as f32, r.y1 as f32]
 }
 
-/// The walk's state across one list: the clip stack, reused frame to frame.
+/// The walk's state across one list: the clip stack, reused frame to frame,
+/// and the path records its entries draw from.
 pub struct Walk {
     clips: Vec<Clip>,
     /// The largest image side a texture can take; images past it are
     /// [`Reason::ImageSize`].
     pub max_image: u32,
+    pub paths: Store,
 }
 
 impl Default for Walk {
@@ -224,7 +258,15 @@ impl Default for Walk {
         Self {
             clips: Vec::new(),
             max_image: u32::MAX,
+            paths: Store::new(super::path::PATH_BUDGET, u32::MAX),
         }
+    }
+}
+
+fn refuse(f: Fail) -> Reason {
+    match f {
+        Fail::Invalid => Reason::Path,
+        Fail::Full => Reason::PathBudget,
     }
 }
 
@@ -268,11 +310,16 @@ impl Walk {
             }
             Layer::Clip => {
                 let top = self.clip();
-                let Some(rr) = p.rect else {
-                    self.clips.push(top);
-                    return Err(Reason::ClipPath);
+                let next = match p.rect {
+                    Some(rr) => top.push(rr.bounds(), rr.radius(), xf),
+                    None => match self.paths.find(&p.path, xf, 0.) {
+                        Ok(found) => top.push_path(found.record, xf),
+                        Err(f) => {
+                            self.clips.push(top);
+                            return Err(refuse(f));
+                        }
+                    },
                 };
-                let next = top.push(rr.bounds(), rr.radius(), xf);
                 self.clips.push(next.unwrap_or(top));
                 return if next.is_some() {
                     Ok(Drawn::Nothing)
@@ -297,52 +344,19 @@ impl Walk {
             return self.text(p, text, xf, out);
         }
         let blurred = p.blur > 0.0;
-        let Some(rr) = p.rect else {
-            // `one` drops a rect-less blur, except the drop shadow `paint`
-            // hands to a filter layer instead.
-            return if crate::path_shadow(p) {
-                Err(Reason::PathShadow)
-            } else if blurred {
-                Ok(Drawn::Nothing)
-            } else {
-                Err(Reason::Path)
-            };
-        };
         let [a, b, c, d, e, f] = xf.as_coeffs();
         if a * d - b * c == 0. {
             // Collapsed to a line: no area, nothing for `vello_cpu` to cover.
             return Ok(Drawn::Nothing);
         }
+        let Some(rr) = p.rect else {
+            return self.path(p, xf, out);
+        };
         let bounds = rr.bounds();
         let radius = rr.radius();
         out[0] = [a as f32, b as f32, c as f32, d as f32];
         let mut clip = self.clip();
-        // An image is placed on the box as `one` places it; `Contain` also
-        // clips to the rect the image occupies, so the padded edge does not
-        // smear across the letterbox.
-        let image = match &p.paint {
-            Paint::Image { image, .. } if image.texture.is_some() => {
-                return Err(Reason::ImageTexture);
-            }
-            // A buffer that does not match its size paints the solid stand-in.
-            Paint::Image { image, fit } if crate::size(image).is_some() => {
-                if image.width.max(image.height) > self.max_image {
-                    return Err(Reason::ImageSize);
-                }
-                let t = crate::image_transform(image, *fit, bounds);
-                if *fit == Fit::Contain {
-                    let r = t.transform_rect_bbox(Rect::new(
-                        0.,
-                        0.,
-                        f64::from(image.width),
-                        f64::from(image.height),
-                    ));
-                    clip = clip.push(r, 0., xf).ok_or(Reason::ClipDepth)?;
-                }
-                Some((image, t))
-            }
-            _ => None,
-        };
+        let image = self.image(p, bounds, xf, &mut clip)?;
         clip.write(out);
         if blurred {
             // Both backends blur with the solid stand-in of a gradient.
@@ -369,6 +383,94 @@ impl Walk {
         };
         out[3] = [code(shape, kind), scale, radius as f32, p.width as f32];
         Ok(image.map_or(Drawn::One, |(image, _)| Drawn::Image(image)))
+    }
+
+    /// An entry whose outline is its path, drawn from the path's record.
+    fn path<'p>(
+        &mut self,
+        p: &'p Painted,
+        xf: Affine,
+        out: &mut Instance,
+    ) -> Result<Drawn<'p>, Reason> {
+        // `one` drops a rect-less blur, except the drop shadow `paint` hands
+        // to a filter layer instead.
+        let shadow = crate::path_shadow(p);
+        if p.blur > 0.0 && !shadow {
+            return Ok(Drawn::Nothing);
+        }
+        let stroke = !shadow && p.width > 0.0;
+        let width = if stroke { p.width } else { 0. };
+        let found = self.paths.find(&p.path, xf, width).map_err(refuse)?;
+        let Some(record) = found.record else {
+            return Ok(Drawn::Nothing);
+        };
+        let bounds = found.bounds;
+        let [a, b, c, d, e, f] = xf.as_coeffs();
+        out[0] = [a as f32, b as f32, c as f32, d as f32];
+        out[1] = [e as f32, f as f32, 0., 0.];
+        let mut clip = self.clip();
+        if shadow {
+            // `blurred_path`: the solid stand-in, blurred as far as
+            // `blur_reach`, where its clip stops it.
+            clip.write(out);
+            let reach = 3. * p.blur;
+            out[2] = rect4(bounds.inflate(reach, reach));
+            out[3] = [code(SHAPE_PATH_BLUR, 0.), 0., record as f32, 0.];
+            out[4] = premul(crate::srgb(p.paint.solid()).components);
+            out[5] = [p.blur as f32, 0., 0., 0.];
+            return Ok(Drawn::One);
+        }
+        let image = self.image(p, bounds, xf, &mut clip)?;
+        clip.write(out);
+        out[2] = rect4(bounds);
+        let (kind, scale) = match image {
+            Some((_, t)) => {
+                let [sx, _, _, sy, tx, ty] = t.as_coeffs();
+                out[9] = [tx as f32, ty as f32, sx as f32, sy as f32];
+                (PAINT_IMAGE, 0.)
+            }
+            None => paint(out, &p.paint, bounds)?,
+        };
+        let shape = if stroke {
+            SHAPE_PATH_STROKE
+        } else {
+            SHAPE_PATH
+        };
+        out[3] = [code(shape, kind), scale, record as f32, width as f32];
+        Ok(image.map_or(Drawn::One, |(image, _)| Drawn::Image(image)))
+    }
+
+    /// An image paint placed on `bounds` as `one` places it; `Contain` also
+    /// narrows `clip` to the rect the image occupies, so the padded edge does
+    /// not smear across the letterbox. `None` for any other paint.
+    fn image<'p>(
+        &self,
+        p: &'p Painted,
+        bounds: Rect,
+        xf: Affine,
+        clip: &mut Clip,
+    ) -> Result<Option<(&'p mui_scene::Image, Affine)>, Reason> {
+        match &p.paint {
+            Paint::Image { image, .. } if image.texture.is_some() => Err(Reason::ImageTexture),
+            // A buffer that does not match its size paints the solid stand-in.
+            Paint::Image { image, fit } if crate::size(image).is_some() => {
+                if image.width.max(image.height) > self.max_image {
+                    return Err(Reason::ImageSize);
+                }
+                let t = crate::image_transform(image, *fit, bounds);
+                if *fit == Fit::Contain {
+                    let r = t.transform_rect_bbox(Rect::new(
+                        0.,
+                        0.,
+                        f64::from(image.width),
+                        f64::from(image.height),
+                    ));
+                    *clip = clip.push(r, 0., xf).ok_or(Reason::ClipDepth)?;
+                }
+                Ok(Some((image, t)))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// A glyph run's template: its paint, clip and local-to-device affine.

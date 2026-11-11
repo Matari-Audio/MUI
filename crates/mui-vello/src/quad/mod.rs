@@ -6,18 +6,21 @@
 //! It draws rounded rects (filled or stroked, solid, gradient or image),
 //! analytic drop and inset shadows, rect clips and glyph runs from a
 //! coverage atlas, under any affine transform for shapes and translation
-//! plus uniform scale for text. Anything else in a paint list is reported by
-//! [`classify`] and refused by [`QuadRenderer::render`]; it is never skipped
-//! or approximated.
+//! plus uniform scale for text; and any path, filled, stroked, blurred as a
+//! drop shadow or clipping, from line segments in a data texture (see
+//! [`path`]). Anything else in a paint list is reported by [`classify`] and
+//! refused by [`QuadRenderer::render`]; it is never skipped or approximated.
 //!
 //! Bindings: group 0 is the view, the glyph atlas (an `R8Unorm` array, one
-//! layer a page) and a linear clamping sampler; group 1 is one image. An
+//! layer a page), a linear clamping sampler and the path records (an
+//! `Rgba32Float` texture read by `textureLoad`); group 1 is one image. An
 //! image instance needs its image bound, so a run of instances is drawn in
 //! one call until an image instance wants a different image than the run
 //! already holds: a list with no images, or one image, is one draw call.
 
 mod build;
 mod gpu;
+mod path;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -25,11 +28,12 @@ mod text;
 use crate::Cache;
 use crate::kurbo::Affine;
 use build::{Drawn, Instance, SLOTS, Walk};
-use gpu::{atlas_layers, atlas_texture, image_group, image_texture, instance_buffer, view_group};
+use gpu::{atlas_texture, image_group, image_texture, instance_buffer, path_texture, view_group};
 use mui_scene::Painted;
 use std::sync::Arc;
 
 pub use build::{MAX_GLYPH_PX, MAX_STOPS};
+pub use path::PATH_BUDGET;
 
 /// The WGSL of the pass, for validation and tooling.
 pub const SHADER: &str = include_str!("quad.wgsl");
@@ -56,13 +60,14 @@ pub enum Reason {
     ImageTexture,
     /// A retained vector paint.
     Vector,
-    /// A fill or stroke whose outline is not a rounded rect.
+    /// A path the geometry kernel refuses to convert (a malformed arc), as
+    /// [`crate::paint`] refuses the whole list over it.
     Path,
-    /// A drop shadow whose outline is not a rounded rect: a filter layer.
-    PathShadow,
-    /// A clip whose outline is not a rounded rect.
-    ClipPath,
-    /// A rounded or rotated clip inside another: one is all an instance carries.
+    /// More path records in one frame than the path budget holds, even
+    /// emptied (found when drawn).
+    PathBudget,
+    /// A rounded or rotated clip inside another, or a path clip inside
+    /// another: an instance carries one of each.
     ClipDepth,
     /// A gradient with more than [`MAX_STOPS`] stops.
     GradientStops,
@@ -77,7 +82,7 @@ pub enum Reason {
 }
 
 impl Reason {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 16] = [
         Self::Text,
         Self::TextTransform,
         Self::TextSize,
@@ -87,8 +92,7 @@ impl Reason {
         Self::ImageTexture,
         Self::Vector,
         Self::Path,
-        Self::PathShadow,
-        Self::ClipPath,
+        Self::PathBudget,
         Self::ClipDepth,
         Self::GradientStops,
         Self::Layer,
@@ -130,6 +134,7 @@ impl Coverage {
 /// classify differently; [`QuadRenderer::render`] checks under the real one.
 pub fn classify(paint: &[Painted]) -> Coverage {
     let mut walk = Walk::default();
+    walk.paths.begin();
     walk.begin();
     let mut scratch: Instance = [[0.; 4]; SLOTS];
     let mut coverage = Coverage::default();
@@ -186,6 +191,12 @@ pub struct Frame {
     pub uploaded: usize,
     /// Bytes the glyph atlas texture holds.
     pub atlas_bytes: u64,
+    /// Path records built this frame.
+    pub paths_built: u64,
+    /// Bytes written to the path texture this frame.
+    pub path_uploaded: usize,
+    /// Bytes the path texture holds.
+    pub path_bytes: u64,
 }
 
 /// The default glyph atlas budget: four 1024-pixel pages.
@@ -197,7 +208,7 @@ const ATTRIBUTES: [wgpu::VertexAttribute; SLOTS] = wgpu::vertex_attr_array![
     0 => Float32x4, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
     4 => Float32x4, 5 => Float32x4, 6 => Float32x4, 7 => Float32x4,
     8 => Float32x4, 9 => Float32x4, 10 => Float32x4, 11 => Float32x4,
-    12 => Float32x4, 13 => Float32x4,
+    12 => Float32x4, 13 => Float32x4, 14 => Float32x4,
 ];
 
 /// The pass: one pipeline, one instance buffer that grows and is then
@@ -214,6 +225,7 @@ pub struct QuadRenderer {
     /// Group 1 for a run that samples no image.
     no_image: wgpu::BindGroup,
     atlas: wgpu::Texture,
+    paths: wgpu::Texture,
     instances: wgpu::Buffer,
     cpu: Instances,
     groups: Vec<wgpu::BindGroup>,
@@ -259,6 +271,7 @@ impl Instances {
     /// Start a frame of builds.
     fn begin(&mut self, entries: usize) {
         self.cache.tick();
+        self.walk.paths.begin();
         self.atlas.begin();
         self.atlas.flushed = false;
         self.boxes.resize(entries, build::EMPTY);
@@ -267,7 +280,8 @@ impl Instances {
     /// The instances of the entries of `paint` that `keep` names, into
     /// `self.list`, each kept entry's box updated; their count. Every entry
     /// is walked, so an unsupported one is refused whether kept or not. A
-    /// frame the atlas cannot hold empties the atlas and tries once more.
+    /// frame the glyph atlas or the path texture cannot hold empties it and
+    /// tries once more.
     fn build(&mut self, paint: &[Painted], transform: Affine, keep: Keep) -> Result<usize, Error> {
         match self.list(paint, transform, keep) {
             Err(Error::Unsupported {
@@ -275,7 +289,14 @@ impl Instances {
                 ..
             }) => {
                 self.atlas.flush();
-                self.list(paint, transform, keep)
+                self.build(paint, transform, keep)
+            }
+            Err(Error::Unsupported {
+                reason: Reason::PathBudget,
+                ..
+            }) if !self.walk.paths.flushed => {
+                self.walk.paths.flush();
+                self.build(paint, transform, keep)
             }
             done => done,
         }
@@ -349,7 +370,7 @@ const PARTIAL: f32 = 0.5;
 
 impl QuadRenderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
-        Self::with_atlas_budget(device, format, ATLAS_BUDGET)
+        Self::with_budgets(device, format, ATLAS_BUDGET, PATH_BUDGET)
     }
 
     /// A pass whose glyph atlas holds at most `budget` bytes: square
@@ -360,6 +381,20 @@ impl QuadRenderer {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         budget: usize,
+    ) -> Self {
+        Self::with_budgets(device, format, budget, PATH_BUDGET)
+    }
+
+    /// A pass with a glyph atlas of `atlas` bytes (see
+    /// [`QuadRenderer::with_atlas_budget`]) and a path texture of at most
+    /// `paths` bytes. A path record no entry of the frame uses is reused
+    /// when space runs short; a frame whose records do not fit empties the
+    /// texture and builds them again.
+    pub fn with_budgets(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        budget: usize,
+        paths: usize,
     ) -> Self {
         let limits = device.limits();
         let mut side = 1024.min(limits.max_texture_dimension_2d);
@@ -400,6 +435,16 @@ impl QuadRenderer {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -471,10 +516,12 @@ impl QuadRenderer {
             ..Default::default()
         });
         let atlas = atlas_texture(device, u32::from(side as u16), 1);
-        let bind = view_group(device, &view_layout, &uniform, &atlas, &sampler);
+        let path_rows = path_texture(device, 1);
+        let bind = view_group(device, &view_layout, &uniform, &atlas, &path_rows, &sampler);
         let no_image = image_group(device, &image_layout, &image_texture(device, 1, 1));
         let mut cpu = Instances::new(side as u16, pages);
         cpu.walk.max_image = limits.max_texture_dimension_2d;
+        cpu.walk.paths = path::Store::new(paths, limits.max_texture_dimension_2d);
         Self {
             pipeline,
             clear,
@@ -485,6 +532,7 @@ impl QuadRenderer {
             bind,
             no_image,
             atlas,
+            paths: path_rows,
             instances: instance_buffer(device, 256),
             cpu,
             groups: Vec::new(),
@@ -531,9 +579,9 @@ impl QuadRenderer {
             .retained
             .take()
             .filter(|r| r.transform == transform && r.size == size && r.target == *target);
-        let atlas_bytes = self.frame.atlas_bytes;
         self.frame = Frame {
-            atlas_bytes,
+            atlas_bytes: self.frame.atlas_bytes,
+            path_bytes: self.frame.path_bytes,
             ..Frame::default()
         };
         if kept.as_ref().is_some_and(|r| r.paint == paint) {
@@ -564,6 +612,7 @@ impl QuadRenderer {
             target: target.clone(),
         });
         self.upload_glyphs(device, queue);
+        self.upload_paths(device, queue);
         self.bind_images(device, queue);
         if damage.is_some_and(|d| d[2] == 0 || d[3] == 0) {
             // Changed entries that cover no pixel.
@@ -681,99 +730,5 @@ impl QuadRenderer {
             return Ok(None);
         }
         Ok(Some([x0, y0, x1 - x0, y1 - y0].map(|v| v as u32)))
-    }
-
-    /// Bring the atlas texture up to date with what the frame rasterised:
-    /// grown by a page, zeroed after a flush, and each new or evicted cell
-    /// written.
-    fn upload_glyphs(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        let atlas = &mut self.cpu.atlas;
-        let before = atlas.rasterised;
-        atlas.rasterise();
-        let side = u32::from(atlas.side());
-        let layers = atlas_layers(atlas.pages());
-        let grow = layers > self.atlas.depth_or_array_layers();
-        if atlas.flushed || grow {
-            let next = atlas_texture(device, side, layers);
-            if !atlas.flushed {
-                // The old pages, copied before this frame's cells land.
-                let mut encoder =
-                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-                encoder.copy_texture_to_texture(
-                    self.atlas.as_image_copy(),
-                    next.as_image_copy(),
-                    self.atlas.size(),
-                );
-                queue.submit([encoder.finish()]);
-            }
-            self.atlas = next;
-            self.bind = view_group(
-                device,
-                &self.view_layout,
-                &self.uniform,
-                &self.atlas,
-                &self.sampler,
-            );
-        }
-        let mut uploaded = 0;
-        for u in &atlas.uploads {
-            let [x, y, w, h] = u.rect;
-            let len = (w * h) as usize;
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &self.atlas,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d { x, y, z: u.page },
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &atlas.bytes[u.at..u.at + len],
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(w),
-                    rows_per_image: Some(h),
-                },
-                wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-            );
-            uploaded += len;
-        }
-        self.frame.rasterised = atlas.rasterised - before;
-        self.frame.uploaded = uploaded;
-        self.frame.atlas_bytes = u64::from(side * side * self.atlas.depth_or_array_layers());
-    }
-
-    /// The bind group of each image run, made once per image buffer and
-    /// dropped with it.
-    fn bind_images(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        self.groups.clear();
-        let cache = &mut self.cpu.cache;
-        cache.sweep();
-        for image in self.cpu.runs.iter().filter_map(|r| r.1.as_ref()) {
-            if let Some(crate::Stored::Texture(group)) = cache.find(&image.rgba) {
-                self.groups.push(group.clone());
-                continue;
-            }
-            // The walk only hands over images `premultiply` takes.
-            let Some(pixels) = crate::premultiply(image) else {
-                unreachable!("the walk refuses an image it cannot hold");
-            };
-            let texture = image_texture(device, image.width, image.height);
-            queue.write_texture(
-                texture.as_image_copy(),
-                pixels.data_as_u8_slice(),
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * image.width),
-                    rows_per_image: Some(image.height),
-                },
-                texture.size(),
-            );
-            let group = image_group(device, &self.image_layout, &texture);
-            cache.remember(&image.rgba, crate::Stored::Texture(group.clone()));
-            self.groups.push(group);
-        }
     }
 }

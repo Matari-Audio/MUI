@@ -132,6 +132,18 @@ fn what_the_pass_cannot_draw_is_counted_by_reason() {
         ]
         .size(320., 200.),
     );
+    let mut paint = paint;
+    // The star draws; the same entry with a path the geometry kernel
+    // refuses (a line with no start) does not.
+    let star = paint
+        .iter()
+        .position(|p| p.rect.is_none() && p.layer == mui_scene::Layer::Fill)
+        .expect("the star");
+    assert_eq!(classify(&paint[star..=star]).supported, 1);
+    paint.push(paint[star].clone());
+    paint.last_mut().expect("pushed").path = std::sync::Arc::new(mui_geometry::Path {
+        commands: vec![mui_geometry::PathCommand::LineTo(Point::new(1., 1.))],
+    });
     let coverage = classify(&paint);
     assert_eq!(coverage.unsupported(Reason::Path), 1, "{coverage:?}");
     assert_eq!(coverage.unsupported(Reason::ClipDepth), 1, "{coverage:?}");

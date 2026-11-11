@@ -1,8 +1,9 @@
 // One instanced quad per paint entry, or per glyph: a rounded rect filled,
-// stroked or blurred, or a glyph's atlas cell, painted solid, with a
-// gradient or with an image, clipped by at most one device rectangle and
-// one rounded rect. Shape coverage is analytic box-filter area; a glyph's is
-// its atlas cell, read one texel a pixel.
+// stroked or blurred, a path filled, stroked or blurred, or a glyph's atlas
+// cell, painted solid, with a gradient or with an image, clipped by at most
+// one device rectangle and one rounded rect or path. Shape coverage is
+// analytic box-filter area; a path's is read from its record (path.rs) and
+// a glyph's from its atlas cell, one texel a pixel.
 //
 // Colours arrive premultiplied, in sRGB-encoded space: `vello_cpu` blends
 // encoded values, and so does this pass (the target is a non-sRGB format).
@@ -16,6 +17,8 @@ struct View {
 // Glyph coverage, one layer a page.
 @group(0) @binding(1) var atlas: texture_2d_array<f32>;
 @group(0) @binding(2) var linear: sampler;
+// Path records, read by linear texel index (path.rs has the layout).
+@group(0) @binding(3) var paths: texture_2d<f32>;
 // Premultiplied RGBA.
 @group(1) @binding(0) var image: texture_2d<f32>;
 
@@ -35,6 +38,7 @@ struct Instance {
     @location(11) cxf: vec4<f32>,
     @location(12) cxt: vec4<f32>,
     @location(13) crect: vec4<f32>,
+    @location(14) pclip: vec4<f32>,
 }
 
 struct Varying {
@@ -53,13 +57,19 @@ struct Varying {
     @location(11) @interpolate(flat) cxf: vec4<f32>,
     @location(12) @interpolate(flat) cxt: vec4<f32>,
     @location(13) @interpolate(flat) crect: vec4<f32>,
+    @location(14) @interpolate(flat) pclip: vec4<f32>,
 }
 
 const SHAPE_STROKE: f32 = 1.0;
 const SHAPE_BLUR: f32 = 2.0;
 const SHAPE_BLUR_INVERT: f32 = 3.0;
 const SHAPE_GLYPH: f32 = 4.0;
+const SHAPE_PATH: f32 = 5.0;
+const SHAPE_PATH_STROKE: f32 = 6.0;
+const SHAPE_PATH_BLUR: f32 = 7.0;
 const PAINT_IMAGE: f32 = 4.0;
+// Texels a row of `paths`: `path::WIDTH`.
+const PATH_WIDTH: u32 = 256u;
 
 // The instance code, `page * 64 + shape * 8 + paint`, as (page, shape, paint).
 fn decode(code: f32) -> vec3<f32> {
@@ -84,7 +94,7 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
     let margin = smax / abs(det);
     let shape = decode(i.kind.x).y;
     var grow = margin;
-    if shape == SHAPE_STROKE {
+    if shape == SHAPE_STROKE || shape == SHAPE_PATH_STROKE {
         grow += 0.5 * i.kind.w;
     }
     let corner = vec2<f32>(f32(vi & 1u), f32(vi >> 1u));
@@ -97,6 +107,10 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
         p = mix(i.rect.xy, i.rect.zw, corner);
         let r = p - i.xt.xy;
         q = vec2<f32>(d * r.x - c * r.y, a * r.y - b * r.x) / det;
+    }
+    if shape >= SHAPE_PATH {
+        // A path's record is in device orientation, translation-free.
+        q = p - i.xt.xy;
     }
     var o: Varying;
     o.pos = vec4<f32>(p.x / view.size.x * 2.0 - 1.0, 1.0 - p.y / view.size.y * 2.0, 0.0, 1.0);
@@ -115,6 +129,7 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
     o.cxf = i.cxf;
     o.cxt = i.cxt;
     o.crect = i.crect;
+    o.pclip = i.pclip;
     return o;
 }
 
@@ -263,12 +278,149 @@ fn ramp(t0: f32, scale: f32, v: Varying) -> vec4<f32> {
     return vec4<f32>(min(clamp(c.rgb, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(a)), a);
 }
 
+fn path_texel(i: u32) -> vec4<f32> {
+    return textureLoad(paths, vec2<i32>(i32(i % PATH_WIDTH), i32(i / PATH_WIDTH)), 0);
+}
+
+// The (first texel, count) of the cell of record `rec` that holds `r`
+// (device, translation-free); (0, 0) outside its grid, where nothing is
+// covered.
+fn path_cell(rec: u32, r: vec2<f32>) -> vec2<u32> {
+    let h = path_texel(rec);
+    let n = path_texel(rec + 1u).xy;
+    let c = floor((r - h.xy) * h.zw);
+    if any(c < vec2<f32>(0.0)) || any(c >= n) {
+        return vec2<u32>(0u);
+    }
+    let e = path_texel(rec + 2u + u32(c.y * n.x + c.x));
+    return vec2<u32>(u32(e.x), u32(e.y));
+}
+
+// The integral of clamp(u, 0, 1) from 0 to u.
+fn ramp_area(u: f32) -> f32 {
+    if u <= 0.0 {
+        return 0.0;
+    }
+    if u >= 1.0 {
+        return u - 0.5;
+    }
+    return 0.5 * u * u;
+}
+
+// The signed area segment `a b` (relative to the pixel centre) sweeps over
+// the unit pixel towards +x: its share of the box-filtered winding. Exact
+// for a line: the part of the pixel left of the segment, integrated over
+// the rows it crosses.
+fn segment_area(a: vec2<f32>, b: vec2<f32>) -> f32 {
+    let dy = b.y - a.y;
+    if dy == 0.0 {
+        return 0.0;
+    }
+    let t0 = clamp((-0.5 - a.y) / dy, 0.0, 1.0);
+    let t1 = clamp((0.5 - a.y) / dy, 0.0, 1.0);
+    let lo = min(t0, t1);
+    let hi = max(t0, t1);
+    let rows = (hi - lo) * dy;
+    let ua = a.x + (b.x - a.x) * lo + 0.5;
+    let ub = a.x + (b.x - a.x) * hi + 0.5;
+    if min(ua, ub) >= 1.0 {
+        return rows;
+    }
+    if max(ua, ub) <= 0.0 {
+        return 0.0;
+    }
+    if abs(ub - ua) < 1e-4 {
+        return rows * clamp(0.5 * (ua + ub), 0.0, 1.0);
+    }
+    return rows * (ramp_area(ub) - ramp_area(ua)) / (ub - ua);
+}
+
+// Non-zero box-filter coverage of the pixel at `r` by fill record `rec`.
+fn path_fill(rec: u32, r: vec2<f32>) -> f32 {
+    let cell = path_cell(rec, r);
+    var acc = 0.0;
+    for (var k = 0u; k < cell.y; k++) {
+        let s = path_texel(cell.x + k);
+        acc += segment_area(s.xy - r, s.zw - r);
+    }
+    return min(abs(acc), 1.0);
+}
+
+// Coverage of the pixel at `r` by stroke record `rec`: the union of
+// capsules `hw` wide either side of its segments (local), measured as the
+// distance to the nearest one, round joins and caps exact.
+fn path_stroke(rec: u32, r: vec2<f32>, hw: f32, ji: vec4<f32>) -> f32 {
+    let cell = path_cell(rec, r);
+    let q = vec2<f32>(ji.x * r.x + ji.y * r.y, ji.z * r.x + ji.w * r.y);
+    var best = 3.0e38;
+    var near = vec2<f32>(0.0);
+    var along = vec2<f32>(1.0, 0.0);
+    for (var k = 0u; k < cell.y; k++) {
+        let s = path_texel(cell.x + k);
+        let a = s.xy - q;
+        let ab = s.zw - s.xy;
+        let t = clamp(-dot(a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
+        let c = a + ab * t;
+        let d2 = dot(c, c);
+        if d2 < best {
+            best = d2;
+            near = c;
+            along = ab;
+        }
+    }
+    if cell.y == 0u {
+        return 0.0;
+    }
+    let d = sqrt(best);
+    // The direction away from the nearest point; across the segment on it.
+    var n = vec2<f32>(-along.y, along.x);
+    if d > 1e-6 {
+        n = near;
+    }
+    // The slab either side of the segment: its two edges, box-filtered.
+    return clamp(edge(hw - d, n, ji) - edge(-hw - d, n, ji), 0.0, 1.0);
+}
+
+// The pixel at `r` under fill record `rec` blurred by a Gaussian of
+// `sigma` device pixels: rows sampled across three deviations either side,
+// each blurred across exactly from where it crosses the outline (after
+// Evan Wallace's separable rounded-rect shadow).
+fn path_blur(rec: u32, r: vec2<f32>, sigma: f32) -> f32 {
+    let h = path_texel(rec);
+    let n = path_texel(rec + 1u).xy;
+    let rows = 16;
+    var total = 0.0;
+    var weights = 0.0;
+    for (var k = 0; k < rows; k++) {
+        let u = -3.0 + 6.0 * (f32(k) + 0.5) / f32(rows);
+        let y = r.y + sigma * u;
+        let w = exp(-0.5 * u * u);
+        weights += w;
+        let band = clamp(floor((y - h.y) * h.w), 0.0, n.y - 1.0);
+        let e = path_texel(rec + 2u + u32(band));
+        var across = 0.0;
+        for (var j = 0u; j < u32(e.y); j++) {
+            let s = path_texel(u32(e.x) + j);
+            if (s.y <= y) != (s.w <= y) {
+                let x = mix(s.x, s.z, (y - s.y) / (s.w - s.y));
+                let rise = sign(s.w - s.y);
+                across += rise * (0.5 + 0.5 * erf7((x - r.x) / (sigma * 1.4142135)));
+            }
+        }
+        total += w * min(abs(across), 1.0);
+    }
+    return total / weights;
+}
+
 fn span(lo: f32, hi: f32, p: f32) -> f32 {
     return clamp(min(p + 0.5, hi) - max(p - 0.5, lo), 0.0, 1.0);
 }
 
 fn clip(p: vec2<f32>, v: Varying) -> f32 {
     var cov = span(v.dclip.x, v.dclip.z, p.x) * span(v.dclip.y, v.dclip.w, p.y);
+    if v.pclip.w > 0.0 && cov > 0.0 {
+        cov *= path_fill(u32(v.pclip.x), p - v.pclip.yz);
+    }
     if v.cxt.w > 0.0 && cov > 0.0 {
         let q = vec2<f32>(
             v.cxf.x * p.x + v.cxf.z * p.y + v.cxt.x,
@@ -288,9 +440,21 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
     let paint = code.z;
     let radius = v.kind.z;
     let width = v.kind.w;
-    let q = v.q;
+    var q = v.q;
+    if shape >= SHAPE_PATH {
+        // The paint lives in local space.
+        q = vec2<f32>(v.ji.x * v.q.x + v.ji.y * v.q.y, v.ji.z * v.q.x + v.ji.w * v.q.y);
+    }
     var cov: f32;
-    if shape == SHAPE_GLYPH {
+    if shape == SHAPE_PATH {
+        cov = path_fill(u32(v.kind.z), v.q);
+    } else if shape == SHAPE_PATH_STROKE {
+        cov = path_stroke(u32(v.kind.z), v.q, 0.5 * width, v.ji);
+    } else if shape == SHAPE_PATH_BLUR {
+        // Its quad is the blur's reach, sharp-edged, as `blurred_path`
+        // clips it.
+        cov = rounded(q, v.rect, 0.0, v.ji);
+    } else if shape == SHAPE_GLYPH {
         let texel = vec2<i32>(floor(v.pos.xy - v.rect.xy + v.kind.zw));
         cov = textureLoad(atlas, texel, i32(code.x), 0).r;
     } else if shape == SHAPE_STROKE {
@@ -307,7 +471,11 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
         discard;
     }
     var colour: vec4<f32>;
-    if shape == SHAPE_BLUR || shape == SHAPE_BLUR_INVERT {
+    if shape == SHAPE_PATH_BLUR {
+        // The deviation in device pixels: local, scaled by the area scale.
+        let sigma = v.c1.x / sqrt(abs(v.ji.x * v.ji.w - v.ji.y * v.ji.z));
+        colour = v.c0 * path_blur(u32(v.kind.z), v.q, sigma);
+    } else if shape == SHAPE_BLUR || shape == SHAPE_BLUR_INVERT {
         var z = blurred(q, v.c1, v.c2, v.c3);
         if shape == SHAPE_BLUR_INVERT {
             z = 1.0 - z;
