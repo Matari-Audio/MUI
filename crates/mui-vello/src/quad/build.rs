@@ -130,6 +130,11 @@ impl Walk {
         self.clips.clear();
     }
 
+    #[cfg(test)]
+    pub fn clip_capacity(&self) -> usize {
+        self.clips.capacity()
+    }
+
     fn clip(&self) -> Clip {
         self.clips.last().copied().unwrap_or(Clip::NONE)
     }

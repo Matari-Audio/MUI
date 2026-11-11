@@ -156,3 +156,28 @@ fn the_lookup_table_is_sized_as_vello_common_sizes_it() {
 }
 
 
+
+#[test]
+fn a_steady_frame_reuses_its_buffers() {
+    let paint = resolved(
+        stack![
+            block(40., 30.)
+                .radius(6.)
+                .fill(Color::srgb(1., 0., 0.))
+                .shadow(Shadow::soft(4.))
+        ]
+        .size(100., 80.)
+        .radius(8.)
+        .clip(),
+    );
+    let mut cpu = Instances::default();
+    let first = cpu.build(&paint, Affine::IDENTITY).expect("supported");
+    let (at, capacity) = (cpu.bytes.as_ptr(), cpu.bytes.capacity());
+    let clips = cpu.walk.clip_capacity();
+    for _ in 0..3 {
+        assert_eq!(cpu.build(&paint, Affine::IDENTITY), Ok(first));
+        assert_eq!((cpu.bytes.as_ptr(), cpu.bytes.capacity()), (at, capacity));
+        assert_eq!(cpu.walk.clip_capacity(), clips);
+    }
+    assert_eq!(cpu.bytes.len(), first * SLOTS * 16);
+}

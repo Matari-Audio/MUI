@@ -144,10 +144,38 @@ pub struct QuadRenderer {
     uniform: wgpu::Buffer,
     bind: wgpu::BindGroup,
     instances: wgpu::Buffer,
-    /// What the instance buffer holds this frame, as bytes; kept, so a
-    /// steady frame allocates nothing.
+    cpu: Instances,
+}
+
+/// The CPU side of a frame: the walk and the instance bytes it writes,
+/// both kept, so a steady frame allocates nothing.
+#[derive(Default)]
+struct Instances {
     bytes: Vec<u8>,
     walk: Walk,
+}
+
+impl Instances {
+    /// The instance bytes of `paint`, into `self.bytes`; their count.
+    fn build(&mut self, paint: &[Painted], transform: Affine) -> Result<usize, Error> {
+        self.bytes.clear();
+        self.walk.begin();
+        let mut one: Instance = [[0.; 4]; SLOTS];
+        let mut count = 0;
+        for (index, p) in paint.iter().enumerate() {
+            match self.walk.entry(p, transform, &mut one) {
+                Ok(true) => {
+                    count += 1;
+                    for v in one.as_flattened() {
+                        self.bytes.extend_from_slice(&v.to_ne_bytes());
+                    }
+                }
+                Ok(false) => {}
+                Err(reason) => return Err(Error::Unsupported { index, reason }),
+            }
+        }
+        Ok(count)
+    }
 }
 
 impl QuadRenderer {
@@ -240,8 +268,7 @@ impl QuadRenderer {
             uniform,
             bind,
             instances: instance_buffer(device, 256),
-            bytes: Vec::new(),
-            walk: Walk::default(),
+            cpu: Instances::default(),
         }
     }
 
@@ -261,13 +288,13 @@ impl QuadRenderer {
         if size.contains(&0) || !transform.as_coeffs().iter().all(|v| v.is_finite()) {
             return Err(Error::Target);
         }
-        let count = self.build(paint, transform)?;
-        if self.instances.size() < self.bytes.len() as u64 {
+        let count = self.cpu.build(paint, transform)?;
+        if self.instances.size() < self.cpu.bytes.len() as u64 {
             let want = (count as u64).next_power_of_two();
             self.instances = instance_buffer(device, want);
         }
-        if !self.bytes.is_empty() {
-            queue.write_buffer(&self.instances, 0, &self.bytes);
+        if !self.cpu.bytes.is_empty() {
+            queue.write_buffer(&self.instances, 0, &self.cpu.bytes);
         }
         let view = [size[0] as f32, size[1] as f32, 0., 0.];
         let mut uniform = [0u8; 16];
@@ -298,33 +325,12 @@ impl QuadRenderer {
             if count > 0 {
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &self.bind, &[]);
-                pass.set_vertex_buffer(0, self.instances.slice(..self.bytes.len() as u64));
+                pass.set_vertex_buffer(0, self.instances.slice(..self.cpu.bytes.len() as u64));
                 pass.draw(0..4, 0..count as u32);
             }
         }
         queue.submit([encoder.finish()]);
         Ok(())
-    }
-
-    /// The instance bytes of `paint`, into `self.bytes`; their count.
-    fn build(&mut self, paint: &[Painted], transform: Affine) -> Result<usize, Error> {
-        self.bytes.clear();
-        self.walk.begin();
-        let mut one: Instance = [[0.; 4]; SLOTS];
-        let mut count = 0;
-        for (index, p) in paint.iter().enumerate() {
-            match self.walk.entry(p, transform, &mut one) {
-                Ok(true) => {
-                    count += 1;
-                    for v in one.as_flattened() {
-                        self.bytes.extend_from_slice(&v.to_ne_bytes());
-                    }
-                }
-                Ok(false) => {}
-                Err(reason) => return Err(Error::Unsupported { index, reason }),
-            }
-        }
-        Ok(count)
     }
 }
 
