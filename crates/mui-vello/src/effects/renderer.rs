@@ -222,17 +222,16 @@ impl GpuRenderer {
         if format.is_srgb() {
             return Err(Error::Unsupported("target must be a non-sRGB format"));
         }
-        let (welds, shared, loaded) = match shared {
-            Some(shared) => (shared.weld.for_window(budget)?, shared, None),
-            None => {
-                let welds = WeldTextures::new(device, queue, budget).await?;
-                let loaded = crate::host::pipeline_cache::load(device);
-                let shared = Shared {
-                    weld: Arc::new(welds.for_window(budget)?),
-                    cache: loaded.as_ref().map(|c| c.cache.clone()),
-                };
-                (welds, shared, loaded)
-            }
+        let (welds, shared, loaded) = if let Some(shared) = shared {
+            (shared.weld.for_window(budget)?, shared, None)
+        } else {
+            let welds = WeldTextures::new(device, queue, budget).await?;
+            let loaded = crate::host::pipeline_cache::load(device);
+            let shared = Shared {
+                weld: Arc::new(welds.for_window(budget)?),
+                cache: loaded.as_ref().map(|c| c.cache.clone()),
+            };
+            (welds, shared, loaded)
         };
         let cache = shared.cache.as_ref();
         let (quad, present) = gate(device, || {
@@ -375,10 +374,9 @@ impl GpuRenderer {
         target: &wgpu::TextureView,
         overlay: impl FnOnce(&mut dyn Canvas),
     ) -> Result<EffectStats, Error> {
-        let result = self.cpu_frame(resolved, xf, Some(overlay)).map(|stats| {
+        let result = self.cpu_frame(resolved, xf, Some(overlay)).inspect(|_| {
             self.shown = None;
             self.fallback.active = false;
-            stats
         });
         self.finish(result, target)
     }
