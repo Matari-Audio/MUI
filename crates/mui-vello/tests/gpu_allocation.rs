@@ -1,4 +1,4 @@
-#![cfg(feature = "vello-classic")]
+#![cfg(feature = "gpu-quad")]
 //! First-open, changed, full-redraw and resized frames must survive GPU overflow.
 use mui_scene::prelude::*;
 use mui_vello::{
@@ -115,6 +115,8 @@ async fn run() -> gpu_support::Result<()> {
     Ok(())
 }
 
+/// Vendored Vello's CPU coarse stages, not the renderer: goes with it.
+#[cfg(feature = "vello-classic")]
 #[test]
 fn cpu_coarse_stages_preserve_download_and_render_contract() {
     pollster::block_on(async {
