@@ -74,7 +74,7 @@ fn item(id: Id, label: &str, checked: bool) -> El {
 /// The rows of a menu, each `"{id}/{index}"`; returns the index activated.
 /// A list taller than the room beside `anchor` scrolls inside that room.
 fn items(
-    ui: &Ui,
+    ui: &mut Ui,
     id: &Id,
     anchor: &str,
     labels: &[&str],
@@ -88,12 +88,39 @@ fn items(
         }
         item(key, label, checked == Some(i))
     });
-    let mut list = col(rows.collect::<Vec<_>>()).min_w(140.0);
+    let rows: Vec<El> = rows.collect();
+    let mut list = col(rows).min_w(140.0);
     let tall = ROW * labels.len() as f64;
     if let Some(room) = room(ui, anchor).filter(|&room| tall > room) {
-        list = list.h(room).scroll();
+        let scroller = Id::runtime(&format!("{}/rows", id.as_str()));
+        reveal(ui, id, &scroller, labels.len(), room);
+        list = list.h(room).scroll().id(scroller);
     }
     (list, chosen)
+}
+
+/// Scroll a list just far enough to show the row keyboard focus moved to.
+/// Only on a move, so a wheel scroll away from a focused row stays put.
+fn reveal(ui: &mut Ui, id: &Id, scroller: &Id, rows: usize, room: f64) {
+    let row = |i: usize| Id::runtime(&format!("{}/{i}", id.as_str()));
+    let focused = (0..rows).find(|&i| ui.focus_visible(row(i)));
+    if focused == ui.stash::<usize>(scroller.as_str()).copied() {
+        return;
+    }
+    ui.set_stash(scroller.as_str(), focused);
+    let Some(i) = focused else {
+        return;
+    };
+    let [x, y] = ui.scroll(scroller.clone());
+    let (top, bottom) = (i as f64 * ROW, (i + 1) as f64 * ROW);
+    let y = if top < y {
+        top
+    } else if bottom > y + room {
+        bottom - room
+    } else {
+        return;
+    };
+    ui.set_scroll(scroller.clone(), [x, y]);
 }
 
 /// A menu row's height: fixed, so a list knows its height before it is laid

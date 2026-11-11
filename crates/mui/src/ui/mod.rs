@@ -180,8 +180,9 @@ pub struct Ui {
     wheel_turned: Option<f64>,
     wheel_capture: Option<Id>,
     popup_wheel_scopes: Vec<Id>,
-    /// A modal's id and the focus it took over, given back when it goes.
-    focus_trap: Option<(Id, Option<String>)>,
+    /// Open modals, innermost last, each with the focus it took over and
+    /// gives back when it goes. Only the innermost holds the keyboard.
+    focus_traps: Vec<(Id, Option<String>)>,
     /// Ids that read [`Ui::wheel`] while the tree now being handed in was
     /// built: no scroll node they sit in takes the wheel over them.
     wheel_claims: Vec<String>,
@@ -318,7 +319,7 @@ impl Ui {
             wheel_turned: None,
             wheel_capture: None,
             popup_wheel_scopes: Vec::new(),
-            focus_trap: None,
+            focus_traps: Vec::new(),
             wheel_claims: Vec::new(),
             press_at: None,
             last_click: None,
@@ -548,9 +549,9 @@ impl Ui {
     /// whatever was focused before gets focus back when it goes.
     pub fn trap_focus(&mut self, id: impl Into<Id>) {
         let id = id.into();
-        if self.focus_trap.as_ref().is_none_or(|(t, _)| *t != id) {
+        if !self.focus_traps.iter().any(|(t, _)| *t == id) {
             let before = self.focus.clone();
-            self.focus_trap = Some((id, before));
+            self.focus_traps.push((id, before));
         }
     }
     /// Retain the last scene in O(1), without borrowing this `Ui`.
@@ -1524,7 +1525,9 @@ impl Ui {
             // Recycling is an allocation optimization, never a scene clone.
             self.resolver.recycle(old);
         }
-        self.settle_focus_trap();
+        // A field that gets focus back builds its IME caret next frame:
+        // ask for that frame now rather than when input next arrives.
+        animating |= self.settle_focus_trap();
         let repaint_after = self.repaint_after();
         // Widgets read the clock while constructing the tree, before this frame
         // advances it. One catch-up frame makes the blink edge visible now,

@@ -1734,3 +1734,15 @@ fn empty_wrapping_rows_still_validate_authored_values_and_tree_budgets() {
         assert_eq!(resolve(&invalid, None, limits), Err(Error::InvalidValue));
     }
 }
+
+#[test]
+fn a_pinned_float_in_a_short_row_keeps_its_own_height() {
+    // A menu pinned under a 24 px field, declared inside the field's row.
+    let menu = col([block(80., 30.), block(80., 30.), block(80., 30.)])
+        .pin(Pin::to("f").area(Area::BottomStart))
+        .id("menu");
+    let tree = col([row([block(60., 24.).id("f"), menu]).id("row")]);
+    let l = resolve(&tree, Some(Size::new(300., 300.)), Limits::default()).unwrap();
+    assert_eq!(l.frame("row").unwrap().size.height, 24.);
+    assert_eq!(l.frame("menu").unwrap().size.height, 90.);
+}

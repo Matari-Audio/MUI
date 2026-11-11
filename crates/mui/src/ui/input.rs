@@ -655,26 +655,39 @@ impl Ui {
     }
     /// Move the focus to the next (or previous) focusable surface in z-order,
     /// wrapping. Nothing focused yet starts at either end.
-    /// After a resolve: a modal that is up holds focus on one of its stops; a
-    /// modal that went gives focus back to what had it, if that is still there.
-    pub(super) fn settle_focus_trap(&mut self) {
-        let Some((trap, before)) = self.focus_trap.take() else {
-            return;
-        };
+    /// The innermost open modal, which holds the keyboard.
+    pub(super) fn focus_trap(&self) -> Option<&Id> {
+        self.focus_traps.last().map(|(t, _)| t)
+    }
+    /// After a resolve: a modal that went gives focus back to what had it
+    /// when it opened, if that is still there; the innermost modal still up
+    /// holds focus on one of its stops. True when focus moved.
+    pub(super) fn settle_focus_trap(&mut self) -> bool {
         let Some(scene) = self.scene.clone() else {
-            return;
+            return false;
         };
-        if scene.surface(trap.as_str()).is_none() {
+        let was = self.focus.clone();
+        // Innermost first, so stacked modals unwind in order.
+        while let Some((trap, before)) = self.focus_traps.last().cloned() {
+            if scene.surface(trap.as_str()).is_some() {
+                break;
+            }
+            self.focus_traps.pop();
             if !self
                 .focus
                 .as_deref()
                 .is_some_and(|f| scene.surface(f).is_some())
+                || self.in_group(trap.as_str(), self.focus.as_deref())
             {
                 self.focus = before.filter(|f| scene.surface(f).is_some());
             }
-            return;
         }
-        if !self.in_group(trap.as_str(), self.focus.as_deref()) {
+        // A modal that closed under an open one leaves it in place.
+        self.focus_traps
+            .retain(|(t, _)| scene.surface(t.as_str()).is_some());
+        if let Some(trap) = self.focus_trap().cloned()
+            && !self.in_group(trap.as_str(), self.focus.as_deref())
+        {
             self.focus = scene
                 .surfaces()
                 .filter(|s| s.focusable && !s.disabled)
@@ -682,7 +695,7 @@ impl Ui {
                 .find(|k| self.in_group(trap.as_str(), Some(k)));
             self.focus_visible = false;
         }
-        self.focus_trap = Some((trap, before));
+        self.focus != was
     }
     pub(super) fn cycle_focus(&mut self, back: bool) {
         let Some(scene) = self.scene.as_ref() else {
@@ -693,7 +706,7 @@ impl Ui {
             .filter(|s| s.focusable && !s.disabled)
             .map(|s| s.key.to_string())
             .filter(|k| {
-                let trap = self.focus_trap.as_ref().map(|(t, _)| t.as_str());
+                let trap = self.focus_trap().map(Id::as_str);
                 trap.is_none_or(|t| self.in_group(t, Some(k)))
             })
             .collect();
@@ -943,7 +956,7 @@ impl Ui {
             self.focus_visible = false;
         }
         // Nothing outside a modal hears the keyboard while it is up.
-        if let Some((trap, _)) = &self.focus_trap
+        if let Some(trap) = self.focus_trap()
             && !self.in_group(trap.as_str(), self.focus.as_deref())
         {
             self.focus = None;

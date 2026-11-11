@@ -228,3 +228,88 @@ fn a_dialog_holds_the_keyboard_and_gives_focus_back() {
     idle(&mut ui, &mut view, Input::default());
     assert!(ui.focused("name"), "focus did not come back");
 }
+
+#[test]
+fn tab_through_a_long_select_keeps_the_focused_row_in_view() {
+    let mut ui = Ui::default();
+    let names: Vec<String> = (0..30).map(|i| format!("Option {i}")).collect();
+    let picked = Cell::new(0);
+    let mut view = |ui: &mut Ui| {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let mut i = picked.get();
+        let s = select(ui, "long", &names, &mut i);
+        picked.set(i);
+        col([s.el]).pad(M)
+    };
+    idle(&mut ui, &mut view, Input::default());
+    let button = centre(&ui, "long");
+    click(&mut ui, &mut view, button);
+    let list = ui.scene().unwrap().surface("long/list").unwrap().frame;
+    let tab = || Input {
+        keys: vec![KeyPress {
+            key: Key::Tab,
+            mods: Mods::default(),
+        }],
+        ..Input::default()
+    };
+    // The button, then every option in turn.
+    for n in 0..20 {
+        idle(&mut ui, &mut view, tab());
+        idle(&mut ui, &mut view, Input::default());
+        let Some(row) = (0..30).find(|i| ui.focused(format!("long/list/{i}"))) else {
+            assert_eq!(n, 0, "focus left the list");
+            continue;
+        };
+        let f = ui
+            .scene()
+            .unwrap()
+            .surface(&format!("long/list/{row}"))
+            .unwrap()
+            .frame;
+        assert!(
+            f.y >= list.y - 0.5 && f.y + f.size.height <= list.y + list.size.height + 0.5,
+            "row {row} at {f:?} outside {list:?}"
+        );
+    }
+}
+
+#[test]
+fn stacked_dialogs_give_focus_back_in_order() {
+    let mut ui = Ui::default();
+    let (outer, inner) = (Cell::new(false), Cell::new(false));
+    let mut view = |ui: &mut Ui| {
+        let field = button(ui, "field", "Field").el.into_el();
+        let mut root = col([field]).w(Len::Pct(100.)).h(Len::Pct(100.));
+        let (mut o, mut i) = (outer.get(), inner.get());
+        let a = button(ui, "a", "A").el.into_el();
+        if let Some(d) = dialog(ui, "outer", &mut o, col![a]) {
+            root = root.push(d);
+        }
+        let b = button(ui, "b", "B").el.into_el();
+        if let Some(d) = dialog(ui, "inner", &mut i, col![b]) {
+            root = root.push(d);
+        }
+        outer.set(o);
+        inner.set(i);
+        root
+    };
+    idle(&mut ui, &mut view, Input::default());
+    ui.focus("field");
+    outer.set(true);
+    idle(&mut ui, &mut view, Input::default());
+    idle(&mut ui, &mut view, Input::default());
+    assert!(ui.focused("a"));
+    inner.set(true);
+    idle(&mut ui, &mut view, Input::default());
+    idle(&mut ui, &mut view, Input::default());
+    assert!(ui.focused("b"));
+    inner.set(false);
+    idle(&mut ui, &mut view, Input::default());
+    assert!(
+        ui.focused("a"),
+        "closing the inner dialog did not return to the outer"
+    );
+    outer.set(false);
+    idle(&mut ui, &mut view, Input::default());
+    assert!(ui.focused("field"), "the background lost its focus");
+}
