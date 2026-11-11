@@ -435,9 +435,15 @@ pub fn local_crates(root: &Path) -> BTreeMap<String, PathBuf> {
     out
 }
 
+/// MUI crates deleted with Vello's GPU path. A plugin pinned to an older MUI
+/// still lists them in its lock; once its `mui-vello` is patched to this tree
+/// nothing depends on them, so they need no patch (and have none to get).
+const RETIRED: [&str; 2] = ["vello", "vello_encoding"];
+
 /// The `--config` values that send each of `used` to the local tree.
 pub fn patch_config(used: &[String], local: &BTreeMap<String, PathBuf>) -> Result<Vec<String>> {
     used.iter()
+        .filter(|c| !RETIRED.contains(&c.as_str()))
         .map(|c| {
             let dir = local.get(c).ok_or_else(|| {
                 format!("the plugin uses MUI crate `{c}`, which this MUI tree lacks")

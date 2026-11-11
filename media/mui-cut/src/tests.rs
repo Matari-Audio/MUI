@@ -218,7 +218,8 @@ fn gpu_frames_match_the_cpu_in_order() {
         .iter()
         .map(|subs| shutter(&mut cpu, &mut Vec::new(), subs).unwrap())
         .collect();
-    for engine in [Engine::Sparse] {
+    {
+        let engine = Engine::Sparse;
         let mut gpu = match Offline::new([320, 180], engine) {
             Ok(g) => g,
             Err(e) => return eprintln!("skipped: no GPU ({e})"),

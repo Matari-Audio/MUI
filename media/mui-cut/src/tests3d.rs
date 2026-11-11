@@ -200,7 +200,8 @@ fn an_unturned_unlit_3d_scene_draws_like_its_2d_self() {
         let flat = eval(&p, &s, 1.);
         s.mode = Mode::ThreeD;
         let deep = eval(&p, &s, 1.);
-        for engine in [Engine::Sparse] {
+        {
+            let engine = Engine::Sparse;
             let Some(mut g) = offline(&p, engine) else {
                 return;
             };
@@ -221,7 +222,7 @@ fn an_unturned_unlit_3d_scene_draws_like_its_2d_self() {
 }
 
 /// The example (shadow maps, contact shadow, a model, depth of field)
-/// renders the same pixels twice, on both engines, with motion blur.
+/// renders the same pixels twice, with motion blur.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn shadowed_3d_frames_are_deterministic_and_drawn() {
@@ -231,8 +232,8 @@ fn shadowed_3d_frames_are_deterministic_and_drawn() {
     let subs: Vec<Frame> = (0..3)
         .map(|k| eval(&p, s, 3. + f64::from(k) * 0.01))
         .collect();
-    let mut engines = Vec::new();
-    for engine in [Engine::Sparse] {
+    {
+        let engine = Engine::Sparse;
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -247,15 +248,7 @@ fn shadowed_3d_frames_are_deterministic_and_drawn() {
             .filter(|px| px[..3].iter().zip(&bg).any(|(a, b)| a.abs_diff(*b) > 30))
             .count();
         assert!(drawn > a.len() / 4 / 10, "{engine:?}: {drawn} pixels drawn");
-        engines.push(a);
     }
-    // The engines only paint the atlas: the 3D pass is the same.
-    let off = engines[0]
-        .iter()
-        .zip(&engines[1])
-        .filter(|(a, b)| a.abs_diff(**b) > 8)
-        .count();
-    assert!(off < engines[0].len() / 200, "{off} channels differ");
 }
 
 /// Beauty is the mean of jittered samples, and the preview's running mean
@@ -339,7 +332,8 @@ fn a_3d_scene_runs_its_effects_on_the_3d_pass() {
     fx.scenes[0].effects =
         serde_json::from_str(r#"[{"type": "levels", "saturation": 0}]"#).unwrap();
     let centre = (180 * 640 + 320) * 4;
-    for engine in [Engine::Sparse] {
+    {
+        let engine = Engine::Sparse;
         let Some(mut g) = offline(&plain, engine) else {
             return;
         };
@@ -390,7 +384,8 @@ fn an_overlay_draws_flat_over_the_3d_pass_and_its_effects() {
     // `ry` 60 would squeeze it to half its width in 3D: flat, it spans
     // x 260..380.
     let edge = at(372, 180);
-    for engine in [Engine::Sparse] {
+    {
+        let engine = Engine::Sparse;
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -480,7 +475,8 @@ fn a_layers_effects_run_on_its_slab_with_room_to_spread() {
     );
     let at = |x: usize, y: usize| (y * 640 + x) * 4;
     let rgb = |px: &[u8], i: usize| [0, 1, 2].map(|k| i32::from(px[i + k]));
-    for engine in [Engine::Sparse] {
+    {
+        let engine = Engine::Sparse;
         let Some(mut g) = offline(&p, engine) else {
             return;
         };
@@ -985,7 +981,8 @@ fn a_gltf_model_shows_its_maps_and_animates() {
            {"id":"key","kind":"light","rx":-30,"ry":20},
            {"id":"fill","kind":"light","type":"ambient","intensity":0.6}"#,
     );
-    for engine in [Engine::Sparse] {
+    {
+        let engine = Engine::Sparse;
         let Some(mut g) = offline(&p, engine) else {
             return;
         };

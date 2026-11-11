@@ -100,6 +100,9 @@ GPU) and this one; a plugin that reaches MUI only through `mui` widgets,
    and the web `classic` engine still work and name `vello_gpu`.
    `mui_cut::Engine::Classic` is removed (`Engine::Sparse` is the only
    variant).
+   `mui-cut`'s plugin builder ignores `vello` and `vello_encoding` in a
+   plugin's lock (a plugin pinned to an older MUI), since nothing needs them
+   once `mui-vello` is patched to this tree.
 
 Checked by: the diff of `crates/*` since `0c865588` outside `mui-vello` is
 the `Cargo.toml` feature lines above and nothing else; the `mui-vello` public
