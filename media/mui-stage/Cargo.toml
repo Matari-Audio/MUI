@@ -17,7 +17,7 @@ backends = ["wgpu/vulkan", "wgpu/gles", "wgpu/metal", "wgpu/dx12"]
 mui-scene.workspace = true
 mui-geometry.workspace = true
 mui-text.workspace = true
-mui-vello = { workspace = true, features = ["gpu-effects"] }
+mui-vello = { workspace = true, features = ["gpu-quad"] }
 wgpu = { workspace = true, features = ["wgsl"] }
 pollster.workspace = true
 bytemuck = "1"

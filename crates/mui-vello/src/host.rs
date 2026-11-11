@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use mui_scene::ResolvedScene;
 
-use crate::Classic;
+use crate::Canvas;
 use crate::effects::{Budget, EffectStats, GpuRenderer};
 use crate::kurbo::Affine;
 
@@ -300,7 +300,7 @@ pub enum Frame {
 /// The initialization operation a candidate reached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GpuStage {
-    /// Surface formats, alpha modes, usages, or compute limits are unsuitable.
+    /// Surface formats, alpha modes, usages, or renderer limits are unsuitable.
     Capabilities,
     /// The driver refused the requested device.
     Device,
@@ -383,7 +383,7 @@ fn select_candidate<A, T>(
                 let chosen = diagnostics.candidates.last().expect("selected candidate");
                 crate::diagnostics::gpu_candidate(
                     "gpu_ready",
-                    "checked shaders; zeroed workgroups; area AA",
+                    "quad pass ready",
                     &chosen.adapter,
                 );
                 return Ok((selected, diagnostics));
@@ -656,11 +656,11 @@ impl OnDevice {
         ))?);
         trial.phase("request_device");
         candidate.supported_limits = adapter.limits();
-        // Vello needs compute/storage limits, not GPUI's downlevel GL limits.
+        // WebGL2-class limits at the adapter's own texture size: see
+        // `selection::requested_limits`.
         candidate.requested_limits = requested_limits(&candidate.supported_limits);
         validate_renderer_requirements(
             &candidate.adapter,
-            adapter.get_downlevel_capabilities().flags,
             &candidate.requested_limits,
             &candidate.supported_limits,
         )?;
@@ -1096,14 +1096,15 @@ impl Host {
     /// device-rebuild failure, not a lost surface; painting the same scene
     /// again would fail the same way.
     pub fn present(&mut self, scene: &ResolvedScene, xf: Affine) -> Result<Frame, HostError> {
-        self.present_inner::<fn(&mut Classic<'_>)>(scene, xf, None)
+        self.present_inner(scene, xf, None::<fn(&mut dyn Canvas)>)
             .inspect_err(|error| {
                 crate::diagnostics::error("mui-vello", "present_failed", &error.to_string());
             })
     }
 
-    /// [`Host::present`] with `overlay` drawn on top, never retained.
-    pub fn present_with_overlay<F: FnOnce(&mut Classic<'_>)>(
+    /// [`Host::present`] with `overlay` drawn on top, never retained (see
+    /// [`GpuRenderer::render_with_overlay`]: the frame is drawn on the CPU).
+    pub fn present_with_overlay<F: FnOnce(&mut dyn Canvas)>(
         &mut self,
         scene: &ResolvedScene,
         xf: Affine,
@@ -1115,7 +1116,7 @@ impl Host {
             })
     }
 
-    fn present_inner<F: FnOnce(&mut Classic<'_>)>(
+    fn present_inner<F: FnOnce(&mut dyn Canvas)>(
         &mut self,
         scene: &ResolvedScene,
         xf: Affine,
@@ -1206,7 +1207,6 @@ impl Host {
             None => renderer.render(scene, xf, &view),
         } {
             Ok(stats) => stats,
-            Err(crate::effects::Error::Busy) => return Ok(Frame::Skipped),
             Err(error) => return Err(HostError::Render(error)),
         };
         queue.present(frame);
@@ -1275,16 +1275,16 @@ mod tests {
     }
 
     #[test]
-    fn requested_storage_limits_use_headroom_without_weakening_compute_requirements() {
+    fn requested_limits_keep_the_adapters_texture_size_and_ask_no_storage() {
         let supported = wgpu::Limits {
-            max_storage_buffers_per_shader_stage: 16,
-            max_storage_buffer_binding_size: 256 * 1024 * 1024,
+            max_texture_dimension_2d: 16384,
             ..wgpu::Limits::default()
         };
         let requested = requested_limits(&supported);
-        assert_eq!(requested.max_storage_buffers_per_shader_stage, 16);
-        assert_eq!(requested.max_storage_buffer_binding_size, 256 * 1024 * 1024);
+        assert_eq!(requested.max_texture_dimension_2d, 16384);
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
         assert!(requested.check_limits(&supported));
+        assert!(requested.check_limits(&wgpu::Limits::downlevel_webgl2_defaults().using_resolution(supported)));
     }
 
     #[test]
@@ -1423,38 +1423,19 @@ mod tests {
         assert_eq!(tried, [B::VULKAN]);
     }
     #[test]
-    fn downlevel_gl_is_rejected_without_weakening_vello_requirements() {
+    fn downlevel_gl_is_accepted_and_short_limits_are_not() {
         let info = adapter_info("GL", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Gl);
-        let requested = wgpu::Limits::default();
         let downlevel = wgpu::Limits::downlevel_webgl2_defaults();
+        let requested = requested_limits(&downlevel);
+        assert!(validate_renderer_requirements(&info, &requested, &downlevel).is_ok());
+        let short = wgpu::Limits {
+            max_vertex_attributes: 8,
+            ..downlevel
+        };
         assert!(
-            validate_renderer_requirements(
-                &info,
-                wgpu::DownlevelFlags::empty(),
-                &requested,
-                &downlevel
-            )
-            .unwrap_err()
-            .contains("compute shaders")
-        );
-        assert!(
-            validate_renderer_requirements(
-                &info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
-                &requested,
-                &downlevel
-            )
-            .unwrap_err()
-            .contains("renderer limits")
-        );
-        assert!(
-            validate_renderer_requirements(
-                &info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
-                &requested,
-                &requested
-            )
-            .is_ok()
+            validate_renderer_requirements(&info, &requested, &short)
+                .unwrap_err()
+                .contains("renderer limits")
         );
     }
 
@@ -1579,7 +1560,7 @@ mod tests {
     /// A real loss, not a flag flipped by hand: `Device::destroy` fires the
     /// lost callback, and a device opened again renders.
     #[test]
-    #[ignore = "requires a native adapter with Vello compute support"]
+    #[ignore = "requires a native adapter"]
     fn a_destroyed_device_is_seen_and_a_new_one_renders() {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
@@ -1622,7 +1603,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a native adapter with Vello compute support"]
+    #[ignore = "requires a native adapter"]
     fn a_failed_replacement_state_requires_a_surface_before_presenting() {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());

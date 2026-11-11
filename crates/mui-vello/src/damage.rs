@@ -77,13 +77,13 @@ impl Regions {
 
 /// Shelf packing is bounded by 16 regions, with tile-aligned placements so
 /// the rasterizer sees the same coordinates modulo whole tiles.
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 pub(crate) struct PackedRegions {
     pub(crate) offsets: [[u32; 2]; 16],
     pub(crate) size: [u32; 2],
 }
 impl Regions {
-    #[cfg(feature = "gpu-effects")]
+    #[cfg(feature = "vello-classic")]
     pub(crate) fn packed(&self, limit: u32) -> Option<PackedRegions> {
         let mut order = std::array::from_fn::<_, 16, _>(|i| i);
         order[..self.len].sort_unstable_by_key(|&i| std::cmp::Reverse(self.rects[i][3]));
@@ -125,7 +125,7 @@ impl Regions {
 
 /// Pack sparse patches only when their atlas fits within this share of the
 /// target; otherwise render the same regions separately, never a full frame.
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 pub(crate) const PARTIAL: f64 = 0.5;
 
 /// The empty box: what `Rect::union` leaves unchanged.

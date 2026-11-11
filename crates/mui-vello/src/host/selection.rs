@@ -1,17 +1,14 @@
 //! Driver-independent candidate policy. Device calls stay in the host lifecycle.
 
+/// What the renderer asks of a device: WebGL2-class limits (no compute, no
+/// storage), the adapter's own texture size and buffer alignment, and the
+/// texture array layers the glyph atlas grows into. The quad pass needs 15
+/// vertex attributes and inter-stage variables and a 240-byte instance
+/// stride, all inside these; every buffer it binds is a uniform.
 pub(super) fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
-    let mut requested = vello::required_limits()
+    wgpu::Limits::downlevel_webgl2_defaults()
         .using_resolution(supported.clone())
-        .using_alignment(supported.clone());
-    requested.max_storage_buffers_per_shader_stage = supported
-        .max_storage_buffers_per_shader_stage
-        .max(requested.max_storage_buffers_per_shader_stage);
-    requested.max_storage_buffer_binding_size = supported
-        .max_storage_buffer_binding_size
-        .max(requested.max_storage_buffer_binding_size);
-    requested.max_buffer_size = supported.max_buffer_size.max(requested.max_buffer_size);
-    requested
+        .using_alignment(supported.clone())
 }
 
 // Adapter type/backend preference adapted from Zed's Apache-2.0
@@ -28,7 +25,7 @@ pub(super) fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
 // See the License for the specific language governing permissions and
 // limitations under the License.
 // Adaptation: stable high-performance ranking without Zed-specific overrides;
-// retain CPU fallback and MUI's full compute renderer requirements.
+// retain CPU fallback.
 pub(super) fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
     adapter_rank_for(info, cfg!(windows))
 }
@@ -49,15 +46,15 @@ fn adapter_rank_for(info: &wgpu::AdapterInfo, windows: bool) -> (u8, u8) {
     (device, backend)
 }
 
+/// No downlevel flag is asked for: the pass runs on anything GLES 3 /
+/// WebGL2 class.
 pub(super) fn validate_renderer_requirements(
     info: &wgpu::AdapterInfo,
-    flags: wgpu::DownlevelFlags,
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
 ) -> Result<(), String> {
     validate_renderer_requirements_with_warp(
         info,
-        flags,
         requested,
         supported,
         cfg!(feature = "test-support")
@@ -67,22 +64,20 @@ pub(super) fn validate_renderer_requirements(
 
 fn validate_renderer_requirements_with_warp(
     info: &wgpu::AdapterInfo,
-    flags: wgpu::DownlevelFlags,
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
     allow_warp: bool,
 ) -> Result<(), String> {
-    // WARP's compute JIT faults outside Rust error handling; see the captured
-    // stack in research/platform-validation-2026-10-08.md.
+    // WARP's shader JIT faulted outside Rust error handling under Vello's
+    // compute (research/platform-validation-2026-10-08.md). The quad pass has
+    // no compute, but WARP stays out until it is shown safe: CPU rendering is
+    // as fast as WARP and cannot fault the host.
     if !allow_warp
         && info.backend == wgpu::Backend::Dx12
         && info.device_type == wgpu::DeviceType::Cpu
         && info.vendor == 0x1414
     {
-        return Err("WARP compute shader compilation can crash; use CPU rendering".into());
-    }
-    if !flags.contains(wgpu::DownlevelFlags::COMPUTE_SHADERS) {
-        return Err("Vello requires compute shaders; downlevel GL is unsupported".into());
+        return Err("WARP shader compilation can crash; use CPU rendering".into());
     }
     let mut missing = Vec::new();
     requested.check_limits_with_fail_fn(supported, false, |name, requested, supported| {
@@ -97,17 +92,20 @@ fn validate_renderer_requirements_with_warp(
     }
 }
 
+/// The formats the renderer creates, with the usages it creates them with:
+/// its frame, image, weld and offscreen textures (`Rgba8Unorm`), the glyph
+/// atlas (`R8Unorm`, copied into a larger one as it grows), the path
+/// records (`Rgba32Float`, read by `textureLoad`), and the shared session's
+/// window format and worker readback bitmap (`Bgra8Unorm`).
 pub(super) fn validate_texture_formats(adapter: &wgpu::Adapter) -> Result<(), String> {
     use wgpu::{TextureFormat as F, TextureUsages as U};
     for (format, needed) in [
         (
             F::Rgba8Unorm,
-            U::STORAGE_BINDING
-                | U::TEXTURE_BINDING
-                | U::RENDER_ATTACHMENT
-                | U::COPY_SRC
-                | U::COPY_DST,
+            U::TEXTURE_BINDING | U::RENDER_ATTACHMENT | U::COPY_SRC | U::COPY_DST,
         ),
+        (F::R8Unorm, U::TEXTURE_BINDING | U::COPY_SRC | U::COPY_DST),
+        (F::Rgba32Float, U::TEXTURE_BINDING | U::COPY_DST),
         (F::Bgra8Unorm, U::RENDER_ATTACHMENT | U::COPY_SRC),
     ] {
         let available = adapter.get_texture_format_features(format);
@@ -156,7 +154,6 @@ mod tests {
         let validate = |info: &wgpu::AdapterInfo| {
             validate_renderer_requirements_with_warp(
                 info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &limits,
                 &limits,
                 false,
@@ -171,7 +168,6 @@ mod tests {
         assert!(
             validate_renderer_requirements_with_warp(
                 &info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &limits,
                 &limits,
                 true,
@@ -235,36 +231,59 @@ mod tests {
     }
 
     #[test]
-    fn required_workgroup_memory_and_storage_are_not_silently_weakened() {
-        let required = vello::required_limits();
-        let info = wgpu::AdapterInfo::new(wgpu::DeviceType::IntegratedGpu, wgpu::Backend::Dx12);
+    fn a_webgl2_class_adapter_without_compute_is_accepted_and_less_is_not() {
+        let info = wgpu::AdapterInfo::new(wgpu::DeviceType::IntegratedGpu, wgpu::Backend::Gl);
+        let webgl2 = wgpu::Limits::downlevel_webgl2_defaults();
+        let requested = requested_limits(&webgl2);
+        assert!(
+            validate_renderer_requirements(
+                &info,
+                &requested,
+                &webgl2
+            )
+            .is_ok()
+        );
+        assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
+        assert_eq!(requested.max_compute_invocations_per_workgroup, 0);
         for field in [
-            "max_storage_buffers_per_shader_stage",
-            "max_compute_workgroup_storage_size",
-            "max_storage_buffer_binding_size",
-            "max_buffer_size",
+            "max_vertex_attributes",
+            "max_inter_stage_shader_variables",
+            "max_vertex_buffer_array_stride",
+            "max_uniform_buffer_binding_size",
         ] {
-            let mut supported = required.clone();
+            let mut supported = webgl2.clone();
             match field {
-                "max_storage_buffers_per_shader_stage" => {
-                    supported.max_storage_buffers_per_shader_stage -= 1;
+                "max_vertex_attributes" => supported.max_vertex_attributes -= 1,
+                "max_inter_stage_shader_variables" => {
+                    supported.max_inter_stage_shader_variables -= 1;
                 }
-                "max_compute_workgroup_storage_size" => {
-                    supported.max_compute_workgroup_storage_size -= 1;
-                }
-                "max_storage_buffer_binding_size" => supported.max_storage_buffer_binding_size -= 1,
-                "max_buffer_size" => supported.max_buffer_size -= 1,
+                "max_vertex_buffer_array_stride" => supported.max_vertex_buffer_array_stride -= 1,
+                "max_uniform_buffer_binding_size" => supported.max_uniform_buffer_binding_size -= 1,
                 _ => unreachable!(),
             }
             let error = validate_renderer_requirements(
                 &info,
-                wgpu::DownlevelFlags::COMPUTE_SHADERS,
                 &requested_limits(&supported),
                 &supported,
             )
             .unwrap_err();
             assert!(error.contains(field), "{error}");
         }
-        assert!(requested_limits(&required).check_limits(&required));
+    }
+
+    /// What the pass's pipelines actually use fits what is requested.
+    #[test]
+    fn the_requested_limits_cover_the_quad_pipelines() {
+        let requested = requested_limits(&wgpu::Limits::default());
+        assert!(crate::quad::INSTANCE_SLOTS as u32 <= requested.max_vertex_attributes);
+        assert!(crate::quad::INSTANCE_SLOTS as u32 <= requested.max_inter_stage_shader_variables);
+        assert!(16 * crate::quad::INSTANCE_SLOTS as u32 <= requested.max_vertex_buffer_array_stride);
+        assert!(
+            mui_weld::boundary::BOUNDARY_BYTES as u64 <= requested.max_uniform_buffer_binding_size
+        );
+        assert_eq!(
+            requested.max_texture_dimension_2d,
+            wgpu::Limits::default().max_texture_dimension_2d
+        );
     }
 }

@@ -103,6 +103,7 @@ pub fn pipeline(
     layout: &wgpu::PipelineLayout,
     format: wgpu::TextureFormat,
     blend: Option<wgpu::BlendState>,
+    cache: Option<&wgpu::PipelineCache>,
 ) -> wgpu::RenderPipeline {
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("mui quad"),
@@ -134,7 +135,7 @@ pub fn pipeline(
             })],
         }),
         multiview_mask: None,
-        cache: None,
+        cache,
     })
 }
 

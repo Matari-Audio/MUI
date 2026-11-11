@@ -164,7 +164,7 @@ fn a_weld_paints_its_texture_in_its_slot() {
 
 /// The same scene through `GpuRenderer`, which copies the weld's texture
 /// into Vello's atlas and samples it there.
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 #[test]
 fn a_weld_matches_gpu_renderer() {
     let Some((device, queue)) = device_with(|adapter| adapter) else {

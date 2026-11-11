@@ -49,16 +49,18 @@ impl SharedVello {
 }
 use vello::peniko::{self, Blob, ImageAlphaType, ImageData, ImageFormat};
 
-/// Classic Vello on the host's device, retained: the frame is encoded once
+/// Classic Vello on the host's device, retained, kept behind `vello-classic`
+/// only so benches can compare against it (the shipping renderer is
+/// [`super::GpuRenderer`]): the frame is encoded once
 /// per change to the paint list and rendered on the GPU, and a frame that
 /// changed nothing is one present pass of the texture already holding it.
 ///
 /// Coarse allocation counters are read back before fine rasterization. Weld
 /// materials, blurred backdrops and the host's own textures
-/// ([`GpuRenderer::set_texture`]) are copied into Vello's image atlas GPU-side.
+/// ([`VelloRenderer::set_texture`]) are copied into Vello's image atlas GPU-side.
 ///
 /// Device and queue ownership is per renderer. Recreate it on device loss.
-pub struct GpuRenderer {
+pub struct VelloRenderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     vello: SharedVello,
@@ -105,9 +107,8 @@ pub struct GpuRenderer {
     incremental_output: bool,
     output: Option<wgpu::TextureView>,
     damage: Vec<[u32; 4]>,
-    /// The present writes straight alpha: see [`GpuRenderer::set_straight_alpha`].
+    /// The present writes straight alpha: see [`VelloRenderer::set_straight_alpha`].
     straight: bool,
-    format: wgpu::TextureFormat,
 }
 
 /// Vello's output: compute shaders write only a storage texture, so the
@@ -226,7 +227,7 @@ impl Passes {
     fn new_serial(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("MUI present"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("present.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(include_str!("vello_present.wgsl").into()),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("MUI present"),
@@ -439,7 +440,7 @@ fn render(
         .map_err(|e| Error::Render(e.to_string()))
 }
 
-impl Drop for GpuRenderer {
+impl Drop for VelloRenderer {
     fn drop(&mut self) {
         // Queue removals instead of waiting for another editor's driver call.
         for image in self
@@ -453,7 +454,7 @@ impl Drop for GpuRenderer {
     }
 }
 
-impl GpuRenderer {
+impl VelloRenderer {
     pub async fn new(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -462,10 +463,6 @@ impl GpuRenderer {
         budget: Budget,
     ) -> Result<Self, Error> {
         Self::new_shared(device, queue, format, size, budget, None).await
-    }
-
-    pub(crate) fn shared_vello(&self) -> SharedVello {
-        self.vello.clone()
     }
 
     pub(crate) async fn new_shared(
@@ -552,21 +549,9 @@ impl GpuRenderer {
             output: None,
             damage: Vec::new(),
             straight: false,
-            format,
         };
         renderer.write_frame();
         Ok(renderer)
-    }
-
-    pub(crate) fn set_surface_format(&mut self, format: wgpu::TextureFormat) {
-        if self.format == format {
-            return;
-        }
-        self.format = format;
-        self.passes = self.vello.passes(&self.device, format);
-        self.target = Self::target(&self.device, &self.passes, self.size);
-        self.write_frame();
-        self.invalidate();
     }
 
     /// Tell the present pass the frame's size: past it, it writes clear.
@@ -718,10 +703,6 @@ impl GpuRenderer {
         self.render_inner(resolved, xf, target, Some(overlay))
     }
 
-    /// Enable dirty-rectangle output to a persistent offscreen target.
-    pub(crate) fn incremental_output(&mut self) {
-        self.incremental_output = true;
-    }
     /// Device rectangles actually changed by the last successful render.
     pub fn damage(&self) -> &[[u32; 4]] {
         &self.damage

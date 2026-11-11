@@ -47,6 +47,9 @@ use offscreen::{Draw, Offscreen, Slots};
 use rustc_hash::FxHashMap;
 
 pub use build::{MAX_GLYPH_PX, MAX_STOPS};
+/// Vertex attributes (and inter-stage variables) one instance takes: what a
+/// device must offer, at 16 bytes each of instance stride.
+pub const INSTANCE_SLOTS: usize = SLOTS;
 pub use layer::OFFSCREEN_BUDGET;
 pub use offscreen::BLUR_SHADER;
 pub use path::PATH_BUDGET;
@@ -264,6 +267,8 @@ pub struct QuadRenderer {
     redrawn: Vec<std::sync::Arc<str>>,
     frame: Frame,
     retained: Option<Retained>,
+    /// Where every pipeline is built through, offscreen ones included.
+    cache: Option<wgpu::PipelineCache>,
     /// A profiling hook: when set, the frame's first render pass writes its
     /// start and its last its end to queries 0 and 1 of this set (the device
     /// needs `TIMESTAMP_QUERY`).
@@ -278,6 +283,16 @@ struct Host {
 impl QuadRenderer {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         Self::with_budgets(device, format, ATLAS_BUDGET, PATH_BUDGET)
+    }
+
+    /// [`QuadRenderer::new`] whose pipelines, offscreen ones included, are
+    /// built through `cache` (a device with `PIPELINE_CACHE`).
+    pub fn with_cache(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        cache: Option<&wgpu::PipelineCache>,
+    ) -> Self {
+        Self::build(device, format, ATLAS_BUDGET, PATH_BUDGET, cache)
     }
 
     /// A pass whose glyph atlas holds at most `budget` bytes: square
@@ -303,6 +318,16 @@ impl QuadRenderer {
         budget: usize,
         paths: usize,
     ) -> Self {
+        Self::build(device, format, budget, paths, None)
+    }
+
+    fn build(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        budget: usize,
+        paths: usize,
+        cache: Option<&wgpu::PipelineCache>,
+    ) -> Self {
         let limits = device.limits();
         let mut side = 1024.min(limits.max_texture_dimension_2d);
         while side > 64 && (side * side) as usize > budget {
@@ -320,8 +345,8 @@ impl QuadRenderer {
             bind_group_layouts: &[Some(&view_layout), Some(&image_layout)],
             immediate_size: 0,
         });
-        let clear = gpu::pipeline(device, &module, &layout, format, None);
-        let pipeline = gpu::pipeline(device, &module, &layout, format, Some(gpu::OVER));
+        let clear = gpu::pipeline(device, &module, &layout, format, None, cache);
+        let pipeline = gpu::pipeline(device, &module, &layout, format, Some(gpu::OVER), cache);
         let uniforms = gpu::uniforms(device, 4);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("mui quad image"),
@@ -370,6 +395,7 @@ impl QuadRenderer {
             redrawn: Vec::new(),
             frame: Frame::default(),
             retained: None,
+            cache: cache.cloned(),
             timestamps: None,
         }
     }
@@ -446,6 +472,7 @@ impl QuadRenderer {
     /// (the weld pass `GpuRenderer` uses) when it changed, and sampled
     /// straight from there in its slot. A weld that changed redraws its
     /// slot, and whatever samples it: a backdrop over it, a layer it is in.
+    /// Returns the weld pool's account of the frame.
     #[expect(
         clippy::too_many_arguments,
         reason = "render's arguments and the weld pool"
@@ -459,7 +486,7 @@ impl QuadRenderer {
         transform: Affine,
         target: &wgpu::TextureView,
         size: [u32; 2],
-    ) -> Result<(), Error> {
+    ) -> Result<crate::effects::EffectStats, Error> {
         if size.contains(&0) || !transform.as_coeffs().iter().all(|v| v.is_finite()) {
             return Err(Error::Target);
         }
@@ -479,10 +506,9 @@ impl QuadRenderer {
             })
             .collect();
         let weld = |e: crate::effects::Error| Error::Weld(e.to_string());
-        welds.begin(wanted.iter().copied()).map_err(weld)?;
+        let mut stats = welds.begin(wanted.iter().copied()).map_err(weld)?;
         welds.forget_absent(|k| scene.external_weld(k).is_some());
         self.redrawn.clear();
-        let mut stats = crate::effects::EffectStats::default();
         let mut encoder = None;
         for &(key, material) in &wanted {
             if welds.is_current(key, material) || self.redrawn.iter().any(|k| **k == *key) {
@@ -507,7 +533,7 @@ impl QuadRenderer {
         let welds = Some(Welds { scene, pool });
         let done = self.draw(device, queue, &scene.paint, welds, transform, target, size);
         self.redrawn.clear();
-        done
+        done.map(|()| stats)
     }
 
     #[expect(
@@ -591,13 +617,17 @@ impl QuadRenderer {
         let layers = &self.cpu.layers;
         if layers.offscreen() && self.offscreen.is_none() {
             let blank = self.blank.clone();
-            self.offscreen = Some(Offscreen::new(
-                device,
-                &self.module,
-                &self.layout,
-                &self.image_layout,
-                blank,
-            ));
+            let cache = self.cache.as_ref();
+            self.offscreen = Some(crate::effects::gate(device, || {
+                Offscreen::new(
+                    device,
+                    &self.module,
+                    &self.layout,
+                    &self.image_layout,
+                    blank,
+                    cache,
+                )
+            }));
         }
         if let Some(off) = &mut self.offscreen {
             off.prepare(device, &self.cpu.layers);

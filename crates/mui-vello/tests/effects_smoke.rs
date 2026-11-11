@@ -1,6 +1,6 @@
 //! The retained GPU renderer on a real device. Skips, loudly, when the
 //! machine has no wgpu adapter at all; a software adapter still runs it.
-#![cfg(feature = "gpu-effects")]
+#![cfg(feature = "vello-classic")]
 
 use mui_scene::prelude::*;
 use mui_scene::{Image, ResolvedScene};

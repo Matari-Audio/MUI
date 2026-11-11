@@ -13,7 +13,7 @@ default = []
 cpu = ["mui/cpu"]
 
 [dependencies]
-mui = { workspace = true, features = ["gpu-effects"] }
+mui = { workspace = true, features = ["gpu-quad"] }
 mui-text.workspace = true
 mui-winit = { path = "../mui-winit" }
 # The gallery owns the window and the device, which is exactly the split a

@@ -10,11 +10,14 @@ default = []
 # Hidden integration-fixture hooks; absent from ordinary shipping builds.
 test-support = []
 reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hickory-resolver", "dep:tokio"]
-gpu-effects = ["wgpu/wgsl", "dep:vello", "dep:pollster"]
-# The instanced SDF quad pass: rounded rects, strokes, analytic shadows,
-# clips, glyph-atlas text and images, with no compute. Independent of
-# classic Vello; `vello_cpu` only rasterises glyph masks for its atlas.
-gpu-quad = ["wgpu/wgsl", "dep:vello_cpu", "dep:glifo"]
+# The GPU renderer (`effects::GpuRenderer`, `host`): the instanced SDF quad
+# pass, with no compute shaders and no storage buffers. `vello_cpu` rasterises
+# glyph masks for its atlas and the frames the pass refuses.
+gpu-quad = ["cpu", "wgpu/wgsl", "dep:pollster"]
+# Classic Vello's compute renderer (`effects::VelloRenderer`), kept for one
+# stage so benches and comparison tests can still measure against it. Nothing
+# shipping turns it on; it goes with `vendor/vello`.
+vello-classic = ["gpu-quad", "dep:vello"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
@@ -33,9 +36,8 @@ rustc-hash.workspace = true
 # No wgpu backend features: a plugin renders into the device its host wrapper
 # already created, so this crate must not choose the backend. Hosts turn on
 # `wgpu_default` (desktop) or `webgl` (browser) themselves.
-# Classic Vello, vendored onto the wgpu the rest of the stack uses: the GPU
-# renderer. Rasterises in compute shaders, so a changed frame costs the CPU
-# its serialisation only.
+# Classic Vello, vendored onto the wgpu the rest of the stack uses: only for
+# `vello-classic`'s comparisons.
 vello = { path = "../../vendor/vello", default-features = false, features = ["wgpu"], optional = true }
 # `host` opens and, after a loss, reopens a device from a frame callback.
 pollster = { workspace = true, optional = true }
@@ -78,15 +80,15 @@ ureq = { version = "=3.4.2", default-features = false, features = ["rustls"], op
 
 [[example]]
 name = "gpu_contract"
-required-features = ["gpu-effects"]
+required-features = ["gpu-quad"]
 
 [[example]]
 name = "headless"
-required-features = ["gpu-effects"]
+required-features = ["gpu-quad"]
 
 [[example]]
 name = "bench"
-required-features = ["cpu", "gpu-effects"]
+required-features = ["vello-classic"]
 
 [[example]]
 name = "quad_coverage"
@@ -94,7 +96,7 @@ required-features = ["gpu-quad"]
 
 [[example]]
 name = "quad_bench"
-required-features = ["gpu-quad", "gpu-effects"]
+required-features = ["vello-classic"]
 
 [lints]
 workspace = true
@@ -114,4 +116,4 @@ mach-dxcompiler-rs = { version = "=0.1.4", default-features = false }
 
 [[example]]
 name = "gpu_pixels"
-required-features = ["cpu", "gpu-effects"]
+required-features = ["vello-classic"]

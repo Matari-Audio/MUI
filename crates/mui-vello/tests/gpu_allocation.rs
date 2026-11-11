@@ -1,4 +1,4 @@
-#![cfg(feature = "gpu-effects")]
+#![cfg(feature = "vello-classic")]
 //! First-open, changed, full-redraw and resized frames must survive GPU overflow.
 use mui_scene::prelude::*;
 use mui_vello::{

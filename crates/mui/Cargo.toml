@@ -10,7 +10,7 @@ default = []
 # Opt-in native integration-fixture hooks, omitted from shipping builds.
 test-support = ["mui-vello/test-support"]
 reporting = ["mui-vello/reporting"]
-gpu-effects = ["mui-vello/gpu-effects"]
+gpu-quad = ["mui-vello/gpu-quad"]
 cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
 software-window = ["mui-vello/software-window"]

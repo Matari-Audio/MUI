@@ -19,7 +19,7 @@ use kurbo::{Affine, BezPath, Rect, Shape as _, Stroke};
 use mui_geometry::Error;
 use mui_scene::{Fit, GradientKind, Layer, Paint, Painted, ResolvedScene, ShadowKind};
 use std::sync::{Arc, Weak};
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 pub use vello;
 #[cfg(feature = "cpu")]
 use vello_common::filter_effects::{EdgeMode, Filter, FilterPrimitive};
@@ -32,20 +32,20 @@ use vello_common::peniko::color::{AlphaColor, DynamicColor, Srgb};
 use vello_common::peniko::{Blob, ColorStop, ColorStops, FontData, Gradient};
 use vello_common::pixmap::{PixelMetadata, Pixmap};
 pub use vello_common::{kurbo, peniko};
-#[cfg(any(feature = "cpu", feature = "gpu-effects"))]
+#[cfg(feature = "cpu")]
 mod damage;
 pub mod diagnostics;
 #[cfg(feature = "cpu")]
 pub use vello_cpu;
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 mod classic;
 #[cfg(feature = "cpu")]
 pub mod software;
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 pub use classic::Classic;
-#[cfg(any(feature = "gpu-effects", feature = "gpu-quad"))]
+#[cfg(feature = "gpu-quad")]
 pub mod effects;
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "gpu-quad")]
 pub mod host;
 #[cfg(feature = "gpu-quad")]
 pub mod quad;
@@ -226,7 +226,7 @@ pub struct Cache {
 }
 
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", feature = "gpu-quad", test)),
+    not(any(feature = "cpu", feature = "vello-classic", feature = "gpu-quad", test)),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 #[derive(Clone, Copy)]
@@ -238,7 +238,7 @@ struct Frames {
 /// How long an unused font keeps its [`FontData`], and with it Vello's
 /// hinted outlines: glifo's own glyph atlas ages entries out after as many.
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", feature = "gpu-quad", test)),
+    not(any(feature = "cpu", feature = "vello-classic", feature = "gpu-quad", test)),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 const FONT_FRAMES: u64 = 64;
@@ -251,7 +251,7 @@ enum Stored {
     )]
     Pixmap(Arc<Pixmap>),
     /// Only the GPU canvas stores these.
-    #[cfg(feature = "gpu-effects")]
+    #[cfg(feature = "vello-classic")]
     Image(vello::peniko::ImageData),
     /// The quad pass's image texture, bound as its own group.
     #[cfg(feature = "gpu-quad")]
@@ -259,7 +259,7 @@ enum Stored {
 }
 
 #[cfg_attr(
-    not(any(feature = "cpu", feature = "gpu-effects", feature = "gpu-quad")),
+    not(any(feature = "cpu", feature = "vello-classic", feature = "gpu-quad")),
     expect(dead_code, reason = "no canvas feature, nothing keeps fonts or images")
 )]
 impl Cache {
@@ -811,7 +811,7 @@ fn mix(m: mui_scene::Mix) -> peniko::Mix {
 
 /// The colour of an entry [`one`] would only fill or stroke with: solid,
 /// sharp and no text. See `GpuRenderer::encode`, which keeps its encoding.
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "vello-classic")]
 pub(crate) fn plain(p: &Painted) -> Option<AlphaColor<Srgb>> {
     let Paint::Solid(c) = p.paint else {
         return None;
@@ -1308,7 +1308,7 @@ mod snapshot {
                 "glyphs must paint in their rotated region at{scale}x"
             );
         }
-        #[cfg(feature = "gpu-effects")]
+        #[cfg(feature = "vello-classic")]
         {
             let mut encoded = vello::Scene::new();
             let mut cache = Cache::default();
@@ -1568,7 +1568,7 @@ mod snapshot {
             assert_eq!(at(24, 16).a, 0, "even-odd hole lost at {scale}x");
             assert_eq!(at(24, 30).a, 0, "group clip lost at {scale}x");
         }
-        #[cfg(feature = "gpu-effects")]
+        #[cfg(feature = "vello-classic")]
         {
             let mut encoded = vello::Scene::new();
             let mut cache = Cache::default();
@@ -1655,7 +1655,7 @@ mod snapshot {
             scene.paint, ready_scene.paint,
             "ready pixels on same vector Arc must invalidate retained GPU paint"
         );
-        #[cfg(feature = "gpu-effects")]
+        #[cfg(feature = "vello-classic")]
         {
             let mut encoded = vello::Scene::new();
             let mut cache = Cache::default();
@@ -1911,8 +1911,8 @@ mod snapshot {
 }
 
 // Reuse the adapter/pixel contracts in targeted --lib validation too.
-#[cfg(all(test, feature = "gpu-effects"))]
+#[cfg(all(test, feature = "gpu-quad"))]
 extern crate self as mui_vello;
-#[cfg(all(test, feature = "gpu-effects"))]
+#[cfg(all(test, feature = "gpu-quad"))]
 #[path = "../tests/effects_smoke.rs"]
 mod retained_gpu_contract;

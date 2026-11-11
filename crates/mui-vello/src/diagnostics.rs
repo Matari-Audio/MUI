@@ -109,7 +109,7 @@ fn journal() -> &'static Mutex<Journal> {
     })
 }
 
-#[cfg(any(not(target_arch = "wasm32"), feature = "gpu-effects"))]
+#[cfg(any(not(target_arch = "wasm32"), feature = "gpu-quad"))]
 pub(super) fn bounded(text: &str, max: usize) -> &str {
     let mut end = text.len().min(max);
     while !text.is_char_boundary(end) {
@@ -204,7 +204,7 @@ pub fn gpu_error(stage: &str, message: &str, adapter: &wgpu::AdapterInfo) {
 
 /// One bounded identity record and a separate reason: a verbose limits dump must
 /// not truncate the driver version or the rejection that support needs.
-#[cfg(feature = "gpu-effects")]
+#[cfg(feature = "gpu-quad")]
 pub(crate) fn gpu_candidate(stage: &str, message: &str, adapter: &wgpu::AdapterInfo) {
     let identity = format!(
         "name={:?}; vendor={:#06x}; device={:#06x}; backend={:?}; type={:?}; driver={:?}; driver_info={:?}",

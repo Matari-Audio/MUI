@@ -137,8 +137,16 @@ impl Offscreen {
         layout: &wgpu::PipelineLayout,
         image_layout: &wgpu::BindGroupLayout,
         blank: wgpu::TextureView,
+        cache: Option<&wgpu::PipelineCache>,
     ) -> Self {
-        let over = super::gpu::pipeline(device, module, layout, FORMAT, Some(super::gpu::OVER));
+        let over = super::gpu::pipeline(
+            device,
+            module,
+            layout,
+            FORMAT,
+            Some(super::gpu::OVER),
+            cache,
+        );
         // Source-atop, premultiplied: colour `s * da + d * (1 - sa)`, and
         // the destination's alpha kept.
         let atop = super::gpu::pipeline(
@@ -158,6 +166,7 @@ impl Offscreen {
                     operation: wgpu::BlendOperation::Add,
                 },
             }),
+            cache,
         );
         let blur_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("mui quad blur"),
@@ -208,7 +217,7 @@ impl Offscreen {
                     })],
                 }),
                 multiview_mask: None,
-                cache: None,
+                cache,
             })
         };
         Self {
