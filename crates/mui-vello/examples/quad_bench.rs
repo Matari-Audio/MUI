@@ -443,7 +443,10 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     rounds(gpu, timer, "scroll", jobs, WARM, N, &mut rows);
     let scrolled = quad.frame();
     table(
-        &format!("editor: {} entries, all drawn by the quad pass", still.paint.len()),
+        &format!(
+            "editor: {} entries, all drawn by the quad pass",
+            still.paint.len()
+        ),
         &rows,
     );
     note("cold", cold);
@@ -453,7 +456,9 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     // The scene's last float, the menu, lays out over the whole window and
     // hides the editor in every renderer: the same frame without it.
     let mut under = still.clone();
-    under.paint.retain(|p| !(&*p.key == "/3" || p.key.starts_with("/3/")));
+    under
+        .paint
+        .retain(|p| !(&*p.key == "/3" || p.key.starts_with("/3/")));
     pngs(gpu, &under, "-under-menu");
 }
 
@@ -466,7 +471,11 @@ fn dense_scene(t: f64) -> ResolvedScene {
             let y = s.height * (0.5 + 0.4 * ((k * 0.05 + t).sin() * (k * 0.37 + 2. * t).cos()));
             Point::new(x, y)
         });
-        vec![Draw::stroke(Path::polyline(pts, false), Color::srgb(0.4, 1., 0.6), 1.5)]
+        vec![Draw::stroke(
+            Path::polyline(pts, false),
+            Color::srgb(0.4, 1., 0.6),
+            1.5,
+        )]
     })
     .size(1200., 200.)
     .at(40., 560.);
@@ -488,8 +497,13 @@ fn dense_scene(t: f64) -> ResolvedScene {
 }
 
 fn dense(gpu: &Gpu, timer: &mut GpuTimer) {
-    let frames: Vec<ResolvedScene> = (0..WARM + N).map(|i| dense_scene(0.05 * i as f64)).collect();
-    assert!(classify(&frames[0].paint).complete(), "dense scene must be all supported");
+    let frames: Vec<ResolvedScene> = (0..WARM + N)
+        .map(|i| dense_scene(0.05 * i as f64))
+        .collect();
+    assert!(
+        classify(&frames[0].paint).complete(),
+        "dense scene must be all supported"
+    );
     let id = Affine::IDENTITY;
     let (qv, vv) = (gpu.target(), gpu.target());
     let (mut quad, mut vello) = (gpu.quad(), gpu.vello());

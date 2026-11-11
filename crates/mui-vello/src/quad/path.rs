@@ -168,7 +168,8 @@ impl Store {
             return Ok(e.found);
         }
         let linear = Affine::new([a, b, c, d, 0., 0.]);
-        crate::bez_path_into(path, crate::ARC_TOLERANCE, &mut self.bez).map_err(|_| Fail::Invalid)?;
+        crate::bez_path_into(path, crate::ARC_TOLERANCE, &mut self.bez)
+            .map_err(|_| Fail::Invalid)?;
         let bounds = self.bez.bounding_box();
         let found = |record| Found { record, bounds };
         let Some(mut record) = self.record(linear, width) else {
@@ -307,8 +308,15 @@ impl Store {
             }
         }
         let old = self.texels.len() as u32;
-        let tail = self.free.last().filter(|f| f.0 + f.1 == old).map_or(0, |f| f.1);
-        let want = (old - tail + len).max(2 * old).min(self.max).next_multiple_of(WIDTH);
+        let tail = self
+            .free
+            .last()
+            .filter(|f| f.0 + f.1 == old)
+            .map_or(0, |f| f.1);
+        let want = (old - tail + len)
+            .max(2 * old)
+            .min(self.max)
+            .next_multiple_of(WIDTH);
         if want > old && want - old + tail >= len {
             self.texels.resize(want as usize, [0.; 4]);
             self.release(old, want - old);

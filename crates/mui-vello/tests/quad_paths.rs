@@ -47,7 +47,11 @@ fn knobs(scale: f64) -> ResolvedScene {
                     true,
                 );
                 vec![
-                    Draw::stroke(arc(c, r, 0.75 * PI, 1.5 * PI), rgba(1., 1., 1., 0.15), width),
+                    Draw::stroke(
+                        arc(c, r, 0.75 * PI, 1.5 * PI),
+                        rgba(1., 1., 1., 0.15),
+                        width,
+                    ),
                     Draw::stroke(
                         arc(c, r, 0.75 * PI, 1.5 * PI * amount),
                         rgba(0.3, 0.8, 1., 0.85),
@@ -118,14 +122,25 @@ fn polylines(scale: f64) -> ResolvedScene {
     let wave: Vec<(f64, f64)> = (0..200)
         .map(|i| {
             let x = 10. + 1.5 * f64::from(i);
-            (x, 130. + 30. * (f64::from(i) * 0.15).sin() * (f64::from(i) * 0.013).cos())
+            (
+                x,
+                130. + 30. * (f64::from(i) * 0.15).sin() * (f64::from(i) * 0.013).cos(),
+            )
         })
         .collect();
     let kids = vec![
         line(zig, 5., rgba(1., 0.8, 0.2, 0.7)),
         line(wave, 1.25, Color::srgb(0.4, 1., 0.6)),
-        line(vec![(40., 175.), (120., 180.), (60., 186.)], 3., Color::srgb(1., 0.4, 0.5)),
-        line(vec![(200., 175.), (300., 175.)], 0.6, Color::srgb(1., 1., 1.)),
+        line(
+            vec![(40., 175.), (120., 180.), (60., 186.)],
+            3.,
+            Color::srgb(1., 0.4, 0.5),
+        ),
+        line(
+            vec![(200., 175.), (300., 175.)],
+            0.6,
+            Color::srgb(1., 1., 1.),
+        ),
     ];
     scene_at(ground(kids), scale)
 }
@@ -146,13 +161,27 @@ fn gradients(scale: f64) -> ResolvedScene {
     let (red, blue) = (Color::srgb(0.95, 0.2, 0.1), Color::srgb(0.1, 0.3, 0.95));
     let fills: Vec<Fill> = vec![
         Gradient::linear(90., [(0., red), (1., blue)]).into(),
-        Gradient::radial((0.5, 0.5), 0.6, [(0., Color::srgb(1., 1., 0.8)), (1., blue)]).into(),
-        Gradient::conic(30., [(0., red), (0.5, Color::srgb(0.2, 0.9, 0.3)), (1., red)]).into(),
+        Gradient::radial(
+            (0.5, 0.5),
+            0.6,
+            [(0., Color::srgb(1., 1., 0.8)), (1., blue)],
+        )
+        .into(),
+        Gradient::conic(
+            30.,
+            [(0., red), (0.5, Color::srgb(0.2, 0.9, 0.3)), (1., red)],
+        )
+        .into(),
     ];
     let kids = fills
         .into_iter()
         .enumerate()
-        .map(|(i, f)| block(90., 90.).outline(star).fill(f).at(12. + 100. * i as f64, 50.))
+        .map(|(i, f)| {
+            block(90., 90.)
+                .outline(star)
+                .fill(f)
+                .at(12. + 100. * i as f64, 50.)
+        })
         .collect();
     scene_at(ground(kids), scale)
 }
@@ -163,9 +192,18 @@ static HACK: std::sync::LazyLock<Font> =
 /// A star clipping rects, a rounded rect and text inside it.
 fn clipped(scale: f64) -> ResolvedScene {
     let inside = stack![
-        block(300., 30.).radius(0.).fill(Color::srgb(0.9, 0.3, 0.2)).at(-20., 20.),
-        block(80., 80.).radius(16.).fill(rgba(0.2, 0.8, 0.4, 0.8)).at(40., 50.),
-        text("Cutoff 440 Hz").text_size(16.).fill(Color::srgb(1., 1., 1.)).at(30., 95.),
+        block(300., 30.)
+            .radius(0.)
+            .fill(Color::srgb(0.9, 0.3, 0.2))
+            .at(-20., 20.),
+        block(80., 80.)
+            .radius(16.)
+            .fill(rgba(0.2, 0.8, 0.4, 0.8))
+            .at(40., 50.),
+        text("Cutoff 440 Hz")
+            .text_size(16.)
+            .fill(Color::srgb(1., 1., 1.))
+            .at(30., 95.),
         // A rounded clip inside the path clip.
         stack![block(200., 20.).fill(Color::srgb(0.9, 0.9, 0.2))]
             .size(60., 40.)
@@ -214,10 +252,17 @@ fn turned(scale: f64) -> ResolvedScene {
     let mut scene = scene_at(
         ground(vec![
             stack![
-                block(70., 70.).outline(star).fill(Color::srgb(0.9, 0.6, 0.2)).at(10., 10.),
+                block(70., 70.)
+                    .outline(star)
+                    .fill(Color::srgb(0.9, 0.6, 0.2))
+                    .at(10., 10.),
                 canvas(|s: Size| {
                     let c = Point::new(s.width / 2., s.height / 2.);
-                    vec![Draw::stroke(arc(c, 25., 0.75 * PI, 1.2 * PI), rgba(0.3, 0.8, 1., 0.9), 3.)]
+                    vec![Draw::stroke(
+                        arc(c, 25., 0.75 * PI, 1.2 * PI),
+                        rgba(0.3, 0.8, 1., 0.9),
+                        3.,
+                    )]
                 })
                 .size(70., 70.)
                 .at(80., 10.),
@@ -319,8 +364,13 @@ fn a_path_abutting_a_rect_leaves_no_seam() {
     };
     let wedge = |s: Size| {
         Path::polyline(
-            [(0., 0.), (s.width, 0.), (s.width, s.height), (s.width * 0.3, s.height)]
-                .map(|(x, y)| Point::new(x, y)),
+            [
+                (0., 0.),
+                (s.width, 0.),
+                (s.width, s.height),
+                (s.width * 0.3, s.height),
+            ]
+            .map(|(x, y)| Point::new(x, y)),
             true,
         )
     };
@@ -368,7 +418,10 @@ fn a_path_abutting_a_rect_leaves_no_seam() {
                 );
             }
         }
-        assert!(shared as f64 > 60. * scale, "scale {scale}: {shared} shared pixels");
+        assert!(
+            shared as f64 > 60. * scale,
+            "scale {scale}: {shared} shared pixels"
+        );
     }
 }
 

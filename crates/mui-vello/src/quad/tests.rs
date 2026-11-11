@@ -259,4 +259,3 @@ fn text_under_rotation_or_past_the_atlas_size_is_refused() {
     assert_eq!(coverage.unsupported(Reason::TextSize), 1, "{coverage:?}");
     assert_eq!(coverage.supported + 2, paint.len(), "{coverage:?}");
 }
-

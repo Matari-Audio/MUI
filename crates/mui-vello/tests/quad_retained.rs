@@ -297,8 +297,14 @@ fn knobs(memos: &Memos, amounts: &[f64], points: usize) -> ResolvedScene {
     };
     kids.push(
         stack![
-            block(120., 20.).radius(0.).fill(Color::srgb(0.9, 0.3, 0.2)).at(-10., 20.),
-            block(40., 40.).radius(8.).fill(Color::srgb(0.2, 0.8, 0.4)).at(30., 40.),
+            block(120., 20.)
+                .radius(0.)
+                .fill(Color::srgb(0.9, 0.3, 0.2))
+                .at(-10., 20.),
+            block(40., 40.)
+                .radius(8.)
+                .fill(Color::srgb(0.2, 0.8, 0.4))
+                .at(30., 40.),
         ]
         .size(90., 90.)
         .outline(star)
@@ -331,7 +337,11 @@ fn a_kept_target_matches_a_whole_redraw_after_path_changes() {
     // frame here, so its outline is a new, equal path).
     for step in 0..5 {
         amounts[3] = 0.1 + 0.2 * f64::from(step);
-        k.check(&format!("knob turn {step}"), &knobs(&m, &amounts, 5).paint, id);
+        k.check(
+            &format!("knob turn {step}"),
+            &knobs(&m, &amounts, 5).paint,
+            id,
+        );
         let frame = k.quad.frame();
         let damage = frame.damage.expect("a partial frame");
         assert!(damage[2] * damage[3] < SIZE[0] * SIZE[1] / 8, "{damage:?}");
@@ -346,7 +356,11 @@ fn a_kept_target_matches_a_whole_redraw_after_path_changes() {
 
     // The same list scrolled by a fraction: records are kept, only placed
     // anew.
-    k.check("paths scrolled", &back.paint, Affine::translate((0.37, 1.61)));
+    k.check(
+        "paths scrolled",
+        &back.paint,
+        Affine::translate((0.37, 1.61)),
+    );
     assert_eq!(k.quad.frame().paths_built, 0, "{:?}", k.quad.frame());
     if let Some(error) = pollster::block_on(scope.pop()) {
         panic!("wgpu validation: {error}");
