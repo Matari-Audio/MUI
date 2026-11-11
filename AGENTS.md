@@ -57,7 +57,8 @@ cargo run -p mui-preview -- --list-scenes && cargo run -p mui-preview -- --scene
 
 Scripts are `[{"t": 0.4, "type": "click", "key": "bypass"}, ...]` (`move down up click
 double-click drag wheel key text mark wait`; target by `"key"` = element id or `x`/`y`
-in logical units). The JSON report on stdout lists the begin/end parameter gestures and
+in logical units). One hand: a press may not start before the previous gesture
+releases, and every time and duration stays within an hour. The JSON report on stdout lists the begin/end parameter gestures and
 value changes the script caused. The trace has one line per frame: ids whose frame,
 paint or state changed, springs in flight, `animating`. Add it to your own editor with
 `Scene::new(name, size, ui, |ui| build(ui))` and `std::process::exit(mui_headless::main(vec![scene]))`;

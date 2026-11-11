@@ -44,12 +44,8 @@ pub struct Tracer {
 }
 
 impl Tracer {
-    pub fn record(
-        &mut self,
-        s: &Session,
-        step: &Step,
-        cost_us: Option<u128>,
-    ) -> Result<Value, Error> {
+    /// Every listed surface's signature, and the ids with a spring in flight.
+    fn sigs(s: &Session) -> Result<(BTreeMap<String, Sig>, Vec<String>), Error> {
         let scene = s.scene()?;
         let ui = s.ui();
         // Paint per id, hashed in paint order with a fixed-key hasher.
@@ -59,6 +55,8 @@ impl Tracer {
             format!("{:?}", p.layer).hash(h);
             [q(p.offset.x), q(p.offset.y), q(p.width), q(p.blur)].hash(h);
             p.transform.as_coeffs().map(q).hash(h);
+            // The shape itself: a new contour in the same frame repaints.
+            format!("{:?}", p.path).hash(h);
             match &p.paint {
                 Paint::Solid(c) => {
                     (
@@ -70,7 +68,9 @@ impl Tracer {
                 _ => 0u8.hash(h),
             }
             if let Some(t) = &p.text {
-                (t.glyphs.len(), q(t.origin.x), q(t.origin.y)).hash(h);
+                (q(t.origin.x), q(t.origin.y)).hash(h);
+                // Which glyphs, not just how many: equal-length text changes.
+                format!("{:?}", t.glyphs).hash(h);
             }
             if p.layer == Layer::Text {
                 1u8.hash(h);
@@ -113,6 +113,24 @@ impl Tracer {
                 },
             );
         }
+        Ok((now, springs))
+    }
+
+    /// Take the warm-up scene as the baseline, without tracing it as a
+    /// frame: the first step's changes then report against it.
+    pub fn seed(&mut self, s: &Session) -> Result<(), Error> {
+        self.prev = Some(Self::sigs(s)?.0);
+        Ok(())
+    }
+
+    pub fn record(
+        &mut self,
+        s: &Session,
+        step: &Step,
+        cost_us: Option<u128>,
+    ) -> Result<Value, Error> {
+        let scene = s.scene()?;
+        let (now, springs) = Self::sigs(s)?;
         let mut changed = Vec::new();
         if let Some(prev) = &self.prev {
             for (id, sig) in &now {

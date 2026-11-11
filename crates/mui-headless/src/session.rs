@@ -58,6 +58,10 @@ pub struct Step {
     pub edits: Vec<(String, Edit)>,
 }
 
+/// The largest device-pixel side and area a session renders: 64 MiB of RGBA.
+const MAX_SIDE: f64 = 16384.0;
+const MAX_AREA: f64 = 16_777_216.0;
+
 pub struct Session {
     ui: Ui,
     build: Box<dyn FnMut(&mut Ui) -> El>,
@@ -104,6 +108,14 @@ impl Session {
         let (w, h) = size.unwrap_or(own);
         if w == 0 || h == 0 {
             return Err(Error::new("size must be non-zero"));
+        }
+        // One RGBA frame at the device size must fit the raster budget.
+        let (dw, dh) = (f64::from(w) * scale, f64::from(h) * scale);
+        if dw.round() > MAX_SIDE || dh.round() > MAX_SIDE || dw.round() * dh.round() > MAX_AREA {
+            return Err(Error::new(format!(
+                "{w}x{h} at scale {scale} is {dw:.0}x{dh:.0} device pixels; \
+                 the limit is {MAX_SIDE} a side and {MAX_AREA} in all"
+            )));
         }
         if let Some(mode) = theme {
             let t = ui.theme().clone();
@@ -227,9 +239,11 @@ impl Session {
                 break;
             }
             // Down and up in one frame would be one frame with no press in
-            // it: the second button change waits for the next step.
+            // it: the second button change waits for the next step, and so
+            // does a move after it, or a press would land where the next
+            // gesture starts.
             let button = matches!(ev.act, Act::Down(_) | Act::Up(_));
-            if button && changed {
+            if changed && (button || matches!(ev.act, Act::Move(_))) {
                 break;
             }
             changed |= button;

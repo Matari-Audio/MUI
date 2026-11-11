@@ -99,8 +99,16 @@ pub fn tree(s: &Session) -> Result<Value, Error> {
         o.insert("named".into(), json!(Id::is_named(&id)));
         o.insert("path".into(), json!(path(scene, sf)));
         o.insert("role".into(), json!(role(sf)));
-        if let Some(p) = &sf.parent {
-            o.insert("parent".into(), json!(p.to_string()));
+        // The nearest ancestor this list has, so every parent resolves.
+        let mut up = sf.parent.clone();
+        while let Some(p) = up.take() {
+            match scene.surface(&p) {
+                Some(a) if listed(a) => {
+                    o.insert("parent".into(), json!(p.to_string()));
+                }
+                Some(a) => up = a.parent.clone(),
+                None => {}
+            }
         }
         if let Some(sem) = &sf.semantics {
             let name = sem.label.as_deref().or(sf.text_value.as_deref());

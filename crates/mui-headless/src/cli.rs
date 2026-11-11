@@ -143,7 +143,7 @@ impl Args {
 /// The flags this harness owns: a host with its own CLI (the gallery) hands
 /// over when it sees one.
 pub fn wants(args: &[String]) -> bool {
-    const OWN: [&str; 8] = [
+    const OWN: [&str; 9] = [
         "--snap",
         "--tree",
         "--script",
@@ -152,21 +152,35 @@ pub fn wants(args: &[String]) -> bool {
         "--frames",
         "--list-scenes",
         "--help",
+        "-h",
     ];
     args.iter().any(|a| OWN.contains(&a.as_str()))
 }
 
-/// `Widgets Gallery` -> `widgets-gallery`: how a scene is named on the command line.
+/// `Widgets Gallery` -> `widgets-gallery`: how a scene is named on the
+/// command line. Letters outside ASCII stay, so `東京` is `東京`, not empty.
 pub fn slug(name: &str) -> String {
     let mut s = String::new();
     for c in name.chars() {
-        if c.is_ascii_alphanumeric() {
-            s.push(c.to_ascii_lowercase());
+        if c.is_alphanumeric() {
+            s.extend(c.to_lowercase());
         } else if !s.ends_with('-') && !s.is_empty() {
             s.push('-');
         }
     }
     s.trim_end_matches('-').to_owned()
+}
+
+/// What `--strip` may hold in memory: its frames plus the sheet.
+const STRIP_BYTES: u64 = 512 << 20;
+
+/// `std::fs::write`, making the parent directories first as `--snap` does.
+fn write(p: &std::path::Path, contents: impl AsRef<[u8]>) -> Result<(), Error> {
+    if let Some(dir) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+        std::fs::create_dir_all(dir)?;
+    }
+    std::fs::write(p, contents)?;
+    Ok(())
 }
 
 pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
@@ -233,8 +247,21 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
         end
     };
 
-    let mut raster = None;
     let (w, h) = s.pixels();
+    if a.strip.is_some() {
+        // Every sampled frame is kept for the sheet, which is as big again.
+        let kept = span.div_ceil(every);
+        let bytes = kept.saturating_mul(u64::from(w) * u64::from(h) * 4 * 2);
+        if bytes > STRIP_BYTES {
+            return Err(Error::new(format!(
+                "--strip of {kept} frames at {w}x{h} needs {} MiB (limit {} MiB): \
+                 raise --every, shorten the run or lower --scale",
+                bytes >> 20,
+                STRIP_BYTES >> 20
+            )));
+        }
+    }
+    let mut raster = None;
     let mut draw = |s: &Session| -> Result<Vec<u8>, Error> {
         raster
             .get_or_insert_with(|| Raster::new(w, h))
@@ -248,7 +275,20 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
     let mut tracer = Tracer::default();
     let mut edits = Vec::new();
     let mut values = Vec::new();
-    let mut seen: BTreeMap<String, f64> = BTreeMap::new();
+    let value_of = |sf: &mui::scene::ResolvedSurface| match sf.semantics.as_ref().map(|m| &m.role) {
+        Some(A11y::Slider { value, .. }) => Some(*value),
+        Some(A11y::Toggle { on }) => Some(f64::from(u8::from(*on))),
+        _ => None,
+    };
+    // The warm-up scene is the baseline: a change on the first step reports.
+    let mut seen: BTreeMap<String, f64> = s
+        .scene()?
+        .surfaces()
+        .filter_map(|sf| Some((sf.key.to_string(), value_of(sf)?)))
+        .collect();
+    if a.trace.is_some() {
+        tracer.seed(&s)?;
+    }
 
     // Everything that wants this frame: the snap, the tree, a sampled frame.
     let mut capture = |s: &Session| -> Result<(), Error> {
@@ -289,10 +329,8 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
             }));
         }
         for sf in s.scene()?.surfaces() {
-            let v = match sf.semantics.as_ref().map(|m| &m.role) {
-                Some(A11y::Slider { value, .. }) => *value,
-                Some(A11y::Toggle { on }) => f64::from(u8::from(*on)),
-                _ => continue,
+            let Some(v) = value_of(sf) else {
+                continue;
             };
             if let Some(old) = seen.insert(sf.key.to_string(), v)
                 && old != v
@@ -313,7 +351,7 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
 
     if let Some(p) = &a.tree {
         let v = tree_json.unwrap_or(Value::Null);
-        std::fs::write(p, crate::tree::pretty(&v))?;
+        write(p, crate::tree::pretty(&v))?;
         wrote.push(p.display().to_string());
     }
     if let Some(p) = &a.trace {
@@ -322,7 +360,7 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
             text += &serde_json::to_string(r)?;
             text.push('\n');
         }
-        std::fs::write(p, text)?;
+        write(p, text)?;
         wrote.push(p.display().to_string());
     }
     if let Some(p) = &a.strip {
@@ -341,7 +379,12 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
         "edits": edits,
         "values": values,
         "animating": s.animating(),
-        "settled_after_frame": a.trace.is_some().then_some(tracer.last_moving.unwrap_or(0)),
+        // Still moving on the last frame: not settled, so no frame.
+        "settled_after_frame": match (a.trace.is_some(), tracer.last_moving) {
+            (false, _) => Value::Null,
+            (true, Some(f)) if f >= s.frame() => Value::Null,
+            (true, f) => json!(f.unwrap_or(0)),
+        },
         "wrote": wrote,
     }))
 }

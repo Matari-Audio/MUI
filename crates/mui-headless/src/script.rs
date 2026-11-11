@@ -106,9 +106,24 @@ fn key(name: &str) -> Result<Key, Error> {
     }
 }
 
+/// The longest a script may run, and so any time or duration in it: an
+/// hour of frames, so no time can ask for an unbounded run or event list.
+pub const MAX_SECS: f64 = 3600.0;
+
+/// A time or duration in `0..=MAX_SECS`.
+pub(crate) fn bounded(secs: f64) -> Result<f64, Error> {
+    if secs.is_finite() && (0.0..=MAX_SECS).contains(&secs) {
+        Ok(secs)
+    } else {
+        Err(Error::new(format!(
+            "time {secs} is outside 0..={MAX_SECS} seconds"
+        )))
+    }
+}
+
 /// Seconds as whole frames, at least `min`.
-fn frames(secs: f64, fps: u32, min: u64) -> u64 {
-    ((secs * f64::from(fps)).round().max(0.0) as u64).max(min)
+fn frames(secs: f64, fps: u32, min: u64) -> Result<u64, Error> {
+    Ok(((bounded(secs.max(0.0))? * f64::from(fps)).round() as u64).max(min))
 }
 
 /// One event as per-frame primitives, and the time it is done.
@@ -143,8 +158,8 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
         "click" | "tap" | "double-click" => {
             let b = button(e)?;
             let dbl = ty == "double-click";
-            let hold = frames(num(e, "hold", if dbl { 0.06 } else { 0.08 })?, fps, 1);
-            let gap = frames(num(e, "gap", 0.15)?, fps, hold + 1);
+            let hold = frames(num(e, "hold", if dbl { 0.06 } else { 0.08 })?, fps, 1)?;
+            let gap = frames(num(e, "gap", 0.15)?, fps, hold + 1)?;
             let presses: u64 = if dbl { 2 } else { 1 };
             for n in 0..presses {
                 let at = f0 + gap * n;
@@ -161,7 +176,7 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
         "drag" => {
             let b = button(e)?;
             let (dx, dy) = (num(e, "dx", 0.0)?, num(e, "dy", 0.0)?);
-            let steps = frames(num(e, "dur", 0.3)?, fps, 1);
+            let steps = frames(num(e, "dur", 0.3)?, fps, 1)?;
             if let Some(p) = to {
                 ev(f0, Act::Move(p));
             }
@@ -236,12 +251,11 @@ impl Script {
         };
         let mut last = 0.0f64;
         let mut explicit_end = None;
+        let mut released = 0u64;
         for (i, e) in list.iter().enumerate() {
             let at = |m: String| Error::new(format!("script event {i}: {m}"));
             let t = num(e, "t", 0.0).map_err(|x| at(x.to_string()))?;
-            if t < 0.0 {
-                return Err(at("'t' must not be negative".into()));
-            }
+            let t = bounded(t).map_err(|x| at(format!("'t': {x}")))?;
             let ty = e.get("type").and_then(Value::as_str).unwrap_or("click");
             let mut done = t;
             match ty {
@@ -255,14 +269,32 @@ impl Script {
                         explicit_end = Some(t);
                     }
                 }
-                "wait" => done = t + num(e, "dur", 0.0).map_err(|x| at(x.to_string()))?.max(0.0),
+                "wait" => {
+                    let dur = num(e, "dur", 0.0).map_err(|x| at(x.to_string()))?;
+                    done = t + bounded(dur.max(0.0)).map_err(|x| at(format!("'dur': {x}")))?;
+                }
                 _ => {
                     let (events, end) = compile(e, ty, t, fps).map_err(|x| at(x.to_string()))?;
+                    // One hand: a press before the last release would land
+                    // while that button is still held.
+                    let first_down = events.iter().find(|v| matches!(v.act, Act::Down(_)));
+                    if let Some(d) = first_down
+                        && d.frame < released
+                    {
+                        return Err(at(format!(
+                            "presses at frame {} before the previous gesture releases at \
+                             frame {released}; start it later",
+                            d.frame
+                        )));
+                    }
+                    let up = events.iter().filter(|v| matches!(v.act, Act::Up(_)));
+                    released = up.map(|v| v.frame).fold(released, u64::max);
                     s.events.extend(events);
                     done = end;
                 }
             }
-            last = last.max(done);
+            // Each part is bounded; their sum must be too.
+            last = last.max(bounded(done).map_err(|x| at(format!("ends past the limit: {x}")))?);
         }
         s.end = explicit_end.unwrap_or(last + 1.0);
         Ok(s)
@@ -271,6 +303,10 @@ impl Script {
     /// A time as the CLI writes it: seconds, or `mark:NAME`, `mark:NAME+0.5`,
     /// `mark:NAME-0.2`. An exact mark name wins over an offset reading.
     pub fn time(&self, spec: &str) -> Result<f64, Error> {
+        self.time_unchecked(spec).and_then(|t| bounded(t.max(0.0)))
+    }
+
+    fn time_unchecked(&self, spec: &str) -> Result<f64, Error> {
         let Some(m) = spec.strip_prefix("mark:") else {
             return spec.parse().map_err(|_| {
                 Error::new(format!("bad time '{spec}' (seconds or mark:NAME[+-secs])"))
