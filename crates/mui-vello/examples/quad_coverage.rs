@@ -39,4 +39,17 @@ fn main() {
             println!("{:<14} {n:5} ({:.1}%)", format!("{reason}:"), pct(n));
         }
     }
+    // Which layers the path-shaped entries are, and how many share a key:
+    // what a path-mask stage has to pick up.
+    let mut layers = std::collections::BTreeMap::<String, usize>::new();
+    for p in paint.iter().filter(|p| {
+        p.rect.is_none() && p.text.is_none() && !matches!(p.layer, mui_scene::Layer::Unclip)
+    }) {
+        let what = format!("{:?} width>0={}", p.layer, p.width > 0.);
+        *layers.entry(what).or_default() += 1;
+    }
+    println!("without an analytic rect, by layer:");
+    for (what, n) in layers {
+        println!("  {what:<28} {n:5}");
+    }
 }
