@@ -265,7 +265,9 @@ fn ramp_t(q: vec2<f32>, paint: f32, g: vec4<f32>) -> f32 {
     // WGSL leaves atan2(0, 0) undefined.
     // The start edge runs along +x: a row within interpolation noise of it
     // (either sign) is the start of the turn, not a wrap to a full one.
-    let on_edge = (v.x >= 0.0 && abs(v.y) < 1e-4) || all(v == vec2<f32>(0.0));
+    // The centre gets the same tolerance: Metal interpolates `q` a few ulps
+    // off it, and atan2 of that noise is any angle at all.
+    let on_edge = abs(v.y) < 1e-4 && v.x > -1e-4;
     var angle = select(atan2(v.y, v.x), 0.0, on_edge);
     if angle < 0.0 {
         angle += 6.283185307179586;
