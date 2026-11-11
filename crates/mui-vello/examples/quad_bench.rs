@@ -1,26 +1,25 @@
 //! The quad pass against the classic-Vello `GpuRenderer` on the same paint
-//! list, one the quad pass draws entirely: about 1250 entries of rounded
-//! rects, strokes, drop and inset shadows, gradients and clips at 1280x800.
+//! lists, ones the quad pass draws entirely, at 1280x800: 96 cards of
+//! rounded rects, strokes, drop and inset shadows, gradients and clips
+//! (about 1250 entries), then the same cards with five labels each (576
+//! glyph runs, bench-editor density).
 //!
 //!     cargo run -p mui-vello --profile perf --features gpu-quad,gpu-effects --example quad_bench
 //!
-//! Per frame: `cpu` is the `render` call (build, upload, encode, submit);
-//! `gpu` is GPU time from timestamps written in encoders submitted just
-//! before and just after it; `wait` is wall time from the `render` return
-//! until the device is idle, which on this machine is dominated by a fixed
-//! submit-to-idle latency (see the empty-list row). The GPU span includes
-//! any time the GPU sat idle while `render` ran on the CPU, so it is an upper
-//! bound; `GpuRenderer::render` itself waits on the device (Vello reads back
-//! its allocation counts), so its `cpu` column includes GPU time. Medians of 60
-//! frames after 10 warm-ups, for a static frame and for one where a single
-//! fill changes colour every frame. `GpuRenderer` retains its output, so a
-//! static frame costs it no render at all; the quad pass redraws every frame.
+//! Per frame, medians of `N` frames after `WARM` warm-ups:
+//! - `cpu`: the `render` call (build, upload, encode, submit).
+//! - `span`: GPU time between timestamps written in encoders submitted just
+//!   before and just after `render`. It includes any time the GPU sat idle
+//!   while `render` ran on the CPU, so it is an upper bound on GPU work.
+//!   `GpuRenderer::render` waits on the device itself (Vello reads back its
+//!   allocation counts), so its `cpu` column includes GPU time too.
+//! - `pass`: the quad render pass's own begin/end timestamps: its true GPU
+//!   time, upload copies excluded. Zero when `render` drew no pass.
+//! - `wait`: wall time from the `render` return until the device is idle.
 //!
-//! The second table is the same cards with five labels each (480 glyph
-//! runs, bench-editor density), for: a cold frame (a renderer's first, its
-//! glyph atlas empty; median of 7 fresh renderers), a static frame, a frame
-//! where one label's text changes, and one where everything scrolls by a
-//! fractional offset (0.37 px a frame on both axes).
+//! The renderers alternate frame by frame within each scenario, each on its
+//! own target, so machine load hits both alike. `GpuRenderer` skips a frame
+//! whose list, transform and target are unchanged.
 
 use std::time::Instant;
 
@@ -33,11 +32,7 @@ use mui_vello::quad::{QuadRenderer, classify};
 const W: u32 = 1280;
 const H: u32 = 800;
 const WARM: usize = 10;
-const N: usize = 60;
-
-fn scene() -> ResolvedScene {
-    cards(None)
-}
+const N: usize = 80;
 
 // One font for every frame, as a host keeps it: a fresh `Font` is a new face
 // to every glyph cache.
@@ -115,86 +110,196 @@ fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
 
-/// Medians of (cpu, gpu, wait) ms over `N` frames of `frame(i)`.
-fn time(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    timer: &mut GpuTimer,
-    frame: impl FnMut(usize),
-) -> [f64; 3] {
-    time_n(device, queue, timer, WARM, N, frame)
+/// The device and the query set the quad pass writes its timestamps to.
+struct Gpu {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    queries: wgpu::QuerySet,
+    resolve: wgpu::Buffer,
+    read: wgpu::Buffer,
 }
 
-fn time_n(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    timer: &mut GpuTimer,
-    warm: usize,
-    n: usize,
-    mut frame: impl FnMut(usize),
-) -> [f64; 3] {
-    let (mut cpu, mut gpu, mut wait) = (vec![], vec![], vec![]);
-    let mut samples = Vec::new();
-    for i in 0..warm + n {
-        let mut before = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let ticket = timer.begin(&mut before).expect("a free timestamp slot");
-        queue.submit([before.finish()]);
-        let start = Instant::now();
-        frame(i);
-        let c = ms(start);
-        let mut after = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        timer.finish(&mut after, ticket);
-        queue.submit([after.finish()]);
-        timer.submitted(ticket);
-        let t = Instant::now();
-        device
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+impl Gpu {
+    fn target(&self) -> wgpu::TextureView {
+        self.device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("quad bench"),
+                size: wgpu::Extent3d {
+                    width: W,
+                    height: H,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    fn quad(&self) -> QuadRenderer {
+        let mut quad = QuadRenderer::new(&self.device, FORMAT);
+        quad.timestamps = Some(self.queries.clone());
+        quad
+    }
+
+    fn vello(&self) -> GpuRenderer {
+        pollster::block_on(GpuRenderer::new(
+            &self.device,
+            &self.queue,
+            FORMAT,
+            [W, H],
+            Budget::default(),
+        ))
+        .expect("GpuRenderer")
+    }
+
+    /// The quad pass's last begin-to-end time, in ms; 0 when it drew none.
+    fn pass_ms(&self) -> f64 {
+        let slice = self.read.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map timestamps"));
+        self.device
             .poll(wgpu::PollType::wait_indefinitely())
             .expect("poll");
-        let w = ms(t);
-        samples.clear();
-        timer.collect(device, &mut samples);
-        if i >= warm {
-            cpu.push(c);
-            wait.push(w);
-            gpu.push(samples.first().expect("a GPU timing").milliseconds);
+        let ticks = {
+            let bytes = slice.get_mapped_range().expect("mapped");
+            let t = |i: usize| u64::from_le_bytes(bytes[i..i + 8].try_into().expect("8 bytes"));
+            t(8).saturating_sub(t(0))
+        };
+        self.read.unmap();
+        ticks as f64 * f64::from(self.queue.get_timestamp_period()) / 1e6
+    }
+
+    /// The quad pass's `render`; whether it drew a pass.
+    fn quad_frame(
+        &self,
+        quad: &mut QuadRenderer,
+        s: &ResolvedScene,
+        xf: Affine,
+        view: &wgpu::TextureView,
+    ) -> bool {
+        quad.render(&self.device, &self.queue, &s.paint, xf, view, [W, H])
+            .expect("quad render");
+        quad.frame().drawn
+    }
+}
+
+fn vello_frame(
+    r: &mut GpuRenderer,
+    s: &ResolvedScene,
+    xf: Affine,
+    view: &wgpu::TextureView,
+) -> bool {
+    r.render(s, xf, view).expect("vello render");
+    true
+}
+
+/// A renderer's frame `i` of a scenario; whether it drew a pass. `quad`
+/// marks the quad pass, whose own timestamps are read back.
+struct Job<'a> {
+    name: &'static str,
+    quad: bool,
+    run: Box<dyn FnMut(usize) -> bool + 'a>,
+}
+
+type Row = (&'static str, &'static str, [f64; 4]);
+
+/// Medians of (cpu, span, pass, wait) ms per job over `n` frames after
+/// `warm`, the jobs alternating within each frame, as rows named `frame`.
+fn rounds(
+    gpu: &Gpu,
+    timer: &mut GpuTimer,
+    frame: &'static str,
+    mut jobs: Vec<Job<'_>>,
+    warm: usize,
+    n: usize,
+    rows: &mut Vec<Row>,
+) {
+    let mut samples: Vec<[Vec<f64>; 4]> = jobs.iter().map(|_| Default::default()).collect();
+    let mut spans = Vec::new();
+    let encoder = || {
+        gpu.device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default())
+    };
+    for i in 0..warm + n {
+        for (job, out) in jobs.iter_mut().zip(&mut samples) {
+            let mut before = encoder();
+            let ticket = timer.begin(&mut before).expect("a free timestamp slot");
+            gpu.queue.submit([before.finish()]);
+            let start = Instant::now();
+            let drew = (job.run)(i);
+            let cpu = ms(start);
+            let mut after = encoder();
+            timer.finish(&mut after, ticket);
+            if job.quad {
+                if drew {
+                    after.resolve_query_set(&gpu.queries, 0..2, &gpu.resolve, 0);
+                } else {
+                    after.clear_buffer(&gpu.resolve, 0, None);
+                }
+                after.copy_buffer_to_buffer(&gpu.resolve, 0, &gpu.read, 0, 16);
+            }
+            gpu.queue.submit([after.finish()]);
+            timer.submitted(ticket);
+            let t = Instant::now();
+            gpu.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .expect("poll");
+            let wait = ms(t);
+            spans.clear();
+            timer.collect(&gpu.device, &mut spans);
+            let pass = if job.quad { gpu.pass_ms() } else { f64::NAN };
+            if i >= warm {
+                let span = spans.first().expect("a GPU timing").milliseconds;
+                for (v, x) in out.iter_mut().zip([cpu, span, pass, wait]) {
+                    v.push(x);
+                }
+            }
         }
     }
-    [median(&mut cpu), median(&mut gpu), median(&mut wait)]
+    for (job, s) in jobs.iter().zip(&mut samples) {
+        rows.push((job.name, frame, s.each_mut().map(|v| median(v))));
+    }
+}
+
+/// The quad pass and `GpuRenderer`, alternating.
+fn both<'a>(
+    quad: impl FnMut(usize) -> bool + 'a,
+    vello: impl FnMut(usize) -> bool + 'a,
+) -> Vec<Job<'a>> {
+    vec![
+        Job {
+            name: "QuadRenderer",
+            quad: true,
+            run: Box::new(quad),
+        },
+        Job {
+            name: "GpuRenderer",
+            quad: false,
+            run: Box::new(vello),
+        },
+    ]
+}
+
+fn table(title: &str, rows: &[Row]) {
+    let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
+    println!("\n{title}; load average: {}", load.trim());
+    println!(
+        "{:<14} {:<13} {:>8} {:>8} {:>8} {:>8}",
+        "renderer", "frame", "cpu ms", "span ms", "pass ms", "wait ms"
+    );
+    let mut rows = rows.to_vec();
+    rows.sort_by_key(|r| r.0 == "GpuRenderer");
+    for (name, frame, [cpu, span, pass, wait]) in rows {
+        println!("{name:<14} {frame:<13} {cpu:8.3} {span:8.3} {pass:8.3} {wait:8.3}");
+    }
 }
 
 fn main() {
-    let base = scene();
-    let coverage = classify(&base.paint);
-    assert!(
-        coverage.complete(),
-        "bench scene must be all supported: {coverage:?}"
-    );
-    let count = |l: fn(&Layer) -> bool| base.paint.iter().filter(|p| l(&p.layer)).count();
-    println!(
-        "scene: {} entries ({} fills, {} strokes, {} shadows, {} clips, {} gradients)",
-        base.paint.len(),
-        count(|l| matches!(l, Layer::Fill)),
-        count(|l| matches!(l, Layer::Stroke)),
-        count(|l| matches!(l, Layer::Shadow(_))),
-        count(|l| matches!(l, Layer::Clip)),
-        base.paint
-            .iter()
-            .filter(|p| matches!(p.paint, Paint::Gradient { .. }))
-            .count(),
-    );
-    // The one entry that changes: the last solid card fill.
-    let moving = base
-        .paint
-        .iter()
-        .rposition(|p| p.layer == Layer::Fill && matches!(p.paint, Paint::Solid(_)))
-        .expect("a solid fill");
-    let changed = |i: usize| {
-        let mut s = base.clone();
-        s.paint[moving].paint = Paint::Solid(Color::srgb((i % 50) as f32 / 50., 0.5, 0.5));
-        s
-    };
-    let frames: Vec<ResolvedScene> = (0..WARM + N).map(changed).collect();
-
     let (device, queue, info) = pollster::block_on(async {
         let adapter =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
@@ -215,90 +320,94 @@ fn main() {
         (d, q, adapter.get_info())
     });
     println!("adapter: {} ({:?})", info.name, info.backend);
-    let format = wgpu::TextureFormat::Rgba8Unorm;
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("quad bench"),
-        size: wgpu::Extent3d {
-            width: W,
-            height: H,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-        view_formats: &[],
-    });
-    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
-    let mut timer = GpuTimer::new(&device, &queue).expect("timestamp queries");
-    let mut quad = QuadRenderer::new(&device, format);
-    let mut q = |s: &ResolvedScene| {
-        quad.render(&device, &queue, &s.paint, Affine::IDENTITY, &view, [W, H])
-            .expect("quad render");
+    let buffer = |usage| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("quad pass timestamps"),
+            size: 16,
+            usage,
+            mapped_at_creation: false,
+        })
     };
-    // The floor: a clear and a submit, nothing drawn.
-    let mut empty = base.clone();
-    empty.paint.clear();
-    let quad_empty = time(&device, &queue, &mut timer, |_| q(&empty));
-    let quad_static = time(&device, &queue, &mut timer, |_| q(&base));
-    let quad_change = time(&device, &queue, &mut timer, |i| q(&frames[i]));
-
-    let mut vello = pollster::block_on(GpuRenderer::new(
-        &device,
-        &queue,
-        format,
-        [W, H],
-        Budget::default(),
-    ))
-    .expect("GpuRenderer");
-    let (mut renders_static, mut renders_change) = (0, 0);
-    let vello_static = time(&device, &queue, &mut timer, |_| {
-        renders_static += vello
-            .render(&base, Affine::IDENTITY, &view)
-            .expect("vello render")
-            .renders;
-    });
-    let vello_change = time(&device, &queue, &mut timer, |i| {
-        renders_change += vello
-            .render(&frames[i], Affine::IDENTITY, &view)
-            .expect("vello render")
-            .renders;
-    });
-
-    let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
-    println!("load average: {}", load.trim());
-    println!(
-        "GpuRenderer renders over {} frames: static {renders_static}, one change {renders_change}",
-        WARM + N
-    );
-    println!(
-        "\n{:<14} {:<12} {:>9} {:>9} {:>9}",
-        "renderer", "frame", "cpu ms", "gpu ms", "wait ms"
-    );
-    for (name, frame, t) in [
-        ("QuadRenderer", "empty list", quad_empty),
-        ("QuadRenderer", "static", quad_static),
-        ("QuadRenderer", "one change", quad_change),
-        ("GpuRenderer", "static", vello_static),
-        ("GpuRenderer", "one change", vello_change),
-    ] {
-        let [cpu, gpu, wait] = t;
-        println!("{name:<14} {frame:<12} {cpu:9.3} {gpu:9.3} {wait:9.3}");
-    }
-    labelled(&device, &queue, &mut timer, &view, format, &mut vello);
+    let mut timer = GpuTimer::new(&device, &queue).expect("timestamp queries");
+    let gpu = Gpu {
+        queries: device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("quad pass"),
+            ty: wgpu::QueryType::Timestamp,
+            count: 2,
+        }),
+        resolve: buffer(
+            wgpu::BufferUsages::QUERY_RESOLVE
+                | wgpu::BufferUsages::COPY_SRC
+                | wgpu::BufferUsages::COPY_DST,
+        ),
+        read: buffer(wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST),
+        device,
+        queue,
+    };
+    shapes(&gpu, &mut timer);
+    labelled(&gpu, &mut timer);
 }
 
-/// The labelled cards through both renderers.
-fn labelled(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    timer: &mut GpuTimer,
-    view: &wgpu::TextureView,
-    format: wgpu::TextureFormat,
-    vello: &mut GpuRenderer,
-) {
+fn shapes(gpu: &Gpu, timer: &mut GpuTimer) {
+    let base = cards(None);
+    let coverage = classify(&base.paint);
+    assert!(
+        coverage.complete(),
+        "bench scene must be all supported: {coverage:?}"
+    );
+    let count = |l: fn(&Layer) -> bool| base.paint.iter().filter(|p| l(&p.layer)).count();
+    println!(
+        "shapes: {} entries ({} fills, {} strokes, {} shadows, {} clips, {} gradients)",
+        base.paint.len(),
+        count(|l| matches!(l, Layer::Fill)),
+        count(|l| matches!(l, Layer::Stroke)),
+        count(|l| matches!(l, Layer::Shadow(_))),
+        count(|l| matches!(l, Layer::Clip)),
+        base.paint
+            .iter()
+            .filter(|p| matches!(p.paint, Paint::Gradient { .. }))
+            .count(),
+    );
+    // The one entry that changes: the last solid card fill.
+    let moving = base
+        .paint
+        .iter()
+        .rposition(|p| p.layer == Layer::Fill && matches!(p.paint, Paint::Solid(_)))
+        .expect("a solid fill");
+    let frames: Vec<ResolvedScene> = (0..WARM + N)
+        .map(|i| {
+            let mut s = base.clone();
+            s.paint[moving].paint = Paint::Solid(Color::srgb((i % 50) as f32 / 50., 0.5, 0.5));
+            s
+        })
+        .collect();
+    let mut empty = base.clone();
+    empty.paint.clear();
+    let (qv, vv) = (gpu.target(), gpu.target());
+    let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
+    let id = Affine::IDENTITY;
+    let mut rows = Vec::new();
+    // The floor: a clear and a submit, nothing drawn.
+    let jobs = vec![Job {
+        name: "QuadRenderer",
+        quad: true,
+        run: Box::new(|_| gpu.quad_frame(&mut quad, &empty, id, &qv)),
+    }];
+    rounds(gpu, timer, "empty list", jobs, WARM, N, &mut rows);
+    let jobs = both(
+        |_| gpu.quad_frame(&mut quad, &base, id, &qv),
+        |_| vello_frame(&mut vello, &base, id, &vv),
+    );
+    rounds(gpu, timer, "static", jobs, WARM, N, &mut rows);
+    let jobs = both(
+        |i| gpu.quad_frame(&mut quad, &frames[i], id, &qv),
+        |i| vello_frame(&mut vello, &frames[i], id, &vv),
+    );
+    rounds(gpu, timer, "one change", jobs, WARM, N, &mut rows);
+    table(&format!("shapes: {} entries", base.paint.len()), &rows);
+}
+
+fn labelled(gpu: &Gpu, timer: &mut GpuTimer) {
     let base = cards(Some(0));
     let runs = base.paint.iter().filter(|p| p.text.is_some()).count();
     let glyphs: usize = base
@@ -313,80 +422,53 @@ fn labelled(
     );
     let labels: Vec<ResolvedScene> = (0..WARM + N).map(|i| cards(Some(1000 + i * 37))).collect();
     let scroll = |i: usize| Affine::translate((0.37 * i as f64, 0.37 * i as f64));
-    let mut quad = QuadRenderer::new(device, format);
-    let q = |quad: &mut QuadRenderer, s: &ResolvedScene, xf: Affine| {
-        quad.render(device, queue, &s.paint, xf, view, [W, H])
-            .expect("quad render");
-    };
-    let mut fresh: Vec<QuadRenderer> = (0..7)
+    let id = Affine::IDENTITY;
+    let (qv, vv) = (gpu.target(), gpu.target());
+    let mut rows = Vec::new();
+    // Cold: each renderer's first frame of this list, its glyph atlas empty
+    // (the quad pass has drawn the unlabelled cards once).
+    let unlabelled = cards(None);
+    let mut fresh_quads: Vec<QuadRenderer> = (0..7)
         .map(|_| {
-            let mut r = QuadRenderer::new(device, format);
-            q(&mut r, &cards(None), Affine::IDENTITY);
+            let mut r = gpu.quad();
+            gpu.quad_frame(&mut r, &unlabelled, id, &qv);
             r
         })
         .collect();
-    let quad_cold = time_n(device, queue, timer, 0, 7, |i| {
-        q(&mut fresh[i], &base, Affine::IDENTITY);
-    });
-    let cold = fresh[0].frame();
-    let quad_static = time(device, queue, timer, |_| {
-        q(&mut quad, &base, Affine::IDENTITY);
-    });
+    let mut fresh_vellos: Vec<GpuRenderer> = (0..7).map(|_| gpu.vello()).collect();
+    let jobs = both(
+        |i| gpu.quad_frame(&mut fresh_quads[i], &base, id, &qv),
+        |i| vello_frame(&mut fresh_vellos[i], &base, id, &vv),
+    );
+    rounds(gpu, timer, "cold", jobs, 0, 7, &mut rows);
+    let cold = fresh_quads[0].frame();
+    drop(fresh_vellos);
+    let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
+    let jobs = both(
+        |_| gpu.quad_frame(&mut quad, &base, id, &qv),
+        |_| vello_frame(&mut vello, &base, id, &vv),
+    );
+    rounds(gpu, timer, "static", jobs, WARM, N, &mut rows);
     let steady = quad.frame();
-    let quad_label = time(device, queue, timer, |i| {
-        q(&mut quad, &labels[i], Affine::IDENTITY);
-    });
-    let quad_scroll = time(device, queue, timer, |i| q(&mut quad, &base, scroll(i)));
-
-    let v = |r: &mut GpuRenderer, s: &ResolvedScene, xf: Affine| {
-        r.render(s, xf, view).expect("vello render");
-    };
-    let mut fresh: Vec<GpuRenderer> = (0..7)
-        .map(|_| {
-            pollster::block_on(GpuRenderer::new(
-                device,
-                queue,
-                format,
-                [W, H],
-                Budget::default(),
-            ))
-            .expect("GpuRenderer")
-        })
-        .collect();
-    let vello_cold = time_n(device, queue, timer, 0, 7, |i| {
-        v(&mut fresh[i], &base, Affine::IDENTITY);
-    });
-    let vello_static = time(device, queue, timer, |_| v(vello, &base, Affine::IDENTITY));
-    let vello_label = time(device, queue, timer, |i| {
-        v(vello, &labels[i], Affine::IDENTITY);
-    });
-    let vello_scroll = time(device, queue, timer, |i| v(vello, &base, scroll(i)));
-
-    let load = std::fs::read_to_string("/proc/loadavg").unwrap_or_default();
-    println!(
-        "\nlabelled cards: {} entries, {runs} glyph runs, {glyphs} glyphs; load average: {}",
-        base.paint.len(),
-        load.trim()
+    let jobs = both(
+        |i| gpu.quad_frame(&mut quad, &labels[i], id, &qv),
+        |i| vello_frame(&mut vello, &labels[i], id, &vv),
     );
-    println!(
-        "quad cold frame: {} cells rasterised, {} bytes uploaded; steady: {:?}",
-        cold.rasterised, cold.uploaded, steady
+    rounds(gpu, timer, "label change", jobs, WARM, N, &mut rows);
+    let jobs = both(
+        |i| gpu.quad_frame(&mut quad, &base, scroll(i), &qv),
+        |i| vello_frame(&mut vello, &base, scroll(i), &vv),
     );
+    rounds(gpu, timer, "scroll", jobs, WARM, N, &mut rows);
     println!(
-        "{:<14} {:<12} {:>9} {:>9} {:>9}",
-        "renderer", "frame", "cpu ms", "gpu ms", "wait ms"
+        "\nquad cold frame: {} cells rasterised, {} bytes uploaded; steady: {steady:?}",
+        cold.rasterised, cold.uploaded
     );
-    for (name, frame, t) in [
-        ("QuadRenderer", "cold", quad_cold),
-        ("QuadRenderer", "static", quad_static),
-        ("QuadRenderer", "label change", quad_label),
-        ("QuadRenderer", "scroll", quad_scroll),
-        ("GpuRenderer", "cold", vello_cold),
-        ("GpuRenderer", "static", vello_static),
-        ("GpuRenderer", "label change", vello_label),
-        ("GpuRenderer", "scroll", vello_scroll),
-    ] {
-        let [cpu, gpu, wait] = t;
-        println!("{name:<14} {frame:<12} {cpu:9.3} {gpu:9.3} {wait:9.3}");
-    }
+    table(
+        &format!(
+            "labelled cards: {} entries, {runs} glyph runs, {glyphs} glyphs",
+            base.paint.len()
+        ),
+        &rows,
+    );
 }

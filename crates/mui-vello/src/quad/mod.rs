@@ -168,6 +168,8 @@ impl std::error::Error for Error {}
 /// What the last [`QuadRenderer::render`] did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Frame {
+    /// Whether `render` encoded a render pass at all.
+    pub drawn: bool,
     /// Instances drawn.
     pub instances: usize,
     /// Draw calls: one, plus one each time an image instance needs a
@@ -209,6 +211,9 @@ pub struct QuadRenderer {
     cpu: Instances,
     groups: Vec<wgpu::BindGroup>,
     frame: Frame,
+    /// A profiling hook: when set, the render pass writes its start and end
+    /// to queries 0 and 1 of this set (the device needs `TIMESTAMP_QUERY`).
+    pub timestamps: Option<wgpu::QuerySet>,
 }
 
 /// The CPU side of a frame: the walk, the instance bytes it writes and the
@@ -429,6 +434,7 @@ impl QuadRenderer {
             cpu,
             groups: Vec::new(),
             frame: Frame::default(),
+            timestamps: None,
         }
     }
 
@@ -482,7 +488,13 @@ impl QuadRenderer {
                     },
                 })],
                 depth_stencil_attachment: None,
-                timestamp_writes: None,
+                timestamp_writes: self.timestamps.as_ref().map(|query_set| {
+                    wgpu::RenderPassTimestampWrites {
+                        query_set,
+                        beginning_of_pass_write_index: Some(0),
+                        end_of_pass_write_index: Some(1),
+                    }
+                }),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -507,6 +519,7 @@ impl QuadRenderer {
             }
         }
         queue.submit([encoder.finish()]);
+        self.frame.drawn = true;
         self.frame.instances = count;
         self.frame.draws = draws;
         Ok(())
