@@ -3,6 +3,15 @@ use mui_weld::analytic::{AnalyticWeld, PARAM_BYTES, dirty_ranges};
 use mui_weld::boundary::BOUNDARY_BYTES;
 use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
+/// Vello serialises pipeline creation on DX12 (see its `robustness.rs`);
+/// without Vello in the build there is nothing to serialise against.
+#[cfg(feature = "gpu-effects")]
+use vello::with_pipeline_creation as gate;
+#[cfg(not(feature = "gpu-effects"))]
+fn gate<T>(_: &wgpu::Device, create: impl FnOnce() -> T) -> T {
+    create()
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     pub max_surfaces: usize,
@@ -148,7 +157,7 @@ impl WeldTextures {
             label: Some("MUI analytic weld"),
             source: wgpu::ShaderSource::Wgsl(super::WELD_SHADER.into()),
         });
-        let pipeline = vello::with_pipeline_creation(device, || {
+        let pipeline = gate(device, || {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("MUI analytic weld"),
                 layout: Some(&pipeline_layout),
@@ -193,6 +202,7 @@ impl WeldTextures {
         })
     }
     /// New per-window slots over the same immutable material pipeline.
+    #[cfg(feature = "gpu-effects")]
     pub(crate) fn for_window(&self, budget: Budget) -> Result<Self, Error> {
         if budget.max_surfaces == 0
             || budget.max_texture_bytes == 0

@@ -43,7 +43,7 @@ mod classic;
 pub mod software;
 #[cfg(feature = "gpu-effects")]
 pub use classic::Classic;
-#[cfg(feature = "gpu-effects")]
+#[cfg(any(feature = "gpu-effects", feature = "gpu-quad"))]
 pub mod effects;
 #[cfg(feature = "gpu-effects")]
 pub mod host;

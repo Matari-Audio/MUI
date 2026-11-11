@@ -123,6 +123,7 @@ fn naga_validates_crisp_boundary_uniform_stride() {
 
 /// A path converts once per `Arc`, however many entries share it; a
 /// failed conversion leaves nothing behind, and an unused one ages out.
+#[cfg(feature = "gpu-effects")]
 #[test]
 fn a_shared_path_is_converted_once() {
     use mui_geometry::Path;
@@ -150,6 +151,7 @@ fn a_shared_path_is_converted_once() {
 
 /// A long path's fill is encoded once per colour and handed back while the
 /// colour stays; placed by `append`, it is the encoding a fresh fill writes.
+#[cfg(feature = "gpu-effects")]
 #[test]
 fn a_replayed_fill_is_kept_per_colour_and_encodes_as_a_fill() {
     use mui_geometry::Path;

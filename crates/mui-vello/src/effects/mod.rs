@@ -6,16 +6,24 @@
 //!
 //! Device/queue ownership is per renderer. Recreate this object on device loss;
 //! do not carry textures or retained encodings across devices.
+//!
+//! The weld pool ([`WeldTextures`], `weld.wgsl`) is plain wgpu and builds
+//! under `gpu-quad` alone, which samples its textures directly; everything
+//! that encodes for Vello needs `gpu-effects`.
+#[cfg(feature = "gpu-effects")]
 use std::sync::Arc;
 
+#[cfg(feature = "gpu-effects")]
 use mui_geometry::Path;
 
 mod pool;
+#[cfg(feature = "gpu-effects")]
 pub(crate) mod retained;
 #[cfg(test)]
 mod tests;
 
 pub use pool::{ABSENT_FRAMES, Budget, EffectStats, WeldTextures};
+#[cfg(feature = "gpu-effects")]
 pub use retained::GpuRenderer;
 pub const WELD_SHADER: &str = include_str!("weld.wgsl");
 
@@ -61,12 +69,14 @@ impl From<mui_geometry::Error> for Error {
 /// by same-sized nodes, or kept by one that only moved, converts once. The
 /// entry holds its `Arc`, so the address cannot be reused while it is a key;
 /// a path no frame asked for in [`AGE`] frames goes.
+#[cfg(feature = "gpu-effects")]
 #[derive(Default)]
 pub(crate) struct Converted {
     map: rustc_hash::FxHashMap<usize, Conversion>,
     frame: u64,
 }
 
+#[cfg(feature = "gpu-effects")]
 struct Conversion {
     /// Held so the pointer key cannot be reused while the entry lives.
     _path: Arc<Path>,
@@ -79,11 +89,14 @@ struct Conversion {
 
 /// Commands from which a plain fill is encoded once and copied after: a
 /// glyph run or an icon. A rect costs less to encode than to copy.
+#[cfg(feature = "gpu-effects")]
 pub(crate) const REPLAYED: usize = 16;
 
 /// Frames a conversion outlives its last use; see [`Converted`].
+#[cfg(feature = "gpu-effects")]
 const AGE: u64 = 32;
 
+#[cfg(feature = "gpu-effects")]
 impl Converted {
     /// Start a frame; every [`AGE`] frames, drop what went unused.
     pub fn tick(&mut self) {
