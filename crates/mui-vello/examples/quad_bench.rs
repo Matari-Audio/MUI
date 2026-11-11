@@ -39,6 +39,12 @@ fn scene() -> ResolvedScene {
     cards(None)
 }
 
+// One font for every frame, as a host keeps it: a fresh `Font` is a new face
+// to every glyph cache.
+static HACK: std::sync::LazyLock<mui_scene::Font> = std::sync::LazyLock::new(|| {
+    mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).expect("font")
+});
+
 /// The cards; with `Some(n)`, five labels on each, card 0's first reading `n`.
 fn cards(labels: Option<usize>) -> ResolvedScene {
     let (a, b) = (Color::srgb(0.25, 0.45, 0.9), Color::srgb(0.85, 0.3, 0.5));
@@ -96,11 +102,6 @@ fn cards(labels: Option<usize>) -> ResolvedScene {
         .radius(0.)
         .fill(Color::srgb(0.06, 0.07, 0.09));
     let mut spec = SceneSpec::new(root).offered(Size::new(f64::from(W), f64::from(H)));
-    // One font for every frame, as a host keeps it: a fresh `Font` is a new
-    // face to every glyph cache.
-    static HACK: std::sync::LazyLock<mui_scene::Font> = std::sync::LazyLock::new(|| {
-        mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).expect("font")
-    });
     spec.font = Some(HACK.clone());
     mui_scene::resolve(&spec).expect("scene resolves")
 }
@@ -329,11 +330,11 @@ fn labelled(
     });
     let cold = fresh[0].frame();
     let quad_static = time(device, queue, timer, |_| {
-        q(&mut quad, &base, Affine::IDENTITY)
+        q(&mut quad, &base, Affine::IDENTITY);
     });
     let steady = quad.frame();
     let quad_label = time(device, queue, timer, |i| {
-        q(&mut quad, &labels[i], Affine::IDENTITY)
+        q(&mut quad, &labels[i], Affine::IDENTITY);
     });
     let quad_scroll = time(device, queue, timer, |i| q(&mut quad, &base, scroll(i)));
 
@@ -353,11 +354,11 @@ fn labelled(
         })
         .collect();
     let vello_cold = time_n(device, queue, timer, 0, 7, |i| {
-        v(&mut fresh[i], &base, Affine::IDENTITY)
+        v(&mut fresh[i], &base, Affine::IDENTITY);
     });
     let vello_static = time(device, queue, timer, |_| v(vello, &base, Affine::IDENTITY));
     let vello_label = time(device, queue, timer, |i| {
-        v(vello, &labels[i], Affine::IDENTITY)
+        v(vello, &labels[i], Affine::IDENTITY);
     });
     let vello_scroll = time(device, queue, timer, |i| v(vello, &base, scroll(i)));
 
