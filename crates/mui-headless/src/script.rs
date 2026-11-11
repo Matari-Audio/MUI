@@ -131,7 +131,14 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
                 ev(f0, Act::Move(p));
             }
             ev(f0, Act::Mods(m));
-            ev(f0, if ty == "down" { Act::Down(b) } else { Act::Up(b) });
+            ev(
+                f0,
+                if ty == "down" {
+                    Act::Down(b)
+                } else {
+                    Act::Up(b)
+                },
+            );
         }
         "click" | "tap" | "double-click" => {
             let b = button(e)?;
@@ -217,10 +224,9 @@ impl Script {
         let v: Value = serde_json::from_str(src)?;
         let list = match &v {
             Value::Array(a) => a,
-            Value::Object(o) => o
-                .get("events")
-                .and_then(Value::as_array)
-                .ok_or_else(|| Error::new("a script is an array of events or {\"events\": [...]}"))?,
+            Value::Object(o) => o.get("events").and_then(Value::as_array).ok_or_else(|| {
+                Error::new("a script is an array of events or {\"events\": [...]}")
+            })?,
             _ => return Err(Error::new("a script is an array of events")),
         };
         let mut s = Self {
@@ -266,9 +272,9 @@ impl Script {
     /// `mark:NAME-0.2`. An exact mark name wins over an offset reading.
     pub fn time(&self, spec: &str) -> Result<f64, Error> {
         let Some(m) = spec.strip_prefix("mark:") else {
-            return spec
-                .parse()
-                .map_err(|_| Error::new(format!("bad time '{spec}' (seconds or mark:NAME[+-secs])")));
+            return spec.parse().map_err(|_| {
+                Error::new(format!("bad time '{spec}' (seconds or mark:NAME[+-secs])"))
+            });
         };
         if let Some(t) = self.marks.get(m) {
             return Ok(*t);

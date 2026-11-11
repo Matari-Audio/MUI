@@ -18,9 +18,9 @@ use mui::prelude::*;
 use mui::scene::{Layer, Paint};
 use serde_json::{Value, json};
 
+use crate::Error;
 use crate::session::{Session, Step};
 use crate::tree::{listed, r2, r4};
-use crate::Error;
 
 #[derive(PartialEq)]
 struct Sig {
@@ -44,7 +44,12 @@ pub struct Tracer {
 }
 
 impl Tracer {
-    pub fn record(&mut self, s: &Session, step: &Step, cost_us: Option<u128>) -> Result<Value, Error> {
+    pub fn record(
+        &mut self,
+        s: &Session,
+        step: &Step,
+        cost_us: Option<u128>,
+    ) -> Result<Value, Error> {
         let scene = s.scene()?;
         let ui = s.ui();
         // Paint per id, hashed in paint order with a fixed-key hasher.
@@ -53,13 +58,14 @@ impl Tracer {
             let h = paint.entry(&p.key).or_default();
             format!("{:?}", p.layer).hash(h);
             [q(p.offset.x), q(p.offset.y), q(p.width), q(p.blur)].hash(h);
-            p.transform
-                .as_coeffs()
-                .map(q)
-                .hash(h);
+            p.transform.as_coeffs().map(q).hash(h);
             match &p.paint {
                 Paint::Solid(c) => {
-                    (1u8, c.to_srgb().components.map(|v| (v * 1000.0).round() as i32)).hash(h);
+                    (
+                        1u8,
+                        c.to_srgb().components.map(|v| (v * 1000.0).round() as i32),
+                    )
+                        .hash(h);
                 }
                 _ => 0u8.hash(h),
             }
@@ -75,18 +81,34 @@ impl Tracer {
         for sf in scene.surfaces().filter(|sf| listed(sf)) {
             let id = sf.key.to_string();
             let st = ui.state(id.as_str());
-            if [st.hover, st.press].iter().any(|v| *v > 0.001 && *v < 0.999) {
+            if [st.hover, st.press]
+                .iter()
+                .any(|v| *v > 0.001 && *v < 0.999)
+            {
                 springs.push(id.clone());
             }
             let mut sem = std::hash::DefaultHasher::new();
             format!("{:?}", sf.semantics).hash(&mut sem);
-            (sf.disabled, ui.focused(id.as_str()), sf.text_value.as_deref()).hash(&mut sem);
+            (
+                sf.disabled,
+                ui.focused(id.as_str()),
+                sf.text_value.as_deref(),
+            )
+                .hash(&mut sem);
             now.insert(
                 id.clone(),
                 Sig {
-                    frame: [q(sf.frame.x), q(sf.frame.y), q(sf.frame.size.width), q(sf.frame.size.height)],
+                    frame: [
+                        q(sf.frame.x),
+                        q(sf.frame.y),
+                        q(sf.frame.size.width),
+                        q(sf.frame.size.height),
+                    ],
                     paint: paint.get(id.as_str()).map_or(0, Hasher::finish),
-                    state: [(st.hover * 100.0).round() as i64, (st.press * 100.0).round() as i64],
+                    state: [
+                        (st.hover * 100.0).round() as i64,
+                        (st.press * 100.0).round() as i64,
+                    ],
                     semantics: sem.finish(),
                 },
             );

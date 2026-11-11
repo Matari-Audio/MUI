@@ -588,6 +588,29 @@ resolves a ~1000-node tree at three window shapes and counts the allocations
 each resolve makes. It lives in `examples` because it installs a counting
 global allocator, which the library itself forbids.
 
+## Checking your UI work headlessly
+
+`mui-headless` runs any editor with no window and no GPU, on the CPU renderer and
+a fixed virtual clock (step `k` is `k/fps` seconds; no wall time is read), so the
+same command gives byte-identical PNGs and JSON. Look at pixels and trees instead
+of guessing. Flags follow Rune's agent tooling.
+
+```sh
+cargo run -p mui-gain-plugin --example headless -- --snap out.png --scale 2 --theme light   # pixels
+cargo run -p mui-gain-plugin --example headless -- --tree tree.json                          # ids, roles, rects, state
+cargo run -p mui-gain-plugin --example headless -- --script examples/scripts/gain-knob-drag.json --at mark:end --snap after.png
+cargo run -p mui-gain-plugin --example headless -- --script s.json --trace run.jsonl --strip strip.png --frames 24 --every 3
+cargo run -p mui-preview -- --list-scenes && cargo run -p mui-preview -- --scene widgets --snap w.png   # the gallery
+```
+
+Scripts are `[{"t": 0.4, "type": "click", "key": "bypass"}, ...]` (`move down up click
+double-click drag wheel key text mark wait`; target by `"key"` = element id or `x`/`y`
+in logical units). The JSON report on stdout lists the begin/end parameter gestures and
+value changes the script caused. The trace has one line per frame: ids whose frame,
+paint or state changed, springs in flight, `animating`. Add it to your own editor with
+`Scene::new(name, size, ui, |ui| build(ui))` and `std::process::exit(mui_headless::main(vec![scene]))`;
+see `crates/mui-headless/src/lib.rs`.
+
 ## Verify
 
 ### MUI tester and UI evidence

@@ -19,7 +19,10 @@ fn run(args: &[&str]) -> mui_headless::Value {
 fn a_scripted_drag_reports_its_gesture_bracket_and_repeats_exactly() {
     let dir = std::env::temp_dir().join("mui-headless-gain-test");
     std::fs::create_dir_all(&dir).unwrap();
-    let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../scripts/gain-knob-drag.json");
+    let script = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../scripts/gain-knob-drag.json"
+    );
     let mut outputs = Vec::new();
     let mut report = None;
     for n in 0..2 {
@@ -29,8 +32,14 @@ fn a_scripted_drag_reports_its_gesture_bracket_and_repeats_exactly() {
             dir.join(format!("{n}.jsonl")),
         );
         let r = run(&[
-            "--script", script, "--snap", png.to_str().unwrap(),
-            "--tree", tree.to_str().unwrap(), "--trace", trace.to_str().unwrap(),
+            "--script",
+            script,
+            "--snap",
+            png.to_str().unwrap(),
+            "--tree",
+            tree.to_str().unwrap(),
+            "--trace",
+            trace.to_str().unwrap(),
         ]);
         outputs.push([png, tree, trace].map(|p| std::fs::read(p).unwrap()));
         report = Some(r);
@@ -45,9 +54,18 @@ fn a_scripted_drag_reports_its_gesture_bracket_and_repeats_exactly() {
     // The drag is one bracket, the ArrowDown after it another.
     let bracket = [("param/0", "begin"), ("param/0", "end")];
     assert_eq!(kinds, [bracket, bracket].concat(), "{r}");
-    assert!(!r["values"].as_array().unwrap().is_empty(), "the knob never moved: {r}");
-    let tree: mui_headless::serde_json::Value = mui_headless::serde_json::from_slice(&outputs[0][1]).unwrap();
-    let knob = tree["surfaces"].as_array().unwrap().iter().find(|s| s["id"] == "param/0").unwrap();
+    assert!(
+        !r["values"].as_array().unwrap().is_empty(),
+        "the knob never moved: {r}"
+    );
+    let tree: mui_headless::serde_json::Value =
+        mui_headless::serde_json::from_slice(&outputs[0][1]).unwrap();
+    let knob = tree["surfaces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == "param/0")
+        .unwrap();
     assert_eq!(knob["role"], "slider");
     assert!(knob["value"].is_number());
 }

@@ -106,12 +106,11 @@ impl Args {
                 // A number is Rune's frame count; anything else is a directory.
                 "--frames" => {
                     let v = value()?;
-                    match v.parse() {
-                        Ok(n) => a.frames = Some(n),
-                        Err(_) => {
-                            a.out = Some(v.into());
-                            a.frames = Some(0);
-                        }
+                    if let Ok(n) = v.parse() {
+                        a.frames = Some(n);
+                    } else {
+                        a.out = Some(v.into());
+                        a.frames = Some(0);
                     }
                 }
                 "--size" => {
@@ -125,7 +124,9 @@ impl Args {
                     a.theme = Some(match value()? {
                         "dark" => Mode::Dark,
                         "light" => Mode::Light,
-                        o => return Err(Error::new(format!("--theme is dark or light, not '{o}'"))),
+                        o => {
+                            return Err(Error::new(format!("--theme is dark or light, not '{o}'")));
+                        }
                     });
                 }
                 other => {
@@ -184,7 +185,11 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
             .ok_or_else(|| {
                 Error::new(format!(
                     "no scene '{n}' (scenes: {})",
-                    scenes.iter().map(|s| slug(&s.name)).collect::<Vec<_>>().join(", ")
+                    scenes
+                        .iter()
+                        .map(|s| slug(&s.name))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 ))
             })?,
     };
@@ -219,8 +224,14 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
         _ => end.saturating_sub(first) + 1,
     };
     let wants_frames = a.frames.is_some() || a.strip.is_some();
-    let sampled = |f: u64| wants_frames && f >= first && f < first + span && (f - first) % every == 0;
-    let last = if wants_frames { end.max(first + span - 1) } else { end };
+    let sampled = |f: u64| {
+        wants_frames && f >= first && f < first + span && (f - first).is_multiple_of(every)
+    };
+    let last = if wants_frames {
+        end.max(first + span - 1)
+    } else {
+        end
+    };
 
     let mut raster = None;
     let (w, h) = s.pixels();

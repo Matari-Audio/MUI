@@ -12,8 +12,8 @@ use mui::prelude::*;
 use mui::scene::{Layer, Paint, ResolvedScene, ResolvedSurface};
 use serde_json::{Map, Value, json};
 
-use crate::session::Session;
 use crate::Error;
+use crate::session::Session;
 
 /// Round for output: the dump is read by people and diffed, not re-solved.
 pub(crate) fn r2(v: f64) -> f64 {
@@ -80,11 +80,10 @@ pub(crate) fn role(s: &ResolvedSurface) -> &'static str {
         Some(A11y::Toggle { .. }) => "toggle",
         Some(A11y::TextInput { .. }) => "textinput",
         Some(A11y::Label) => "label",
-        Some(A11y::Group) => "group",
         Some(A11y::Scroll) => "scroll",
         Some(A11y::Image) => "image",
         None if s.text_value.is_some() => "label",
-        None => "group",
+        Some(A11y::Group) | None => "group",
     }
 }
 
