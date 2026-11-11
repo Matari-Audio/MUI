@@ -11,7 +11,9 @@
 //! It also writes the static editor frame from both renderers to
 //! `quad-bench-editor-{quad,vello}.png` in the temp directory, and the same
 //! frame without the menu float that covers it to
-//! `quad-bench-editor-under-menu-{quad,vello}.png`.
+//! `quad-bench-editor-under-menu-{quad,vello}.png`. Last, a modal fading in
+//! over the editor through a backdrop blur, every frame a new opacity, with
+//! its first frame as `quad-bench-editor-modal-{quad,vello}.png`.
 //!
 //!     cargo run -p mui-vello --profile perf --features gpu-quad,gpu-effects --example quad_bench
 //!
@@ -359,6 +361,7 @@ fn main() {
     dense(&gpu, &mut timer);
     shapes(&gpu, &mut timer);
     labelled(&gpu, &mut timer);
+    modal(&gpu, &mut timer);
 }
 
 /// The editor scene: `frames` frames of a `Ui` in which knob 5 turns (none
@@ -391,13 +394,25 @@ fn editor_frames(frames: usize, turn: bool) -> Vec<ResolvedScene> {
         .collect()
 }
 
+/// The editor frame without the menu float, which lays out over the whole
+/// window and hides the editor in every renderer.
+fn under_menu(still: &ResolvedScene) -> ResolvedScene {
+    let mut under = still.clone();
+    under
+        .paint
+        .retain(|p| !(&*p.key == "/3" || p.key.starts_with("/3/")));
+    under
+}
+
 /// What the quad pass's frame drew and holds, after the timing rows.
 fn note(name: &str, f: mui_vello::quad::Frame) {
     println!(
-        "  quad {name}: {} instances, {} draw calls, {} path records built, {} B paths uploaded, \
-         cache {} B (glyph atlas {} + paths {})",
+        "  quad {name}: {} instances, {} draw calls in {} passes, {} B offscreen, \
+         {} path records built, {} B paths uploaded, cache {} B (glyph atlas {} + paths {})",
         f.instances,
         f.draws,
+        f.passes,
+        f.offscreen_bytes,
         f.paths_built,
         f.path_uploaded,
         f.atlas_bytes + f.path_bytes,
@@ -453,13 +468,7 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     note("knob turning", turned);
     note("scroll", scrolled);
     pngs(gpu, &still, "");
-    // The scene's last float, the menu, lays out over the whole window and
-    // hides the editor in every renderer: the same frame without it.
-    let mut under = still.clone();
-    under
-        .paint
-        .retain(|p| !(&*p.key == "/3" || p.key.starts_with("/3/")));
-    pngs(gpu, &under, "-under-menu");
+    pngs(gpu, &under_menu(&still), "-under-menu");
 }
 
 /// A 1,000-point polyline that changes every frame, over 300 static cards.
@@ -526,6 +535,16 @@ fn dense(gpu: &Gpu, timer: &mut GpuTimer) {
 /// The static editor frame from both renderers, as PNGs in the temp
 /// directory.
 fn pngs(gpu: &Gpu, scene: &ResolvedScene, tag: &str) {
+    pngs_to(gpu, scene, tag, &mut gpu.quad(), &mut gpu.vello());
+}
+
+fn pngs_to(
+    gpu: &Gpu,
+    scene: &ResolvedScene,
+    tag: &str,
+    quad: &mut QuadRenderer,
+    vello: &mut GpuRenderer,
+) {
     let texture = || {
         gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("quad bench png"),
@@ -544,8 +563,8 @@ fn pngs(gpu: &Gpu, scene: &ResolvedScene, tag: &str) {
     };
     let (q, v) = (texture(), texture());
     let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
-    gpu.quad_frame(&mut gpu.quad(), scene, Affine::IDENTITY, &view(&q));
-    vello_frame(&mut gpu.vello(), scene, Affine::IDENTITY, &view(&v));
+    gpu.quad_frame(quad, scene, Affine::IDENTITY, &view(&q));
+    vello_frame(vello, scene, Affine::IDENTITY, &view(&v));
     for (name, t) in [("quad", &q), ("vello", &v)] {
         let path = std::env::temp_dir().join(format!("quad-bench-editor{tag}-{name}.png"));
         save_png(gpu, t, &path);
@@ -721,4 +740,82 @@ fn labelled(gpu: &Gpu, timer: &mut GpuTimer) {
         ),
         &rows,
     );
+}
+
+/// A dialog fading in over the editor: a frosted panel blurring what is
+/// under it, a title and two buttons, at a new opacity every frame. The
+/// quad pass keeps the panel's blur and its group and draws the window
+/// again with them; `GpuRenderer` replays the editor under the blur every
+/// frame.
+fn modal(gpu: &Gpu, timer: &mut GpuTimer) {
+    let ink = Color::srgb(0.95, 0.95, 0.97);
+    let dialog = |opacity: f32| {
+        let button = |label: &str, x: f64| {
+            stack![text(label).text_size(15.).fill(ink).at(22., 8.)]
+                .size(110., 34.)
+                .radius(8.)
+                .fill(Color::srgba(1., 1., 1., 0.14))
+                .at(x, 150.)
+        };
+        stack![
+            text("Discard changes to this patch?")
+                .text_size(20.)
+                .fill(ink)
+                .at(28., 40.),
+            button("Cancel", 160.),
+            button("Discard", 290.),
+        ]
+        .size(420., 210.)
+        .radius(16.)
+        .fill(Color::srgba(0.08, 0.09, 0.12, 0.55))
+        .stroke(Color::srgba(1., 1., 1., 0.12))
+        .shadow(Shadow::soft(24.))
+        .backdrop_blur(18.)
+        .opacity(opacity)
+        .at(430., 295.)
+    };
+    let under = under_menu(&editor_frames(1, false)[0]);
+    let size = Size::new(f64::from(W), f64::from(H));
+    let frames: Vec<ResolvedScene> = (0..WARM + N)
+        .map(|i| {
+            let over =
+                stack![dialog(0.3 + 0.7 * (i % 30) as f32 / 29.)].size(size.width, size.height);
+            let mut spec = SceneSpec::new(over).offered(size);
+            spec.font = Some(HACK.clone());
+            let over = mui_scene::resolve(&spec).expect("dialog");
+            let mut scene = under.clone();
+            scene.paint.extend(over.paint.iter().map(|p| {
+                let mut p = p.clone();
+                p.key = format!("/modal{}", p.key).into();
+                p
+            }));
+            scene
+        })
+        .collect();
+    let coverage = classify(&frames[0].paint);
+    assert!(coverage.complete(), "modal: {coverage:?}");
+    let id = Affine::IDENTITY;
+    let (qv, vv) = (gpu.target(), gpu.target());
+    let (mut quad, mut vello) = (gpu.quad(), gpu.vello());
+    pngs_to(gpu, &frames[20], "-modal", &mut quad, &mut vello);
+    let mut rows = Vec::new();
+    let mut passes = std::collections::BTreeMap::<usize, usize>::new();
+    let jobs = both(
+        |i| {
+            let drew = gpu.quad_frame(&mut quad, &frames[i], id, &qv);
+            *passes.entry(quad.frame().passes).or_default() += 1;
+            drew
+        },
+        |i| vello_frame(&mut vello, &frames[i], id, &vv),
+    );
+    rounds(gpu, timer, "modal fading", jobs, WARM, N, &mut rows);
+    table(
+        &format!(
+            "modal over editor: {} entries, a blurred dialog fading in",
+            frames[0].paint.len()
+        ),
+        &rows,
+    );
+    note("modal fading", quad.frame());
+    println!("  quad modal fading, frames by passes drawn: {passes:?}");
 }
