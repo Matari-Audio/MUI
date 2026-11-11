@@ -161,14 +161,23 @@ fn rounded(q: vec2<f32>, r: vec4<f32>, radius: f32, ji: vec4<f32>) -> f32 {
     if r.z <= r.x || r.w <= r.y {
         return 0.0;
     }
+    // Most fragments sit a pixel or more inside every edge, where each
+    // `edge` below would return exactly 1: a pixel reaches at most `reach`
+    // local units from its centre (0.71 of the inverse map's Frobenius norm
+    // bounds half its diagonal), so skip the edge maths there.
+    let reach = 0.71 * sqrt(dot(ji, ji));
+    let d = min(q - r.xy, r.zw - q);
+    let centre = clamp(q, r.xy + vec2<f32>(radius), r.zw - vec2<f32>(radius));
+    let v = q - centre;
+    if min(d.x, d.y) >= reach && (radius <= 0.0 || v.x == 0.0 || v.y == 0.0 || length(v) <= radius - reach) {
+        return 1.0;
+    }
     let sx = clamp(edge(q.x - r.x, vec2<f32>(1.0, 0.0), ji) + edge(r.z - q.x, vec2<f32>(1.0, 0.0), ji) - 1.0, 0.0, 1.0);
     let sy = clamp(edge(q.y - r.y, vec2<f32>(0.0, 1.0), ji) + edge(r.w - q.y, vec2<f32>(0.0, 1.0), ji) - 1.0, 0.0, 1.0);
     let box = sx * sy;
     if radius <= 0.0 {
         return box;
     }
-    let centre = clamp(q, r.xy + vec2<f32>(radius), r.zw - vec2<f32>(radius));
-    let v = q - centre;
     if v.x == 0.0 || v.y == 0.0 {
         return box;
     }
