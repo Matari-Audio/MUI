@@ -152,7 +152,7 @@ pub struct Control {
 /// shared by the text and the accessible name.
 enum Kind {
     Slider(Id, Arc<str>, Dial),
-    Knob(Id, Arc<str>, Dial),
+    Knob(Id, Arc<str>, Dial, DialCache),
     Button(Id, Arc<str>),
     Toggle(Id, Arc<str>, bool),
     Drag(Id, Arc<str>, Dial),
@@ -239,7 +239,7 @@ impl Control {
     pub(crate) fn hide_matching_adjustment_label(mut self, setting_label: &str) -> Self {
         if matches!(
             &self.kind,
-            Kind::Slider(_, label, _) | Kind::Knob(_, label, _) if label.as_ref() == setting_label
+            Kind::Slider(_, label, _) | Kind::Knob(_, label, _, _) if label.as_ref() == setting_label
         ) {
             self.label_visible = false;
         }
@@ -376,7 +376,7 @@ impl Control {
         let label_visible = self.label_visible;
         let el = match self.kind {
             Kind::Slider(id, label, d) => slider_el(look, id, label, d, label_visible),
-            Kind::Knob(id, label, d) => knob_el(look, id, label, d, label_visible),
+            Kind::Knob(id, label, d, cache) => knob_el(look, id, label, d, &cache, label_visible),
             Kind::Button(id, label) => button_el(look, id, label),
             Kind::Toggle(id, label, on) => toggle_el(look, id, label, on),
             Kind::Drag(id, label, d) => drag_el(look, id, label, d),
@@ -621,13 +621,29 @@ pub fn knob(
     // the whole face is the target and 120 px of vertical drag sweeps the
     // range whatever the diameter, so a small knob is not a twitchy one.
     let dial = Dial::read(ui, &id, value, &range, 120.0, true);
+    // The painted dial is three ~50-point paths; a still knob reuses them.
+    let cache = ui.stash::<DialCache>(&id).cloned().unwrap_or_else(|| {
+        let c = DialCache::new();
+        ui.set_stash(&id, Some(c.clone()));
+        c
+    });
     Response {
         changed: moved(before, *value),
-        el: Control::new(ui, Kind::Knob(id, label.into(), dial)),
+        el: Control::new(ui, Kind::Knob(id, label.into(), dial, cache)),
     }
 }
 
-fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
+/// What a knob's painted dial reads: its sweep, colour and stroke width.
+type DialCache = CanvasCache<(u64, Fill, u64)>;
+
+fn knob_el(
+    look: &Look,
+    id: Id,
+    label: Arc<str>,
+    d: Dial,
+    cache: &DialCache,
+    label_visible: bool,
+) -> El {
     // The macro grammar: a quiet inner disc, a 270-degree value arc and the
     // formatted reading in its centre. The square keeps one size across
     // values; units get a second centered line inside the same compact face.
@@ -638,7 +654,8 @@ fn knob_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -
     });
     let amount = d.t;
     let width = look.px / 16.;
-    let paint = canvas(move |size| {
+    let key = (amount.to_bits(), active.clone(), width.to_bits());
+    let paint = canvas_keyed(cache, key, move |size| {
         let center = Point::new(size.width * 0.5, size.height * 0.5);
         let radius = size.width.min(size.height) * 0.42;
         let arc = |amount: f64| {

@@ -2195,6 +2195,7 @@ dependencies = [
  "mui-text",
  "mui-weld",
  "rustc-hash 2.1.3",
+ "smallvec",
  "ttf-inter",
 ]
 

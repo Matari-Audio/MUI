@@ -10,19 +10,8 @@ use super::outline::OutlineCache;
 use super::{SceneError, SceneSpec, TextGlyph};
 use crate::{Content, Element, Theme};
 
-pub(super) enum Lines<'t> {
-    One([Cow<'t, str>; 1]),
-    Many(Vec<Cow<'t, str>>),
-}
-impl<'t> std::ops::Deref for Lines<'t> {
-    type Target = [Cow<'t, str>];
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::One(line) => line,
-            Self::Many(lines) => lines,
-        }
-    }
-}
+/// A label's lines; most labels wrap to a handful, so they stay inline.
+pub(super) type Lines<'t> = smallvec::SmallVec<[Cow<'t, str>; 4]>;
 
 /// One shaped string, kept in [`TextState`] while the font stays the same.
 #[derive(Debug, Clone)]
@@ -345,7 +334,7 @@ impl<'a> Runs<'a> {
         max: f64,
         cap: Option<usize>,
     ) -> Lines<'t> {
-        let one = || Lines::One([Cow::Borrowed(text)]);
+        let one = || smallvec::smallvec![Cow::Borrowed(text)];
         if max.is_nan()
             || max <= 0.0
             || (self.measure(text, face).width <= max + 0.5 && !text.contains('\n'))
@@ -388,7 +377,7 @@ impl<'a> Runs<'a> {
             return one();
         };
         *seen = generation;
-        let mut out: Vec<Cow<'t, str>> = ranges
+        let mut out: Lines<'t> = ranges
             .iter()
             .map(|r| Cow::Borrowed(text[r.clone()].trim_end()))
             .collect();
@@ -403,7 +392,7 @@ impl<'a> Runs<'a> {
         if out.is_empty() {
             out.push(Cow::Borrowed(""));
         }
-        Lines::Many(out)
+        out
     }
     /// A wrapped label's height. Every line has the one pitch its face sets,
     /// whatever its text, so no line is shaped to find it.
