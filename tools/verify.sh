@@ -17,7 +17,7 @@ python3 tools/test_verify.py
 python3 -m unittest discover -s tools/ci
 cargo fmt --all -- --check
 fi
-# Every workspace feature is additive (mui-vello's cpu/gpu-quad/vello-classic backends and
+# Every workspace feature is additive (mui-vello's cpu/gpu-quad backends and
 # their facade forwards), so one all-features surface covers test, lint and wasm.
 if on root-test; then
 cargo test --workspace --all-features --locked --offline
@@ -34,7 +34,6 @@ cargo clippy --workspace --all-features --all-targets --locked --offline -- -D w
 cargo clippy -p mui-vello --no-default-features --all-targets --locked --offline -- -D warnings
 cargo clippy -p mui-vello --no-default-features --features cpu --all-targets --locked --offline -- -D warnings
 cargo clippy -p mui-vello --no-default-features --features gpu-quad --all-targets --locked --offline -- -D warnings
-cargo clippy -p mui-vello --no-default-features --features vello-classic --all-targets --locked --offline -- -D warnings
 # mui-preview is a native dev host: it owns a winit event loop and a wgpu
 # surface, neither of which this gate can build for wasm. The wasm claim is
 # about the library crates; drop the --exclude once the preview grows a

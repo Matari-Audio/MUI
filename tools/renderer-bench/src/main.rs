@@ -2,11 +2,9 @@
 use anyhow::{Context, Result, ensure};
 use serde_json::json;
 use std::{fs::File, io::Write, time::Instant};
-#[cfg(feature = "classic")]
-mod classic;
 #[cfg(feature = "vello-cpu")]
 mod cpu;
-#[cfg(any(feature = "classic", feature = "vello-gpu"))]
+#[cfg(feature = "vello-gpu")]
 mod gpu;
 #[cfg(feature = "gpui")]
 mod gpui;
@@ -36,7 +34,7 @@ impl Shape {
         }
     }
 }
-#[cfg(any(feature = "classic", feature = "vello-cpu"))]
+#[cfg(feature = "vello-cpu")]
 fn path(points: &[[f64; 2]]) -> kurbo::BezPath {
     let mut path = kurbo::BezPath::new();
     path.move_to((points[0][0], points[0][1]));
@@ -95,8 +93,6 @@ fn fixture(workload: &str, scale: f64, phase: f64) -> Vec<Shape> {
 }
 
 enum Renderer {
-    #[cfg(feature = "classic")]
-    Classic(classic::Renderer),
     #[cfg(feature = "vello-gpu")]
     Hybrid(hybrid::Renderer),
     #[cfg(feature = "vello-cpu")]
@@ -109,8 +105,6 @@ enum Renderer {
 impl Renderer {
     fn new(name: &str, w: u32, h: u32) -> Result<Self> {
         Ok(match name {
-            #[cfg(feature = "classic")]
-            "classic" => Self::Classic(pollster::block_on(classic::Renderer::new(w, h))?),
             #[cfg(feature = "vello-gpu")]
             "vello-gpu" => Self::Hybrid(pollster::block_on(hybrid::Renderer::new(w, h))?),
             #[cfg(feature = "vello-cpu")]
@@ -124,8 +118,6 @@ impl Renderer {
     }
     fn draw(&mut self, shapes: &[Shape]) -> Result<Vec<u8>> {
         match self {
-            #[cfg(feature = "classic")]
-            Self::Classic(r) => r.draw(shapes),
             #[cfg(feature = "vello-gpu")]
             Self::Hybrid(r) => r.draw(shapes),
             #[cfg(feature = "vello-cpu")]

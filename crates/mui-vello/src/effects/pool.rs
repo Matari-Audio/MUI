@@ -30,7 +30,7 @@ pub struct EffectStats {
     pub effect_draws: u64,
     pub effect_pixels: u64,
     pub encoded_scenes: u64,
-    /// Vello render passes recorded: 0 on a frame that left the target as
+    /// Quad render passes recorded: 0 on a frame that left the target as
     /// the previous one did.
     pub renders: u64,
     /// The pixels those renders drew of the frame: all of it, or the box

@@ -12,7 +12,7 @@ on:
       - .github/actions/native-setup/**
       - tools/ci/ui.py
       - crates/mui-vello/**
-      - vendor/vello*/**
+      - vendor/vello_cpu/**
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -27,7 +27,7 @@ on:
       - .github/actions/native-setup/**
       - tools/ci/ui.py
       - crates/mui-vello/**
-      - vendor/vello*/**
+      - vendor/vello_cpu/**
       - Cargo.toml
       - Cargo.lock
       - rust-toolchain.toml
@@ -56,7 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [classic, vello-gpu, vello-cpu, skia-cpu, gpui]
+        engine: [vello-gpu, vello-cpu, skia-cpu, gpui]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -151,7 +151,7 @@ jobs:
         if: always()
         run: |
           failed=0
-          for engine in classic vello-gpu vello-cpu skia-cpu gpui; do
+          for engine in vello-gpu vello-cpu skia-cpu gpui; do
             binary="binaries/renderer-$engine/mui-renderer-bench"
             build_status=failure
             if [ -f "$binary" ]; then

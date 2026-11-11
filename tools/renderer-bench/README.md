@@ -47,8 +47,8 @@ rows. Its `cold` case recreates UI state, not the GPU device; startup is printed
 separately. No renderer migration should be decided from software-only rows.
 
 To build one candidate independently, use `cargo build --release --manifest-path
-tools/renderer-bench/Cargo.toml --no-default-features --features classic` (or
-`vello-gpu`, `vello-cpu`, `skia-cpu`, `gpui`). To reproduce on real hardware after a CI build, use the artifact binary and
-run `mui-renderer-bench classic controls 1 results`. Repeat for `vello-gpu`,
+tools/renderer-bench/Cargo.toml --no-default-features --features vello-gpu` (or
+`vello-cpu`, `skia-cpu`, `gpui`). To reproduce on real hardware after a CI build, use the artifact binary and
+run `mui-renderer-bench vello-gpu controls 1 results`. Repeat for
 `vello-cpu`, `skia-cpu`, and the separately built `gpui` binary. Preserve the
 actual selected adapter from stderr and record concurrent machine load.

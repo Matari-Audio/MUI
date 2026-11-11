@@ -2,7 +2,8 @@
 //! the weld pass into its pool texture, in the weld's slot of the paint
 //! list; and a host texture registered under a key. Neither has a CPU
 //! reference (`crate::paint` refuses external material), so the checks are
-//! reference-free, and the weld is also compared with classic Vello.
+//! reference-free: the target against the weld's own texture, texel for
+//! pixel, edges included (this replaced a comparison with classic Vello).
 #![cfg(all(feature = "gpu-quad", feature = "cpu"))]
 
 mod quad_support;
@@ -129,11 +130,23 @@ fn a_weld_paints_its_texture_in_its_slot() {
                 continue;
             }
             let texel = at(&texels, texture.width(), x, y);
+            let got = at(&px, SIZE[0], dx, dy);
             if texel[3] < 255 {
+                // An antialiased edge: the premultiplied texel over what
+                // is under it (the orange block, or the cleared target).
+                let orange = (30..90).contains(&dx) && (20..180).contains(&dy);
+                let under = if orange { [230., 153., 26., 255.] } else { [0.; 4] };
+                let keep = f64::from(255 - texel[3]) / 255.;
+                for c in 0..4 {
+                    let want = f64::from(texel[c]) + under[c] * keep;
+                    assert!(
+                        (f64::from(got[c]) - want).abs() <= 3.,
+                        "edge texel {texel:?} at ({dx}, {dy}) channel {c}: {got:?}"
+                    );
+                }
                 continue;
             }
             covered += 1;
-            let got = at(&px, SIZE[0], dx, dy);
             let off = got
                 .iter()
                 .zip(texel)
@@ -160,57 +173,6 @@ fn a_weld_paints_its_texture_in_its_slot() {
     if let Some(error) = pollster::block_on(scope.pop()) {
         panic!("wgpu validation: {error}");
     }
-}
-
-/// The same scene through classic Vello (`VelloRenderer`), which copies the weld's texture
-/// into Vello's atlas and samples it there.
-#[cfg(feature = "vello-classic")]
-#[test]
-fn a_weld_matches_classic_vello() {
-    let Some((device, queue)) = device_with(|adapter| adapter) else {
-        return;
-    };
-    let scene = welded(true);
-    let mut quad = QuadRenderer::new(&device, FORMAT);
-    let mut pool =
-        pollster::block_on(WeldTextures::new(&device, &queue, Budget::default())).expect("pool");
-    let a = target(&device);
-    let view = a.create_view(&wgpu::TextureViewDescriptor::default());
-    quad.render_scene(
-        &device,
-        &queue,
-        &scene,
-        &mut pool,
-        Affine::IDENTITY,
-        &view,
-        SIZE,
-    )
-    .expect("quad");
-    let got = readback(&device, &queue, &a, SIZE);
-    let mut vello = pollster::block_on(mui_vello::effects::VelloRenderer::new(
-        &device,
-        &queue,
-        FORMAT,
-        SIZE,
-        Budget::default(),
-    ))
-    .expect("VelloRenderer");
-    let b = target(&device);
-    let view = b.create_view(&wgpu::TextureViewDescriptor::default());
-    vello
-        .render(&scene, Affine::IDENTITY, &view)
-        .expect("vello");
-    let want = readback(&device, &queue, &b, SIZE);
-    let diff: Vec<u8> = got.iter().zip(&want).map(|(a, b)| a.abs_diff(*b)).collect();
-    let worst = diff.iter().copied().max().unwrap_or(0);
-    let mean = diff.iter().map(|&v| f64::from(v)).sum::<f64>() / diff.len() as f64;
-    println!("PIXELS weld vs GpuRenderer max={worst} mean={mean:.4}");
-    let dir = out_dir();
-    save(&dir.join("weld-quad.png"), SIZE, &got);
-    save(&dir.join("weld-vello.png"), SIZE, &want);
-    // Measured on RADV: max 1, mean 0.0003; square blocks and a texture
-    // sampled a texel a pixel leave only u8 rounding.
-    assert!(worst <= 2 && mean <= 0.01, "max {worst}, mean {mean:.4}");
 }
 
 /// A host texture is sampled where it is, straight alpha premultiplied; an

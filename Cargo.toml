@@ -20,8 +20,6 @@ members = [
   "crates/mui-native-dialog",
   "crates/mui-symbols",
   "examples/gain-plugin",
-  "vendor/vello",
-  "vendor/vello_encoding",
 ]
 exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit", "vendor/accesskit_unix", "vendor/vello_cpu"]
 resolver = "2"
@@ -71,8 +69,7 @@ vello_cpu = { version = "0.3", path = "vendor/vello_cpu", default-features = fal
 unicode-segmentation = "1.13"
 truce = { version = "6.3", default-features = false }
 
-# Every member opts in with `[lints] workspace = true`. The vendored vello keeps
-# upstream's own table. Pedantic is a curated slice: the lints that catch a real
+# Every member opts in with `[lints] workspace = true`. Pedantic is a curated slice: the lints that catch a real
 # mistake or a real simplification, not the ones that argue about taste.
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

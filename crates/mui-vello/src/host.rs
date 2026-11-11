@@ -212,16 +212,15 @@ fn backend_order_for(windows: bool) -> [wgpu::Backends; 6] {
     ]
 }
 
-/// The surface size clamped to what a vello `Scene` holds (`u16`), or
-/// `None` when there is nothing to draw into: a minimised window reports
-/// 0x0, and configuring a zero-sized surface is invalid.
+/// The surface size, or `None` when there is nothing to draw into: a
+/// minimised window reports 0x0, and configuring a zero-sized surface is
+/// invalid. The device's texture limit is applied where the size is used.
 pub fn target_size(width: u32, height: u32) -> Option<(u32, u32)> {
-    let max = u32::from(u16::MAX);
-    (width > 0 && height > 0).then(|| (width.min(max), height.min(max)))
+    (width > 0 && height > 0).then_some((width, height))
 }
 
-/// MUI's alpha contract wants a non-sRGB UNORM target: vello writes sRGB
-/// values, and an `_Srgb` surface would encode them a second time.
+/// MUI's alpha contract wants a non-sRGB UNORM target: the renderer writes
+/// sRGB values, and an `_Srgb` surface would encode them a second time.
 pub fn surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
     formats.iter().copied().find(|f| {
         matches!(
@@ -975,7 +974,7 @@ impl Host {
     }
 
     /// Resize to `width` x `height` physical pixels, clamped to what the
-    /// device and a vello scene hold. Zero hides: presents skip until a
+    /// device holds. Zero hides: presents skip until a
     /// real size comes back.
     pub fn resize(&mut self, width: u32, height: u32) -> Result<(), HostError> {
         self.wanted = target_size(width, height);
@@ -1265,7 +1264,7 @@ mod tests {
             FailureClass::Transient
         );
         assert_eq!(
-            HostError::Render(crate::effects::Error::Busy).failure_class(),
+            HostError::Render(crate::effects::Error::Render("driver fault".into())).failure_class(),
             FailureClass::Transient
         );
     }
@@ -1332,10 +1331,10 @@ mod tests {
     }
 
     #[test]
-    fn sizes_clamp_and_zero_is_nothing_to_draw_into() {
+    fn zero_is_nothing_to_draw_into() {
         assert_eq!(target_size(0, 600), None);
         assert_eq!(target_size(800, 0), None);
-        assert_eq!(target_size(70_000, 600), Some((65_535, 600)));
+        assert_eq!(target_size(70_000, 600), Some((70_000, 600)));
     }
 
     #[test]
@@ -1398,7 +1397,7 @@ mod tests {
             FailureClass::Transient
         );
         assert_eq!(
-            HostError::Render(crate::effects::Error::Busy).failure_class(),
+            HostError::Render(crate::effects::Error::Render("driver fault".into())).failure_class(),
             FailureClass::Transient
         );
         assert_eq!(
