@@ -681,4 +681,4 @@ fault, so a green Windows check currently does not certify Windows rendering.
 Formatting, tests, clippy with warnings denied, and a wasm check of the
 library crates. `BENCHMARKS.md` is the frame budget of a synth-sized scene
 on `vello_cpu` and `GpuRenderer`, reproduced by
-`cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.
+`cargo run -p mui-vello --profile perf --features cpu,gpu-quad --example bench`.

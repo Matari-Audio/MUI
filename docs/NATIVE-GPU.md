@@ -2,9 +2,11 @@
 
 19 September 2026. Integration base: `a9cc11d232986fce8dfb1a12aa20afd7dcbb664e`.
 
-25 September 2026: the GPU path is classic Vello 0.10 (vendored) on wgpu 30,
-behind one retained renderer, `effects::GpuRenderer`. `vello_hybrid`,
-`HybridEffects`, `TiledEffects` and the `gpu_matrix` example are gone.
+11 November 2026: the GPU path is the instanced SDF quad pass
+(`mui_vello::quad`, feature `gpu-quad`) on wgpu 30, behind the one retained
+renderer, `effects::GpuRenderer`: no compute shaders, no storage buffers.
+Classic Vello survives only as `effects::VelloRenderer` behind `vello-classic`,
+for benches and comparisons, until `vendor/vello` is deleted.
 
 **Status: builds, passes its tests, and runs on a physical device.** The
 workspace builds and its test suite passes (including the Naga validation test
@@ -20,7 +22,7 @@ animation must not silently switch back to that per-pixel CPU implementation.
 ```
 El tree -> layout -> paint-ordered scene
                         |                   
-                        +-- ordinary paint ---------> retained Vello scene
+                        +-- ordinary paint ---------> quad pass instances
                         |
                         +-- ExternalWeld (local analytic spec)
                                  |
@@ -30,14 +32,22 @@ El tree -> layout -> paint-ordered scene
                                  |
                         persistent RGBA8 texture
                                  |
-              copied GPU-side into Vello's image atlas, sampled in its z slot
+              sampled in place by the quad pass, in its z slot
 ```
 
-Queue submissions per frame: `GpuRenderer::render` records the material
-passes, the Vello render and the present pass, and submits them. An
+Queue submissions per frame: `GpuRenderer::render` submits the material
+passes that changed, the quad pass into its retained frame texture (only the
+box of what changed, when entries changed in place) and the present pass. An
 unchanged frame into the view presented last submits nothing; into a new
 view (a swapchain) it is one present pass of the texture already holding
-the frame. Nothing is read back to the CPU.
+the frame. Nothing is read back to the CPU. A frame the pass refuses (see
+`quad::Reason`: vector paints, colour or bitmap glyphs, rotated text, a path
+clip inside a path clip, over-budget frames) is rasterised by `vello_cpu`,
+uploaded into the same frame texture and presented the same way;
+`GpuRenderer::fallback` counts it, and the next changed list is tried on the
+GPU again. A refused frame that also holds weld material is an error, and the
+host falls back to its CPU presenter. `render_with_overlay` (debug overlays)
+draws its frame on the CPU too.
 
 `Ui::gpu_welding()` selects the analytic backend for material welds; without
 a `Ui`, `SceneSpec::weld_backend(WeldBackend::AnalyticGpu)` does. The backend
@@ -85,11 +95,11 @@ refresh those dependent values explicitly when needed.
   re-renders nothing. Commit happens after queue submission, and aborts are
   explicit. Low-level callers must not mutate an effect
   twice in one submission or call commit before submission.
-- `GpuRenderer`: a classic Vello renderer on the host's device. An exactly
-  unchanged paint list and transform reuse the encoded `vello::Scene` and
-  the rendered texture. The material pass precedes sampling in the same
-  encoder. Retention helps only when the paint list really is identical: in
-  the `bench` editor with a knob turning it re-encodes 54 of 55 frames.
+- `GpuRenderer`: the quad pass on the host's device. An exactly unchanged
+  paint list and transform submit nothing; entries changed in place redraw
+  one device box (reported by `damage()`); a list whose length changed, or a
+  new transform, redraws whole. Material passes are submitted before the quad
+  pass samples them.
 - `GpuTimer`: an optional, standalone four-slot asynchronous timestamp ring.
 - The native gallery host (`mui-preview`) plus the `gpu_welding` windowed example.
   Resize preserves pipelines. Surface loss recreates the surface. Device loss
@@ -148,14 +158,16 @@ Border bands near a smooth join are approximate field offsets, not certified
 Euclidean parallel offsets.
 
 Whole-group translation can reuse local texture contents, but changes the
-placement encoding. Morph-only updates reuse layout, texture allocation and
-the Vello encoding. A normal `Ui::frame` STILL walks/resolves the immediate tree.
+placement. Morph-only updates reuse layout and texture allocation, and redraw
+only the weld's box. A normal `Ui::frame` STILL walks/resolves the immediate tree.
 There is no automatic fine-grained reactive dependency graph, subtree layout
 retention, arbitrary-path distance-tile cache or generic static-layer atlas here.
 The retained cache stores an exact copy of one paint list; it is not a bounded
 history of every scene ever shown.
 
-The high-level renderer currently supports non-sRGB RGBA8/BGRA8 UNORM output.
+The high-level renderer supports non-sRGB RGBA8/BGRA8 UNORM output; its frame
+is premultiplied sRGB-encoded RGBA8, presented premultiplied or, for a
+`PostMultiplied` surface, straight.
 Its effect texture contains premultiplied sRGB-encoded values, written by the
 single `fs_hybrid` entry point. Do not assume an sRGB attachment works
 without further changes.
@@ -192,31 +204,21 @@ Its current pixel assertions are targeted, not exhaustive CPU/GPU parity.
 
 ## Measurement
 
-The whole-editor comparison is the `bench` example:
-`cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench`.
-It has `vello_cpu` and `GpuRenderer` rows. On an RX 6600 (release build,
-25 September 2026), median frame totals were:
-
-| case | vello_cpu | GpuRenderer |
-|---|---|---|
-| cold | 11.3 ms | 8.9 ms |
-| static | 4.6 ms | 1.7 ms |
-| one knob turning | 4.4 ms | 4.2 ms |
-| fresh image | 4.6 ms | 4.4 ms |
-
-`render` for `GpuRenderer` is the wait for the GPU after `render` returns;
-it is not presented latency or FPS. Window scheduling, input-to-display,
-power/thermals, real audio underruns and multiple plugin instances remain
-unmeasured.
+The whole-editor comparison is the `bench` example
+(`cargo run -p mui-vello --profile perf --features gpu-quad --example bench`,
+`vello_cpu` and `GpuRenderer` rows) and, against classic Vello,
+`quad_bench` (`--features vello-classic`): the bare quad pass, the wired
+`GpuRenderer` and `VelloRenderer` on the same paint lists. See
+`BENCHMARKS.md` for numbers; they are CPU-side and GPU-span timings on one
+RX 6600 (RADV/Vulkan), not presented latency, and power, thermals, real
+audio underruns and integrated GPUs remain unmeasured.
 
 ## Upstream contracts checked
 
-- https://docs.rs/vello/0.11.0/vello/struct.Renderer.html
-- https://docs.rs/vello/0.11.0/vello/struct.Scene.html
 - https://github.com/gfx-rs/wgpu/tree/v30.0.1/wgpu/src/api
 
-`vello` 0.11 is vendored under `vendor/vello`, with MUI retained rendering
-patches preserved on upstream wgpu 30. CPU/common use 0.3 and glifo uses 0.4.
+`vello_cpu`/`vello_common` 0.3 and glifo 0.4 rasterise glyph masks and the
+CPU frames.
 CPU PNG glyph decoding is enabled for bitmap-font parity; fallible glyph draws
 propagate through the additive `Canvas::try_glyphs` path.
 Cargo --locked remains authoritative; do not invent or
@@ -238,15 +240,16 @@ or backing off; `Some(Err(error))` records a failure and its retry class;
 of any device-bound texture producers. `deadline()` describes retry backoff;
 `pending()` allows the native scheduler to poll active initialization.
 
-The surface factory runs on the owning GUI thread only after the compute
-context and per-window resources are ready. Drop the CPU presenter immediately
+The surface factory runs on the owning GUI thread only after the shared
+device and per-window resources are ready. Drop the CPU presenter immediately
 before creating the GPU surface (especially before attaching CAMetalLayer).
 On an error after this handover, recreate the CPU presenter. Finish CPU startup
 quality when a permanent GPU failure selects software-only operation.
 
 Translucent Windows sessions select `DxgiFromVisual` before instance creation;
-HWND opaque sessions keep their ordinary swapchain. Their compute devices and
-pipelines are shared within each compatible presentation mode. Other platforms
+HWND opaque sessions keep their ordinary swapchain. Their devices, weld
+pipeline and pipeline cache are shared within each compatible presentation
+mode; each window builds its own quad and present pipelines. Other platforms
 share one context across alpha modes and select alpha per surface. Actual
 capability remains available through `Host::translucent()`, including opaque
 fallback where alpha is unavailable. Native OS blur remains the host's policy.

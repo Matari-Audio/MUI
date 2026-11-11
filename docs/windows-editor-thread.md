@@ -223,7 +223,7 @@ cargo fmt --all -- --check
 cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib windows_frame_state_tests
 cargo test -p mui --lib host::tests
 cargo test -p mui-vello --no-default-features --features cpu --lib
-cargo test -p mui-vello --features cpu,gpu-effects --lib
+cargo test -p mui-vello --features cpu,gpu-quad --lib
 cargo test -p mui-baseview -p mui-truce --lib
 cargo clippy -p mui-baseview -p mui-truce --all-targets -- -D warnings
 cargo check --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets
@@ -233,7 +233,7 @@ cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-
 xvfb-run -a cargo run -p mui-baseview --example worker_close_probe
 xvfb-run -a cargo run -p mui-baseview --example native_editor
 MUI_RENDERER=cpu MUI_EXPECT_SOFTWARE=1 xvfb-run -a cargo run -p mui-baseview --example native_editor
-cargo run --profile perf -p mui-vello --features cpu,gpu-effects --example bench
+cargo run --profile perf -p mui-vello --features cpu,gpu-quad --example bench
 ```
 
 Run the same final benchmark on baseline `b8799856add3ee77714bb785d29d042ad78d56dc`
@@ -253,7 +253,7 @@ Windows cross commands do not execute Windows binaries on Linux. On a **real
 Windows desktop** with MSVC available, also run:
 
 ```powershell
-cargo test -p mui-vello --features cpu,gpu-effects --lib
+cargo test -p mui-vello --features cpu,gpu-quad --lib
 cargo test -p mui-baseview -p mui-truce --lib
 cargo clippy -p mui-baseview -p mui-truce --all-targets -- -D warnings
 cargo run -p mui-baseview --example worker_close_probe

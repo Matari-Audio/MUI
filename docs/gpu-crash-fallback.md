@@ -96,11 +96,11 @@ Run serially from the worktree:
 
 ```sh
 cargo fmt --all -- --check
-cargo test -p mui-vello --features cpu,gpu-effects --lib host::crash_guard::tests
+cargo test -p mui-vello --features cpu,gpu-quad --lib host::crash_guard::tests
 cargo test -p mui-baseview --lib native_worker::gpu_recovery_tests
-cargo test -p mui-vello --features cpu,gpu-effects --lib host::
+cargo test -p mui-vello --features cpu,gpu-quad --lib host::
 cargo test -p mui-baseview -p mui-truce --lib
-cargo clippy -p mui-vello --features cpu,gpu-effects --all-targets -- -D warnings
+cargo clippy -p mui-vello --features cpu,gpu-quad --all-targets -- -D warnings
 cargo clippy -p mui-baseview -p mui-truce --all-targets -- -D warnings
 cargo clippy --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets -- -D warnings
 ```

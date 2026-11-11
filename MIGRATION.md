@@ -4,6 +4,74 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+GPU renderer: the quad pass replaces Vello. Plugin checklist, in order:
+
+1. Cargo features. `gpu-effects` is gone from `mui` and `mui-vello`; ask for
+   `gpu-quad`. Nothing else in a manifest changes (mui-truce and
+   mui-baseview turn it on themselves).
+
+   ```toml
+   # before
+   mui = { git = "…", rev = "…", features = ["gpu-effects"] }
+   # after
+   mui = { git = "…", rev = "…", features = ["gpu-quad"] }
+   ```
+
+   `cpu`, `software-window`, `test-support` and `reporting` are unchanged.
+   Only benches or pixel comparisons against Vello want the new
+   `vello-classic` (it pulls in `vendor/vello`; never ship it).
+2. Bump the `rev` and run `cargo update -p mui`. The lock loses `vello` and
+   `vello_encoding` (check: `cargo tree -i vello` finds nothing).
+3. Only if you call the renderer directly (`mui::vello::effects`,
+   `mui::vello::host`):
+   - `effects::GpuRenderer` is the quad pass with the same constructor,
+     `render`, `resize`, `invalidate`, `is_current`, `damage`,
+     `set_texture`/`remove_texture`. The Vello one is
+     `effects::VelloRenderer` behind `vello-classic`.
+   - Overlays draw through the `Canvas` trait (on the CPU, never retained):
+
+     ```rust
+     // before
+     host.present_with_overlay(scene, xf, |c: &mut mui::vello::Classic| draw(c))?;
+     renderer.render_with_overlay(scene, xf, view, |c: &mut Classic| draw(c))?;
+     // after
+     host.present_with_overlay(scene, xf, |c: &mut dyn mui::vello::Canvas| draw(c))?;
+     renderer.render_with_overlay(scene, xf, view, |c: &mut dyn Canvas| draw(c))?;
+     ```
+
+     `mui::vello::Classic` and `mui::vello::vello` exist only under
+     `vello-classic`.
+   - A texture handed to `set_texture` needs `TextureUsages::TEXTURE_BINDING`
+     (it was `COPY_SRC`).
+   - `effects::Error::Busy` is no longer returned without `vello-classic`;
+     a match arm for it still compiles.
+   - `EffectStats` counts differently: an unchanged list is 0 renders; an
+     in-place change redraws one box (the hull of all changes); inserting or
+     removing paint redraws the whole frame; `encoded_scenes` counts quad
+     frames, morphs included.
+   - New: `GpuRenderer::fallback() -> &Fallback { frames, last, active }`
+     counts frames the pass refused (vector paints, colour/bitmap glyphs,
+     rotated text, a path clip inside a path clip, over-budget frames) and
+     drew on `vello_cpu` instead; `quad_frame()`; `effects::PRESENT_SHADER`;
+     `quad::QuadRenderer::with_cache`, `quad::INSTANCE_SLOTS`;
+     `QuadRenderer::render_scene` returns `Result<EffectStats, _>` (was `Result<(), _>`).
+4. Behaviour, no code: the first GPU open after upgrading rebuilds the
+   pipeline cache (file `*-wgpu30-quad1-mui*.bin`). Adapters without compute
+   shaders now get the GPU; WARP still gets the CPU, with the message "WARP
+   shader compilation can crash; use CPU rendering" (update tests that match
+   the old text).
+
+Nothing changes for a plugin that reaches MUI only through `mui`'s widgets,
+`mui-truce` and `mui-baseview` beyond step 1 (and only if it named
+`gpu-effects`). Checked by: the diff of `crates/mui*/src` outside
+`mui-vello` since the stage began is empty (only five `Cargo.toml` feature
+lines changed); mui-winit's `present_with_overlay` already took
+`dyn Canvas`; and a grep of KURV, BUFFR, KONTRA, KORREKT and relay finds no
+`Classic`, `GpuRenderer`, `present_with_overlay`, `render_with_overlay`,
+`set_texture` or `mui::vello::vello` use. BUFFR (`Cargo.toml`,
+`crates/buffr-editor/Cargo.toml`) is the only one naming `gpu-effects`.
+Polaar was not found on this machine and is unchecked.
+
 Breaking (by hand):
 
 - mui-baseview and mui-truce run on

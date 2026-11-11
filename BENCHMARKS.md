@@ -10,7 +10,7 @@ there is no FPS column (see `docs/rendering-investigation.md`).
 `--features cpu,bench-classic` table, is history: measured while the GPU
 canvas was `vello_hybrid`. That backend is gone. The GPU path is now classic
 Vello (vendored at `vendor/vello`, wgpu 30) behind `effects::GpuRenderer`, and
-`bench` runs `vello_cpu` plus the `gpu-effects` rows. The old rows stay as
+`bench` runs `vello_cpu` plus the `gpu-quad` rows. The old rows stay as
 measured, not re-run.
 
 ## mui-weld CPU bake (2026-09-26)
@@ -119,8 +119,8 @@ for the same binary across runs), because the GPU was shared too.
 
 ```
 cargo run -p mui-scene --profile perf --example stress
-cargo run -p mui-vello --profile perf --features cpu,gpu-effects --example bench
-cargo run -p mui-vello --profile perf --features cpu-threads,gpu-effects --example bench
+cargo run -p mui-vello --profile perf --features cpu,gpu-quad --example bench
+cargo run -p mui-vello --profile perf --features cpu-threads,gpu-quad --example bench
 cargo test -p mui-preview --profile perf --test frame_cost -- --nocapture
 ```
 

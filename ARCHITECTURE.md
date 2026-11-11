@@ -77,8 +77,8 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |     roles  -> Palette                            ink resolves on its ground
    |     image  -> Fill::Image                        straight RGBA, fitted to
    |                                                  the node's own outline
-   |                                                  (vello_cpu: pixmap; GpuRenderer: a Vello
-   |                                                  image, or a registered texture)
+   |                                                  (vello_cpu: pixmap; GpuRenderer: a
+   |                                                  texture, or a registered one)
    |
    v  ResolvedScene         paint: Vec<Painted>  (shadows, fill, shells, stroke,
    |                        text, draws, clip/unclip); floats are appended after
@@ -96,14 +96,28 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        host's adapter; a disabled one says so and offers
    |                        no Focus action
    |
-   v  mui-vello paint       Canvas: Classic over a vello::Scene (GpuRenderer,
-                            wgpu 30), Cpu { ctx, resources, cache } over
-                            vello_cpu.
+   +--> mui-vello quad      GpuRenderer (wgpu 30): the list walked straight into
+   |                        instances of one SDF quad pipeline (rects, strokes,
+   |                        gradients, analytic shadows, clips, glyph-atlas
+   |                        text, images, paths from a data texture), drawn into
+   |                        a retained frame; layers, masks, backdrops, welds
+   |                        and host textures through offscreen targets only
+   |                        when present. No compute, no storage buffers. An
+   |                        unchanged list submits nothing; an in-place change
+   |                        redraws its box. One present pass puts the frame on
+   |                        the window. What it refuses (vector paints, colour
+   |                        glyphs, rotated text, a path clip in a path clip,
+   |                        over-budget frames) is drawn by vello_cpu into the
+   |                        same frame, counted in `GpuRenderer::fallback`.
+   |
+   v  mui-vello paint       Canvas: Cpu { ctx, resources, cache } over
+                            vello_cpu (CPU hosts, snapshots, the GPU's
+                            refused frames and debug overlays).
                             Fill / stroke / blurred rect / push_clip / pop_clip
                             / push_layer / pop_layer (blend mode + opacity),
                             and text as a hinted glyph run (a font blob is
                             interned by Font id in the renderer's Cache, so
-                            Vello's hinted-outline cache survives the frame).
+                            the hinted-outline cache survives the frame).
                             Paths convert arc-to-cubic every frame; caching
                             that saved ~0.08 ms and was deleted.
 ```
@@ -200,7 +214,10 @@ the solver knows nothing of style, so the edge points one way.
 `mui-vello`.
 
 `vendor/vello` is classic Vello 0.10 ported to wgpu 30 with MUI's patches
-(`vendor/vello/PATCHES.md`); `mui-vello`'s `gpu-effects` renders through it.
+(`vendor/vello/PATCHES.md`). Nothing ships on it any more: `mui-vello`'s
+`vello-classic` keeps it as `effects::VelloRenderer` for benches, comparison
+tests and mui-cut's classic engine, until it is deleted. `gpu-quad` is the GPU
+feature.
 
 ### media/: a second workspace
 
@@ -214,13 +231,14 @@ compiles them. `media/MOVED.md` lists their old paths.
 media/mui-reel            scripted, deterministic takes of a real editor
    |                      (over mui with `cpu`): video, audio, track, handoffs
    +--> media/mui-stage   GPU trailer stage: layers on lit 3D slabs, post
-                          (over mui-vello `gpu-effects`; wgpu backends on
+                          (over mui-vello `gpu-quad`; wgpu backends on
                           its default `backends` feature)
 media/mui-motion-bridge   a live editor as browser-transformable surfaces,
                           for `tools/film` (over mui, mui-vello `cpu`)
 media/mui-cut             keyframe motion editor: a *.cut.json project, a pure
                           evaluator, a render/still CLI and a WASM web editor
-                          (over mui-scene, mui-vello `cpu`; mui-reel's shutter)
+                          (over mui-scene, mui-vello `cpu` and, for its
+                          classic engine, `vello-classic`; mui-reel's shutter)
 ```
 
 `tools/film` is the JS/Python film pipeline driving `mui-motion-bridge`; it is
