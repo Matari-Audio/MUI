@@ -10,7 +10,7 @@ use quad_support::*;
 use mui_scene::prelude::*;
 use mui_scene::{Font, Image, Paint, Painted, ResolvedScene};
 use mui_vello::kurbo::Affine;
-use mui_vello::quad::QuadRenderer;
+use mui_vello::quad::{ATLAS_BUDGET as ATLAS, QuadRenderer};
 use std::sync::Arc;
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -245,4 +245,138 @@ fn atlas_eviction_under_a_kept_target_leaves_no_stale_glyph() {
     }
     assert!(partial > 60, "only {partial} partial frames");
     assert!(evicted, "the atlas never had to rasterise again");
+}
+
+/// One draw-list memo per knob, as a host keeps them: an unchanged knob
+/// hands back the same paths.
+type Memos = Vec<mui_scene::CanvasCache<u64>>;
+
+fn memos() -> Memos {
+    (0..8).map(|_| mui_scene::CanvasCache::new()).collect()
+}
+
+/// Knobs whose value arcs are `amounts`, over a star-clipped panel whose
+/// star has `points` points.
+fn knobs(memos: &Memos, amounts: &[f64], points: usize) -> ResolvedScene {
+    use std::f64::consts::PI;
+    let mut kids: Vec<El> = amounts
+        .iter()
+        .enumerate()
+        .map(|(i, &amount)| {
+            mui_scene::canvas_keyed(&memos[i], amount.to_bits(), move |s: Size| {
+                let c = Point::new(s.width / 2., s.height / 2.);
+                let arc = |sweep: f64| {
+                    Path::polyline(
+                        (0..=48).map(|k| {
+                            let a = 0.75 * PI + sweep * f64::from(k) / 48.;
+                            Point::new(c.x + a.cos() * 18., c.y + a.sin() * 18.)
+                        }),
+                        false,
+                    )
+                };
+                vec![
+                    Draw::stroke(arc(1.5 * PI), Color::srgba(1., 1., 1., 0.15), 3.),
+                    Draw::stroke(arc(1.5 * PI * amount), Color::srgba(0.3, 0.8, 1., 0.85), 3.),
+                ]
+            })
+            .size(46., 46.)
+            .id(format!("knob{i}"))
+            .at(6. + 50. * (i % 6) as f64, 6. + 50. * (i / 6) as f64)
+        })
+        .collect();
+    let star = move |s: Size| {
+        let c = Point::new(s.width / 2., s.height / 2.);
+        Path::polyline(
+            (0..2 * points).map(|i| {
+                let a = PI * i as f64 / points as f64;
+                let r = if i % 2 == 0 { 40. } else { 18. };
+                Point::new(c.x + a.cos() * r, c.y + a.sin() * r)
+            }),
+            true,
+        )
+    };
+    kids.push(
+        stack![
+            block(120., 20.).radius(0.).fill(Color::srgb(0.9, 0.3, 0.2)).at(-10., 20.),
+            block(40., 40.).radius(8.).fill(Color::srgb(0.2, 0.8, 0.4)).at(30., 40.),
+        ]
+        .size(90., 90.)
+        .outline(star)
+        .fill(Color::srgb(0.2, 0.25, 0.4))
+        .clip()
+        .at(220., 100.),
+    );
+    let spec = SceneSpec::new(ground(kids)).offered(Size::new(W, H));
+    mui_scene::resolve(&spec).expect("resolves")
+}
+
+#[test]
+fn a_kept_target_matches_a_whole_redraw_after_path_changes() {
+    let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
+        return;
+    };
+    let scope = k.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let id = Affine::IDENTITY;
+    let m = memos();
+    let mut amounts: Vec<f64> = (0..8).map(|i| f64::from(i) / 8.).collect();
+    k.check("paths first", &knobs(&m, &amounts, 5).paint, id);
+    assert!(k.quad.frame().paths_built > 0);
+
+    // The same scene, resolved again: nothing drawn, nothing built.
+    k.check("paths unchanged", &knobs(&m, &amounts, 5).paint, id);
+    assert!(!k.quad.frame().drawn, "{:?}", k.quad.frame());
+
+    // One knob turning, in the middle of the list: a partial frame that
+    // builds only that knob's two arcs, and the star (resolved afresh each
+    // frame here, so its outline is a new, equal path).
+    for step in 0..5 {
+        amounts[3] = 0.1 + 0.2 * f64::from(step);
+        k.check(&format!("knob turn {step}"), &knobs(&m, &amounts, 5).paint, id);
+        let frame = k.quad.frame();
+        let damage = frame.damage.expect("a partial frame");
+        assert!(damage[2] * damage[3] < SIZE[0] * SIZE[1] / 8, "{damage:?}");
+        assert!(frame.paths_built <= 3, "{frame:?}");
+    }
+
+    // The path clip changes: a whole redraw.
+    k.check("clip changed", &knobs(&m, &amounts, 7).paint, id);
+    assert_eq!(k.quad.frame().damage, None);
+    let back = knobs(&m, &amounts, 5);
+    k.check("clip back", &back.paint, id);
+
+    // The same list scrolled by a fraction: records are kept, only placed
+    // anew.
+    k.check("paths scrolled", &back.paint, Affine::translate((0.37, 1.61)));
+    assert_eq!(k.quad.frame().paths_built, 0, "{:?}", k.quad.frame());
+    if let Some(error) = pollster::block_on(scope.pop()) {
+        panic!("wgpu validation: {error}");
+    }
+}
+
+/// A path texture with room for only a few records: knobs turning in turn
+/// reuse the space of records no longer drawn, a frame that needs more
+/// than fits empties it and builds again, and the kept target never shows
+/// a stale or missing arc.
+#[test]
+fn path_eviction_under_a_kept_target_leaves_no_stale_arc() {
+    // Twelve rows of 256 texels: one frame's 17 records and little more.
+    let Some(mut k) = Kept::new(|d| QuadRenderer::with_budgets(d, FORMAT, ATLAS, 12 * 256 * 16))
+    else {
+        return;
+    };
+    let id = Affine::IDENTITY;
+    let m = memos();
+    let mut amounts: Vec<f64> = (0..8).map(|i| f64::from(i) / 8.).collect();
+    let (mut partial, mut built) = (0, 0);
+    for i in 0..30 {
+        amounts[i % 8] = (amounts[i % 8] + 0.37) % 1.;
+        k.check(&format!("evict {i}"), &knobs(&m, &amounts, 5).paint, id);
+        let frame = k.quad.frame();
+        partial += usize::from(frame.damage.is_some());
+        built += frame.paths_built;
+        assert!(frame.path_bytes <= 12 * 256 * 16, "{frame:?}");
+    }
+    assert!(partial > 20, "only {partial} partial frames");
+    // Far more records than the texture holds were built: space was reused.
+    assert!(built > 50, "only {built} records built");
 }
