@@ -92,18 +92,14 @@ fn blends(scale: f64) -> ResolvedScene {
         Multiply, Screen, Overlay, Darken, Lighten, ColorDodge, ColorBurn, HardLight, SoftLight,
         Difference, Exclusion, Hue, Saturation, Color, Luminosity,
     ];
-    let mut kids = vec![
-        block(W, H)
-            .radius(0.)
-            .fill(Gradient::linear(
-                90.,
-                [
-                    (0., rgba(0.9, 0.2, 0.1, 1.)),
-                    (0.5, rgba(0.2, 0.8, 0.4, 1.)),
-                    (1., rgba(0.1, 0.2, 0.9, 1.)),
-                ],
-            )),
-    ];
+    let mut kids = vec![block(W, H).radius(0.).fill(Gradient::linear(
+        90.,
+        [
+            (0., rgba(0.9, 0.2, 0.1, 1.)),
+            (0.5, rgba(0.2, 0.8, 0.4, 1.)),
+            (1., rgba(0.1, 0.2, 0.9, 1.)),
+        ],
+    ))];
     for (i, m) in modes.into_iter().enumerate() {
         let (x, y) = (8. + 62. * (i % 5) as f64, 8. + 64. * (i / 5) as f64);
         kids.push(
@@ -260,7 +256,13 @@ fn layers_match_vello_cpu() {
         (6., corners(25, 0.21)),
         (12., corners(24, 0.24)),
     ] {
-        compare(&mut gpu, f, &format!("backdrop{blur}"), limit, backdrops(blur));
+        compare(
+            &mut gpu,
+            f,
+            &format!("backdrop{blur}"),
+            limit,
+            backdrops(blur),
+        );
     }
     compare(&mut gpu, f, "fading", corners(28, 0.28), fading);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
@@ -305,7 +307,10 @@ fn known_answers() {
                 for x in (0..size[0]).step_by(3) {
                     let got = at(&px, size[0], x, y);
                     let off = got.iter().zip(want).map(|(a, b)| a.abs_diff(b)).max();
-                    assert!(off <= Some(1), "blur {blur} at {scale}x, ({x}, {y}): {got:?} vs {want:?}");
+                    assert!(
+                        off <= Some(1),
+                        "blur {blur} at {scale}x, ({x}, {y}): {got:?} vs {want:?}"
+                    );
                 }
             }
         }
@@ -330,11 +335,19 @@ fn known_answers() {
         for (x, y) in [(60, 60), (100, 100), (140, 140)] {
             let got = at(&px, size[0], x, y);
             assert!(
-                (127..=128).contains(&got[0]) && got[0] == got[1] && got[1] == got[2] && got[3] == 255,
+                (127..=128).contains(&got[0])
+                    && got[0] == got[1]
+                    && got[1] == got[2]
+                    && got[3] == 255,
                 "{name} at ({x}, {y}): {got:?}"
             );
         }
-        assert_eq!(gpu.quad.frame().passes, passes, "{name}: {:?}", gpu.quad.frame());
+        assert_eq!(
+            gpu.quad.frame().passes,
+            passes,
+            "{name}: {:?}",
+            gpu.quad.frame()
+        );
     }
     let gone = half(vec![block(100., 100.).radius(0.).fill(white)], 0.);
     let px = gpu_pixels(&mut gpu, &gone.paint, Affine::IDENTITY, size);
@@ -345,7 +358,8 @@ fn known_answers() {
 /// The layer entries these scenes produce are the ones under test.
 #[test]
 fn the_scenes_hold_the_layers_under_test() {
-    let count = |s: &ResolvedScene, f: fn(&Layer) -> bool| s.paint.iter().filter(|p| f(&p.layer)).count();
+    let count =
+        |s: &ResolvedScene, f: fn(&Layer) -> bool| s.paint.iter().filter(|p| f(&p.layer)).count();
     assert_eq!(count(&opacity(1.), |l| matches!(l, Layer::Blend { .. })), 2);
     assert_eq!(count(&blends(1.), |l| matches!(l, Layer::Blend { .. })), 15);
     assert_eq!(count(&mask(1.), |l| *l == Layer::Mask), 1);

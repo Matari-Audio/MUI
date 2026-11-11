@@ -85,7 +85,11 @@ impl Draw<'_> {
         let mut draws = 0;
         let mut atop_bound = None;
         for (k, r) in self.runs.iter().enumerate() {
-            let end = self.runs.get(k + 1).map_or(self.count, |n| n.start).min(upto);
+            let end = self
+                .runs
+                .get(k + 1)
+                .map_or(self.count, |n| n.start)
+                .min(upto);
             if end <= r.start || !keep(r) {
                 continue;
             }
@@ -302,9 +306,12 @@ impl Offscreen {
         let target = |id: u16| self.targets[usize::from(id)].as_ref().expect("a target");
         match under {
             None => target(id).group.clone(),
-            Some(u) => {
-                super::gpu::image_group(device, &self.image_layout, &target(id).view, &target(u).view)
-            }
+            Some(u) => super::gpu::image_group(
+                device,
+                &self.image_layout,
+                &target(id).view,
+                &target(u).view,
+            ),
         }
     }
 
@@ -355,7 +362,10 @@ impl Offscreen {
     /// what the box average and the composite's bilinear tent already add
     /// (variances `(s^2 - 1) / 12 s^2` and `1 / 6` texel squared), so the
     /// three together have the deviation asked for.
-    #[allow(clippy::too_many_arguments, reason = "one frame's state, passed through")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one frame's state, passed through"
+    )]
     fn backdrop(
         &mut self,
         device: &wgpu::Device,
@@ -393,7 +403,16 @@ impl Offscreen {
             used = low;
         }
         let across = self.take(device, low);
-        let at = slots.push([used[0] as f32, used[1] as f32, 1., 0., sigma, radius, 0., 0.]);
+        let at = slots.push([
+            used[0] as f32,
+            used[1] as f32,
+            1.,
+            0.,
+            sigma,
+            radius,
+            0.,
+            0.,
+        ]);
         self.blur_pass(device, encoder, &self.blur, &source, &across, low, at, draw);
         let out = self.targets[id].take().expect("a target");
         let at = slots.push([low[0] as f32, low[1] as f32, 0., 1., sigma, radius, 0., 0.]);
@@ -403,7 +422,10 @@ impl Offscreen {
         draws
     }
 
-    #[allow(clippy::too_many_arguments, reason = "one pass's state, passed through")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one pass's state, passed through"
+    )]
     fn blur_pass(
         &self,
         device: &wgpu::Device,
@@ -513,5 +535,7 @@ fn snapshot(
     over: &wgpu::RenderPipeline,
     atop: &wgpu::RenderPipeline,
 ) -> usize {
-    draw.runs(pass, over, Some(atop), s.upto, |r| s.sources.contains(&r.surface))
+    draw.runs(pass, over, Some(atop), s.upto, |r| {
+        s.sources.contains(&r.surface)
+    })
 }

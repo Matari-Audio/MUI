@@ -546,8 +546,16 @@ impl QuadRenderer {
         });
         let atlas = atlas_texture(device, u32::from(side as u16), 1);
         let path_rows = path_texture(device, 1);
-        let bind = view_group(device, &view_layout, &uniforms, &atlas, &path_rows, &sampler);
-        let blank = image_texture(device, 1, 1).create_view(&wgpu::TextureViewDescriptor::default());
+        let bind = view_group(
+            device,
+            &view_layout,
+            &uniforms,
+            &atlas,
+            &path_rows,
+            &sampler,
+        );
+        let blank =
+            image_texture(device, 1, 1).create_view(&wgpu::TextureViewDescriptor::default());
         let no_image = image_group(device, &image_layout, &blank, &blank);
         let mut cpu = Instances::new(side as u16, pages);
         cpu.walk.max_image = limits.max_texture_dimension_2d;
@@ -653,7 +661,10 @@ impl QuadRenderer {
     /// (the weld pass `GpuRenderer` uses) when it changed, and sampled
     /// straight from there in its slot. A weld that changed redraws its
     /// slot, and whatever samples it: a backdrop over it, a layer it is in.
-    #[allow(clippy::too_many_arguments, reason = "render's arguments and the weld pool")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "render's arguments and the weld pool"
+    )]
     pub fn render_scene(
         &mut self,
         device: &wgpu::Device,
@@ -714,7 +725,10 @@ impl QuadRenderer {
         done
     }
 
-    #[allow(clippy::too_many_arguments, reason = "render's arguments and the welds")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "render's arguments and the welds"
+    )]
     fn draw(
         &mut self,
         device: &wgpu::Device,
@@ -805,7 +819,11 @@ impl QuadRenderer {
         }
         self.bind_runs(device, queue);
         let layers = &self.cpu.layers;
-        let offscreen = layers.surfaces.iter().skip(1).any(|s| s.dirty && s.kind != Kind::Folded);
+        let offscreen = layers
+            .surfaces
+            .iter()
+            .skip(1)
+            .any(|s| s.dirty && s.kind != Kind::Folded);
         if damage.is_some_and(|d| d[2] == 0 || d[3] == 0) && !offscreen {
             // Changed entries that cover no pixel.
             if let Some(off) = &mut self.offscreen {
@@ -849,7 +867,13 @@ impl QuadRenderer {
             stamp: std::cell::Cell::new(self.timestamps.as_ref()),
         };
         let (passes, mut draws) = match &mut self.offscreen {
-            Some(off) => off.encode(device, &mut encoder, &self.cpu.layers, &draw, &mut self.slots),
+            Some(off) => off.encode(
+                device,
+                &mut encoder,
+                &self.cpu.layers,
+                &draw,
+                &mut self.slots,
+            ),
             None => (0, 0),
         };
         if damage.is_none_or(|d| d[2] > 0 && d[3] > 0) {
@@ -887,7 +911,9 @@ impl QuadRenderer {
                 pass.set_pipeline(&self.clear);
                 pass.draw(0..4, count as u32..count as u32 + 1);
             }
-            draws += draw.runs(&mut pass, &self.pipeline, None, u32::MAX, |r| r.surface == 0);
+            draws += draw.runs(&mut pass, &self.pipeline, None, u32::MAX, |r| {
+                r.surface == 0
+            });
             self.frame.passes = passes + 1;
         } else {
             self.frame.passes = passes;
@@ -970,15 +996,31 @@ impl QuadRenderer {
         if hit.iter().any(|&i| clip(&old[i]) || clip(&paint[i])) {
             return Ok(None);
         }
+        // A changed `Blend` changes pixels where its layer composites, at
+        // its `Unblend`: not under a backdrop inside it.
+        let mut closes = vec![0; paint.len()];
+        let mut open = Vec::new();
+        for (i, p) in paint.iter().enumerate() {
+            match p.layer {
+                Layer::Blend { .. } => open.push(i),
+                Layer::Unblend => closes[open.pop().unwrap_or(i)] = i,
+                _ => {}
+            }
+        }
         let boxes = &self.cpu.boxes;
         let mut damage: Vec<_> = hit
             .iter()
-            .map(|&i| (i, build::union(before[i], boxes[i])))
+            .map(|&i| {
+                let at = if closes[i] > i { closes[i] } else { i };
+                (at, build::union(before[i], boxes[i]))
+            })
             .collect();
         self.cpu
             .layers
             .propagate(&mut hit, &mut damage, boxes, &|i| before[i]);
-        let all = damage.iter().fold(build::EMPTY, |a, d| build::union(a, d.1));
+        let all = damage
+            .iter()
+            .fold(build::EMPTY, |a, d| build::union(a, d.1));
         Ok(partial(all, size))
     }
 
@@ -986,7 +1028,9 @@ impl QuadRenderer {
     /// texture set since, or a weld redrawn this frame.
     fn changed(&self, old: &[Painted], paint: &[Painted], touched: &[u64]) -> Vec<usize> {
         let samples = |p: &Painted| match &p.paint {
-            mui_scene::Paint::Image { image, .. } => image.texture.is_some_and(|k| touched.contains(&k)),
+            mui_scene::Paint::Image { image, .. } => {
+                image.texture.is_some_and(|k| touched.contains(&k))
+            }
             _ => p.layer == Layer::External && self.redrawn.iter().any(|k| **k == *p.key.as_ref()),
         };
         (0..paint.len())

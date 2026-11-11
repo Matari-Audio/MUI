@@ -521,7 +521,12 @@ impl Walk {
         let ky = f64::from(image.height) / f64::from(size[1]);
         out[9] = [tx as f32, ty as f32, (sx * kx) as f32, (sy * ky) as f32];
         let straight = matches!(drawn, Drawn::Host(_));
-        out[4] = [1., size[0] as f32, size[1] as f32, f32::from(u8::from(straight))];
+        out[4] = [
+            1.,
+            size[0] as f32,
+            size[1] as f32,
+            f32::from(u8::from(straight)),
+        ];
         Ok(Some(drawn))
     }
 

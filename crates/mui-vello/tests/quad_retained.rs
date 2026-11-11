@@ -394,3 +394,188 @@ fn path_eviction_under_a_kept_target_leaves_no_stale_arc() {
     // Far more records than the texture holds were built: space was reused.
     assert!(built > 50, "only {built} records built");
 }
+
+/// Stripes under a frosted modal fading in, as an editor under a dialog.
+/// `under` tints a stripe the modal's blur reaches, `away` one it does not,
+/// `inner` the modal's label; `opacity` fades the modal.
+fn modal(under: f32, away: f32, inner: f32, opacity: f32) -> ResolvedScene {
+    let mut kids: Vec<El> = (0..16)
+        .map(|i| {
+            let tint = match i {
+                5 => under,
+                15 => away,
+                _ => 0.5,
+            };
+            block(10., H)
+                .radius(0.)
+                .fill(Color::srgb(tint, 0.3 + 0.04 * i as f32, 0.6))
+                .at(20. * i as f64, 0.)
+        })
+        .collect();
+    kids.push(
+        stack![
+            block(90., 18.)
+                .radius(4.)
+                .fill(Color::srgb(inner, 0.9, 0.9))
+                .at(14., 14.)
+        ]
+        .size(150., 100.)
+        .radius(12.)
+        .fill(Color::srgba(0.1, 0.1, 0.12, 0.45))
+        .shadow(Shadow::soft(6.))
+        .backdrop_blur(6.)
+        .opacity(opacity)
+        .at(60., 50.),
+    );
+    let spec = SceneSpec::new(ground(kids)).offered(Size::new(W, H));
+    mui_scene::resolve(&spec).expect("resolves")
+}
+
+#[test]
+fn a_kept_target_matches_a_whole_redraw_under_layers_and_backdrops() {
+    let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
+        return;
+    };
+    let scope = k.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let id = Affine::IDENTITY;
+    k.check("modal first", &modal(0.5, 0.5, 0.9, 0.3).paint, id);
+    let first = k.quad.frame();
+    assert!(first.passes >= 5, "{first:?}");
+    k.check("modal unchanged", &modal(0.5, 0.5, 0.9, 0.3).paint, id);
+    assert!(!k.quad.frame().drawn);
+
+    // Fading in: the modal's target and its blur are kept; only the frame
+    // redraws, around the modal.
+    for (step, opacity) in [0.4, 0.55, 0.7, 0.85].into_iter().enumerate() {
+        k.check(
+            &format!("fade {step}"),
+            &modal(0.5, 0.5, 0.9, opacity).paint,
+            id,
+        );
+        let frame = k.quad.frame();
+        assert_eq!(frame.passes, 1, "{frame:?}");
+        assert!(frame.damage.is_some(), "{frame:?}");
+    }
+    // A stripe under the blur: the backdrop and the layer holding it are
+    // drawn again.
+    k.check("under", &modal(0.1, 0.5, 0.9, 0.85).paint, id);
+    let frame = k.quad.frame();
+    assert!(frame.passes >= 5, "{frame:?}");
+    // A stripe the blur does not reach: neither is.
+    k.check("away", &modal(0.1, 0.9, 0.9, 0.85).paint, id);
+    let frame = k.quad.frame();
+    assert_eq!(frame.passes, 1, "{frame:?}");
+    // The modal's label: its layer alone.
+    k.check("inside", &modal(0.1, 0.9, 0.2, 0.85).paint, id);
+    let frame = k.quad.frame();
+    assert_eq!(frame.passes, 2, "{frame:?}");
+    // Faded out to nothing and back.
+    k.check("gone", &modal(0.1, 0.9, 0.2, 0.).paint, id);
+    k.check("back", &modal(0.1, 0.9, 0.2, 0.6).paint, id);
+    // Scrolled: every target drawn again.
+    k.check(
+        "scrolled",
+        &modal(0.1, 0.9, 0.2, 0.6).paint,
+        Affine::translate((3.5, -2.25)),
+    );
+    if let Some(error) = pollster::block_on(scope.pop()) {
+        panic!("wgpu validation: {error}");
+    }
+}
+
+/// A morphing weld redraws its texture and its slot; a host texture drawn
+/// into again redraws what samples it. Each frame against a whole redraw by
+/// a fresh pass with a fresh weld pool.
+#[test]
+fn a_kept_target_matches_a_whole_redraw_as_textures_change() {
+    use mui_vello::effects::{Budget, WeldTextures};
+    let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
+        return;
+    };
+    let pool = |k: &Kept| {
+        pollster::block_on(WeldTextures::new(&k.device, &k.queue, Budget::default())).expect("pool")
+    };
+    let mut welds = pool(&k);
+    let host = k.device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size: wgpu::Extent3d {
+            width: 4,
+            height: 4,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let fill = |k: &Kept, rgba: [u8; 4]| {
+        k.queue.write_texture(
+            host.as_image_copy(),
+            &rgba.repeat(16),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(16),
+                rows_per_image: None,
+            },
+            host.size(),
+        );
+    };
+    let plate = |id: &str| block(60., 50.).radius(10.).fill(Role::Primary).id(id);
+    let root = stack![
+        row![plate("a"), plate("b")]
+            .gap(12.)
+            .weld(Weld::all().reach(20.).blend(40.))
+            .id("join")
+            .at(20., 20.),
+        block(60., 40.)
+            .radius(6.)
+            .fill(Fill::Image(Arc::new(Image::texture(7, 4, 4)), Fit::Fill))
+            .at(240., 140.),
+    ]
+    .size(W, H);
+    let spec = SceneSpec::new(ground(vec![root])).offered(Size::new(W, H));
+    let mut scene =
+        mui_scene::resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu)).expect("scene");
+    let mut check = |k: &mut Kept, welds: &mut WeldTextures, scene: &ResolvedScene, what: &str| {
+        let id = Affine::IDENTITY;
+        k.quad
+            .render_scene(&k.device, &k.queue, scene, welds, id, &k.view, SIZE)
+            .expect("quad render");
+        let got = readback(&k.device, &k.queue, &k.texture, SIZE);
+        let fresh = target(&k.device, SIZE);
+        let view = fresh.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut quad = QuadRenderer::new(&k.device, FORMAT);
+        quad.set_texture(7, &host);
+        quad.render_scene(&k.device, &k.queue, scene, &mut pool(k), id, &view, SIZE)
+            .expect("quad render");
+        let want = readback(&k.device, &k.queue, &fresh, SIZE);
+        if got != want {
+            let dir = out_dir();
+            save(&dir.join(format!("retained-{what}-got.png")), SIZE, &got);
+            save(&dir.join(format!("retained-{what}-want.png")), SIZE, &want);
+            panic!("{what}: stale pixels; images in {}", dir.display());
+        }
+    };
+    fill(&k, [255, 0, 0, 255]);
+    k.quad.set_texture(7, &host);
+    check(&mut k, &mut welds, &scene, "textures first");
+    check(&mut k, &mut welds, &scene, "textures unchanged");
+    assert!(!k.quad.frame().drawn, "{:?}", k.quad.frame());
+    for step in 1..=4 {
+        scene
+            .set_weld_morph("join", f64::from(step) / 4.)
+            .expect("morph");
+        check(&mut k, &mut welds, &scene, &format!("morph {step}"));
+        let frame = k.quad.frame();
+        let damage = frame.damage.expect("a partial frame");
+        // The weld's slot, not the host texture's corner.
+        assert!(damage[0] < 200 && damage[1] < 120, "{damage:?}");
+    }
+    fill(&k, [0, 0, 255, 128]);
+    k.quad.set_texture(7, &host);
+    check(&mut k, &mut welds, &scene, "host redrawn");
+    let damage = k.quad.frame().damage.expect("a partial frame");
+    assert!(damage[0] >= 200, "{damage:?}");
+}

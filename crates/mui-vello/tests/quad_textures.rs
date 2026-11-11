@@ -95,8 +95,16 @@ fn a_weld_paints_its_texture_in_its_slot() {
             reason: Reason::External
         })
     );
-    quad.render_scene(&device, &queue, &scene, &mut pool, Affine::IDENTITY, &view, SIZE)
-        .expect("render");
+    quad.render_scene(
+        &device,
+        &queue,
+        &scene,
+        &mut pool,
+        Affine::IDENTITY,
+        &view,
+        SIZE,
+    )
+    .expect("render");
     let px = readback(&device, &queue, &out, SIZE);
     let (_, texture, used) = pool.texture("join").expect("a texture");
     let texels = readback(
@@ -126,7 +134,12 @@ fn a_weld_paints_its_texture_in_its_slot() {
             }
             covered += 1;
             let got = at(&px, SIZE[0], dx, dy);
-            let off = got.iter().zip(texel).map(|(a, b)| a.abs_diff(b)).max().unwrap_or(0);
+            let off = got
+                .iter()
+                .zip(texel)
+                .map(|(a, b)| a.abs_diff(b))
+                .max()
+                .unwrap_or(0);
             worst = worst.max(off);
         }
     }
@@ -163,8 +176,16 @@ fn a_weld_matches_gpu_renderer() {
         pollster::block_on(WeldTextures::new(&device, &queue, Budget::default())).expect("pool");
     let a = target(&device);
     let view = a.create_view(&wgpu::TextureViewDescriptor::default());
-    quad.render_scene(&device, &queue, &scene, &mut pool, Affine::IDENTITY, &view, SIZE)
-        .expect("quad");
+    quad.render_scene(
+        &device,
+        &queue,
+        &scene,
+        &mut pool,
+        Affine::IDENTITY,
+        &view,
+        SIZE,
+    )
+    .expect("quad");
     let got = readback(&device, &queue, &a, SIZE);
     let mut vello = pollster::block_on(mui_vello::effects::GpuRenderer::new(
         &device,
@@ -176,7 +197,9 @@ fn a_weld_matches_gpu_renderer() {
     .expect("GpuRenderer");
     let b = target(&device);
     let view = b.create_view(&wgpu::TextureViewDescriptor::default());
-    vello.render(&scene, Affine::IDENTITY, &view).expect("vello");
+    vello
+        .render(&scene, Affine::IDENTITY, &view)
+        .expect("vello");
     let want = readback(&device, &queue, &b, SIZE);
     let diff: Vec<u8> = got.iter().zip(&want).map(|(a, b)| a.abs_diff(*b)).collect();
     let worst = diff.iter().copied().max().unwrap_or(0);
@@ -224,9 +247,7 @@ fn a_host_texture_is_sampled_in_place() {
         host.size(),
     );
     let image = Arc::new(Image::texture(7, 4, 4));
-    let root = block(W, H)
-        .radius(0.)
-        .fill(Fill::Image(image, Fit::Fill));
+    let root = block(W, H).radius(0.).fill(Fill::Image(image, Fit::Fill));
     let scene = scene_at(root, 1.);
     let mut gpu = Gpu {
         device,
@@ -235,7 +256,10 @@ fn a_host_texture_is_sampled_in_place() {
     };
     let stand_in = gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, SIZE);
     let cpu = cpu_pixels(&scene, Affine::IDENTITY, SIZE);
-    assert_eq!(at(&stand_in, SIZE[0], 160, 100), at(&cpu, SIZE[0], 160, 100));
+    assert_eq!(
+        at(&stand_in, SIZE[0], 160, 100),
+        at(&cpu, SIZE[0], 160, 100)
+    );
     gpu.quad.set_texture(7, &host);
     let px = gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, SIZE);
     let got = at(&px, SIZE[0], 160, 100);

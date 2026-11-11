@@ -373,7 +373,10 @@ impl QuadRenderer {
                     group
                 }
                 Bind::Host(key) => {
-                    let host = self.hosts.get_mut(key).expect("the walk names a registered key");
+                    let host = self
+                        .hosts
+                        .get_mut(key)
+                        .expect("the walk names a registered key");
                     host.group
                         .get_or_insert_with(|| image_group(device, layout, &host.view, blank))
                         .clone()
