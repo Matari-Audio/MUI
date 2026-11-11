@@ -7,10 +7,14 @@
 //
 // Colours arrive premultiplied, in sRGB-encoded space: `vello_cpu` blends
 // encoded values, and so does this pass (the target is a non-sRGB format).
+//
+// The same pass draws into offscreen targets (a group layer, a backdrop's
+// snapshot): `view.origin` is where the target's corner sits in device
+// pixels, so every instance keeps its device coordinates.
 
 struct View {
     size: vec2<f32>,
-    pad: vec2<f32>,
+    origin: vec2<f32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -19,8 +23,11 @@ struct View {
 @group(0) @binding(2) var linear: sampler;
 // Path records, read by linear texel index (path.rs has the layout).
 @group(0) @binding(3) var paths: texture_2d<f32>;
-// Premultiplied RGBA.
+// Premultiplied RGBA (or straight, flagged): an image, a host texture, a
+// weld's material, a group layer or a blurred backdrop.
 @group(1) @binding(0) var image: texture_2d<f32>;
+// What a blending group layer composites onto, over the layer's rect.
+@group(1) @binding(1) var under: texture_2d<f32>;
 
 // See `Instance` in build.rs for what each slot holds.
 struct Instance {
@@ -68,6 +75,7 @@ const SHAPE_PATH: f32 = 5.0;
 const SHAPE_PATH_STROKE: f32 = 6.0;
 const SHAPE_PATH_BLUR: f32 = 7.0;
 const PAINT_IMAGE: f32 = 4.0;
+const PAINT_SCREEN: f32 = 5.0;
 // Texels a row of `paths`: `path::WIDTH`.
 const PATH_WIDTH: u32 = 256u;
 
@@ -113,7 +121,8 @@ fn vs(@builtin(vertex_index) vi: u32, i: Instance) -> Varying {
         q = p - i.xt.xy;
     }
     var o: Varying;
-    o.pos = vec4<f32>(p.x / view.size.x * 2.0 - 1.0, 1.0 - p.y / view.size.y * 2.0, 0.0, 1.0);
+    let t = p - view.origin;
+    o.pos = vec4<f32>(t.x / view.size.x * 2.0 - 1.0, 1.0 - t.y / view.size.y * 2.0, 0.0, 1.0);
     o.q = q;
     // Inverse of the linear part, rows (x, y) and (z, w): local = ji * device.
     o.ji = vec4<f32>(d, -c, -b, a) / det;
@@ -433,8 +442,126 @@ fn clip(p: vec2<f32>, v: Varying) -> f32 {
     return cov;
 }
 
+// Color mixing, from Vello's `vello_shaders/shader/shared/blend.wgsl`
+// (vello_shaders 0.11.0, Apache-2.0 OR MIT OR Unlicense), with `set_sat`
+// written without pointers. The same formulas `vello_cpu` mixes with.
+fn screen(cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
+    return cb + cs - (cb * cs);
+}
+
+fn color_dodge(cb: f32, cs: f32) -> f32 {
+    if cb == 0.0 {
+        return 0.0;
+    } else if cs == 1.0 {
+        return 1.0;
+    }
+    return min(1.0, cb / (1.0 - cs));
+}
+
+fn color_burn(cb: f32, cs: f32) -> f32 {
+    if cb == 1.0 {
+        return 1.0;
+    } else if cs == 0.0 {
+        return 0.0;
+    }
+    return 1.0 - min(1.0, (1.0 - cb) / cs);
+}
+
+fn hard_light(cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
+    return select(screen(cb, 2.0 * cs - 1.0), cb * 2.0 * cs, cs <= vec3(0.5));
+}
+
+fn soft_light(cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
+    let d = select(sqrt(cb), ((16.0 * cb - 12.0) * cb + 4.0) * cb, cb <= vec3(0.25));
+    return select(cb + (2.0 * cs - 1.0) * (d - cb), cb - (1.0 - 2.0 * cs) * cb * (1.0 - cb), cs <= vec3(0.5));
+}
+
+fn sat(c: vec3<f32>) -> f32 {
+    return max(c.x, max(c.y, c.z)) - min(c.x, min(c.y, c.z));
+}
+
+fn lum(c: vec3<f32>) -> f32 {
+    return dot(c, vec3(0.3, 0.59, 0.11));
+}
+
+fn clip_color(c_in: vec3<f32>) -> vec3<f32> {
+    var c = c_in;
+    let l = lum(c);
+    let n = min(c.x, min(c.y, c.z));
+    let x = max(c.x, max(c.y, c.z));
+    if n < 0.0 {
+        c = l + (((c - l) * l) / (l - n));
+    }
+    if x > 1.0 {
+        c = l + (((c - l) * (1.0 - l)) / (x - l));
+    }
+    return c;
+}
+
+fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> {
+    return clip_color(c + (l - lum(c)));
+}
+
+// The smallest channel to 0, the largest to `s`, the middle one in
+// proportion: Vello's `set_sat_inner` on the sorted channels.
+fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
+    let lo = min(c.x, min(c.y, c.z));
+    let hi = max(c.x, max(c.y, c.z));
+    if hi > lo {
+        return (c - lo) * s / (hi - lo);
+    }
+    return vec3(0.0);
+}
+
+// `mode` is `mui_scene::Mix` in declaration order, Normal 0.
+fn blend_mix(cb: vec3<f32>, cs: vec3<f32>, mode: u32) -> vec3<f32> {
+    switch mode {
+        case 1u: { return cb * cs; }
+        case 2u: { return screen(cb, cs); }
+        case 3u: { return hard_light(cs, cb); }
+        case 4u: { return min(cb, cs); }
+        case 5u: { return max(cb, cs); }
+        case 6u: { return vec3(color_dodge(cb.x, cs.x), color_dodge(cb.y, cs.y), color_dodge(cb.z, cs.z)); }
+        case 7u: { return vec3(color_burn(cb.x, cs.x), color_burn(cb.y, cs.y), color_burn(cb.z, cs.z)); }
+        case 8u: { return hard_light(cb, cs); }
+        case 9u: { return soft_light(cb, cs); }
+        case 10u: { return abs(cb - cs); }
+        case 11u: { return cb + cs - 2.0 * cb * cs; }
+        case 12u: { return set_lum(set_sat(cs, sat(cb)), lum(cb)); }
+        case 13u: { return set_lum(set_sat(cb, sat(cs)), lum(cb)); }
+        case 14u: { return set_lum(cs, lum(cb)); }
+        case 15u: { return set_lum(cb, lum(cs)); }
+        default: { return cs; }
+    }
+}
+
+fn unpremultiply(c: vec4<f32>) -> vec3<f32> {
+    return select(c.rgb / c.a, vec3(0.0), c.a == 0.0);
+}
+
+// `src` (premultiplied) mixed onto `bg` as `vello_cpu`'s `mix` does before
+// it composites source-over: the result keeps the source's alpha.
+fn mixed(src: vec4<f32>, bg: vec4<f32>, mode: u32) -> vec4<f32> {
+    let cs = unpremultiply(src);
+    let cb = unpremultiply(bg);
+    return vec4((1.0 - bg.a) * cs + bg.a * blend_mix(cb, cs, mode), 1.0) * src.a;
+}
+
+// A texture sampled at `at` texels of the `used` corner, edges clamped.
+// `c0` is (opacity, used w, used h, straight alpha).
+fn texture_paint(at: vec2<f32>, c0: vec4<f32>) -> vec4<f32> {
+    let uv = clamp(at, vec2(0.5), c0.yz - 0.5) / vec2<f32>(textureDimensions(image));
+    var c = textureSampleLevel(image, linear, uv, 0.0);
+    if c0.w > 0.0 {
+        c = vec4(c.rgb * c.a, c.a);
+    }
+    return c * c0.x;
+}
+
 @fragment
 fn fs(v: Varying) -> @location(0) vec4<f32> {
+    // This pixel's centre in device pixels, wherever the target sits.
+    let dev = v.pos.xy + view.origin;
     let code = decode(v.kind.x);
     let shape = code.y;
     let paint = code.z;
@@ -455,7 +582,7 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
         // clips it.
         cov = rounded(q, v.rect, 0.0, v.ji);
     } else if shape == SHAPE_GLYPH {
-        let texel = vec2<i32>(floor(v.pos.xy - v.rect.xy + v.kind.zw));
+        let texel = vec2<i32>(floor(dev - v.rect.xy + v.kind.zw));
         cov = textureLoad(atlas, texel, i32(code.x), 0).r;
     } else if shape == SHAPE_STROKE {
         let h = 0.5 * width;
@@ -466,7 +593,7 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
         // A blurred rect paints its inflated box, sharp-edged.
         cov = rounded(q, v.rect, select(radius, 0.0, shape == SHAPE_BLUR || shape == SHAPE_BLUR_INVERT), v.ji);
     }
-    cov *= clip(v.pos.xy, v);
+    cov *= clip(dev, v);
     if cov <= 0.0 {
         discard;
     }
@@ -485,8 +612,15 @@ fn fs(v: Varying) -> @location(0) vec4<f32> {
         colour = v.c0;
     } else if paint == PAINT_IMAGE {
         // Image pixels from the box's local space; bilinear, edges clamped.
-        let at = (q - v.geom.xy) / v.geom.zw;
-        colour = textureSampleLevel(image, linear, at / vec2<f32>(textureDimensions(image)), 0.0);
+        colour = texture_paint((q - v.geom.xy) / v.geom.zw, v.c0);
+    } else if paint == PAINT_SCREEN {
+        // A texture laid over device pixels: a layer, at one texel a pixel,
+        // or a blurred backdrop, at `geom.zw` pixels a texel.
+        let at = (dev - v.geom.xy) / v.geom.zw;
+        colour = texture_paint(at, v.c0);
+        if v.kind.y > 0.0 {
+            colour = mixed(colour, textureLoad(under, vec2<i32>(floor(at)), 0), u32(v.kind.y));
+        }
     } else {
         colour = ramp(ramp_t(q, paint, v.geom), v.kind.y, v);
     }

@@ -21,15 +21,17 @@ pub const MAX_STOPS: usize = 4;
 /// | 1 | affine `e f`, unused, unused |
 /// | 2 | the rect (`x0 y0 x1 y1`, local); a blur's inflated box |
 /// | 3 | code, gradient table scale, radius, stroke width; glyph: code, scale, atlas `x y`; path: radius is the record |
-/// | 4-7 | premultiplied colour stops; blur: colour, params, params, rect; path blur: colour, std dev |
+/// | 4-7 | premultiplied colour stops; blur: colour, params, params, rect; path blur: colour, std dev; texture: opacity, used `w h`, straight alpha |
 /// | 8 | stop offsets |
-/// | 9 | gradient geometry; image: placement `tx ty sx sy` |
+/// | 9 | gradient geometry; image: placement `tx ty sx sy`; screen: device origin, pixels a texel |
 /// | 10 | device clip rect |
 /// | 11-12 | rounded clip: device-to-local affine `a b c d`, `e f radius on` |
 /// | 13 | rounded clip rect |
 /// | 14 | path clip: fill record, translation `e f`, on |
 ///
-/// The code is `page * 64 + shape * 8 + paint`. A path's rect is its local
+/// The code is `page * 64 + shape * 8 + paint`. A screen paint samples a
+/// texture laid over device pixels (a group layer, a blurred backdrop); its
+/// table scale is the layer's blend mode. A path's rect is its local
 /// bounding box (a blur's inflated by its reach) and its record (see
 /// [`super::path`]) holds the outline. A glyph's rect (slot 2) is
 /// in device pixels, a whole-pixel box over its atlas cell; its affine still
@@ -45,7 +47,8 @@ pub const SHAPE_GLYPH: f32 = 4.;
 const SHAPE_PATH: f32 = 5.;
 const SHAPE_PATH_STROKE: f32 = 6.;
 const SHAPE_PATH_BLUR: f32 = 7.;
-const PAINT_IMAGE: f32 = 4.;
+pub const PAINT_IMAGE: f32 = 4.;
+pub const PAINT_SCREEN: f32 = 5.;
 
 /// The instance code of `shape` painted with `paint`.
 pub fn code(shape: f32, paint: f32) -> f32 {
@@ -129,8 +132,25 @@ pub enum Drawn<'p> {
     One,
     /// The instance in `out`, sampling this image.
     Image(&'p mui_scene::Image),
+    /// The instance in `out`, sampling the host texture of this key.
+    Host(u64),
     /// A glyph run: `out` is the template every glyph's instance starts from.
     Text(&'p mui_scene::Text),
+    /// A group layer opens: `mix` is `mui_scene::Mix` in declaration order.
+    Open { mix: u32, opacity: f32 },
+    /// The innermost group layer closes.
+    Close,
+    /// The outline in `out`, to be painted with what the list painted
+    /// before it in device `region` (`x y w h`), blurred by `sigma` device
+    /// pixels at one texel per `scale` pixels.
+    Backdrop {
+        region: [u32; 4],
+        scale: u32,
+        sigma: f32,
+    },
+    /// A weld's slot: `out` holds its transform and clip; the weld's bounds
+    /// and texture come from the scene.
+    External,
 }
 
 /// No device clip at all: far past any target.
@@ -251,6 +271,11 @@ pub struct Walk {
     /// [`Reason::ImageSize`].
     pub max_image: u32,
     pub paths: Store,
+    /// The target, device pixels: where a backdrop's snapshot is cut.
+    pub size: [u32; 2],
+    /// The size of each registered host texture, by key. An image naming
+    /// any other key paints its solid stand-in, as `one` does.
+    pub hosted: rustc_hash::FxHashMap<u64, [u32; 2]>,
 }
 
 impl Default for Walk {
@@ -259,6 +284,8 @@ impl Default for Walk {
             clips: Vec::new(),
             max_image: u32::MAX,
             paths: Store::new(super::path::PATH_BUDGET, u32::MAX),
+            size: [u32::MAX; 2],
+            hosted: rustc_hash::FxHashMap::default(),
         }
     }
 }
@@ -327,10 +354,25 @@ impl Walk {
                     Err(Reason::ClipDepth)
                 };
             }
-            Layer::Blend { .. } | Layer::Unblend | Layer::Mask => return Err(Reason::Layer),
-            Layer::Backdrop => return Err(Reason::Backdrop),
-            Layer::External => return Err(Reason::External),
-            Layer::Text
+            Layer::Blend { mix, opacity } => {
+                return Ok(Drawn::Open {
+                    mix: mix as u32,
+                    opacity,
+                });
+            }
+            Layer::Unblend => return Ok(Drawn::Close),
+            Layer::Backdrop => return self.backdrop(p, transform, xf, out),
+            Layer::External => {
+                let [a, b, c, d, e, f] = xf.as_coeffs();
+                out[0] = [a as f32, b as f32, c as f32, d as f32];
+                out[1] = [e as f32, f as f32, 0., 0.];
+                self.clip().write(out);
+                return Ok(Drawn::External);
+            }
+            // `one` fills a mask with a solid or gradient brush.
+            Layer::Mask if matches!(p.paint, Paint::Image { .. }) => return Err(Reason::Image),
+            Layer::Mask
+            | Layer::Text
             | Layer::Shadow(_)
             | Layer::Fill
             | Layer::Shell(_)
@@ -356,7 +398,7 @@ impl Walk {
         let radius = rr.radius();
         out[0] = [a as f32, b as f32, c as f32, d as f32];
         let mut clip = self.clip();
-        let image = self.image(p, bounds, xf, &mut clip)?;
+        let image = self.image(p, bounds, xf, &mut clip, out)?;
         clip.write(out);
         if blurred {
             // Both backends blur with the solid stand-in of a gradient.
@@ -374,15 +416,11 @@ impl Walk {
         out[1] = [e as f32, f as f32, 0., 0.];
         out[2] = rect4(bounds);
         let (kind, scale) = match image {
-            Some((_, t)) => {
-                let [sx, _, _, sy, tx, ty] = t.as_coeffs();
-                out[9] = [tx as f32, ty as f32, sx as f32, sy as f32];
-                (PAINT_IMAGE, 0.)
-            }
+            Some(_) => (PAINT_IMAGE, 0.),
             None => paint(out, &p.paint, bounds)?,
         };
         out[3] = [code(shape, kind), scale, radius as f32, p.width as f32];
-        Ok(image.map_or(Drawn::One, |(image, _)| Drawn::Image(image)))
+        Ok(image.unwrap_or(Drawn::One))
     }
 
     /// An entry whose outline is its path, drawn from the path's record.
@@ -420,15 +458,11 @@ impl Walk {
             out[5] = [p.blur as f32, 0., 0., 0.];
             return Ok(Drawn::One);
         }
-        let image = self.image(p, bounds, xf, &mut clip)?;
+        let image = self.image(p, bounds, xf, &mut clip, out)?;
         clip.write(out);
         out[2] = rect4(bounds);
         let (kind, scale) = match image {
-            Some((_, t)) => {
-                let [sx, _, _, sy, tx, ty] = t.as_coeffs();
-                out[9] = [tx as f32, ty as f32, sx as f32, sy as f32];
-                (PAINT_IMAGE, 0.)
-            }
+            Some(_) => (PAINT_IMAGE, 0.),
             None => paint(out, &p.paint, bounds)?,
         };
         let shape = if stroke {
@@ -437,40 +471,121 @@ impl Walk {
             SHAPE_PATH
         };
         out[3] = [code(shape, kind), scale, record as f32, width as f32];
-        Ok(image.map_or(Drawn::One, |(image, _)| Drawn::Image(image)))
+        Ok(image.unwrap_or(Drawn::One))
     }
 
-    /// An image paint placed on `bounds` as `one` places it; `Contain` also
-    /// narrows `clip` to the rect the image occupies, so the padded edge does
-    /// not smear across the letterbox. `None` for any other paint.
+    /// An image paint placed on `bounds` as `one` places it, its placement
+    /// and texture size written to `out`; `Contain` also narrows `clip` to
+    /// the rect the image occupies, so the padded edge does not smear
+    /// across the letterbox. `None` for any other paint, and for an image
+    /// with nothing to sample (a buffer that does not match its size, an
+    /// unregistered host texture), which paints its solid stand-in.
     fn image<'p>(
         &self,
         p: &'p Painted,
         bounds: Rect,
         xf: Affine,
         clip: &mut Clip,
-    ) -> Result<Option<(&'p mui_scene::Image, Affine)>, Reason> {
-        match &p.paint {
-            Paint::Image { image, .. } if image.texture.is_some() => Err(Reason::ImageTexture),
-            // A buffer that does not match its size paints the solid stand-in.
-            Paint::Image { image, fit } if crate::size(image).is_some() => {
+        out: &mut Instance,
+    ) -> Result<Option<Drawn<'p>>, Reason> {
+        let Paint::Image { image, fit } = &p.paint else {
+            return Ok(None);
+        };
+        let (drawn, size) = match image.texture {
+            Some(key) => match self.hosted.get(&key) {
+                Some(&size) if image.width > 0 && image.height > 0 => (Drawn::Host(key), size),
+                _ => return Ok(None),
+            },
+            None if crate::size(image).is_some() => {
                 if image.width.max(image.height) > self.max_image {
                     return Err(Reason::ImageSize);
                 }
-                let t = crate::image_transform(image, *fit, bounds);
-                if *fit == Fit::Contain {
-                    let r = t.transform_rect_bbox(Rect::new(
-                        0.,
-                        0.,
-                        f64::from(image.width),
-                        f64::from(image.height),
-                    ));
-                    *clip = clip.push(r, 0., xf).ok_or(Reason::ClipDepth)?;
-                }
-                Ok(Some((image, t)))
+                (Drawn::Image(image), [image.width, image.height])
             }
-            _ => Ok(None),
+            None => return Ok(None),
+        };
+        let t = crate::image_transform(image, *fit, bounds);
+        if *fit == Fit::Contain {
+            let r = t.transform_rect_bbox(Rect::new(
+                0.,
+                0.,
+                f64::from(image.width),
+                f64::from(image.height),
+            ));
+            *clip = clip.push(r, 0., xf).ok_or(Reason::ClipDepth)?;
         }
+        // Placed in the texture's own texels: a host texture need not be
+        // the size the scene's image says.
+        let [sx, _, _, sy, tx, ty] = t.as_coeffs();
+        let kx = f64::from(image.width) / f64::from(size[0]);
+        let ky = f64::from(image.height) / f64::from(size[1]);
+        out[9] = [tx as f32, ty as f32, (sx * kx) as f32, (sy * ky) as f32];
+        let straight = matches!(drawn, Drawn::Host(_));
+        out[4] = [1., size[0] as f32, size[1] as f32, f32::from(u8::from(straight))];
+        Ok(Some(drawn))
+    }
+
+    /// A backdrop's outline, painted with the blurred snapshot of what was
+    /// drawn before it: `lib.rs`'s `backdrop`, whose reach is three
+    /// deviations past the outline's scene box, cut to the target. The
+    /// snapshot is taken at one texel per `scale` device pixels, the power
+    /// of two that keeps its deviation within four texels, as
+    /// `GpuRenderer`'s backdrop does.
+    fn backdrop<'p>(
+        &mut self,
+        p: &Painted,
+        transform: Affine,
+        xf: Affine,
+        out: &mut Instance,
+    ) -> Result<Drawn<'p>, Reason> {
+        // NaN and negatives say nothing, as a zero does.
+        if p.blur.is_nan() || p.blur <= 0.0 {
+            return Ok(Drawn::Nothing);
+        }
+        let [a, b, c, d, e, f] = xf.as_coeffs();
+        if a * d - b * c == 0. {
+            return Ok(Drawn::Nothing);
+        }
+        out[0] = [a as f32, b as f32, c as f32, d as f32];
+        out[1] = [e as f32, f as f32, 0., 0.];
+        self.clip().write(out);
+        let local = match p.rect {
+            Some(rr) => {
+                out[3] = [code(SHAPE_FILL, PAINT_SCREEN), 0., rr.radius() as f32, 0.];
+                rr.bounds()
+            }
+            None => {
+                let found = self.paths.find(&p.path, xf, 0.).map_err(refuse)?;
+                let Some(record) = found.record else {
+                    return Ok(Drawn::Nothing);
+                };
+                out[3] = [code(SHAPE_PATH, PAINT_SCREEN), 0., record as f32, 0.];
+                found.bounds
+            }
+        };
+        out[2] = rect4(local);
+        let scene = p
+            .transform
+            .transform_rect_bbox(local + crate::kurbo::Vec2::new(p.offset.x, p.offset.y));
+        let reach = transform.transform_rect_bbox(scene.inflate(3. * p.blur, 3. * p.blur));
+        let [w, h] = self.size.map(f64::from);
+        let x0 = reach.x0.floor().clamp(0., w);
+        let y0 = reach.y0.floor().clamp(0., h);
+        let x1 = reach.x1.ceil().clamp(x0, w);
+        let y1 = reach.y1.ceil().clamp(y0, h);
+        if x1 <= x0 || y1 <= y0 {
+            return Ok(Drawn::Nothing);
+        }
+        let sigma = p.blur * transform.determinant().abs().sqrt();
+        let scale = ((sigma / 4.).ceil().max(1.) as u32).next_power_of_two();
+        let low = [x1 - x0, y1 - y0].map(|v| (v / f64::from(scale)).ceil() as f32);
+        out[4] = [1., low[0], low[1], 0.];
+        out[9] = [x0 as f32, y0 as f32, scale as f32, scale as f32];
+        Ok(Drawn::Backdrop {
+            region: [x0, y0, x1 - x0, y1 - y0].map(|v| v as u32),
+            scale,
+            sigma: sigma as f32,
+        })
     }
 
     /// A glyph run's template: its paint, clip and local-to-device affine.
@@ -510,6 +625,23 @@ impl Walk {
         let (kind, scale) = paint(out, &p.paint, bounds)?;
         out[3] = [code(SHAPE_GLYPH, kind), scale, 0., 0.];
         Ok(Drawn::Text(text))
+    }
+}
+
+/// `i` drawn at `alpha` times its opacity, as a group layer that does not
+/// need a target of its own draws it: every colour it can paint scaled.
+pub fn fade(i: &mut Instance, alpha: f32) {
+    let rest = i[3][0] % 64.;
+    let (shape, paint) = ((rest / 8.).floor(), rest % 8.);
+    if paint >= PAINT_IMAGE {
+        // A texture's opacity.
+        i[4][0] *= alpha;
+        return;
+    }
+    let ramp = paint > 0. && shape != SHAPE_BLUR && shape != SHAPE_BLUR_INVERT;
+    let stops = if ramp { 4 } else { 1 };
+    for slot in &mut i[4..4 + stops] {
+        *slot = slot.map(|v| v * alpha);
     }
 }
 

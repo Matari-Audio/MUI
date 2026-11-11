@@ -188,7 +188,7 @@ fn a_steady_frame_reuses_its_buffers() {
     let mut cpu = Instances::new(1024, 4);
     let build = |cpu: &mut Instances| {
         cpu.begin(paint.len());
-        let count = cpu.build(&paint, Affine::IDENTITY, &|_, _| true);
+        let count = cpu.build(&paint, Affine::IDENTITY, &|_, _| true, None);
         cpu.encode();
         count
     };
