@@ -9,6 +9,7 @@ members = [
   "crates/mui-material",
   "crates/mui",
   "crates/mui-preview",
+  "crates/mui-headless",
   "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-vello",
@@ -40,6 +41,7 @@ mui-native-dialog = { path = "crates/mui-native-dialog" }
 mui-baseview = { path = "crates/mui-baseview" }
 mui-winit = { path = "crates/mui-winit" }
 mui-geometry = { path = "crates/mui-geometry" }
+mui-headless = { path = "crates/mui-headless" }
 mui-input = { path = "crates/mui-input" }
 mui-layout = { path = "crates/mui-layout" }
 mui-material = { path = "crates/mui-material" }

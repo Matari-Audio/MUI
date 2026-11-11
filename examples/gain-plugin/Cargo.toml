@@ -28,3 +28,9 @@ epaint_default_fonts.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+mui-headless.workspace = true
+
+[[example]]
+name = "headless"

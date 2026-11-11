@@ -1,0 +1,6 @@
+[
+  {"t": 0.0, "type": "move", "x": 10, "y": 10},
+  {"t": 0.3, "type": "move", "key": "param/0"},
+  {"t": 0.6, "type": "wheel", "key": "param/0", "dy": -30},
+  {"t": 0.8, "type": "mark", "name": "end"}
+]

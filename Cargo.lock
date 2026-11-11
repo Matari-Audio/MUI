@@ -2079,6 +2079,7 @@ dependencies = [
  "clap-sys",
  "epaint_default_fonts",
  "mui",
+ "mui-headless",
  "mui-truce",
  "truce",
  "truce-clap",
@@ -2092,6 +2093,16 @@ dependencies = [
  "i_overlay",
  "kurbo",
  "rustc-hash 2.1.3",
+]
+
+[[package]]
+name = "mui-headless"
+version = "0.4.2"
+dependencies = [
+ "epaint_default_fonts",
+ "mui",
+ "png",
+ "serde_json",
 ]
 
 [[package]]
@@ -2161,6 +2172,7 @@ dependencies = [
  "epaint_default_fonts",
  "mui",
  "mui-access",
+ "mui-headless",
  "mui-text",
  "mui-winit",
  "pollster",

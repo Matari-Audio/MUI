@@ -8,6 +8,7 @@
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
 
+mod headless;
 mod host;
 mod scenes;
 mod skin;
@@ -917,6 +918,11 @@ impl ApplicationHandler<AccessEvent> for App {
 }
 
 fn main() -> Result<(), String> {
+    // Agent tooling: no window, no GPU. See `mui-preview --help`.
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if mui_headless::wants(&args) {
+        std::process::exit(mui_headless::main(headless::all()));
+    }
     let tester = std::env::args()
         .any(|arg| arg == "--test-ui")
         .then(tester::Tester::new)
