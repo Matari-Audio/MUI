@@ -161,9 +161,11 @@ pub fn wants(args: &[String]) -> bool {
 /// command line. Letters outside ASCII stay, so `東京` is `東京`, not empty.
 pub fn slug(name: &str) -> String {
     let mut s = String::new();
-    for c in name.chars() {
+    // Filter after lowercasing: `İ` lowers to `i` and a combining dot, and
+    // a listed name must slug to itself when handed back to `--scene`.
+    for c in name.chars().flat_map(char::to_lowercase) {
         if c.is_alphanumeric() {
-            s.extend(c.to_lowercase());
+            s.push(c);
         } else if !s.ends_with('-') && !s.is_empty() {
             s.push('-');
         }

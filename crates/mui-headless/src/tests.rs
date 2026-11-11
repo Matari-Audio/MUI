@@ -21,7 +21,8 @@ fn go(args: &[&str]) -> crate::Value {
 }
 
 fn tmp(name: &str) -> String {
-    let d = std::env::temp_dir().join("mui-headless-tests");
+    // One directory per test process, so two runs never share a file.
+    let d = std::env::temp_dir().join(format!("mui-headless-tests-{}", std::process::id()));
     std::fs::create_dir_all(&d).unwrap();
     d.join(name).to_str().unwrap().to_owned()
 }
@@ -143,6 +144,10 @@ fn unbounded_inputs_are_refused_and_outputs_find_their_way() {
     assert!(Script::parse(r#"[{"t":0.1,"key":"bypass"},{"t":0.3,"key":"gain"}]"#, 60).is_ok());
     // A name outside ASCII is still a name.
     assert_eq!(crate::slug("東京 Night"), "東京-night");
+    for name in ["İstanbul", "Straße Ⅳ", "東京 Night"] {
+        let s = crate::slug(name);
+        assert_eq!(crate::slug(&s), s, "{name}");
+    }
     // Missing directories are made, and a first-frame click is a change.
     let dir = tmp("nested/a/b");
     let _ = std::fs::remove_dir_all(tmp("nested"));
@@ -160,4 +165,6 @@ fn unbounded_inputs_are_refused_and_outputs_find_their_way() {
     let first = std::fs::read_to_string(format!("{dir}/trace.jsonl")).unwrap();
     let first: crate::Value = serde_json::from_str(first.lines().next().unwrap()).unwrap();
     assert!(!first["changed"].as_array().unwrap().is_empty(), "{first}");
+    let _ = std::fs::remove_dir_all(tmp("nested"));
+    let _ = std::fs::remove_file(script);
 }
