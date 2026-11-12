@@ -70,6 +70,8 @@ pub struct Glyph {
     pub id: u32,
     pub x: f64,
     pub y: f64,
+    /// Byte offset in the shaped text of the cluster this glyph draws.
+    pub cluster: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -239,6 +241,7 @@ fn shaped_run(faces: &[Face<'_>], text: &str, size_px: f64) -> Result<TextRun, E
                 id: g.glyph_id.to_u32(),
                 x: g.x,
                 y: g.y,
+                cluster: g.cluster,
             })
             .collect(),
         advance: checked_finite(shaped.advance, "font metrics")?,
