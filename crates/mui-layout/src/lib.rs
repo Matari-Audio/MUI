@@ -14,7 +14,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 mod incremental;
-pub use incremental::{LayoutCache, LayoutStats, resolve_cached_with};
+pub use incremental::{LayoutCache, LayoutStats, resolve_cached_retained, resolve_cached_with};
 mod diagnostics;
 pub use diagnostics::{
     LayoutRequestDepth, LayoutRequestInput, LayoutRequestNode, LayoutRequestRevision,
