@@ -81,6 +81,7 @@ pub(super) type CoordsCache = HashMap<Axes, HashMap<(u64, Option<u64>), (Coords,
 #[derive(Debug, Default)]
 pub struct TextState {
     pub(super) layout: mui_layout::LayoutCache,
+    pub(super) discover: Discover,
     /// The ids of the spec's faces the cache was filled with.
     pub(super) fonts: Vec<u64>,
     pub(super) generation: u64,
@@ -159,6 +160,42 @@ impl TextState {
     }
 }
 
+/// Faces for graphemes a chain has no glyph for: given the chain and the
+/// text, the faces to append. See `FontDatabase::fallbacks` in mui-text.
+pub type FallbackSource = Arc<dyn Fn(&[Font], &str) -> Vec<Font> + Send + Sync>;
+
+/// A [`FallbackSource`] and the faces it found that the scene does not have
+/// yet, for the owner to append to its fallback fonts.
+#[derive(Default)]
+pub(super) struct Discover {
+    pub(super) source: Option<FallbackSource>,
+    pub(super) found: Vec<Font>,
+}
+impl std::fmt::Debug for Discover {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Discover")
+            .field("source", &self.source.is_some())
+            .field("found", &self.found.len())
+            .finish()
+    }
+}
+impl Discover {
+    // ponytail: a string no installed face covers asks again each time it
+    // is shaped (a new size, or after the chain grows). Remember misses if
+    // that shows up in a profile.
+    fn ask(&mut self, chain: &[Font], text: &str) {
+        let Some(source) = &self.source else {
+            return;
+        };
+        for font in source(chain, text) {
+            let id = font.id();
+            if !chain.iter().chain(&self.found).any(|f| f.id() == id) {
+                self.found.push(font);
+            }
+        }
+    }
+}
+
 /// What one text node is measured and shaped with.
 #[derive(Clone, Copy)]
 pub(super) struct Face<'a> {
@@ -190,6 +227,7 @@ pub(super) struct Runs<'a> {
     pub(super) breaks: &'a mut PerText<BreakKey, Breaks>,
     pub(super) coords: &'a mut CoordsCache,
     pub(super) last_coords: &'a mut HashMap<crate::Id, (Coords, u64)>,
+    pub(super) discover: &'a mut Discover,
 }
 impl<'a> Runs<'a> {
     /// The faces a node shapes with: its own first, then the scene's.
@@ -257,7 +295,12 @@ impl<'a> Runs<'a> {
         let generation = self.generation;
         if self.cache.get(text).is_none_or(|m| !m.contains_key(&key)) {
             let settings = face.axes.to_vec();
-            let run = CachedRun::from_run(mui_text::shape_run(&fonts, text, face.size, &settings)?);
+            let run = mui_text::shape_run(&fonts, text, face.size, &settings)?;
+            // Glyph 0 is .notdef: the chain has nothing for some grapheme.
+            if run.glyphs.iter().any(|g| g.id == 0) {
+                self.discover.ask(&fonts, text);
+            }
+            let run = CachedRun::from_run(run);
             self.cache
                 .entry(text.to_owned())
                 .or_default()
@@ -678,6 +721,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_fallback_source_fills_in_a_missing_glyph_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let asked = Arc::new(AtomicUsize::new(0));
+        let mut r = crate::Resolver::new();
+        let count = asked.clone();
+        r.set_fallback_source(Some(Arc::new(move |_, text: &str| {
+            count.fetch_add(1, SeqCst);
+            let emoji = Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap();
+            if text.contains('\u{1F600}') {
+                vec![emoji]
+            } else {
+                vec![]
+            }
+        })));
+        let mut spec = SceneSpec::new(col![text("A\u{1F600}").id("t"), text("plain")]).font(font());
+        r.resolve(&spec).unwrap();
+        let found = r.take_found_fallbacks();
+        assert_eq!(found.len(), 1, "only the string with a .notdef asks");
+        assert_eq!(asked.load(SeqCst), 1);
+        spec.fallback_fonts = found;
+        let scene = r.resolve(&spec).unwrap();
+        let glyphs = scene
+            .paint
+            .iter()
+            .filter_map(|p| p.text.as_ref())
+            .flat_map(|t| t.glyphs.iter());
+        assert!(
+            glyphs.clone().any(|g| g.font == 1),
+            "the found face drew the emoji"
+        );
+        assert!(glyphs.clone().all(|g| g.id != 0), "nothing left as .notdef");
+        r.resolve(&spec).unwrap();
+        assert_eq!(asked.load(SeqCst), 1, "a covered chain never asks again");
+        assert!(r.take_found_fallbacks().is_empty());
     }
 
     #[test]

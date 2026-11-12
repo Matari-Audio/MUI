@@ -158,6 +158,17 @@ impl FontDatabase {
             .map(|(_, font)| font.clone())
     }
 
+    /// The faces to append to `chain` so it covers `text`, as a scene's
+    /// fallback source: `ui.fallback_source(Arc::new(db.fallbacks()))`.
+    /// Selection is in memory; discover the database off the UI thread.
+    pub fn fallbacks(self: Arc<Self>) -> impl Fn(&[Font], &str) -> Vec<Font> + Send + Sync {
+        move |chain, text| {
+            self.prepare_with(chain, &FontQuery::default(), text)
+                .map(|s| s.fonts[chain.len()..].to_vec())
+                .unwrap_or_default()
+        }
+    }
+
     /// Select a primary family and prepare fallback for `text`. Missing primary
     /// families are an error; use `prepare_with` to retain supplied primary fonts.
     pub fn prepare(&self, query: &FontQuery<'_>, text: &str) -> Result<FontSelection, Error> {

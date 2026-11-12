@@ -74,8 +74,8 @@ pub use mui_style::{
 pub use mui_text::{Axes, Font, Weight};
 pub use scene::bar;
 pub use scene::{
-    Layer, LocalPose, Painted, PlacedPath, ResolvedScene, ResolvedSurface, Resolver, SceneError,
-    SceneSpec, Text, TextGlyph, push_index, resolve,
+    FallbackSource, Layer, LocalPose, Painted, PlacedPath, ResolvedScene, ResolvedSurface,
+    Resolver, SceneError, SceneSpec, Text, TextGlyph, push_index, resolve,
 };
 
 /// Everything a scene file needs, including the spacing tokens as bare
