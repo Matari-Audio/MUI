@@ -24,6 +24,12 @@ class Select(unittest.TestCase):
     def test_docs_and_media_touch_no_root_package(self):
         self.assertEqual(select(["docs/platform-notes.md", "media/mui-cut/src/lib.rs"], PACKAGES), [])
 
+    def test_prose_in_shared_dirs_is_not_shared(self):
+        self.assertEqual(select(["vendor/README.md", ".github/PULL_REQUEST_TEMPLATE.md"], PACKAGES), [])
+
+    def test_a_crate_readme_still_tests_its_crate(self):
+        self.assertEqual(select(["crates/mui-vello/README.md"], PACKAGES), ["mui-vello"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def whole(path):
-    """A change here can break any package."""
+    """A change here can break any package. Prose never does."""
+    if path.endswith(".md"):
+        return False
     return path in ("Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "tools/verify.sh") or path.startswith(
         (".cargo/", ".github/", "vendor/")
     )
