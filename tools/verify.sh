@@ -23,6 +23,11 @@ if [ "${#scope[@]}" -gt 0 ]; then
 cargo clippy "${scope[@]}" --all-features --all-targets --locked --offline -- -D warnings
 cargo test "${scope[@]}" --all-features --locked --offline
 fi
+# A workflow that does not parse fails on every push without running a job.
+if ! git diff --quiet "$base"...HEAD -- .github tools/ci; then
+"${ACTIONLINT:-actionlint}" -shellcheck= .github/workflows/*.yml
+python3 -m unittest discover -s tools/ci
+fi
 if ! git diff --quiet "$base"...HEAD -- media; then
 cargo fmt --manifest-path media/Cargo.toml --all -- --check
 cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings

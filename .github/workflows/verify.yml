@@ -168,4 +168,5 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: gh issue create -R "$GITHUB_REPOSITORY" --title "Verify failed on main at ${GITHUB_SHA::8}" --body "$GITHUB_EVENT_NAME run: $RUN"
+        run: |
+          gh issue create -R "$GITHUB_REPOSITORY" --title "Verify failed on main at ${GITHUB_SHA::8}" --body "$GITHUB_EVENT_NAME run: $RUN"
