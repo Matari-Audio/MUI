@@ -53,6 +53,31 @@ scroll redraw. Both use one draw call for the editor; the modal costs 3 draws
 in 5 passes on the frames that blur. No compute shader and no storage buffer
 is involved.
 
+## Retained memos and layout replay (2026-11-12)
+
+`cargo run -p mui --profile perf --example frame_bench` (2319 nodes, thread
+CPU time of `Ui::frame`; `TOTAL=1` adds the build). Load average ~9 on 16
+threads. `MEMO=1` wraps each track, the toolbar and the ruler in `Ui::memo`;
+`hover10` moves the pointer to a new target every tenth frame instead of
+every frame.
+
+| frame | no memo | `MEMO=1` | `MEMO=1`, before layout replay |
+|---|---:|---:|---:|
+| steady | 1.60 ms | 0.48-0.58 ms | 0.62 ms |
+| hover (new target every frame) | 1.59 ms | 1.06 ms | 1.07 ms |
+| hover10 | 1.57 ms | 0.65 ms | -- |
+| resize | 4.37 ms | 3.90 ms | 3.77 ms |
+
+Steady `MEMO=1` frame by phase before the replay: layout 227 us (every node
+re-validated), walk 245 us (spans copied), everything else ~60 us. A reused
+memo now replays its layout stamps: layout 57 us. The build itself costs
+~0.3 ms without memos and nothing with them.
+
+What this says: memos are the lever (2.5-3x on steady and realistic hover
+frames); per-frame hover targets keep several springs in flight, and a memo
+holding one rebuilds until it settles. Resize is layout-bound (bare solve of
+every node, ~1.2 us each) and the walk, neither touched by memos.
+
 ## mui-weld CPU bake (2026-09-26)
 
 `cargo run -p mui-weld --profile perf --example bake_timing`, median of 15, 16

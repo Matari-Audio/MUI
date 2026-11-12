@@ -17,6 +17,8 @@ use std::{
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LayoutStats {
     pub validated_nodes: usize,
+    /// Of those, the ones a retained subtree revalidated without comparing.
+    pub replayed_nodes: usize,
     pub measured_nodes: usize,
     pub measure_hits: usize,
     /// Constraint variants discarded by the bounded measurement cache this
@@ -46,9 +48,15 @@ struct Stamp {
 }
 /// One `prepare` walk's state. The buffers live in the cache between frames,
 /// so a warm walk allocates nothing.
-struct Scan<'k, K> {
+struct Scan<'k, K, R> {
     limits: Limits,
     key: &'k mut K,
+    /// A node's retained-subtree token: `(token, reusable)`. See
+    /// [`resolve_cached_retained`].
+    retained: &'k mut R,
+    /// Every visited node's `(address, revision)`, in completion order, so
+    /// a retained subtree's run can be recorded and replayed.
+    trail: Vec<(u64, u64)>,
     pass: u64,
     count: usize,
     /// Child revisions of every node on the current path, stacked.
@@ -256,6 +264,9 @@ fn fx(v: impl Hash) -> u64 {
     v.hash(&mut h);
     h.finish()
 }
+/// A retained subtree's run, whether it reads the container, and the pass
+/// that last used it.
+type Replay = (Vec<(u64, u64)>, bool, u64);
 #[derive(Debug, Default)]
 pub struct LayoutCache {
     /// Keyed by a hash of the node's id, or of its child-index path if it
@@ -280,6 +291,12 @@ pub struct LayoutCache {
     stats: LayoutStats,
     /// None in ordinary operation: no trace history or export buffers exist.
     trace: Option<Box<crate::diagnostics::Recorder>>,
+    /// Each retained subtree's stamps, `(address, revision)` in completion
+    /// order, whether it reads the container, and the pass that last used it.
+    replays: FxHashMap<u64, Replay>,
+    trail: Vec<(u64, u64)>,
+    /// A replay's claimed stamps and the pass each had, to undo a failed one.
+    claimed: Vec<(u64, u64)>,
 }
 impl LayoutCache {
     pub fn clear(&mut self) {
@@ -309,12 +326,23 @@ impl LayoutCache {
     // inputs before the next pass. Leaves keep their small four-entry cache.
     const BRANCH_VARIANTS: usize = 64;
     /// Validates the tree and returns its measurement and placement revisions.
+    #[cfg(test)]
     fn prepare<P>(
         &mut self,
         n: &Node<P>,
         limits: Limits,
         scale: SpacingScale,
         key: &mut impl FnMut(&P, &mut Vec<u8>),
+    ) -> Result<(u64, u64), Error> {
+        self.prepare_retained(n, limits, scale, key, &mut |_| None)
+    }
+    fn prepare_retained<P>(
+        &mut self,
+        n: &Node<P>,
+        limits: Limits,
+        scale: SpacingScale,
+        key: &mut impl FnMut(&P, &mut Vec<u8>),
+        retained: &mut impl FnMut(&P) -> Option<(u64, bool)>,
     ) -> Result<(u64, u64), Error> {
         // A context change invalidates every metric. Limits cannot be bypassed.
         if self.context != Some((limits, scale)) {
@@ -340,6 +368,8 @@ impl LayoutCache {
         let mut scan = Scan {
             limits,
             key,
+            retained,
+            trail: std::mem::take(&mut self.trail),
             pass: self.pass,
             count: 0,
             revisions: std::mem::take(&mut self.revisions),
@@ -349,6 +379,10 @@ impl LayoutCache {
         let walked = self.scan(n, 0, 0, &mut scan);
         (self.revisions, self.payload, self.placement_scratch) =
             (scan.revisions, scan.payload, scan.placement);
+        self.trail = scan.trail;
+        self.trail.clear();
+        let pass = self.pass;
+        self.replays.retain(|_, r| r.2 == pass);
         // A failed walk returns before popping its path's revisions.
         self.revisions.clear();
         let revision = walked?.0;
@@ -369,12 +403,133 @@ impl LayoutCache {
     /// mean equal subtrees. That makes the u64 address a hint, not an
     /// identity: two nodes that collide on it probe apart, and a node that
     /// lands on a stranger's stamp just fails the comparison and misses.
-    fn scan<P, K: FnMut(&P, &mut Vec<u8>)>(
+    fn scan<P, K: FnMut(&P, &mut Vec<u8>), R: FnMut(&P) -> Option<(u64, bool)>>(
         &mut self,
         n: &Node<P>,
         path: u64,
         depth: usize,
-        s: &mut Scan<'_, K>,
+        s: &mut Scan<'_, K, R>,
+    ) -> Result<(u64, bool), Error> {
+        let token = (s.retained)(&n.payload);
+        if let Some((token, true)) = token
+            && let Some(done) = self.replay(n, token, depth, s)?
+        {
+            return Ok(done);
+        }
+        let from = s.trail.len();
+        let done = self.scan_node(n, path, depth, s)?;
+        if let Some((token, _)) = token {
+            let run = s.trail[from..].to_vec();
+            self.replays.insert(token, (run, done.1, s.pass));
+        }
+        Ok(done)
+    }
+    /// Revalidate a retained subtree from the run its last scan recorded,
+    /// without projecting or comparing a node: the caller vouched it is
+    /// the very subtree scanned then. Only the bookkeeping a scan leaves
+    /// behind is redone. `None` (with nothing changed) when a stamp it
+    /// names was replaced or already claimed this pass: scan it instead.
+    fn replay<P, K, R: FnMut(&P) -> Option<(u64, bool)>>(
+        &mut self,
+        n: &Node<P>,
+        token: u64,
+        depth: usize,
+        s: &mut Scan<'_, K, R>,
+    ) -> Result<Option<(u64, bool)>, Error> {
+        let Some((run, container, _)) = self.replays.get_mut(&token) else {
+            return Ok(None);
+        };
+        let run = std::mem::take(run);
+        let container = *container;
+        let (count, placed, trailed, pinned, replayed) = (
+            s.count,
+            s.placement.len(),
+            s.trail.len(),
+            self.pinned,
+            self.stats.replayed_nodes,
+        );
+        let mut claimed = std::mem::take(&mut self.claimed);
+        claimed.clear();
+        let mut at = 0;
+        let ok = match self.replay_node(n, depth, &run, &mut at, &mut claimed, s) {
+            Ok(ok) => ok,
+            Err(e) => {
+                self.claimed = claimed;
+                return Err(e);
+            }
+        };
+        if ok && at == run.len() {
+            self.claimed = claimed;
+            let root = run[run.len() - 1].1;
+            self.replays.insert(token, (run, container, s.pass));
+            return Ok(Some((root, container)));
+        }
+        for &(address, seen) in &claimed {
+            if let Some(stamp) = self.stamps.get_mut(&address) {
+                stamp.seen = seen;
+            }
+        }
+        s.count = count;
+        self.stats.replayed_nodes = replayed;
+        s.placement.truncate(placed);
+        s.trail.truncate(trailed);
+        self.pinned = pinned;
+        self.replays.remove(&token);
+        self.claimed = claimed;
+        Ok(None)
+    }
+    fn replay_node<P, K, R: FnMut(&P) -> Option<(u64, bool)>>(
+        &mut self,
+        n: &Node<P>,
+        depth: usize,
+        run: &[(u64, u64)],
+        at: &mut usize,
+        claimed: &mut Vec<(u64, u64)>,
+        s: &mut Scan<'_, K, R>,
+    ) -> Result<bool, Error> {
+        if depth > s.limits.depth || s.count >= s.limits.nodes {
+            return Err(Error::BudgetExceeded);
+        }
+        s.count += 1;
+        if !n.scrolled.iter().all(|v| v.is_finite()) {
+            return Err(Error::InvalidValue);
+        }
+        s.placement.push(n.scrolled.map(f64::to_bits));
+        self.pinned |= n.rare().pin.is_some();
+        // A retained subtree nested in this one keeps its own record alive.
+        if let Some((token, _)) = (s.retained)(&n.payload)
+            && let Some(nested) = self.replays.get_mut(&token)
+        {
+            nested.2 = s.pass;
+        }
+        self.stats.replayed_nodes += 1;
+        for c in n.children() {
+            if !self.replay_node(c, depth + 1, run, at, claimed, s)? {
+                return Ok(false);
+            }
+        }
+        let Some(&(address, revision)) = run.get(*at) else {
+            return Ok(false);
+        };
+        *at += 1;
+        let Some(stamp) = self.stamps.get_mut(&address) else {
+            return Ok(false);
+        };
+        if stamp.seen == s.pass || stamp.revision != revision || stamp.shape.id != n.id {
+            return Ok(false);
+        }
+        claimed.push((address, stamp.seen));
+        stamp.seen = s.pass;
+        s.trail.push((address, revision));
+        self.pointers.insert(n as *const Node<P> as usize, address);
+        Ok(true)
+    }
+    fn scan_node<P, K: FnMut(&P, &mut Vec<u8>), R: FnMut(&P) -> Option<(u64, bool)>>(
+        &mut self,
+        n: &Node<P>,
+        path: u64,
+        depth: usize,
+        s: &mut Scan<'_, K, R>,
     ) -> Result<(u64, bool), Error> {
         if depth > s.limits.depth || s.count >= s.limits.nodes {
             return Err(Error::BudgetExceeded);
@@ -443,6 +598,7 @@ impl LayoutCache {
             }
         };
         s.revisions.truncate(base);
+        s.trail.push((address, revision));
         self.pointers.insert(n as *const Node<P> as usize, address);
         Ok((revision, container_dependent))
     }
@@ -541,7 +697,26 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
     limits: Limits,
     scale: SpacingScale,
     cache: &mut LayoutCache,
+    key: impl FnMut(&P, &mut Vec<u8>),
+    measurer: impl FnMut(&P, Option<f64>) -> M,
+) -> Result<Layout, Error> {
+    resolve_cached_retained(root, offered, limits, scale, cache, key, |_| None, measurer)
+}
+
+/// [`resolve_cached_with`] for a tree with retained subtrees. `retained`
+/// gives a subtree root's token, and whether it is *reusable*: the exact
+/// subtree, untouched, that the last call scanned under that token. A
+/// reusable subtree is revalidated from what that scan recorded instead of
+/// node by node; one whose stamps were since replaced is scanned as usual.
+#[expect(clippy::too_many_arguments, reason = "resolve_cached_with plus the token")]
+pub fn resolve_cached_retained<P, M: Into<Intrinsic>>(
+    root: &Node<P>,
+    offered: Option<Size>,
+    limits: Limits,
+    scale: SpacingScale,
+    cache: &mut LayoutCache,
     mut key: impl FnMut(&P, &mut Vec<u8>),
+    mut retained: impl FnMut(&P) -> Option<(u64, bool)>,
     measurer: impl FnMut(&P, Option<f64>) -> M,
 ) -> Result<Layout, Error> {
     if !limits.extent.is_finite()
@@ -568,7 +743,8 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
         };
         return Ok(layout);
     }
-    let (revision, placement) = cache.prepare(root, limits, scale, &mut key)?;
+    let (revision, placement) =
+        cache.prepare_retained(root, limits, scale, &mut key, &mut retained)?;
     if let Some((r, p, o, layout)) = &cache.last
         && (*r, *p, *o) == (revision, placement, offered_bits)
     {
@@ -1114,6 +1290,59 @@ mod tests {
             metric,
         )
         .unwrap()
+    }
+    /// `colour` doubles as a retained-subtree token in these tests.
+    fn retained(n: &Node<Text>, w: f64, c: &mut LayoutCache, reuse: bool) -> Layout {
+        resolve_cached_retained(
+            n,
+            Some(Size::new(w, 100.)),
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            c,
+            key,
+            |t: &Text| (t.colour > 0).then_some((u64::from(t.colour), reuse)),
+            metric,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn a_reused_subtree_replays_its_stamps_and_lays_out_the_same() {
+        let mut n = fixture();
+        n.children_mut()[1].payload_mut().colour = 7;
+        let mut c = LayoutCache::default();
+        retained(&n, 400., &mut c, false);
+        retained(&n, 400., &mut c, false);
+        assert_eq!(c.stats().replayed_nodes, 0);
+        assert_eq!(retained(&n, 400., &mut c, true), oracle(&n, 400.));
+        let s = c.stats();
+        assert_eq!((s.validated_nodes, s.replayed_nodes), (7, 3), "{s:?}");
+        // The rest of the tree changes around it.
+        n.children_mut()[0].children_mut()[0].payload_mut().value = "A much longer label".into();
+        assert_eq!(retained(&n, 400., &mut c, true), oracle(&n, 400.));
+        assert_eq!(c.stats().replayed_nodes, 3);
+        assert!(c.stats().measured_nodes > 0);
+    }
+    #[test]
+    fn a_retained_subtree_whose_record_no_longer_fits_is_scanned() {
+        let mut n = fixture();
+        n.children_mut()[1].payload_mut().colour = 7;
+        let mut c = LayoutCache::default();
+        retained(&n, 400., &mut c, false);
+        retained(&n, 400., &mut c, false);
+        // Rebuilt with one child fewer, yet claimed reusable.
+        n.children_mut()[1] = Node::col([label("c", "Static right panel")])
+            .id("right")
+            .grow(1.)
+            .with(Text {
+                value: String::new(),
+                colour: 7,
+            });
+        assert_eq!(retained(&n, 400., &mut c, true), oracle(&n, 400.));
+        let s = c.stats();
+        assert_eq!((s.validated_nodes, s.replayed_nodes), (6, 0), "{s:?}");
+        // What that scan recorded replays next time.
+        assert_eq!(retained(&n, 400., &mut c, true), oracle(&n, 400.));
+        assert_eq!(c.stats().replayed_nodes, 2);
     }
     /// A new size solves bare; the cache takes over once it holds.
     fn prime(n: &Node<Text>, w: f64, c: &mut LayoutCache) -> Layout {

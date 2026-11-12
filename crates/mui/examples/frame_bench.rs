@@ -99,6 +99,78 @@ fn wave(t: usize) -> El {
     .id(format!("t{t}/wave"))
 }
 
+/// `MEMO=1`: each track, the toolbar and the ruler in a memo of its own.
+fn memo_editor(ui: &mut Ui, values: &mut [f64]) -> El {
+    let toolbar = ui.memo("toolbar", 0, |_| {
+        row((0..24).map(|i| button(format!("tool{i}"), "Tool")))
+            .gap(4.0)
+            .wrap()
+    });
+    let ruler = ui.memo("ruler", 0, |_| {
+        row((0..60).map(|i| text(format!("{i}")).text_size(10.0).w(20.0))).gap(4.0)
+    });
+    let tracks: Vec<El> = values
+        .chunks_mut(5)
+        .enumerate()
+        .map(|(t, v)| {
+            let deps: Vec<u64> = v.iter().map(|x| x.to_bits()).collect();
+            ui.memo(format!("t{t}"), deps, |ui| track(ui, t, v))
+        })
+        .collect();
+    col([toolbar, ruler].into_iter().chain(tracks))
+        .gap(4.0)
+        .pad(8.0)
+        .fill(Role::Background)
+}
+
+fn track(ui: &mut Ui, t: usize, values: &mut [f64]) -> El {
+    let mut v = values.iter_mut();
+    let knobs: Vec<El> = (0..4)
+        .map(|k| {
+            knob(
+                ui,
+                format!("t{t}/k{k}"),
+                "Gain",
+                v.next().unwrap(),
+                0.0..=1.0,
+            )
+            .el
+            .into_el()
+        })
+        .collect();
+    let fader = slider(ui, format!("t{t}/f"), "Level", v.next().unwrap(), 0.0..=1.0)
+        .el
+        .into_el();
+    let head = col([
+        text(format!("Track {t}"))
+            .id(format!("t{t}/name"))
+            .tip("Double-click to rename"),
+        row(["M", "S", "R", "Fx", "Arm"].map(|b| button(format!("t{t}/{b}"), b))).gap(2.0),
+        row(knobs).gap(8.0),
+        fader.w(200.0),
+    ])
+    .gap(4.0)
+    .w(260.0);
+    let clips = row((0..CLIPS).map(|c| {
+        stack![text(format!("Clip {c}")).text_size(10.0)]
+            .w(48.0)
+            .h(40.0)
+            .fill(Role::Primary.alpha(0.4))
+            .stroke(Role::Ink.alpha(0.2))
+            .radius(4.0)
+            .on(State::Hover, |s| s.stroke(Role::Ink.alpha(0.6)))
+            .id(format!("t{t}/c{c}"))
+    }))
+    .gap(2.0)
+    .clip()
+    .grow(1.0);
+    row([head, wave(t), clips])
+        .gap(8.0)
+        .pad(6.0)
+        .fill(Role::Raised)
+        .radius(6.0)
+}
+
 fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
     let mut v = values.iter_mut();
     let toolbar = row((0..24).map(|i| button(format!("tool{i}"), "Tool")))
@@ -171,10 +243,20 @@ fn main() {
         ..Default::default()
     };
     let mut nodes = 0;
+    let memo = std::env::var_os("MEMO").is_some();
+    let total = std::env::var_os("TOTAL").is_some();
     let mut frame = |ui: &mut Ui, w: f64, p: PointerInput, dt: f64| -> f64 {
-        let root = editor(ui, &mut values);
+        let b = cpu_ms();
+        if memo {
+            ui.anticipate(p.pos);
+        }
+        let root = if memo {
+            memo_editor(ui, &mut values)
+        } else {
+            editor(ui, &mut values)
+        };
         nodes = count(&root);
-        let s = cpu_ms();
+        let s = if total { b } else { cpu_ms() };
         std::hint::black_box(ui.frame(root, size(w), p, dt).unwrap().scene.paint.len());
         cpu_ms() - s
     };
@@ -227,6 +309,11 @@ fn main() {
     run("steady", &mut |ui, _| frame(ui, 1800.0, away, 0.016));
     run("hover", &mut |ui, i| {
         frame(ui, 1800.0, over[i % over.len()], 0.016)
+    });
+    // A hand on the mouse: a new target every tenth frame (160 ms), long
+    // enough for most hover springs to settle in between.
+    run("hover10", &mut |ui, i| {
+        frame(ui, 1800.0, over[(i / 10) % over.len()], 0.016)
     });
     run("resize", &mut |ui, i| {
         frame(ui, 1500.0 + (i % 50) as f64 * 6.0, away, 0.016)

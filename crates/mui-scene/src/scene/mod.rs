@@ -548,13 +548,15 @@ fn resolve_with(
     // Every paragraph wraps in this one pass: mui-layout hands a flex item's
     // final main size back to the measurer, so there is no share left to learn
     // afterwards.
-    let layout = mui_layout::resolve_cached_with(
+    let layout = mui_layout::resolve_cached_retained(
         &spec.root,
         spec.offered,
         spec.limits,
         th.spacing,
         &mut text.layout,
         |e, out| layout_key(e, th, spec.device_scale, out),
+        // A reused memo is the subtree last resolve laid out, untouched.
+        |e| e.extras().memo.map(|m| (m.id, m.reused)),
         |e, room| fit(&mut runs, th, e, room),
     )?;
     let nodes = layout.all().len();
