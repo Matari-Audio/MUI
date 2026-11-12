@@ -9,9 +9,9 @@ impl Ui {
     /// painted -- without walking it again.
     ///
     /// "Moved" is the runtime's own state, tracked by the keys the subtree
-    /// painted: a hover, press, capture or focus arriving or leaving (call
-    /// [`Ui::anticipate`] with the pointer before building, or a hover lands
-    /// on the frame after), the
+    /// painted: a hover, press, capture or focus arriving or leaving (the
+    /// host calls [`Ui::anticipate`] with the pointer before building; a
+    /// hand-driven `Ui` must too, or a hover lands on the frame after), the
     /// canvas shape under the pointer, a spring, transition, glide, morph or
     /// scroll still in flight, a tween or play it read still running, and
     /// any button, key, text or wheel input, which every tree reads. The

@@ -708,7 +708,10 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
 /// subtree, untouched, that the last call scanned under that token. A
 /// reusable subtree is revalidated from what that scan recorded instead of
 /// node by node; one whose stamps were since replaced is scanned as usual.
-#[expect(clippy::too_many_arguments, reason = "resolve_cached_with plus the token")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resolve_cached_with plus the token"
+)]
 pub fn resolve_cached_retained<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,

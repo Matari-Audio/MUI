@@ -201,6 +201,45 @@ fn typing_reaches_the_focused_field() {
     assert_eq!(value, "h");
 }
 
+/// A secret field edits the real value but paints, copies and reports
+/// only dots; a flush one is one line tall.
+#[test]
+fn a_secret_field_edits_the_value_behind_its_dots() {
+    let mut ui = Ui::default();
+    let mut value = "pa".to_owned();
+    let opts = widgets::TextOpts {
+        secret: true,
+        flush: true,
+        ..Default::default()
+    };
+    let tree = |ui: &mut Ui, v: &mut String| widgets::text_edit(ui, "f", v, opts).el;
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, PointerInput::default(), 0.016)
+        .unwrap();
+    ui.focus("f");
+    ui.set_sel("f", 2, 2);
+    let typed = Input {
+        text: "sx".into(),
+        ..Input::default()
+    };
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, typed, 0.016).unwrap();
+    let root = tree(&mut ui, &mut value);
+    ui.frame(root, None, key(Key::Backspace), 0.016).unwrap();
+    let root = tree(&mut ui, &mut value);
+    let f = ui
+        .frame(root, None, PointerInput::default(), 0.016)
+        .unwrap();
+    assert_eq!(value, "pas");
+    let field = f.scene.surface("f").unwrap();
+    let g = field.text_geometry.as_ref().unwrap();
+    assert_eq!(&*g.state.value, "•••", "only dots reach the scene");
+    assert_eq!(
+        g.state.insets[1], 0.0,
+        "a flush field has no inset above or below"
+    );
+}
+
 /// A field tells a screen reader where its selection is and where each
 /// character sits, and a reader's `SetTextSelection` moves it.
 #[test]

@@ -720,6 +720,9 @@ impl Driver {
         s.ui.set_scale(Some(self.ui_scale()));
         self.line = s.ui.theme().text;
         let weld_before = self.profiler().map(|_| s.ui.weld_cache_stats());
+        // A memo the pointer enters or leaves this frame rebuilds now, so
+        // its hover paints this frame rather than the next.
+        s.ui.anticipate(input.pointer.pos);
         let start = self.profiler().map(|_| Instant::now());
         let root = s.view.build(&mut s.ui, &input);
         if let (Some(profile), Some(start)) = (self.profiler_mut(), start) {

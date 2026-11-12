@@ -40,6 +40,13 @@ pub struct TextOpts {
     /// Let go of the keyboard focus when the field submits, as a rename box
     /// does.
     pub blur_on_submit: bool,
+    /// Show `•` for every character, as a password field does. Typing,
+    /// deleting and pasting edit the real value; copying and the
+    /// accessibility value see only the dots.
+    pub secret: bool,
+    /// No inset above and below: the field is one line tall, for a field
+    /// set inside another box that gives it its height, icon and fill.
+    pub flush: bool,
 }
 impl Default for TextOpts {
     fn default() -> Self {
@@ -47,6 +54,8 @@ impl Default for TextOpts {
             newline: Newline::None,
             rows: 4,
             blur_on_submit: false,
+            secret: false,
+            flush: false,
         }
     }
 }
@@ -64,6 +73,24 @@ pub struct TextEdit {
 /// The text starts this far in from the field's edges.
 const PAD: f64 = 8.0;
 const PAD_Y: f64 = 6.0;
+
+/// `old` after the edit that turned its dots into `shown`: the dots kept at
+/// either end stand for the characters they hid, the rest is what was typed.
+fn unmask(old: &[char], shown: &str) -> String {
+    let new: Vec<char> = shown.chars().collect();
+    let head = new.iter().take_while(|c| **c == '•').count().min(old.len());
+    let tail = new[head..]
+        .iter()
+        .rev()
+        .take_while(|c| **c == '•')
+        .count()
+        .min(old.len() - head);
+    old[..head]
+        .iter()
+        .chain(&new[head..new.len() - tail])
+        .chain(&old[old.len() - tail..])
+        .collect()
+}
 
 /// A caret's x from [`Ui::carets`]; `0` for a byte that is not a boundary.
 fn caret_at(carets: &[(usize, f64)], byte: usize) -> f64 {
@@ -438,9 +465,23 @@ pub fn text_edit(
     value: &mut String,
     opts: TextOpts,
 ) -> Response<TextEdit> {
+    if opts.secret {
+        let old: Vec<char> = value.chars().collect();
+        let mut shown = "•".repeat(old.len());
+        let opts = TextOpts {
+            secret: false,
+            ..opts
+        };
+        let r = text_edit(ui, id, &mut shown, opts);
+        if r.changed.changed {
+            *value = unmask(&old, &shown);
+        }
+        return r;
+    }
     let id: Id = id.into();
     let id = id.as_str();
     let multi = opts.newline != Newline::None;
+    let pad_y = if opts.flush { 0.0 } else { PAD_Y };
     let size = ui.theme().text;
     let lh = ui.line_height(size);
     let focused = ui.focused(id);
@@ -469,7 +510,7 @@ pub fn text_edit(
         .scene()
         .and_then(|s| s.surface(id))
         .map_or(opts.rows.max(1) as f64 * lh, |s| {
-            (s.frame.size.height - 2. * PAD_Y).max(lh)
+            (s.frame.size.height - 2. * pad_y).max(lh)
         });
     let scroll = geometry
         .as_ref()
@@ -556,12 +597,12 @@ pub fn text_edit(
     };
     let mut el = text(shown)
         .h(if multi {
-            opts.rows.max(1) as f64 * lh + 2. * PAD_Y
+            opts.rows.max(1) as f64 * lh + 2. * pad_y
         } else {
-            lh + 2. * PAD_Y
+            lh + 2. * pad_y
         })
         .clip()
-        .pad((PAD, PAD_Y))
+        .pad((PAD, pad_y))
         .radius(6.)
         .fill(Role::Field)
         .on(State::Focus, |s| s.stroke(Role::Primary))
@@ -593,14 +634,29 @@ pub fn text_edit(
             && ui.preedit().is_none_or(|(_, cursor)| cursor.is_some()),
         scroll: if multi { scroll + r.wheel.y } else { 0. },
         follow_caret,
-        insets: [PAD, PAD_Y],
+        insets: [PAD, pad_y],
         previous_viewport: geometry.as_ref().map(|g| g.viewport),
     });
     if multi {
         ui.set_text_scroll(id, scroll);
     }
     if focused {
-        ui.set_ime_caret(id, mui_geometry::Point::new(PAD, PAD_Y), lh);
+        ui.set_ime_caret(id, mui_geometry::Point::new(PAD, pad_y), lh);
     }
     Response { el, changed: edit }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::unmask;
+
+    #[test]
+    fn unmask_splices_the_typed_characters_between_the_kept_dots() {
+        let old: Vec<char> = "secret".chars().collect();
+        assert_eq!(unmask(&old, "••••••x"), "secretx");
+        assert_eq!(unmask(&old, "•••••"), "secre");
+        assert_eq!(unmask(&old, "••X••••"), "seXcret");
+        assert_eq!(unmask(&old, "ab"), "ab");
+        assert_eq!(unmask(&[], "pw"), "pw");
+    }
 }
