@@ -11,9 +11,8 @@ GPU) and this one; a plugin that reaches MUI only through `mui` widgets,
 `mui-truce` and `mui-baseview` needs steps 1 and 2 and nothing else.
 
 1. Cargo features. The GPU feature is `gpu-quad`.
-   - On `mui`: `gpu-effects` -> `gpu-quad`. `gpu-effects` stays as a
-     deprecated alias (`gpu-effects = ["gpu-quad"]`), so an old manifest still
-     builds; rename it.
+   - On `mui`: `gpu-effects` -> `gpu-quad`. The deprecated alias was removed
+     on 2026-11-12, once every plugin named `gpu-quad`.
    - On `mui-vello`: `gpu-effects` is gone (no alias), `gpu-quad` replaces it.
      `gpu-quad` now implies `cpu` (it was `gpu-effects` alone), because the
      quad pass rasterises glyph masks and refused frames on `vello_cpu`;
