@@ -27,11 +27,16 @@ pub(super) struct CachedRun {
     /// Per-char advances, shaped the first time this string wraps, so every
     /// later width breaks without shaping.
     pub(super) advances: Option<Arc<[(f64, bool)]>>,
+    /// Each glyph's source byte offset, when they run in logical order (no
+    /// right-to-left text), so a wrapped line's glyphs are a slice of these.
+    pub(super) clusters: Option<Arc<[u32]>>,
 }
 
 impl CachedRun {
     pub(super) fn from_run(run: TextRun) -> Self {
+        let clusters: Arc<[u32]> = run.glyphs.iter().map(|g| g.cluster as u32).collect();
         Self {
+            clusters: clusters.is_sorted().then_some(clusters),
             caret_map: None,
             advance: run.advance,
             ascent: run.ascent,
@@ -60,8 +65,10 @@ pub(super) type Coords = Arc<[Arc<[i16]>]>;
 pub(super) type RunKey = (u64, u64, Coords);
 /// A run's key plus the width it broke at and its line cap.
 pub(super) type BreakKey = (RunKey, u64, Option<usize>);
-/// A paragraph's line byte ranges, and whether the cap cut lines off.
-pub(super) type Breaks = (Vec<std::ops::Range<usize>>, bool);
+/// A paragraph's line byte ranges, whether the cap cut lines off, and each
+/// line's glyphs sliced from the paragraph's run (empty when they must be
+/// shaped line by line).
+pub(super) type Breaks = (Vec<std::ops::Range<usize>>, bool, Arc<[Arc<[TextGlyph]>]>);
 /// Per string, per variant: the value and the resolve that last used it.
 pub(super) type PerText<K, V> = HashMap<String, HashMap<K, (V, u64)>>;
 /// Normalized coordinates per axes, then per (size bits, primary face id).
@@ -74,6 +81,7 @@ pub(super) type CoordsCache = HashMap<Axes, HashMap<(u64, Option<u64>), (Coords,
 #[derive(Debug, Default)]
 pub struct TextState {
     pub(super) layout: mui_layout::LayoutCache,
+    pub(super) discover: Discover,
     /// The ids of the spec's faces the cache was filled with.
     pub(super) fonts: Vec<u64>,
     pub(super) generation: u64,
@@ -152,6 +160,42 @@ impl TextState {
     }
 }
 
+/// Faces for graphemes a chain has no glyph for: given the chain and the
+/// text, the faces to append. See `FontDatabase::fallbacks` in mui-text.
+pub type FallbackSource = Arc<dyn Fn(&[Font], &str) -> Vec<Font> + Send + Sync>;
+
+/// A [`FallbackSource`] and the faces it found that the scene does not have
+/// yet, for the owner to append to its fallback fonts.
+#[derive(Default)]
+pub(super) struct Discover {
+    pub(super) source: Option<FallbackSource>,
+    pub(super) found: Vec<Font>,
+}
+impl std::fmt::Debug for Discover {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Discover")
+            .field("source", &self.source.is_some())
+            .field("found", &self.found.len())
+            .finish()
+    }
+}
+impl Discover {
+    // ponytail: a string no installed face covers asks again each time it
+    // is shaped (a new size, or after the chain grows). Remember misses if
+    // that shows up in a profile.
+    fn ask(&mut self, chain: &[Font], text: &str) {
+        let Some(source) = &self.source else {
+            return;
+        };
+        for font in source(chain, text) {
+            let id = font.id();
+            if !chain.iter().chain(&self.found).any(|f| f.id() == id) {
+                self.found.push(font);
+            }
+        }
+    }
+}
+
 /// What one text node is measured and shaped with.
 #[derive(Clone, Copy)]
 pub(super) struct Face<'a> {
@@ -183,6 +227,7 @@ pub(super) struct Runs<'a> {
     pub(super) breaks: &'a mut PerText<BreakKey, Breaks>,
     pub(super) coords: &'a mut CoordsCache,
     pub(super) last_coords: &'a mut HashMap<crate::Id, (Coords, u64)>,
+    pub(super) discover: &'a mut Discover,
 }
 impl<'a> Runs<'a> {
     /// The faces a node shapes with: its own first, then the scene's.
@@ -250,7 +295,12 @@ impl<'a> Runs<'a> {
         let generation = self.generation;
         if self.cache.get(text).is_none_or(|m| !m.contains_key(&key)) {
             let settings = face.axes.to_vec();
-            let run = CachedRun::from_run(mui_text::shape_run(&fonts, text, face.size, &settings)?);
+            let run = mui_text::shape_run(&fonts, text, face.size, &settings)?;
+            // Glyph 0 is .notdef: the chain has nothing for some grapheme.
+            if run.glyphs.iter().any(|g| g.id == 0) {
+                self.discover.ask(&fonts, text);
+            }
+            let run = CachedRun::from_run(run);
             self.cache
                 .entry(text.to_owned())
                 .or_default()
@@ -313,7 +363,7 @@ impl<'a> Runs<'a> {
                 width.to_bits(),
                 None,
             );
-            if let Some(((ranges, _), _)) = self.breaks.get(text).and_then(|m| m.get(&key)) {
+            if let Some(((ranges, ..), _)) = self.breaks.get(text).and_then(|m| m.get(&key)) {
                 return ranges.clone();
             }
         }
@@ -366,13 +416,33 @@ impl<'a> Runs<'a> {
             let advances = run.advances.as_deref().unwrap_or_default();
             let lines = mui_text::break_lines_from_advances(text, advances, max);
             let n = cap.unwrap_or(usize::MAX).max(1);
-            let ranges = lines.iter().take(n).map(|l| l.text_range.clone()).collect();
+            let ranges: Vec<_> = lines.iter().take(n).map(|l| l.text_range.clone()).collect();
+            let cut = lines.len() > n;
+            // An ellipsised last line has bytes the paragraph never shaped.
+            let whole = ranges.len() - usize::from(cut);
+            let sliced = run
+                .clusters
+                .as_deref()
+                .map_or_else(Arc::default, |clusters| {
+                    ranges[..whole]
+                        .iter()
+                        .map(|r| {
+                            slice(
+                                &run.glyphs,
+                                clusters,
+                                r.start,
+                                r.start + text[r.clone()].trim_end().len(),
+                            )
+                        })
+                        .collect()
+                });
             self.breaks
                 .entry(text.to_owned())
                 .or_default()
-                .insert(key.clone(), ((ranges, lines.len() > n), generation));
+                .insert(key.clone(), ((ranges, cut, sliced), generation));
         }
-        let Some(((ranges, cut), seen)) = self.breaks.get_mut(text).and_then(|m| m.get_mut(&key))
+        let Some(((ranges, cut, _), seen)) =
+            self.breaks.get_mut(text).and_then(|m| m.get_mut(&key))
         else {
             return one();
         };
@@ -393,6 +463,30 @@ impl<'a> Runs<'a> {
             out.push(Cow::Borrowed(""));
         }
         out
+    }
+    /// The glyphs of each line [`Self::lines`] broke `text` into at `max`,
+    /// sliced from its one shaped run, so a new width re-breaks without
+    /// shaping a line. Empty when the lines must be shaped one by one.
+    pub(super) fn line_glyphs(
+        &mut self,
+        text: &str,
+        face: Face<'_>,
+        max: f64,
+        cap: Option<usize>,
+    ) -> Arc<[Arc<[TextGlyph]>]> {
+        let fonts = self.fonts_for(face);
+        let Some(font) = fonts.first() else {
+            return Arc::default();
+        };
+        let key: BreakKey = (
+            (face.size.to_bits(), font.id(), self.coords(&fonts, face)),
+            max.to_bits(),
+            cap,
+        );
+        self.breaks
+            .get(text)
+            .and_then(|m| m.get(&key))
+            .map_or_else(Arc::default, |((.., sliced), _)| sliced.clone())
     }
     /// A wrapped label's height. Every line has the one pitch its face sets,
     /// whatever its text, so no line is shaped to find it.
@@ -432,6 +526,19 @@ impl<'a> Runs<'a> {
             ),
         }
     }
+}
+
+/// The glyphs of bytes `start..end`, moved so the first sits at the pen's
+/// origin. `clusters` are in logical order, one per glyph.
+// ponytail: kerning and ligatures across a break keep the paragraph's
+// shaping; at a space (where lines break) there is none to lose.
+fn slice(glyphs: &[TextGlyph], clusters: &[u32], start: usize, end: usize) -> Arc<[TextGlyph]> {
+    let at = |b: usize| clusters.partition_point(|&c| (c as usize) < b);
+    let line = &glyphs[at(start)..at(end)];
+    let x0 = line.first().map_or(0.0, |g| g.x);
+    line.iter()
+        .map(|g| TextGlyph { x: g.x - x0, ..*g })
+        .collect()
 }
 
 /// Exactly the fields [`fit`] consumes, as bytes the layout cache compares
@@ -617,6 +724,73 @@ mod tests {
     }
 
     #[test]
+    fn a_fallback_source_fills_in_a_missing_glyph_once() {
+        use std::sync::atomic::{AtomicUsize, Ordering::SeqCst};
+        let asked = Arc::new(AtomicUsize::new(0));
+        let mut r = crate::Resolver::new();
+        let count = asked.clone();
+        r.set_fallback_source(Some(Arc::new(move |_, text: &str| {
+            count.fetch_add(1, SeqCst);
+            let emoji = Font::new(epaint_default_fonts::NOTO_EMOJI_REGULAR).unwrap();
+            if text.contains('\u{1F600}') {
+                vec![emoji]
+            } else {
+                vec![]
+            }
+        })));
+        let mut spec = SceneSpec::new(col![text("A\u{1F600}").id("t"), text("plain")]).font(font());
+        r.resolve(&spec).unwrap();
+        let found = r.take_found_fallbacks();
+        assert_eq!(found.len(), 1, "only the string with a .notdef asks");
+        assert_eq!(asked.load(SeqCst), 1);
+        spec.fallback_fonts = found;
+        let scene = r.resolve(&spec).unwrap();
+        let glyphs = scene
+            .paint
+            .iter()
+            .filter_map(|p| p.text.as_ref())
+            .flat_map(|t| t.glyphs.iter());
+        assert!(
+            glyphs.clone().any(|g| g.font == 1),
+            "the found face drew the emoji"
+        );
+        assert!(glyphs.clone().all(|g| g.id != 0), "nothing left as .notdef");
+        r.resolve(&spec).unwrap();
+        assert_eq!(asked.load(SeqCst), 1, "a covered chain never asks again");
+        assert!(r.take_found_fallbacks().is_empty());
+    }
+
+    #[test]
+    fn a_resized_paragraph_rebreaks_without_shaping_a_line() {
+        let para = "one two three four five six seven eight nine ten";
+        let mut state = TextState::default();
+        for w in [80., 95., 110., 130., 160.] {
+            let spec = SceneSpec::new(col![text(para).id("p")].w(w)).font(font());
+            let scene = state.resolve(&spec).unwrap();
+            assert_eq!(state.len(), 1, "a width of {w} shaped a line on its own");
+            let painted: Vec<Vec<(u32, f32)>> = scene
+                .paint
+                .iter()
+                .filter_map(|p| p.text.as_ref())
+                .map(|t| t.glyphs.iter().map(|g| (g.id, g.x)).collect())
+                .collect();
+            assert!(painted.len() > 1, "{w} did not wrap");
+            let ranges = &state.breaks[para].values().next().unwrap().0.0;
+            for (line, r) in painted.iter().zip(ranges) {
+                let own = mui_text::shape_run(&[font()], para[r.clone()].trim_end(), 14.0, &[]);
+                let own: Vec<(u32, f32)> = own
+                    .unwrap()
+                    .glyphs
+                    .iter()
+                    .map(|g| (g.id, g.x as f32))
+                    .collect();
+                assert_eq!(line, &own, "{w}: {:?}", &para[r.clone()]);
+            }
+            state.recycle(scene);
+        }
+    }
+
+    #[test]
     fn a_steady_paragraph_reuses_its_line_breaks() {
         let para = "one two three four five six seven eight nine ten";
         let spec = SceneSpec::new(col![text(para).id("p")].w(80.))
@@ -625,7 +799,7 @@ mod tests {
         let lines = |s: &ResolvedScene| s.paint.iter().filter(|p| p.layer == Layer::Text).count();
         assert!(lines(&text.resolve(&spec).unwrap()) > 1);
         // Doctor the cached breaks: a resolve that re-broke would not see it.
-        for ((ranges, _), _) in text.breaks.values_mut().flat_map(|m| m.values_mut()) {
+        for ((ranges, ..), _) in text.breaks.values_mut().flat_map(|m| m.values_mut()) {
             *ranges = std::iter::once(0..para.len()).collect();
         }
         assert_eq!(lines(&text.resolve(&spec).unwrap()), 1);

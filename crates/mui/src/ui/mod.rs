@@ -435,6 +435,13 @@ impl Ui {
         self.font = Some(font);
         self
     }
+    /// Where to find a face for text the fonts have no glyph for, such as
+    /// `mui_text::FontDatabase::fallbacks` (feature `system-fonts`). A face
+    /// it finds joins the fallback fonts and the frame after reshapes with it.
+    pub fn fallback_source(mut self, source: mui_scene::FallbackSource) -> Self {
+        self.resolver.set_fallback_source(Some(source));
+        self
+    }
     /// Add a font used when the primary face has no glyph for a grapheme.
     /// The selected face is retained in the scene text payload, so CPU and
     /// GPU renderers use the same fallback choice.
@@ -1385,6 +1392,13 @@ impl Ui {
             },
             self.scene.as_deref(),
         )?;
+        let found = self.resolver.take_found_fallbacks();
+        if !found.is_empty() {
+            self.retained_root = None;
+            self.fallback_fonts.extend(found);
+            self.runs.set_fallbacks(self.fallback_fonts.clone());
+            self.repaint_in(0.0);
+        }
         if self
             .scene
             .as_ref()
