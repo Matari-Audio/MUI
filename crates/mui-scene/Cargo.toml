@@ -16,6 +16,7 @@ mui-text.workspace = true
 # `sym`, in the prelude for `icon(sym::HOME)`.
 mui-symbols.workspace = true
 rustc-hash.workspace = true
+smallvec = "1.16"
 
 [dev-dependencies]
 mui-material.workspace = true

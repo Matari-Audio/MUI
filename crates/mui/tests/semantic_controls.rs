@@ -398,6 +398,28 @@ fn compact_macro_style_knob_keeps_its_value_inside_and_its_name_accessible() {
 }
 
 #[test]
+fn a_still_knob_keeps_its_painted_dial_across_frames() {
+    let mut ui = Ui::default();
+    let paths = |ui: &mut Ui, mut value: f64| {
+        let control = knob(ui, "dial", "Mix", &mut value, 0.0..=1.0);
+        ui.frame(control.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+        let scene = ui.scene().unwrap();
+        let drawn = scene
+            .paint
+            .iter()
+            .filter(|p| matches!(p.layer, Layer::Draw(_)));
+        drawn.map(|p| Arc::clone(&p.path)).collect::<Vec<_>>()
+    };
+    let (a, b) = (paths(&mut ui, 0.5), paths(&mut ui, 0.5));
+    assert_eq!((a.len(), b.len()), (3, 3), "the dial lost a stroke");
+    assert!(
+        a.iter().zip(&b).all(|(a, b)| Arc::ptr_eq(a, b)),
+        "redrawn while still"
+    );
+}
+
+#[test]
 fn dragging_from_the_centered_reading_changes_the_knob_value() {
     let mut ui = Ui::default();
     let mut value = 0.;
