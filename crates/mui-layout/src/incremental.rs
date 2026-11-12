@@ -264,6 +264,9 @@ fn fx(v: impl Hash) -> u64 {
     v.hash(&mut h);
     h.finish()
 }
+/// A retained subtree's run, whether it reads the container, and the pass
+/// that last used it.
+type Replay = (Vec<(u64, u64)>, bool, u64);
 #[derive(Debug, Default)]
 pub struct LayoutCache {
     /// Keyed by a hash of the node's id, or of its child-index path if it
@@ -290,7 +293,7 @@ pub struct LayoutCache {
     trace: Option<Box<crate::diagnostics::Recorder>>,
     /// Each retained subtree's stamps, `(address, revision)` in completion
     /// order, whether it reads the container, and the pass that last used it.
-    replays: FxHashMap<u64, (Vec<(u64, u64)>, bool, u64)>,
+    replays: FxHashMap<u64, Replay>,
     trail: Vec<(u64, u64)>,
     /// A replay's claimed stamps and the pass each had, to undo a failed one.
     claimed: Vec<(u64, u64)>,
@@ -705,7 +708,7 @@ pub fn resolve_cached_with<P, M: Into<Intrinsic>>(
 /// subtree, untouched, that the last call scanned under that token. A
 /// reusable subtree is revalidated from what that scan recorded instead of
 /// node by node; one whose stamps were since replaced is scanned as usual.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "resolve_cached_with plus the token")]
 pub fn resolve_cached_retained<P, M: Into<Intrinsic>>(
     root: &Node<P>,
     offered: Option<Size>,
