@@ -569,3 +569,48 @@ fn native_failed_show_stops_worker_before_joining() {
     drop_rx.recv_timeout(Duration::from_secs(2)).unwrap();
     runner.join().unwrap();
 }
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_a_click_takes_the_keyboard_from_the_host_and_a_wheel_does_not() {
+    use x11rb::protocol::xproto::{ButtonPressEvent, EventMask, InputFocus, KeyButMask};
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let root = conn.setup().roots[screen].root;
+    let host = parent(&conn, root);
+    conn.map_window(host).unwrap().check().unwrap();
+    let count = Arc::new(AtomicUsize::new(0));
+    let window = editor(host, Arc::clone(&count), FrameDemand::Idle);
+    window.show().unwrap();
+    wait_for_frame(&count, 0);
+    let child = conn.query_tree(host).unwrap().reply().unwrap().children[0];
+    // The host holds the keyboard, as a DAW's own window does.
+    conn.set_input_focus(InputFocus::PARENT, host, x11rb::CURRENT_TIME).unwrap().check().unwrap();
+    let focus = || conn.get_input_focus().unwrap().reply().unwrap().focus;
+    let press = |detail: u8| {
+        let event = ButtonPressEvent {
+            response_type: x11rb::protocol::xproto::BUTTON_PRESS_EVENT,
+            detail,
+            sequence: 0,
+            time: x11rb::CURRENT_TIME,
+            root,
+            event: child,
+            child: x11rb::NONE,
+            root_x: 10,
+            root_y: 10,
+            event_x: 10,
+            event_y: 10,
+            state: KeyButMask::default(),
+            same_screen: true,
+        };
+        conn.send_event(false, child, EventMask::BUTTON_PRESS, event).unwrap().check().unwrap();
+        thread::sleep(Duration::from_millis(150));
+    };
+    thread::sleep(Duration::from_millis(150));
+    assert_eq!(focus(), host, "being shown takes nothing");
+    press(4);
+    assert_eq!(focus(), host, "a wheel takes nothing");
+    press(1);
+    assert_eq!(focus(), child, "a click takes the keyboard");
+    window.close_bounded(Duration::from_millis(250));
+    conn.destroy_window(host).unwrap().check().unwrap();
+}
