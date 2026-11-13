@@ -26,7 +26,7 @@ use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::randr::{ConnectionExt as _, ModeFlag, ModeInfo};
 use x11rb::protocol::xproto::{
-    ConnectionExt as _, EventMask, InputFocus, KeyPressEvent, KeyReleaseEvent,
+    ConnectionExt as _, EventMask, InputFocus, KeyPressEvent, KeyReleaseEvent, NotifyDetail,
 };
 use x11rb::protocol::Event as XEvent;
 use x11rb::CURRENT_TIME;
@@ -92,6 +92,9 @@ pub(crate) struct EventLoop {
     /// Keys currently held down in this window, by X keycode. Used to flag
     /// auto-repeat key-downs (MOOSE X01).
     pressed_keys: [bool; 256],
+    /// Focus ownership for click-to-focus; pointer-derived focus still drives
+    /// the existing focus notifications and IME state.
+    owns_focus: bool,
     /// Key-downs the handler ignored and that were forwarded to the embed
     /// parent, so the matching key-up can be synthesized on focus loss/close.
     forwarded_keys: [Option<KeyPressEvent>; 256],
@@ -150,6 +153,7 @@ impl EventLoop {
             run_error: None,
             main_thread,
             pressed_keys: [false; 256],
+            owns_focus: false,
             forwarded_keys: [None; 256],
 
             window,
@@ -826,7 +830,7 @@ impl EventLoop {
                         // A host does not always give its plugin's window the
                         // keyboard: a click inside takes it, with the click's
                         // own time, and it goes back to the parent after.
-                        if takes_focus(self.window.parented, self.window.has_focus(), detail) {
+                        if takes_focus(self.window.parented, self.owns_focus, detail) {
                             let conn = &self.window.connection.conn;
                             let _ = conn.set_input_focus(
                                 InputFocus::PARENT,
@@ -877,6 +881,7 @@ impl EventLoop {
             }
 
             XEvent::FocusIn(event) if event.event == self.window.raw_id() => {
+                self.owns_focus = event.detail != NotifyDetail::POINTER;
                 self.window.is_focused.set(true);
                 let config = self.window.ime_configuration.borrow().clone();
                 self.window.set_ime_configuration(config);
@@ -885,6 +890,7 @@ impl EventLoop {
             }
 
             XEvent::FocusOut(e) if e.event == self.window.raw_id() => {
+                self.owns_focus = false;
                 self.window.is_focused.set(false);
                 let config = self.window.ime_configuration.borrow().clone();
                 self.window.set_ime_configuration(config);
