@@ -37,6 +37,7 @@ pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 mod drag;
 mod native_worker;
 mod policies;
+mod timing;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{
     DropData, DropEffect, Event, EventStatus, HandlerError, MouseButton, MouseCursor, MouseEvent,
