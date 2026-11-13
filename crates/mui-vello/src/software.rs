@@ -148,7 +148,9 @@ impl Renderer {
                 resources: &mut self.resources,
                 cache: &mut self.cache,
             };
-            crate::paint(&mut canvas, scene, transform).map_err(|e| e.to_string())?;
+            let view = crate::kurbo::Rect::new(x.into(), y.into(), (x + w).into(), (y + h).into());
+            crate::paint_within(&mut canvas, scene, transform, Some(view))
+                .map_err(|e| e.to_string())?;
             self.ctx.flush();
             self.ctx.render_with(
                 &mut scratch,

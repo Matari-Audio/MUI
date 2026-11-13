@@ -587,6 +587,17 @@ pub fn paint(
     scene: &ResolvedScene,
     transform: Affine,
 ) -> Result<(), Error> {
+    paint_within(canvas, scene, transform, None)
+}
+
+/// [`paint`], skipping every leaf whose reach misses the device rect
+/// `view`. Clips, masks and layers are kept so their pushes and pops pair.
+pub(crate) fn paint_within(
+    canvas: &mut impl Canvas,
+    scene: &ResolvedScene,
+    transform: Affine,
+    view: Option<Rect>,
+) -> Result<(), Error> {
     // A CPU/sink Canvas must not silently omit external GPU paint. Use
     // effects::GpuRenderer for scenes containing native material surfaces.
     if scene.paint.iter().any(|p| p.layer == Layer::External) {
@@ -595,7 +606,7 @@ pub fn paint(
     canvas.begin_frame();
     let mut bez = BezPath::new();
     for (i, p) in scene.paint.iter().enumerate() {
-        if layered(canvas, p) {
+        if layered(canvas, p) || view.is_some_and(|v| misses(p, transform, v)) {
             continue;
         }
         bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
@@ -609,6 +620,26 @@ pub fn paint(
         }
     }
     Ok(())
+}
+
+/// Whether leaf `p` paints nothing inside device rect `view`. Only the
+/// CPU damage pass culls; without it nothing is skipped.
+#[cfg(not(feature = "cpu"))]
+fn misses(_: &Painted, _: Affine, _: Rect) -> bool {
+    false
+}
+
+/// Whether leaf `p` paints nothing inside device rect `view`.
+#[cfg(feature = "cpu")]
+fn misses(p: &Painted, transform: Affine, view: Rect) -> bool {
+    !matches!(p.layer, Layer::Clip | Layer::Mask)
+        && damage::reach(p).is_some_and(|r| {
+            r == damage::NOTHING
+                || !transform
+                    .transform_rect_bbox(r)
+                    .inflate(2., 2.)
+                    .overlaps(view)
+        })
 }
 
 /// `base` moved to where `p` stands: its paths are local to
