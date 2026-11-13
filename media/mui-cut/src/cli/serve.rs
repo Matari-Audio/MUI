@@ -296,8 +296,7 @@ pub fn merge(
     ops: &[Value],
 ) -> (Value, Vec<String>, Vec<String>) {
     let theirs: Vec<String> = base
-        .map(|b| diff(b, current))
-        .unwrap_or_default()
+        .map_or_default(|b| diff(b, current))
         .iter()
         .filter_map(|o| o["path"].as_str().map(str::to_owned))
         .collect();
@@ -453,8 +452,7 @@ impl Shared {
             .ok()
             .and_then(|v| crate::cli::host::playhead(&v));
         Project::load(&text)
-            .map(|p| crate::cli::host::by_playhead(&p, at))
-            .unwrap_or_default()
+            .map_or_default(|p| crate::cli::host::by_playhead(&p, at))
             .into_iter()
             .filter(|path| dir.join(path).is_file())
             .collect()
@@ -601,8 +599,7 @@ impl Shared {
                 let taken: Vec<String> = std::fs::read_to_string(&self.project)
                     .ok()
                     .and_then(|t| Project::load(&t).ok())
-                    .map(|p| p.all_sources().into_iter().map(|m| m.id).collect())
-                    .unwrap_or_default();
+                    .map_or_default(|p| p.all_sources().into_iter().map(|m| m.id).collect());
                 let taken: Vec<&str> = taken.iter().map(String::as_str).collect();
                 let from = v["from"].as_str().unwrap_or("").trim();
                 let id = v["id"].as_str().map(str::trim).filter(|s| !s.is_empty());

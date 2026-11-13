@@ -325,12 +325,11 @@ impl Assets {
                 ..
             } => vector::duplicator(l, *shape, d, *layout, along, *orient),
             // A missing file draws nothing (the CLI warns when it loads).
-            Kind::Svg { path } => self.svgs.get(path).map(|p| p.to_vec()).unwrap_or_default(),
+            Kind::Svg { path } => self.svgs.get(path).map_or_default(|p| p.to_vec()),
             Kind::Lottie { path, looped, .. } => self
                 .lotties
                 .get(path)
-                .map(|c| vector::lottie(c, l.time, *looped))
-                .unwrap_or_default(),
+                .map_or_default(|c| vector::lottie(c, l.time, *looped)),
             Kind::Rect
             | Kind::Ellipse
             | Kind::Image { .. }
@@ -904,20 +903,17 @@ fn patch_panel(patch: &serde_json::Value, w: f64, h: f64) -> El {
         ])
     };
     let label = |s: &str| text(s.to_owned()).text_size(11.).fill(color(DIM));
-    let held: Vec<String> = patch["held"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(serde_json::Value::as_u64)
-                .map(|n| {
-                    const NAMES: [&str; 12] = [
-                        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
-                    ];
-                    format!("{}{}", NAMES[(n % 12) as usize], n as i64 / 12 - 1)
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    let held: Vec<String> = patch["held"].as_array().map_or_default(|a| {
+        a.iter()
+            .filter_map(serde_json::Value::as_u64)
+            .map(|n| {
+                const NAMES: [&str; 12] = [
+                    "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+                ];
+                format!("{}{}", NAMES[(n % 12) as usize], n as i64 / 12 - 1)
+            })
+            .collect()
+    });
     let name = patch["plugin"].as_str().unwrap_or("PLUGIN").to_uppercase();
     let mut rows = vec![
         row([

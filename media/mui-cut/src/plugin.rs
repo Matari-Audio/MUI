@@ -490,8 +490,7 @@ impl Layer {
         let state = self
             .plugin_track(fps, rate, f)
             .pop()
-            .map(|s| s.key)
-            .unwrap_or_default();
+            .map_or_default(|s| s.key);
         // Parameters and pointer are read on the grid, like the capture.
         let tq = f as f64 / fps;
         Some(PluginAt {
