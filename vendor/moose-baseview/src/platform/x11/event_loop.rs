@@ -95,6 +95,10 @@ pub(crate) struct EventLoop {
     /// Focus ownership for click-to-focus; pointer-derived focus still drives
     /// the existing focus notifications and IME state.
     owns_focus: bool,
+    /// A click asked for the keyboard and its FocusIn has not come yet. The
+    /// pointer-derived focus it replaces ends first, with a FocusOut that
+    /// must not cancel the very click that asked.
+    taking_focus: bool,
     /// Key-downs the handler ignored and that were forwarded to the embed
     /// parent, so the matching key-up can be synthesized on focus loss/close.
     forwarded_keys: [Option<KeyPressEvent>; 256],
@@ -154,6 +158,7 @@ impl EventLoop {
             main_thread,
             pressed_keys: [false; 256],
             owns_focus: false,
+            taking_focus: false,
             forwarded_keys: [None; 256],
 
             window,
@@ -838,6 +843,7 @@ impl EventLoop {
                                 event.time,
                             );
                             let _ = conn.flush();
+                            self.taking_focus = true;
                         }
                         self.handle_event(Event::Mouse(MouseEvent::ButtonPressed {
                             button: mouse_id(detail),
@@ -881,6 +887,7 @@ impl EventLoop {
             }
 
             XEvent::FocusIn(event) if event.event == self.window.raw_id() => {
+                self.taking_focus = false;
                 self.owns_focus = event.detail != NotifyDetail::POINTER;
                 self.window.is_focused.set(true);
                 let config = self.window.ime_configuration.borrow().clone();
@@ -889,7 +896,10 @@ impl EventLoop {
                 self.handle_event(Event::Window(WindowEvent::Focused));
             }
 
-            XEvent::FocusOut(e) if e.event == self.window.raw_id() => {
+            XEvent::FocusOut(e)
+                if e.event == self.window.raw_id()
+                    && !(self.taking_focus && e.detail == NotifyDetail::POINTER) =>
+            {
                 self.owns_focus = false;
                 self.window.is_focused.set(false);
                 let config = self.window.ime_configuration.borrow().clone();
