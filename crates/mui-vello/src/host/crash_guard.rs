@@ -8,16 +8,21 @@ use std::path::PathBuf;
 #[derive(Clone)]
 pub(super) struct Key(String);
 
+/// This build of MUI: its version and source checkout (a git dependency's
+/// checkout path names its commit). A trial is denied for one build only, so
+/// a crash cannot disable the GPU for every build after it.
+const BUILD: &str = concat!(env!("CARGO_PKG_VERSION"), "@", env!("CARGO_MANIFEST_DIR"));
+
 impl Key {
     pub(super) fn enumeration(backends: wgpu::Backends) -> Self {
         Self(format!(
-            "backend={backends:?};adapter=unknown;driver=unknown"
+            "backend={backends:?};adapter=unknown;driver=unknown;build={BUILD}"
         ))
     }
 
     pub(super) fn adapter(info: &wgpu::AdapterInfo) -> Self {
         Self(format!(
-            "backend={:?};vendor={:08x};device={:08x};driver[{}]={};driver_info[{}]={}",
+            "backend={:?};vendor={:08x};device={:08x};driver[{}]={};driver_info[{}]={};build={BUILD}",
             info.backend,
             info.vendor,
             info.device,
@@ -277,6 +282,19 @@ mod tests {
         directory.stale(&adapter("old driver"));
         assert!(directory.begin(&adapter("updated driver"), false).is_ok());
         assert!(directory.begin(&adapter("old driver"), false).is_err());
+    }
+
+    #[test]
+    fn a_new_build_retries_a_stale_trial_and_a_crash_there_denies_it_again() {
+        let directory = Directory::new();
+        let on = |build: &str| Key(format!("backend=Vulkan;adapter=unknown;build={build}"));
+        directory.stale(&on("old"));
+        assert!(directory.begin(&on("old"), false).is_err());
+        let retry = directory.begin(&on("new"), false);
+        assert!(retry.is_ok(), "a new build tries the GPU again");
+        drop(retry);
+        directory.stale(&on("new"));
+        assert!(directory.begin(&on("new"), false).is_err());
     }
 
     #[test]
