@@ -25,7 +25,9 @@ use std::time::{Duration, Instant};
 use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::randr::{ConnectionExt as _, ModeFlag, ModeInfo};
-use x11rb::protocol::xproto::{ConnectionExt as _, EventMask, KeyPressEvent, KeyReleaseEvent};
+use x11rb::protocol::xproto::{
+    ConnectionExt as _, EventMask, InputFocus, KeyPressEvent, KeyReleaseEvent, NotifyDetail,
+};
 use x11rb::protocol::Event as XEvent;
 use x11rb::CURRENT_TIME;
 
@@ -90,6 +92,9 @@ pub(crate) struct EventLoop {
     /// Keys currently held down in this window, by X keycode. Used to flag
     /// auto-repeat key-downs (MOOSE X01).
     pressed_keys: [bool; 256],
+    /// Focus ownership for click-to-focus; pointer-derived focus still drives
+    /// the existing focus notifications and IME state.
+    owns_focus: bool,
     /// Key-downs the handler ignored and that were forwarded to the embed
     /// parent, so the matching key-up can be synthesized on focus loss/close.
     forwarded_keys: [Option<KeyPressEvent>; 256],
@@ -148,6 +153,7 @@ impl EventLoop {
             run_error: None,
             main_thread,
             pressed_keys: [false; 256],
+            owns_focus: false,
             forwarded_keys: [None; 256],
 
             window,
@@ -821,6 +827,18 @@ impl EventLoop {
                         }));
                     }
                     detail => {
+                        // A host does not always give its plugin's window the
+                        // keyboard: a click inside takes it, with the click's
+                        // own time, and it goes back to the parent after.
+                        if takes_focus(self.window.parented, self.owns_focus, detail) {
+                            let conn = &self.window.connection.conn;
+                            let _ = conn.set_input_focus(
+                                InputFocus::PARENT,
+                                self.window.raw_id(),
+                                event.time,
+                            );
+                            let _ = conn.flush();
+                        }
                         self.handle_event(Event::Mouse(MouseEvent::ButtonPressed {
                             button: mouse_id(detail),
                             modifiers: key_mods(event.state),
@@ -863,6 +881,7 @@ impl EventLoop {
             }
 
             XEvent::FocusIn(event) if event.event == self.window.raw_id() => {
+                self.owns_focus = event.detail != NotifyDetail::POINTER;
                 self.window.is_focused.set(true);
                 let config = self.window.ime_configuration.borrow().clone();
                 self.window.set_ime_configuration(config);
@@ -871,6 +890,7 @@ impl EventLoop {
             }
 
             XEvent::FocusOut(e) if e.event == self.window.raw_id() => {
+                self.owns_focus = false;
                 self.window.is_focused.set(false);
                 let config = self.window.ime_configuration.borrow().clone();
                 self.window.set_ime_configuration(config);
@@ -989,6 +1009,13 @@ impl EventLoop {
     }
 }
 
+/// Whether a press of button `detail` takes the keyboard: only in an
+/// embedded window that lacks it, and never for the wheel (4..=7), so a
+/// pointer passing over or scrolling leaves the host's keys alone.
+fn takes_focus(parented: bool, focused: bool, detail: u8) -> bool {
+    parented && !focused && !(4..=7).contains(&detail)
+}
+
 fn frame_deadline(
     demand: FrameDemand, now: Instant, last_frame: Instant, interval: Duration,
 ) -> Option<Instant> {
@@ -1064,6 +1091,15 @@ fn mouse_id(id: u8) -> MouseButton {
 #[cfg(test)]
 #[allow(clippy::arithmetic_side_effects, reason = "test clocks use fixed small durations")]
 mod tests {
+    #[test]
+    fn only_a_click_in_an_unfocused_embedded_window_takes_the_keyboard() {
+        assert!(super::takes_focus(true, false, 1));
+        assert!(super::takes_focus(true, false, 3));
+        assert!(!super::takes_focus(true, true, 1), "it has it already");
+        assert!(!super::takes_focus(false, false, 1), "a top level's is the WM's");
+        assert!((4..=7).all(|w| !super::takes_focus(true, false, w)), "the wheel never");
+    }
+
     use super::mode_refresh_hz;
     use x11rb::protocol::randr::{ModeFlag, ModeInfo};
 

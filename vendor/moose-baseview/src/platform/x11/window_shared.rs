@@ -84,7 +84,7 @@ pub(crate) struct WindowInner {
     pub(crate) main_thread_shared: Arc<WindowThreadShared>,
 
     /// The newest pointer event, the authority an outbound drag starts from.
-    parented: bool,
+    pub(crate) parented: bool,
     pub(crate) defer_user_close: bool,
     pub(crate) last_pointer_event: Cell<Option<X11PointerEvent>>,
     pub(crate) primary_pointer_down: Cell<bool>,
