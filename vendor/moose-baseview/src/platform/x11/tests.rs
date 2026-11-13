@@ -167,14 +167,16 @@ fn native_request_racing_demand_and_timer_rearm_is_not_lost() {
     });
     ready.store(true, Ordering::Release);
     wake.request_frame();
-    wait_for_frame(&count, before + 1);
+    wait_for_frame(&count, before);
     producer.join().unwrap();
     thread::sleep(Duration::from_millis(200));
-    assert_eq!(
-        count.load(Ordering::Acquire),
-        before + 2,
-        "the racing request must draw once, not wait five seconds or remain latched"
-    );
+    // The racing request came before the frame that drew: that frame serves
+    // both. It must not wait five seconds, draw twice or remain latched.
+    assert_eq!(count.load(Ordering::Acquire), before + 1, "racing request");
+    wake.request_frame();
+    wait_for_frame(&count, before + 1);
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(count.load(Ordering::Acquire), before + 2, "a later request draws once");
     window.close_bounded(Duration::from_millis(250));
     conn.destroy_window(host).unwrap().check().unwrap();
 }

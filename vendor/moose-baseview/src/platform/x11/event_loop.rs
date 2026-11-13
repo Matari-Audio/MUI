@@ -60,6 +60,9 @@ pub(crate) struct EventLoop {
     new_size: Option<PhysicalSize<u16>>,
     new_parent_size: Option<PhysicalSize<u16>>,
     exposed: bool,
+    /// A `request_frame` from another thread: served on the next paced frame,
+    /// never at once, so a renderer that asks again per frame stays at refresh.
+    frame_requested: Option<Instant>,
 
     /// `on_frame` pacing: the refresh period of the monitor under the window (MOOSE).
     frame_interval: Duration,
@@ -135,6 +138,7 @@ impl EventLoop {
             new_size: None,
             new_parent_size: None,
             exposed: false,
+            frame_requested: None,
             frame_interval,
             refresh_rate_stale: false,
             refresh_rate_queried_at: Instant::now(),
@@ -214,7 +218,9 @@ impl EventLoop {
             self.frame_interval = frame_interval(query_refresh_hz(&self.window));
         }
         let deadline = if visible {
-            frame_deadline(self.handler.frame_demand(), now, self.last_frame, self.frame_interval)
+            let demand = self.handler.frame_demand();
+            let demand = self.frame_requested.map_or(demand, |at| soonest(demand, at));
+            frame_deadline(demand, now, self.last_frame, self.frame_interval)
         } else {
             None
         };
@@ -255,6 +261,7 @@ impl EventLoop {
         if !self.window.visibility_state.own_window_is_viewable() {
             return;
         }
+        self.frame_requested = None;
 
         self.last_frame = Instant::now();
         if let Err(e) = self.handler.on_frame() {
@@ -437,7 +444,9 @@ impl EventLoop {
             self.stop_now();
             return Ok(());
         }
-        self.exposed |= self.window.main_thread_shared.take_frame_request();
+        if self.window.main_thread_shared.take_frame_request() {
+            self.frame_requested.get_or_insert_with(Instant::now);
+        }
         // Check for any events in the internal buffers before going to sleep:
         self.drain_xcb_events()?;
 
@@ -991,6 +1000,15 @@ fn frame_deadline(
     }
 }
 
+/// `demand`, due no later than `now`.
+fn soonest(demand: FrameDemand, now: Instant) -> FrameDemand {
+    match demand {
+        FrameDemand::Idle => FrameDemand::At(now),
+        FrameDemand::At(at) => FrameDemand::At(at.min(now)),
+        FrameDemand::Continuous => FrameDemand::Continuous,
+    }
+}
+
 /// Refresh rate of the RandR CRTC under the window's centre, `None` when RandR is missing or
 /// the window is off every CRTC (MOOSE).
 fn query_refresh_hz(window: &WindowInner) -> Option<f64> {
@@ -1082,6 +1100,22 @@ mod tests {
         let later = now + Duration::from_secs(1);
         assert_eq!(frame_deadline(FrameDemand::At(later), now, now, interval), Some(later));
         assert_eq!(frame_deadline(FrameDemand::Continuous, later, now, interval), Some(later));
+    }
+
+    #[test]
+    fn a_frame_request_right_after_a_frame_waits_for_the_refresh() {
+        use super::{frame_deadline, soonest};
+        use crate::FrameDemand;
+        use std::time::{Duration, Instant};
+        let now = Instant::now();
+        let interval = Duration::from_millis(16);
+        let asked = soonest(FrameDemand::Idle, now);
+        assert_eq!(frame_deadline(asked, now, now, interval), Some(now + interval));
+        let long_ago = now.checked_sub(interval * 2).unwrap_or(now);
+        assert_eq!(frame_deadline(asked, now, long_ago, interval), Some(now));
+        // A request is never held behind a later deadline the handler gave.
+        let later = now + Duration::from_secs(5);
+        assert_eq!(soonest(FrameDemand::At(later), now), FrameDemand::At(now));
     }
 
     #[test]
