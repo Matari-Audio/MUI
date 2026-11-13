@@ -419,6 +419,7 @@ impl NativeAdapter {
         }
         #[cfg(not(target_os = "macos"))]
         let mut bitmap = self.bitmap.borrow_mut();
+        let blitting = std::time::Instant::now();
         let submitted = submit_patches(
             &self.requests,
             output.size,
@@ -464,6 +465,7 @@ impl NativeAdapter {
                 }
             },
         );
+        crate::timing::note("blit ms", blitting.elapsed().as_secs_f64() * 1e3);
         if !submitted {
             self.send(Command::Invalidate);
             self.input_pending.set(true);
@@ -823,7 +825,7 @@ fn worker<V: View>(
                     driver.redraw();
                 }
             }
-            let fresh = driver.advance(&mut shared, now);
+            let fresh = crate::timing::time("advance ms", || driver.advance(&mut shared, now));
             unpainted |= fresh;
             let ime = driver
                 .ime_configuration(&shared.ui)
@@ -837,7 +839,7 @@ fn worker<V: View>(
             });
             (
                 if unpainted && valid {
-                    shared.ui.scene_snapshot()
+                    crate::timing::time("snapshot ms", || shared.ui.scene_snapshot())
                 } else {
                     None
                 },
@@ -856,7 +858,9 @@ fn worker<V: View>(
         if let Some(scene) = scene {
             let transform = Affine::scale(driver.ui_scale());
             if let Some(result) = render_gpu(&mut gpu, |renderer| {
-                renderer.render(&scene, transform, size)
+                crate::timing::time("gpu render+readback ms", || {
+                    renderer.render(&scene, transform, size)
+                })
             }) {
                 match result {
                     Ok(damage) => {
@@ -891,7 +895,9 @@ fn worker<V: View>(
                     }
                     let cpu = cpu.as_mut().expect("created above");
                     cpu.resize(size)?;
-                    let rects = cpu.render_damage(&scene, transform)?;
+                    let rects = crate::timing::time("cpu render ms", || {
+                        cpu.render_damage(&scene, transform)
+                    })?;
                     Ok::<_, String>(
                         rects
                             .into_iter()
@@ -929,6 +935,15 @@ fn worker<V: View>(
                     }
                 }
             }
+        }
+        if !patches.is_empty() {
+            let px: u64 = (patches.iter())
+                .map(|p| u64::from(p.rect[2]) * u64::from(p.rect[3]))
+                .sum();
+            crate::timing::note(
+                "damage % of window",
+                px as f64 * 100. / (u64::from(size.0) * u64::from(size.1)).max(1) as f64,
+            );
         }
         if stopped.load(Ordering::Acquire) {
             break;
