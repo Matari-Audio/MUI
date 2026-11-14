@@ -2,7 +2,7 @@
 //! it writes, and the layers they are drawn into.
 
 use super::build::{Drawn, Instance, SLOTS, Walk};
-use super::layer::{Bind, Kind, Layers};
+use super::layer::{Bind, Compose, Kind, Layers};
 use super::{Error, Reason, build, text};
 use crate::Cache;
 use crate::effects::WeldTextures;
@@ -133,25 +133,34 @@ impl Instances {
             let at = start as u32;
             match drawn {
                 Drawn::Nothing | Drawn::Open { .. } | Drawn::Close => {}
-                Drawn::One if p.layer == Layer::Mask => {
+                Drawn::One if matches!(p.layer, Layer::Mask | Layer::AlphaMask) => {
                     if !self.layers.mask() {
                         return Err(refuse(Reason::Layer));
                     }
-                    self.layers.push(at, Bind::None, true);
+                    self.layers.push(
+                        at,
+                        Bind::None,
+                        if p.layer == Layer::AlphaMask {
+                            Compose::DestIn
+                        } else {
+                            Compose::Atop
+                        },
+                    );
                     self.list.push(one);
                     super::ramp::spans(&mut self.list, start, &p.paint);
                 }
                 Drawn::One => {
-                    self.layers.push(at, Bind::None, false);
+                    self.layers.push(at, Bind::None, Compose::Over);
                     self.list.push(one);
                     super::ramp::spans(&mut self.list, start, &p.paint);
                 }
                 Drawn::Image(image) => {
-                    self.layers.push(at, Bind::Image(image.clone()), false);
+                    self.layers
+                        .push(at, Bind::Image(image.clone()), Compose::Over);
                     self.list.push(one);
                 }
                 Drawn::Host(key) => {
-                    self.layers.push(at, Bind::Host(key), false);
+                    self.layers.push(at, Bind::Host(key), Compose::Over);
                     self.list.push(one);
                 }
                 Drawn::Backdrop {
@@ -182,12 +191,13 @@ impl Instances {
                         one[4] = [1., uw, uh, 0.];
                         let (w, h) = (b.width() as f32, b.height() as f32);
                         one[9] = [b.x0 as f32, b.y0 as f32, w / uw, h / uh];
-                        self.layers.push(at, Bind::Weld(id, texture.clone()), false);
+                        self.layers
+                            .push(at, Bind::Weld(id, texture.clone()), Compose::Over);
                         self.list.push(one);
                     }
                 }
                 Drawn::Text(text) => {
-                    self.layers.push(at, Bind::None, false);
+                    self.layers.push(at, Bind::None, Compose::Over);
                     let xf = crate::placed(transform, p);
                     self.atlas
                         .draw(&mut self.cache, text, xf, &one, &mut self.list)

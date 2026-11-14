@@ -371,8 +371,11 @@ impl Walk {
                 return Ok(Drawn::External);
             }
             // `one` fills a mask with a solid or gradient brush.
-            Layer::Mask if matches!(p.paint, Paint::Image { .. }) => return Err(Reason::Image),
+            Layer::Mask | Layer::AlphaMask if matches!(p.paint, Paint::Image { .. }) => {
+                return Err(Reason::Image);
+            }
             Layer::Mask
+            | Layer::AlphaMask
             | Layer::Text
             | Layer::Shadow(_)
             | Layer::Fill

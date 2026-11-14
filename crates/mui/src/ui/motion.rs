@@ -314,7 +314,7 @@ impl Ui {
                     && Arc::ptr_eq(&p.path, &target)
                     && matches!(
                         p.layer,
-                        Layer::Fill | Layer::Stroke | Layer::Clip | Layer::Mask
+                        Layer::Fill | Layer::Stroke | Layer::Clip | Layer::Mask | Layer::AlphaMask
                     )
                 {
                     p.path = world.clone();

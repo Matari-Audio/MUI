@@ -950,13 +950,20 @@ fn one(
         canvas.push_clip(path);
         return Ok(());
     }
-    if p.layer == Layer::Mask {
-        // Source-atop inside the node's own blend layer: the fill lands
-        // only where the subtree already painted.
+    if matches!(p.layer, Layer::Mask | Layer::AlphaMask) {
+        // Both masks are inside the subtree's isolated layer. Destination-in
+        // preserves its colours and removes alpha; source-atop tints it.
         // ponytail: solid and gradient paints only -- an image mask would
         // need the paint-transform dance below, and nothing asks for one.
         canvas.push_layer(
-            peniko::BlendMode::new(peniko::Mix::Normal, peniko::Compose::SrcAtop),
+            peniko::BlendMode::new(
+                peniko::Mix::Normal,
+                if p.layer == Layer::AlphaMask {
+                    peniko::Compose::DestIn
+                } else {
+                    peniko::Compose::SrcAtop
+                },
+            ),
             1.0,
         );
         canvas.set_paint(brush(&p.paint, paint_box(p, path)));

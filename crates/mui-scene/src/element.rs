@@ -812,6 +812,15 @@ pub trait Paints: Sized {
         self.style_mut().mask = Some(f.into());
         self
     }
+    /// Multiply this subtree by `f`'s alpha without tinting its colours.
+    ///
+    /// The subtree is isolated before destination-in compositing, so a
+    /// transparent mask reveals content behind this node without erasing it.
+    /// Only the fill's alpha matters; black and white masks behave alike.
+    fn alpha_mask(mut self, f: impl Into<Fill>) -> Self {
+        self.style_mut().alpha_mask = Some(f.into());
+        self
+    }
     /// Before this node paints, blur whatever was painted behind it, clipped
     /// to its outline: the frosted dim under a modal. `radius` is the
     /// Gaussian's standard deviation in logical pixels, as CSS `blur()`.

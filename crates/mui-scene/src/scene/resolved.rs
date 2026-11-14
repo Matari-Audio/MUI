@@ -39,6 +39,9 @@ pub enum Layer {
     /// only where the node and its children already painted. Always inside
     /// a `Blend`/`Unblend` pair. See [`Paints::mask`](crate::Paints::mask).
     Mask,
+    /// Multiply the isolated subtree by the paint's alpha, destination-in.
+    /// See [`Paints::alpha_mask`](crate::Paints::alpha_mask).
+    AlphaMask,
     Unblend,
     /// External GPU material, sampled in paint order through the effect renderer.
     External,

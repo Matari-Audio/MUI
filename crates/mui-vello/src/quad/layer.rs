@@ -71,14 +71,21 @@ impl Bind {
     }
 }
 
+/// Fixed-function compositing for one run in an isolated target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Compose {
+    Over,
+    Atop,
+    DestIn,
+}
+
 /// Instances `start..` (to the next run's start) drawn into `surface`.
 #[derive(Clone, Debug)]
 pub struct Run {
     pub start: u32,
     pub surface: u16,
     pub bind: Bind,
-    /// Drawn source-atop: a mask.
-    pub atop: bool,
+    pub compose: Compose,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -194,10 +201,10 @@ impl Layers {
 
     /// The instance at `at` (and those after it up to the next call) is
     /// drawn into the innermost open layer, binding `bind`.
-    pub fn push(&mut self, at: u32, bind: Bind, atop: bool) {
+    pub fn push(&mut self, at: u32, bind: Bind, compose: Compose) {
         let surface = self.open.last().map_or(0, |o| o.surface);
         match self.runs.last_mut() {
-            Some(r) if r.surface == surface && r.atop == atop && r.bind.joins(&bind) => {
+            Some(r) if r.surface == surface && r.compose == compose && r.bind.joins(&bind) => {
                 if matches!(r.bind, Bind::None) {
                     r.bind = bind;
                 }
@@ -206,7 +213,7 @@ impl Layers {
                 start: at,
                 surface,
                 bind,
-                atop,
+                compose,
             }),
         }
     }
@@ -418,7 +425,11 @@ impl Layers {
         let mut joined: Vec<Run> = Vec::with_capacity(self.runs.len());
         for r in self.runs.drain(..) {
             match joined.last_mut() {
-                Some(j) if j.surface == r.surface && j.atop == r.atop && j.bind.joins(&r.bind) => {
+                Some(j)
+                    if j.surface == r.surface
+                        && j.compose == r.compose
+                        && j.bind.joins(&r.bind) =>
+                {
                     if matches!(j.bind, Bind::None) {
                         j.bind = r.bind;
                     }
@@ -540,7 +551,7 @@ mod tests {
     fn surface_capacity_refuses_blend_snapshots_without_wrapping() {
         let mut layers = folded_surfaces(usize::from(u16::MAX) - 1);
         layers.open(99, 0, 1, 1.).unwrap();
-        layers.push(0, Bind::None, false);
+        layers.push(0, Bind::None, Compose::Over);
         let mut list = vec![super::super::build::clear([8, 8])];
         assert_eq!(layers.close(100, &mut list, [8, 8]), Err(Reason::Offscreen));
         assert_eq!(layers.surfaces.len(), 65_536);

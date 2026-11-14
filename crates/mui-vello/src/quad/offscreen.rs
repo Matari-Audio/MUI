@@ -7,7 +7,7 @@
 //! when what they show changed; a target no frame used is dropped at the
 //! frame's end.
 
-use super::layer::{Kind, Layers, Run, Surface};
+use super::layer::{Compose, Kind, Layers, Run, Surface};
 use rustc_hash::FxHashMap;
 
 /// `Rgba8Unorm`: renderable and filterable on every WebGL2 device.
@@ -83,12 +83,12 @@ impl Draw<'_> {
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         over: &wgpu::RenderPipeline,
-        atop: Option<&wgpu::RenderPipeline>,
+        masks: Option<[&wgpu::RenderPipeline; 2]>,
         upto: u32,
         keep: impl Fn(&Run) -> bool,
     ) -> usize {
         let mut draws = 0;
-        let mut atop_bound = None;
+        let mut compose_bound = None;
         for (k, r) in self.runs.iter().enumerate() {
             let end = self
                 .runs
@@ -98,13 +98,14 @@ impl Draw<'_> {
             if end <= r.start || !keep(r) {
                 continue;
             }
-            if atop_bound != Some(r.atop) {
-                let pipeline = match (r.atop, atop) {
-                    (true, Some(atop)) => atop,
+            if compose_bound != Some(r.compose) {
+                let pipeline = match (r.compose, masks) {
+                    (Compose::Atop, Some([atop, _])) => atop,
+                    (Compose::DestIn, Some([_, inside])) => inside,
                     _ => over,
                 };
                 pass.set_pipeline(pipeline);
-                atop_bound = Some(r.atop);
+                compose_bound = Some(r.compose);
             }
             pass.set_bind_group(1, &self.groups[k], &[]);
             pass.draw(0..4, r.start..end);
@@ -117,6 +118,7 @@ impl Draw<'_> {
 pub struct Offscreen {
     over: wgpu::RenderPipeline,
     atop: wgpu::RenderPipeline,
+    inside: wgpu::RenderPipeline,
     down: wgpu::RenderPipeline,
     blur: wgpu::RenderPipeline,
     blur_layout: wgpu::BindGroupLayout,
@@ -165,6 +167,23 @@ impl Offscreen {
                     dst_factor: wgpu::BlendFactor::One,
                     operation: wgpu::BlendOperation::Add,
                 },
+            }),
+            cache,
+        );
+        // Destination-in scales premultiplied colour and alpha equally.
+        let component = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::SrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let inside = super::gpu::pipeline(
+            device,
+            module,
+            layout,
+            FORMAT,
+            Some(wgpu::BlendState {
+                color: component,
+                alpha: component,
             }),
             cache,
         );
@@ -223,6 +242,7 @@ impl Offscreen {
         Self {
             over,
             atop,
+            inside,
             down: pass("fs_down"),
             blur: pass("fs_blur"),
             blur_layout,
@@ -350,15 +370,19 @@ impl Offscreen {
                 Kind::Group => {
                     let view = &self.targets[id].as_ref().expect("a target").view;
                     let mut pass = quad_pass(encoder, view, s, draw, slots);
-                    draws += draw.runs(&mut pass, &self.over, Some(&self.atop), u32::MAX, |r| {
-                        usize::from(r.surface) == id
-                    });
+                    draws += draw.runs(
+                        &mut pass,
+                        &self.over,
+                        Some([&self.atop, &self.inside]),
+                        u32::MAX,
+                        |r| usize::from(r.surface) == id,
+                    );
                     passes += 1;
                 }
                 Kind::Under => {
                     let view = &self.targets[id].as_ref().expect("a target").view;
                     let mut pass = quad_pass(encoder, view, s, draw, slots);
-                    draws += snapshot(&mut pass, s, draw, &self.over, &self.atop);
+                    draws += snapshot(&mut pass, s, draw, &self.over, [&self.atop, &self.inside]);
                     passes += 1;
                 }
                 Kind::Backdrop { scale, sigma } => {
@@ -395,7 +419,7 @@ impl Offscreen {
         let snap = self.take(device, full);
         let draws = {
             let mut pass = quad_pass(encoder, &snap.view, s, draw, slots);
-            snapshot(&mut pass, s, draw, &self.over, &self.atop)
+            snapshot(&mut pass, s, draw, &self.over, [&self.atop, &self.inside])
         };
         let k = scale as f32;
         let sigma = sigma / k;
@@ -547,9 +571,9 @@ fn snapshot(
     s: &Surface,
     draw: &Draw<'_>,
     over: &wgpu::RenderPipeline,
-    atop: &wgpu::RenderPipeline,
+    masks: [&wgpu::RenderPipeline; 2],
 ) -> usize {
-    draw.runs(pass, over, Some(atop), s.upto, |r| {
+    draw.runs(pass, over, Some(masks), s.upto, |r| {
         s.sources.contains(&r.surface)
     })
 }

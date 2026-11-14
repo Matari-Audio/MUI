@@ -113,7 +113,7 @@ pub(crate) fn reach(p: &Painted) -> Option<Rect> {
         // raster culling must conservatively keep the entry.
         Layer::External | Layer::Shadow(ShadowKind::Inset) => return None,
         Layer::Blend { .. } | Layer::Unblend | Layer::Unclip => return Some(NOTHING),
-        Layer::Clip | Layer::Mask => path(),
+        Layer::Clip | Layer::Mask | Layer::AlphaMask => path(),
         // Vello's blurred rect stops at 2.5 standard deviations.
         Layer::Backdrop | Layer::Shadow(_) => path().inflate(3. * p.blur, 3. * p.blur),
         _ => match &p.text {

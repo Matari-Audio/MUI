@@ -151,6 +151,7 @@ impl<'a> Walk<'a> {
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
         let clips = n.is_clip()
+            || e.style.alpha_mask.as_ref().is_some_and(|m| !m.is_none())
             || e.style.union.unwrap_or_default()
             || e.extras().inside.is_some()
             || self.plan.regions.contains(at);
@@ -247,7 +248,10 @@ impl<'a> Walk<'a> {
         let s = &e.style;
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
-        let masked = s.mask.as_ref().is_some_and(|m| !m.is_none());
+        let masked = [s.mask.as_ref(), s.alpha_mask.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|m| !m.is_none());
         let blended = match s.layer {
             Some((mix, opacity)) if !(mix == Mix::Normal && opacity == 1.0) => Some((mix, opacity)),
             _ if masked => Some((Mix::Normal, 1.0)),
@@ -443,16 +447,18 @@ impl<'a> Walk<'a> {
             }
         }
         if let Some(masked) = o.blend {
-            if masked
-                && let Some(p) = self.push(
-                    Layer::Mask,
-                    contour.path.clone(),
-                    contour.rect,
-                    e.style.mask.as_ref().unwrap_or(&Fill::None),
-                    bg,
-                )
-            {
-                p.offset = contour.offset;
+            if masked {
+                for (layer, fill) in [
+                    (Layer::Mask, &e.style.mask),
+                    (Layer::AlphaMask, &e.style.alpha_mask),
+                ] {
+                    if let Some(fill) = fill
+                        && let Some(p) =
+                            self.push(layer, contour.path.clone(), contour.rect, fill, bg)
+                    {
+                        p.offset = contour.offset;
+                    }
+                }
             }
             self.mark(Layer::Unblend, empty(), None);
         }
