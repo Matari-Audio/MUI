@@ -549,9 +549,6 @@ pub struct Style {
     /// where they drew: source-atop, in the node's outline. See
     /// `Paints::mask` in `mui-scene`.
     pub mask: Option<Fill>,
-    /// Multiply subtree opacity by this fill's alpha, preserving its colours.
-    /// See `Paints::alpha_mask` in `mui-scene`.
-    pub alpha_mask: Option<Fill>,
     /// Blur what was painted before this node, inside its outline, by this
     /// standard deviation in logical pixels; `0` leaves it sharp. See
     /// `Paints::backdrop_blur` in `mui-scene`.
@@ -593,7 +590,6 @@ impl Style {
             cursor: other.cursor.or(self.cursor),
             layer: other.layer.or(self.layer),
             mask: other.mask.or(self.mask),
-            alpha_mask: other.alpha_mask.or(self.alpha_mask),
             backdrop_blur: other.backdrop_blur.or(self.backdrop_blur),
         }
     }

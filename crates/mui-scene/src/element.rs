@@ -348,6 +348,8 @@ pub struct Element {
 /// The rarely set half of an [`Element`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
+    /// Shared alpha mask; rare paint stays off the by-value node.
+    pub alpha_mask: Option<Arc<Fill>>,
     /// Editing layers resolved against the final text frame.
     pub editable_text: Option<crate::EditableText>,
     /// Paint-only clockwise radians about the final frame's centre.
@@ -419,6 +421,7 @@ pub struct Memo {
 }
 impl Extras {
     const NONE: Self = Self {
+        alpha_mask: None,
         editable_text: None,
         rotation: None,
         reserve: None,
@@ -812,15 +815,6 @@ pub trait Paints: Sized {
         self.style_mut().mask = Some(f.into());
         self
     }
-    /// Multiply this subtree by `f`'s alpha without tinting its colours.
-    ///
-    /// The subtree is isolated before destination-in compositing, so a
-    /// transparent mask reveals content behind this node without erasing it.
-    /// Only the fill's alpha matters; black and white masks behave alike.
-    fn alpha_mask(mut self, f: impl Into<Fill>) -> Self {
-        self.style_mut().alpha_mask = Some(f.into());
-        self
-    }
     /// Before this node paints, blur whatever was painted behind it, clipped
     /// to its outline: the frosted dim under a modal. `radius` is the
     /// Gaussian's standard deviation in logical pixels, as CSS `blur()`.
@@ -903,6 +897,15 @@ impl Paints for Style {
 pub trait Styled: Paints {
     fn element_mut(&mut self) -> &mut Element;
 
+    /// Multiply this subtree by `f`'s alpha without tinting its colours.
+    ///
+    /// The subtree is isolated before destination-in compositing, so a
+    /// transparent mask reveals content behind this node without erasing it.
+    /// Only the fill's alpha matters; black and white masks behave alike.
+    fn alpha_mask(mut self, f: impl Into<Fill>) -> Self {
+        self.element_mut().extras_mut().alpha_mask = Some(Arc::new(f.into()));
+        self
+    }
     /// Rotate this node and its subtree clockwise by `radians` about its
     /// solved frame's centre. Layout frames and sibling placement stay the
     /// same; paint, clipping, hit geometry and local pointer coordinates

@@ -125,7 +125,7 @@ impl<'a> Walk<'a> {
             }
             None => false,
         };
-        let alpha_clips = e.style.alpha_mask.as_ref().is_some_and(|m| !m.is_none());
+        let alpha_clips = e.extras().alpha_mask.as_ref().is_some_and(|m| !m.is_none());
         if alpha_clips {
             self.clip(None, &contour, frame, &mut inner)?;
         }
@@ -254,7 +254,7 @@ impl<'a> Walk<'a> {
         let s = &e.style;
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
-        let masked = [s.mask.as_ref(), s.alpha_mask.as_ref()]
+        let masked = [s.mask.as_ref(), e.extras().alpha_mask.as_deref()]
             .into_iter()
             .flatten()
             .any(|m| !m.is_none());
@@ -455,8 +455,8 @@ impl<'a> Walk<'a> {
         if let Some(masked) = o.blend {
             if masked {
                 for (layer, fill) in [
-                    (Layer::Mask, &e.style.mask),
-                    (Layer::AlphaMask, &e.style.alpha_mask),
+                    (Layer::Mask, e.style.mask.as_ref()),
+                    (Layer::AlphaMask, e.extras().alpha_mask.as_deref()),
                 ] {
                     if let Some(fill) = fill
                         && let Some(p) =
