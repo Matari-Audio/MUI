@@ -969,6 +969,26 @@ fn one(
     path: &BezPath,
     transform: Affine,
 ) -> Result<(), Error> {
+    if p.layer == Layer::AlphaMask {
+        // Composite the complete mask, including vector command overlap and
+        // transparent regions, against the isolated subtree in one operation.
+        canvas.push_layer(
+            peniko::BlendMode::new(peniko::Mix::Normal, peniko::Compose::DestIn),
+            1.0,
+        );
+        let result = paint_one(canvas, p, path, transform);
+        canvas.pop_layer();
+        return result;
+    }
+    paint_one(canvas, p, path, transform)
+}
+
+fn paint_one(
+    canvas: &mut impl Canvas,
+    p: &Painted,
+    path: &BezPath,
+    transform: Affine,
+) -> Result<(), Error> {
     if let Paint::Vector { vector, fit, .. } = &p.paint {
         return vector_paint(canvas, vector, *fit, path, transform);
     }
@@ -982,8 +1002,7 @@ fn one(
         return Ok(());
     }
     if p.layer == Layer::Mask {
-        // Source-atop inside the node's own blend layer: the fill lands
-        // only where the subtree already painted.
+        // Source-atop tints the subtree inside its isolated layer.
         // ponytail: solid and gradient paints only -- an image mask would
         // need the paint-transform dance below, and nothing asks for one.
         canvas.push_layer(

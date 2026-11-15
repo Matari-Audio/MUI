@@ -25,10 +25,9 @@ pub fn fade(i: &mut Instance, alpha: f32) {
 
 /// A ramp of more than [`MAX_STOPS`] stops, drawn as `list[start..]`
 /// with its first four: each instance again once per span between two
-/// stops, as `(a, a, b, b)` with no colour outside `[a, b)` but the pads at
-/// the ends. The shader picks a span by the same comparisons in each, so
-/// every pixel takes its colour from exactly one instance and the rest add
-/// exact zeros.
+/// stops. Offsets x/w flag the end pads; y/z hold the span. The shader
+/// discards inactive spans instead of painting transparent, which would
+/// erase the destination under destination-in composition.
 pub fn spans(list: &mut Vec<Instance>, start: usize, paint: &Paint) {
     let Paint::Gradient { stops, .. } = paint else {
         return;
@@ -53,7 +52,13 @@ pub fn spans(list: &mut Vec<Instance>, start: usize, paint: &Paint) {
             one[5] = ca;
             one[6] = cb;
             one[7] = if k == last { cb } else { zero };
-            one[8] = [a, a, b, b];
+            // Valid authored offsets are nonnegative; x < 0 tags a span.
+            one[8] = [
+                if k == 0 { -2. } else { -1. },
+                a,
+                b,
+                if k == last { 2. } else { 0. },
+            ];
             list.push(one);
         }
     }

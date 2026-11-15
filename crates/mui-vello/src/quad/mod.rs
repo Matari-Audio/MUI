@@ -566,6 +566,7 @@ impl QuadRenderer {
                 Layer::Blend { .. }
                     | Layer::Unblend
                     | Layer::Mask
+                    | Layer::AlphaMask
                     | Layer::Backdrop
                     | Layer::External
             )

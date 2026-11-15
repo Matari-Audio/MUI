@@ -11,8 +11,8 @@ pub const BAR_STRIP: f64 = 10.0;
 /// The gap between the thumb and the viewport's edges.
 pub(super) const BAR_MARGIN: f64 = 2.0;
 /// Thumb thickness at rest and under the pointer.
-pub(super) const BAR_THIN: f64 = 3.0;
-pub(super) const BAR_WIDE: f64 = 6.0;
+pub(super) const BAR_THIN: f64 = 1.5;
+pub(super) const BAR_WIDE: f64 = 3.0;
 /// The shortest a thumb gets over a very long list, so it stays grabbable.
 const BAR_MIN: f64 = 18.0;
 

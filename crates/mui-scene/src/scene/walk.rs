@@ -43,6 +43,8 @@ struct Opened {
     border_background: usize,
     /// A region envelope clip is open.
     enveloped: bool,
+    /// The whole node, including its own canvas and shadows, is clipped.
+    alpha_clips: bool,
     /// A blend layer is open, and whether it ends in a mask.
     blend: Option<bool>,
     /// The children clip is open.
@@ -123,6 +125,10 @@ impl<'a> Walk<'a> {
             }
             None => false,
         };
+        let alpha_clips = e.extras().alpha_mask.as_ref().is_some_and(|m| !m.is_none());
+        if alpha_clips {
+            self.clip(None, &contour, frame, &mut inner)?;
+        }
         let blend = self.open_layers(e, &contour, under)?;
         let bg = self.fill(e, material.as_ref(), &contour, under);
         let border_background = self.out.paint.len();
@@ -177,6 +183,7 @@ impl<'a> Walk<'a> {
             start,
             border_background,
             enveloped,
+            alpha_clips,
             blend,
             clips,
             late_stroke,
@@ -247,7 +254,10 @@ impl<'a> Walk<'a> {
         let s = &e.style;
         // A mask composites against what the subtree drew, so the subtree
         // needs a layer of its own even when nothing asked to blend.
-        let masked = s.mask.as_ref().is_some_and(|m| !m.is_none());
+        let masked = [s.mask.as_ref(), e.extras().alpha_mask.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|m| !m.is_none());
         let blended = match s.layer {
             Some((mix, opacity)) if !(mix == Mix::Normal && opacity == 1.0) => Some((mix, opacity)),
             _ if masked => Some((Mix::Normal, 1.0)),
@@ -443,18 +453,23 @@ impl<'a> Walk<'a> {
             }
         }
         if let Some(masked) = o.blend {
-            if masked
-                && let Some(p) = self.push(
-                    Layer::Mask,
-                    contour.path.clone(),
-                    contour.rect,
-                    e.style.mask.as_ref().unwrap_or(&Fill::None),
-                    bg,
-                )
-            {
-                p.offset = contour.offset;
+            if masked {
+                for (layer, fill) in [
+                    (Layer::Mask, e.style.mask.as_ref()),
+                    (Layer::AlphaMask, e.extras().alpha_mask.as_deref()),
+                ] {
+                    if let Some(fill) = fill
+                        && let Some(p) =
+                            self.push(layer, contour.path.clone(), contour.rect, fill, bg)
+                    {
+                        p.offset = contour.offset;
+                    }
+                }
             }
             self.mark(Layer::Unblend, empty(), None);
+        }
+        if o.alpha_clips {
+            self.mark(Layer::Unclip, empty(), None);
         }
         if o.enveloped {
             self.mark(Layer::Unclip, empty(), None);

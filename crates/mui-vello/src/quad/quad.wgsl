@@ -279,7 +279,15 @@ fn ramp(t0: f32, scale: f32, v: Varying) -> vec4<f32> {
     // Pad, then snap to the lookup table `vello_cpu` samples.
     let t = floor(clamp(t0, 0.0, 1.0) * scale) / scale;
     var c: vec4<f32>;
-    if t < v.offs.x {
+    if v.offs.x < 0.0 {
+        // A long ramp's inactive instances must not clear a destination-in
+        // target. Transparent samples inside the active span still paint.
+        if (v.offs.x == -1.0 && t < v.offs.y) || (v.offs.w == 0.0 && t >= v.offs.z) {
+            discard;
+        }
+        let u = select(clamp((t - v.offs.y) / max(v.offs.z - v.offs.y, 1e-6), 0.0, 1.0), 1.0, t >= v.offs.z);
+        c = mix(v.c1, v.c2, u);
+    } else if t < v.offs.x {
         c = v.c0;
     } else if t < v.offs.y {
         c = mix(v.c0, v.c1, (t - v.offs.x) / max(v.offs.y - v.offs.x, 1e-6));

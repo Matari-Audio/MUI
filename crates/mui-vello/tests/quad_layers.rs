@@ -300,6 +300,228 @@ fn at(px: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
     [px[i], px[i + 1], px[i + 2], px[i + 3]]
 }
 
+/// Alpha masks reveal the original backdrop and ignore mask RGB on both renderers.
+#[test]
+fn alpha_mask_reveals_backdrop_without_tinting() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let size = sized(1.);
+    for alpha in [0., 0.5, 1.] {
+        let mut colours = Vec::new();
+        for ink in [0., 1.] {
+            let root = stack![
+                stack![block(160., 120.).radius(0.).fill(rgba(1., 0., 0., 1.))]
+                    .size(100., 100.)
+                    .radius(0.)
+                    .alpha_mask(rgba(ink, ink, ink, alpha))
+                    .at(50., 50.)
+            ]
+            .size(W, H)
+            .radius(0.)
+            .fill(rgba(0., 0., 1., 1.));
+            let scene = scene_at(root, 1.);
+            let pixels = [
+                cpu_pixels(&scene, Affine::IDENTITY, size),
+                gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, size),
+            ];
+            for (backend, px) in pixels.iter().enumerate() {
+                let got = at(px, size[0], 75, 75);
+                let expected = [alpha * 255., 0., (1. - alpha) * 255., 255.];
+                for (got, expected) in got.into_iter().zip(expected) {
+                    assert!(
+                        (f32::from(got) - expected).abs() <= 1.,
+                        "backend {backend}, alpha {alpha}, mask RGB {ink}: {got} vs {expected}"
+                    );
+                }
+                assert_eq!(
+                    at(px, size[0], 175, 75),
+                    [0, 0, 255, 255],
+                    "overflow must be clipped before masking on backend {backend}"
+                );
+            }
+            colours.push(pixels);
+        }
+        assert_eq!(
+            colours[0], colours[1],
+            "mask RGB must not tint, alpha {alpha}"
+        );
+    }
+    let ramp = scene_at(
+        stack![
+            block(100., 100.)
+                .radius(0.)
+                .fill(rgba(1., 0., 0., 1.))
+                .alpha_mask(Gradient::linear(
+                    180.,
+                    [(0., rgba(0., 0., 0., 1.)), (1., rgba(0., 0., 0., 0.))]
+                ))
+                .at(50., 50.)
+        ]
+        .size(W, H)
+        .radius(0.)
+        .fill(rgba(0., 0., 1., 1.)),
+        1.,
+    );
+    for px in [
+        cpu_pixels(&ramp, Affine::IDENTITY, size),
+        gpu_pixels(&mut gpu, &ramp.paint, Affine::IDENTITY, size),
+    ] {
+        let top = at(&px, size[0], 100, 55);
+        let middle = at(&px, size[0], 100, 100);
+        let bottom = at(&px, size[0], 100, 145);
+        assert!(
+            top[0] > middle[0] && middle[0] > bottom[0],
+            "smooth alpha fade"
+        );
+        assert!(
+            top[2] < middle[2] && middle[2] < bottom[2],
+            "backdrop revealed"
+        );
+        assert_eq!(middle[1], 0, "mask must not introduce another colour");
+    }
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("retained alpha mask"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    for frame in 0..2 {
+        gpu.quad
+            .render(
+                &gpu.device,
+                &gpu.queue,
+                &ramp.paint,
+                Affine::IDENTITY,
+                &view,
+                size,
+            )
+            .expect("retained alpha mask renders");
+        if frame == 0 {
+            assert!(gpu.quad.frame().passes > 0, "the mask was rendered");
+        } else {
+            assert_eq!(
+                gpu.quad.frame().passes,
+                0,
+                "unchanged mask must reuse its target"
+            );
+        }
+    }
+}
+
+/// Every long-ramp span is opaque, so the source must survive all instances.
+#[test]
+fn alpha_masks_with_long_ramps_preserve_opaque_and_transparent_samples() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let size = sized(1.);
+    for alphas in [[1., 1., 1., 1., 1.], [1., 0.5, 0., 0.5, 1.]] {
+        for angle in [90., 180.] {
+            let stops = alphas
+                .into_iter()
+                .enumerate()
+                .map(|(i, a)| (i as f32 / 4., rgba(0., 0., 0., a)));
+            let scene = scene_at(
+                stack![
+                    block(100., 100.)
+                        .radius(0.)
+                        .fill(rgba(1., 0., 0., 1.))
+                        .alpha_mask(Gradient::linear(angle, stops))
+                        .at(50., 50.)
+                ]
+                .size(W, H)
+                .radius(0.)
+                .fill(rgba(0., 0., 1., 1.)),
+                1.,
+            );
+            let cpu = cpu_pixels(&scene, Affine::IDENTITY, size);
+            let quad = gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, size);
+            for y in 51..149 {
+                for x in 51..149 {
+                    let (a, b) = (at(&cpu, size[0], x, y), at(&quad, size[0], x, y));
+                    assert!(
+                        a.into_iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2),
+                        "long alpha ramp at {x},{y}, angle {angle}: CPU {a:?}, quad {b:?}"
+                    );
+                    if alphas == [1.; 5] {
+                        assert_eq!(b, [255, 0, 0, 255]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A node's own paint is clipped as well as its children.
+#[test]
+fn alpha_mask_clips_own_canvas_and_shadow() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let size = sized(1.);
+    for alpha in [0., 1.] {
+        let scene = scene_at(
+            stack![
+                canvas(|_| vec![Draw::fill(
+                    Path::polyline(
+                        [
+                            Point::ZERO,
+                            Point::new(80., 0.),
+                            Point::new(80., 40.),
+                            Point::new(0., 40.)
+                        ],
+                        true
+                    ),
+                    rgba(1., 0., 0., 1.)
+                )])
+                .size(40., 40.)
+                .radius(0.)
+                .shadow(Shadow::soft(8.))
+                .alpha_mask(rgba(0., 0., 0., alpha))
+                .at(50., 50.)
+            ]
+            .size(W, H)
+            .radius(0.)
+            .fill(rgba(0., 0., 1., 1.)),
+            1.,
+        );
+        for (backend, px) in [
+            cpu_pixels(&scene, Affine::IDENTITY, size),
+            gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, size),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                at(px, size[0], 65, 65),
+                if alpha == 0. {
+                    [0, 0, 255, 255]
+                } else {
+                    [255, 0, 0, 255]
+                },
+                "backend {backend}"
+            );
+            for (x, y) in [(45, 65), (100, 65), (65, 95)] {
+                assert_eq!(
+                    at(px, size[0], x, y),
+                    [0, 0, 255, 255],
+                    "canvas/shadow outside masked outline on backend {backend}, {x},{y}"
+                );
+            }
+        }
+    }
+}
+
 /// No reference needed: a blurred flat colour is that colour, at every
 /// radius and scale; half of opaque white over black is mid grey whether
 /// the group folds (one child) or takes a target (two overlapping); a
