@@ -43,6 +43,8 @@ struct Opened {
     border_background: usize,
     /// A region envelope clip is open.
     enveloped: bool,
+    /// The whole node, including its own canvas and shadows, is clipped.
+    alpha_clips: bool,
     /// A blend layer is open, and whether it ends in a mask.
     blend: Option<bool>,
     /// The children clip is open.
@@ -123,6 +125,10 @@ impl<'a> Walk<'a> {
             }
             None => false,
         };
+        let alpha_clips = e.style.alpha_mask.as_ref().is_some_and(|m| !m.is_none());
+        if alpha_clips {
+            self.clip(None, &contour, frame, &mut inner)?;
+        }
         let blend = self.open_layers(e, &contour, under)?;
         let bg = self.fill(e, material.as_ref(), &contour, under);
         let border_background = self.out.paint.len();
@@ -151,7 +157,6 @@ impl<'a> Walk<'a> {
         // tab's own fill stops at the filleted corner instead of poking past
         // the shared outline.
         let clips = n.is_clip()
-            || e.style.alpha_mask.as_ref().is_some_and(|m| !m.is_none())
             || e.style.union.unwrap_or_default()
             || e.extras().inside.is_some()
             || self.plan.regions.contains(at);
@@ -178,6 +183,7 @@ impl<'a> Walk<'a> {
             start,
             border_background,
             enveloped,
+            alpha_clips,
             blend,
             clips,
             late_stroke,
@@ -461,6 +467,9 @@ impl<'a> Walk<'a> {
                 }
             }
             self.mark(Layer::Unblend, empty(), None);
+        }
+        if o.alpha_clips {
+            self.mark(Layer::Unclip, empty(), None);
         }
         if o.enveloped {
             self.mark(Layer::Unclip, empty(), None);

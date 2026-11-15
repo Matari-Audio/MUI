@@ -418,6 +418,110 @@ fn alpha_mask_reveals_backdrop_without_tinting() {
     }
 }
 
+/// Every long-ramp span is opaque, so the source must survive all instances.
+#[test]
+fn alpha_masks_with_long_ramps_preserve_opaque_and_transparent_samples() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let size = sized(1.);
+    for alphas in [[1., 1., 1., 1., 1.], [1., 0.5, 0., 0.5, 1.]] {
+        for angle in [90., 180.] {
+            let stops = alphas
+                .into_iter()
+                .enumerate()
+                .map(|(i, a)| (i as f32 / 4., rgba(0., 0., 0., a)));
+            let scene = scene_at(
+                stack![
+                    block(100., 100.)
+                        .radius(0.)
+                        .fill(rgba(1., 0., 0., 1.))
+                        .alpha_mask(Gradient::linear(angle, stops))
+                        .at(50., 50.)
+                ]
+                .size(W, H)
+                .radius(0.)
+                .fill(rgba(0., 0., 1., 1.)),
+                1.,
+            );
+            let cpu = cpu_pixels(&scene, Affine::IDENTITY, size);
+            let quad = gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, size);
+            for y in 51..149 {
+                for x in 51..149 {
+                    let (a, b) = (at(&cpu, size[0], x, y), at(&quad, size[0], x, y));
+                    assert!(
+                        a.into_iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 2),
+                        "long alpha ramp at {x},{y}, angle {angle}: CPU {a:?}, quad {b:?}"
+                    );
+                    if alphas == [1.; 5] {
+                        assert_eq!(b, [255, 0, 0, 255]);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A node's own paint is clipped as well as its children.
+#[test]
+fn alpha_mask_clips_own_canvas_and_shadow() {
+    let Some(mut gpu) = gpu() else {
+        return;
+    };
+    let size = sized(1.);
+    for alpha in [0., 1.] {
+        let scene = scene_at(
+            stack![
+                canvas(|_| vec![Draw::fill(
+                    Path::polyline(
+                        [
+                            Point::ZERO,
+                            Point::new(80., 0.),
+                            Point::new(80., 40.),
+                            Point::new(0., 40.)
+                        ],
+                        true
+                    ),
+                    rgba(1., 0., 0., 1.)
+                )])
+                .size(40., 40.)
+                .radius(0.)
+                .shadow(Shadow::soft(8.))
+                .alpha_mask(rgba(0., 0., 0., alpha))
+                .at(50., 50.)
+            ]
+            .size(W, H)
+            .radius(0.)
+            .fill(rgba(0., 0., 1., 1.)),
+            1.,
+        );
+        for (backend, px) in [
+            cpu_pixels(&scene, Affine::IDENTITY, size),
+            gpu_pixels(&mut gpu, &scene.paint, Affine::IDENTITY, size),
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                at(px, size[0], 65, 65),
+                if alpha == 0. {
+                    [0, 0, 255, 255]
+                } else {
+                    [255, 0, 0, 255]
+                },
+                "backend {backend}"
+            );
+            for (x, y) in [(45, 65), (100, 65), (65, 95)] {
+                assert_eq!(
+                    at(px, size[0], x, y),
+                    [0, 0, 255, 255],
+                    "canvas/shadow outside masked outline on backend {backend}, {x},{y}"
+                );
+            }
+        }
+    }
+}
+
 /// No reference needed: a blurred flat colour is that colour, at every
 /// radius and scale; half of opaque white over black is mid grey whether
 /// the group folds (one child) or takes a target (two overlapping); a
