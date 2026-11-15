@@ -290,7 +290,7 @@ impl Layers {
             dirty: true,
         });
         self.passes.push(id);
-        self.push(at, Bind::Surface(id), false);
+        self.push(at, Bind::Surface(id), Compose::Over);
         Ok(id)
     }
 
@@ -410,7 +410,7 @@ impl Layers {
         one[9] = [x0, y0, 1., 1.];
         // Unclipped: its instances carry every clip around it already.
         one[10] = [-1e9, -1e9, 1e9, 1e9];
-        self.push(list.len() as u32, bind, false);
+        self.push(list.len() as u32, bind, Compose::Over);
         list.push(one);
         Ok((o.entry, [x0, y0, x1, y1]))
     }
