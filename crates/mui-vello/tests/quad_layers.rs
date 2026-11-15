@@ -380,14 +380,42 @@ fn alpha_mask_reveals_backdrop_without_tinting() {
         );
         assert_eq!(middle[1], 0, "mask must not introduce another colour");
     }
-    let renders = gpu.quad.frame().passes;
-    gpu_pixels(&mut gpu, &ramp.paint, Affine::IDENTITY, size);
-    assert!(renders > 0, "the mask was rendered");
-    assert_eq!(
-        gpu.quad.frame().passes,
-        0,
-        "unchanged mask must reuse its target"
-    );
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("retained alpha mask"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    for frame in 0..2 {
+        gpu.quad
+            .render(
+                &gpu.device,
+                &gpu.queue,
+                &ramp.paint,
+                Affine::IDENTITY,
+                &view,
+                size,
+            )
+            .expect("retained alpha mask renders");
+        if frame == 0 {
+            assert!(gpu.quad.frame().passes > 0, "the mask was rendered");
+        } else {
+            assert_eq!(
+                gpu.quad.frame().passes,
+                0,
+                "unchanged mask must reuse its target"
+            );
+        }
+    }
 }
 
 /// No reference needed: a blurred flat colour is that colour, at every
