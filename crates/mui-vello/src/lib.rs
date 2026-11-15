@@ -938,6 +938,26 @@ fn one(
     path: &BezPath,
     transform: Affine,
 ) -> Result<(), Error> {
+    if p.layer == Layer::AlphaMask {
+        // Composite the complete mask, including vector command overlap and
+        // transparent regions, against the isolated subtree in one operation.
+        canvas.push_layer(
+            peniko::BlendMode::new(peniko::Mix::Normal, peniko::Compose::DestIn),
+            1.0,
+        );
+        let result = paint_one(canvas, p, path, transform);
+        canvas.pop_layer();
+        return result;
+    }
+    paint_one(canvas, p, path, transform)
+}
+
+fn paint_one(
+    canvas: &mut impl Canvas,
+    p: &Painted,
+    path: &BezPath,
+    transform: Affine,
+) -> Result<(), Error> {
     if let Paint::Vector { vector, fit, .. } = &p.paint {
         return vector_paint(canvas, vector, *fit, path, transform);
     }
@@ -950,20 +970,12 @@ fn one(
         canvas.push_clip(path);
         return Ok(());
     }
-    if matches!(p.layer, Layer::Mask | Layer::AlphaMask) {
-        // Both masks are inside the subtree's isolated layer. Destination-in
-        // preserves its colours and removes alpha; source-atop tints it.
+    if p.layer == Layer::Mask {
+        // Source-atop tints the subtree inside its isolated layer.
         // ponytail: solid and gradient paints only -- an image mask would
         // need the paint-transform dance below, and nothing asks for one.
         canvas.push_layer(
-            peniko::BlendMode::new(
-                peniko::Mix::Normal,
-                if p.layer == Layer::AlphaMask {
-                    peniko::Compose::DestIn
-                } else {
-                    peniko::Compose::SrcAtop
-                },
-            ),
+            peniko::BlendMode::new(peniko::Mix::Normal, peniko::Compose::SrcAtop),
             1.0,
         );
         canvas.set_paint(brush(&p.paint, paint_box(p, path)));
