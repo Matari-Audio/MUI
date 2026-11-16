@@ -407,6 +407,21 @@ impl Requests {
         filter.is_some_and(|filter| filter(event))
     }
 
+    fn key_hook_for(&self, ui: &mui::Ui, event: &KeyEvent) -> Option<KeyHook> {
+        let filter = self
+            .key_filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if !ui.focus_is_text() && filter.is_some_and(|filter| !filter(event)) {
+            return None;
+        }
+        self.keys
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
     /// Resize the child window to `width` x `height` logical points.
     pub fn resize(&self, width: u32, height: u32) {
         self.size.store(
