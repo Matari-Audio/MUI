@@ -385,6 +385,8 @@ impl Requests {
     /// Reserve selected shortcuts for a worker key hook on Windows.
     /// Other keys retain normal text-field and host routing. A selected key is
     /// reserved even when the hook later declines it and MUI handles it instead.
+    /// On Windows the filter also runs before text assembly, using the layout's
+    /// base key. The hook receives the completed text event only once.
     pub fn on_key_filtered(&self, filter: KeyFilter, hook: KeyHook) {
         self.on_key(hook);
         *self
@@ -1257,6 +1259,14 @@ fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -
 }
 
 impl<V: View + 'static> WindowHandler for Adapter<V> {
+    fn captures_key(&self, key: &KeyboardEvent) -> bool {
+        let Ok(h) = self.handler.try_borrow() else {
+            return false;
+        };
+        let text = lock(&h.shared).ui.focus_is_text();
+        text || h.requests.claims_key(&key_event(key))
+    }
+
     fn frame_demand(&self) -> baseview::FrameDemand {
         // ponytail: View::changed, plugin meters and a11y requests are polled.
         // Push-based change notifications would remove this idle heartbeat.

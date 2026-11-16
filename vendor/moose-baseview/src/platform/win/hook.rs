@@ -229,6 +229,9 @@ mod tests {
         }
         struct Probe(Arc<Mutex<Vec<KeyState>>>, Arc<AtomicUsize>);
         impl WindowHandler for Probe {
+            fn captures_key(&self, key: &keyboard_types::KeyboardEvent) -> bool {
+                key.key == Key::Character(" ".into())
+            }
             fn on_frame(&self) -> Result<(), HandlerError> {
                 Ok(())
             }
@@ -317,10 +320,40 @@ mod tests {
                 2,
                 "the editor observes ignored releases too"
             );
+            // Real message pumps can have translated text queued before the down
+            // is removed. The initial route must not depend on text assembly.
+            for (vk, scan, character, captured) in
+                [(0x41, 0x1e, 'a', false), (0x20, 0x39, ' ', true)]
+            {
+                assert_ne!(PostMessageW(hwnd, WM_CHAR, character as usize, scan << 16), 0);
+                let mut down = message(WM_KEYDOWN, vk, scan);
+                assert_eq!(offer_message_to_baseview(&mut down), captured, "queued {character:?}");
+                if !captured {
+                    assert_eq!(down.hwnd, parent.0);
+                }
+                let mut text = MSG::default();
+                assert_ne!(PeekMessageW(&mut text, hwnd, WM_CHAR, WM_CHAR, PM_REMOVE), 0);
+                if captured {
+                    assert_eq!(text.message, WM_NULL);
+                } else {
+                    assert_eq!(text.message, WM_CHAR);
+                    assert_eq!(text.hwnd, parent.0);
+                }
+                let mut up = message(WM_KEYUP, vk, scan);
+                assert_eq!(offer_message_to_baseview(&mut up), captured);
+                if !captured {
+                    assert_eq!(up.hwnd, parent.0);
+                }
+            }
+            assert_eq!(
+                *heard.lock().unwrap(),
+                [KeyState::Down, KeyState::Down, KeyState::Up, KeyState::Down, KeyState::Up,]
+            );
+            assert_eq!(other_events.load(Ordering::Relaxed), 4);
             SetFocus(parent.0);
             let mut unfocused = message(WM_KEYDOWN, 0x20, 0x39);
             assert!(!offer_message_to_baseview(&mut unfocused));
-            assert_eq!(heard.lock().unwrap().len(), 3);
+            assert_eq!(heard.lock().unwrap().len(), 5);
             drop(child);
         }
     }

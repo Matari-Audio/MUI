@@ -509,6 +509,9 @@ impl Drop for NativeAdapter {
     }
 }
 impl WindowHandler for NativeAdapter {
+    fn captures_key(&self, key: &KeyboardEvent) -> bool {
+        self.capture.get() || self.requests.claims_key(&key_event(key))
+    }
     fn frame_demand(&self) -> baseview::FrameDemand {
         if self.stopped.load(Ordering::Acquire) {
             return baseview::FrameDemand::Idle;

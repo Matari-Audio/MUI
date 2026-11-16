@@ -778,6 +778,12 @@ impl BaseviewWindow {
     pub(super) unsafe fn offer_keyboard_message(
         &self, window: HWnd, msg: u32, wparam: WPARAM, lparam: LPARAM,
     ) -> bool {
+        let reserved = if matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN) {
+            let key = self.window_state.keyboard_state.borrow().key_down(wparam, lparam);
+            Some(self.handler.with(|handler| handler.captures_key(&key)).unwrap_or(false))
+        } else {
+            None
+        };
         let event = self.window_state.keyboard_state.borrow_mut().process_message(
             window.as_raw(),
             msg,
@@ -792,11 +798,10 @@ impl BaseviewWindow {
             }
             self.handle_event(Event::Keyboard(event)) == EventStatus::Captured
         } else {
-            // A multi-message key is still being assembled by KeyboardState.
-            true
+            false
         };
         self.finish_close(window);
-        captured
+        reserved.unwrap_or(captured)
     }
 }
 
