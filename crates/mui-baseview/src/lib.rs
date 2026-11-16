@@ -1035,7 +1035,7 @@ impl<V: View> Handler<V> {
             event,
             Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
         ) {
-            self.requests.clear_key_routes();
+            self.key_routes.clear();
         }
         self.drag.observe(&self.requests.drag, event);
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
