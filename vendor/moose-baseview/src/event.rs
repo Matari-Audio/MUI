@@ -134,7 +134,10 @@ pub enum Event {
     Keyboard(KeyboardEvent),
     /// Windows press ownership, published before text assembly and key delivery.
     /// This is routing metadata; the completed key still arrives as `Keyboard`.
-    KeyboardCapture { key: KeyboardEvent, captured: bool },
+    KeyboardCapture {
+        key: KeyboardEvent,
+        captured: bool,
+    },
     /// Native text input. Keyboard events never duplicate these commits.
     Ime(crate::Ime),
     Window(WindowEvent),
