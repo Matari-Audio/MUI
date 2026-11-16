@@ -168,7 +168,6 @@ unsafe fn offer_message_to_baseview(msg: &mut MSG) -> bool {
     // Never hold the registry lock over a reentrant window/handler callback.
     drop(state);
     let offered = enabled
-        && previous != Some(false)
         && unsafe { native::offer_keyboard_message(msg.hwnd, msg.message, msg.wParam, msg.lParam) };
     let capture = enabled && previous.unwrap_or(offered);
     let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
@@ -226,7 +225,7 @@ mod tests {
                 }
             }
         }
-        struct Probe(Arc<Mutex<Vec<KeyState>>>);
+        struct Probe(Arc<Mutex<Vec<KeyState>>>, Arc<AtomicUsize>);
         impl WindowHandler for Probe {
             fn on_frame(&self) -> Result<(), HandlerError> {
                 Ok(())
@@ -245,6 +244,7 @@ mod tests {
                             EventStatus::Ignored
                         };
                     }
+                    self.1.fetch_add(1, Ordering::Relaxed);
                 }
                 EventStatus::Ignored
             }
@@ -270,6 +270,8 @@ mod tests {
             let native = Arc::clone(&handle);
             let heard = Arc::new(Mutex::new(Vec::new()));
             let log = Arc::clone(&heard);
+            let other_events = Arc::new(AtomicUsize::new(0));
+            let other_log = Arc::clone(&other_events);
             let child = Window::create(WindowSettings::new().with_parent(&parent), move |cx| {
                 let RawWindowHandle::Win32(hwnd) =
                     cx.platform_handle().window_handle().unwrap().as_raw()
@@ -277,7 +279,7 @@ mod tests {
                     unreachable!()
                 };
                 native.store(hwnd.hwnd.get() as usize, Ordering::Relaxed);
-                Ok(Probe(log))
+                Ok(Probe(log, other_log))
             })
             .unwrap();
             child.show().unwrap();
@@ -306,6 +308,11 @@ mod tests {
                 assert!(!offer_message_to_baseview(&mut other));
                 assert_eq!(other.hwnd, parent.0);
             }
+            assert_eq!(
+                other_events.load(Ordering::Relaxed),
+                2,
+                "the editor observes ignored releases too"
+            );
             SetFocus(parent.0);
             let mut unfocused = message(WM_KEYDOWN, 0x20, 0x39);
             assert!(!offer_message_to_baseview(&mut unfocused));
