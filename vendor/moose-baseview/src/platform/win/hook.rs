@@ -167,7 +167,8 @@ unsafe fn offer_message_to_baseview(msg: &mut MSG) -> bool {
     let previous = *held;
     // Never hold the registry lock over a reentrant window/handler callback.
     drop(state);
-    let offered = enabled && previous != Some(false)
+    let offered = enabled
+        && previous != Some(false)
         && unsafe { native::offer_keyboard_message(msg.hwnd, msg.message, msg.wParam, msg.lParam) };
     let capture = enabled && previous.unwrap_or(offered);
     let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
