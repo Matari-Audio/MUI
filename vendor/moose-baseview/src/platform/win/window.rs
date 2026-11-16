@@ -779,7 +779,10 @@ impl BaseviewWindow {
         &self, window: HWnd, msg: u32, wparam: WPARAM, lparam: LPARAM,
     ) -> bool {
         let event = self.window_state.keyboard_state.borrow_mut().process_message(
-            window.as_raw(), msg, wparam, lparam,
+            window.as_raw(),
+            msg,
+            wparam,
+            lparam,
         );
         let captured = if let Some(mut event) = event {
             if self.window_state.ime.composing.get()
