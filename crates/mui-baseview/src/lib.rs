@@ -70,7 +70,7 @@ use raw_window_handle::HasWindowHandle;
 pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 
 /// Selects native shortcuts without borrowing the model or waiting for its worker.
-/// Runs on the window thread; keep it short and independent of UI state.
+/// May run on the window or model thread; keep it short and independent of UI state.
 pub type KeyFilter = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 
 /// A native-close signal. Runs before borrowing the model or handler; it must
