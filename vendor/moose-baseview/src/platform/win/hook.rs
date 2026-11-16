@@ -250,6 +250,10 @@ mod tests {
                         };
                     }
                     self.1.fetch_add(1, Ordering::Relaxed);
+                    if key.key == Key::Named(keyboard_types::NamedKey::Escape) {
+                        // MUI may handle Escape internally without reserving it from the host.
+                        return EventStatus::Captured;
+                    }
                 }
                 EventStatus::Ignored
             }
@@ -320,6 +324,11 @@ mod tests {
                 2,
                 "the editor observes ignored releases too"
             );
+            for kind in [WM_KEYDOWN, WM_KEYUP] {
+                let mut escape = message(kind, 0x1b, 0x01);
+                assert!(!offer_message_to_baseview(&mut escape));
+                assert_eq!(escape.hwnd, parent.0);
+            }
             // Real message pumps can have translated text queued before the down
             // is removed. The initial route must not depend on text assembly.
             for (vk, scan, character, captured) in
@@ -349,7 +358,7 @@ mod tests {
                 *heard.lock().unwrap(),
                 [KeyState::Down, KeyState::Down, KeyState::Up, KeyState::Down, KeyState::Up,]
             );
-            assert_eq!(other_events.load(Ordering::Relaxed), 4);
+            assert_eq!(other_events.load(Ordering::Relaxed), 6);
             SetFocus(parent.0);
             let mut unfocused = message(WM_KEYDOWN, 0x20, 0x39);
             assert!(!offer_message_to_baseview(&mut unfocused));
