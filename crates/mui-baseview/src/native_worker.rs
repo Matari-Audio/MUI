@@ -1046,7 +1046,7 @@ fn dispatch<V: View>(
     match event {
         Event::Keyboard(key) => {
             let event = key_event(&key);
-            let hook = requests.key_hook_for(&lock(shared).ui, &event);
+            let hook = requests.key_hook_for(key_routes, &lock(shared).ui, &event);
             let kept = hook.is_some_and(|hook| {
                 hook.lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)(
