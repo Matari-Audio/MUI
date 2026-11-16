@@ -849,6 +849,8 @@ fn native_shortcut_filter_reserves_space_without_running_the_worker_hook() {
     assert!(!h.requests.claims_key(&key_event(other_key)));
     assert_eq!(heard.load(Ordering::Relaxed), 0);
     h.step();
+    assert_eq!(h.on_event_inner(&other), EventStatus::Ignored);
+    assert_eq!(heard.load(Ordering::Relaxed), 0);
     assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
     assert_eq!(heard.load(Ordering::Relaxed), 1);
 }
