@@ -171,7 +171,7 @@ unsafe fn offer_message_to_baseview(msg: &mut MSG) -> bool {
     // ignored releases that update the editor's modifier state.
     let offered = (enabled || previous.is_some())
         && unsafe { native::offer_keyboard_message(msg.hwnd, msg.message, msg.wParam, msg.lParam) };
-    let capture = enabled && previous.unwrap_or(offered);
+    let capture = previous.unwrap_or(offered);
     let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
     if let Some(owner) = state
         .get_mut(&unsafe { GetCurrentThreadId() })
