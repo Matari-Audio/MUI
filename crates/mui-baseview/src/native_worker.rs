@@ -735,6 +735,7 @@ fn worker<V: View>(
     driver.display_paced = true;
     let mut scale = size.scale_factor;
     let mut input_revision = 0;
+    let mut key_routes = KeyRoutes::new();
     let mut gpu = None::<Offscreen>;
     let software_only = std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
     let mut init = (!software_only).then(|| GpuInit::new(true));
@@ -759,7 +760,7 @@ fn worker<V: View>(
             }
             Command::Event(event, revision) => {
                 input_revision = revision;
-                dispatch(&mut driver, shared, requests, scale, event);
+                dispatch(&mut driver, shared, requests, &mut key_routes, scale, event);
                 continue;
             }
             Command::Tick(drag) => {
@@ -1033,6 +1034,7 @@ fn dispatch<V: View>(
     driver: &mut Driver,
     shared: &Mutex<Shared<V>>,
     requests: &Requests,
+    key_routes: &mut KeyRoutes,
     scale: f64,
     event: Event,
 ) {

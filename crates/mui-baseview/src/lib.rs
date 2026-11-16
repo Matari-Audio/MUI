@@ -626,6 +626,7 @@ pub struct Handler<V> {
     applied_ime: Option<Option<baseview::ImeConfiguration>>,
     /// The queue and the frame schedule.
     pub driver: Driver,
+    key_routes: KeyRoutes,
     #[cfg(target_os = "linux")]
     x11_window: u32,
     /// Outbound drag sessions, and whether the window is a host's child.
@@ -683,6 +684,7 @@ impl<V: View> Handler<V> {
             captured: None,
             applied_ime: None,
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
+            key_routes: KeyRoutes::new(),
             #[cfg(target_os = "linux")]
             x11_window: 0,
             drag,
