@@ -856,6 +856,73 @@ fn native_shortcut_filter_reserves_space_without_running_the_worker_hook() {
 }
 
 #[test]
+fn a_pre_text_selection_survives_translated_characters() {
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&heard);
+    let hook: KeyHook = Arc::new(Mutex::new(move |_: &Ui, event: &KeyEvent| {
+        log.lock().unwrap().push((event.key.clone(), event.down));
+        true
+    }));
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.key == NativeKey::Text("a".into())),
+        Arc::clone(&hook),
+    );
+    h.step();
+    let Event::Keyboard(base) = key(
+        HostKey::Character("a".into()),
+        Code::KeyA,
+        KeyState::Down,
+        Modifiers::CAPS_LOCK,
+    ) else {
+        unreachable!()
+    };
+    h.on_event_inner(&Event::KeyboardCapture {
+        key: base.clone(),
+        captured: true,
+    });
+    for state in [KeyState::Down, KeyState::Up] {
+        assert_eq!(
+            h.on_event_inner(&key(
+                HostKey::Character("A".into()),
+                Code::KeyA,
+                state,
+                Modifiers::CAPS_LOCK
+            )),
+            EventStatus::Captured
+        );
+    }
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            (NativeKey::Text("A".into()), true),
+            (NativeKey::Text("A".into()), false),
+        ]
+    );
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.key == NativeKey::Text("A".into())),
+        hook,
+    );
+    h.on_event_inner(&Event::KeyboardCapture {
+        key: base,
+        captured: false,
+    });
+    for state in [KeyState::Down, KeyState::Up] {
+        h.on_event_inner(&key(
+            HostKey::Character("A".into()),
+            Code::KeyA,
+            state,
+            Modifiers::CAPS_LOCK,
+        ));
+    }
+    assert_eq!(
+        heard.lock().unwrap().len(),
+        2,
+        "declined base keys must not enter the hook after translation"
+    );
+}
+
+#[test]
 fn a_filtered_hook_keeps_the_press_route_after_modifiers_change() {
     let mut h = handler((400, 300), 1.0);
     let heard = Arc::new(Mutex::new(Vec::new()));

@@ -219,6 +219,7 @@ pub(super) fn build<V: View + Send + 'static>(
 
 enum Command {
     Event(Event, u64),
+    KeyReservation(u64, Option<KeyHook>),
     Resize(WindowSize),
     Tick(Option<(u64, u64)>),
     Invalidate,
@@ -338,7 +339,10 @@ impl NativeAdapter {
     }
     fn send(&self, command: Command) {
         if !self.stopped.load(Ordering::Acquire) {
-            if matches!(command, Command::Event(_, _) | Command::Resize(_)) {
+            if matches!(
+                command,
+                Command::Event(_, _) | Command::KeyReservation(_, _) | Command::Resize(_)
+            ) {
                 self.input_pending.set(true);
             }
             let _ = self.send.send(command);
@@ -648,6 +652,14 @@ impl WindowHandler for NativeAdapter {
         Ok(())
     }
     fn on_event(&self, mut event: Event) -> EventStatus {
+        if let Event::KeyboardCapture { key, captured } = &event {
+            self.send(Command::KeyReservation(
+                key_event(key).code,
+                self.requests.reserved_key_hook(*captured),
+            ));
+            self.requests.wake();
+            return EventStatus::Captured;
+        }
         if !matches!(event, Event::Window(WindowEvent::RedrawRequested)) {
             self.pointer.borrow_mut().observe(&event);
         }
@@ -756,6 +768,10 @@ fn worker<V: View>(
             Command::Resize(size) => {
                 scale = size.scale_factor;
                 driver.resized((size.physical.width, size.physical.height), scale);
+                continue;
+            }
+            Command::KeyReservation(code, hook) => {
+                key_routes.insert(code, hook);
                 continue;
             }
             Command::Event(event, revision) => {

@@ -200,7 +200,20 @@ pub(super) unsafe fn with_window<T>(
     data.inner.get().map(f)
 }
 
-pub(super) unsafe fn offer_keyboard_message(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> bool {
+pub(super) unsafe fn captures_key(hwnd: HWND, wp: WPARAM, lp: LPARAM) -> bool {
+    callback::guard(
+        "keyboard reservation",
+        || false,
+        || unsafe {
+            let Some(hwnd) = NonNull::new(hwnd) else { return false };
+            with_window(HWnd::from_raw(hwnd), |inner| inner.captures_key(wp, lp)).unwrap_or(false)
+        },
+    )
+}
+
+pub(super) unsafe fn offer_keyboard_message(
+    hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, reservation: Option<bool>,
+) -> bool {
     callback::guard(
         "keyboard message",
         || false,
@@ -209,8 +222,10 @@ pub(super) unsafe fn offer_keyboard_message(hwnd: HWND, msg: u32, wp: WPARAM, lp
                 return false;
             };
             let window = HWnd::from_raw(hwnd);
-            with_window(window, |inner| inner.offer_keyboard_message(window, msg, wp, lp))
-                .unwrap_or(false)
+            with_window(window, |inner| {
+                inner.offer_keyboard_message(window, msg, wp, lp, reservation)
+            })
+            .unwrap_or(false)
         },
     )
 }

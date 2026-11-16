@@ -413,6 +413,17 @@ impl Requests {
         filter.is_some_and(|filter| filter(event))
     }
 
+    fn reserved_key_hook(&self, captured: bool) -> Option<KeyHook> {
+        if captured {
+            self.keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        } else {
+            None
+        }
+    }
+
     fn key_hook_for(
         &self,
         routes: &mut KeyRoutes,
@@ -1059,6 +1070,12 @@ impl<V: View> Handler<V> {
                 }
             }
             Event::Ime(event) => d.ime(native::ime_event(event)),
+            Event::KeyboardCapture { key, captured } => {
+                self.key_routes.insert(
+                    key_event(key).code,
+                    self.requests.reserved_key_hook(*captured),
+                );
+            }
             Event::Keyboard(key) => {
                 let event = key_event(key);
                 let hook = self.requests.key_hook_for(

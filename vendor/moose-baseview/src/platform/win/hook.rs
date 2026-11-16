@@ -167,25 +167,40 @@ unsafe fn offer_message_to_baseview(msg: &mut MSG) -> bool {
     let previous = *held;
     // Never hold the registry lock over a reentrant window/handler callback.
     drop(state);
-    // Finish observed presses even after capture is disabled, including
-    // ignored releases that update the editor's modifier state.
-    let offered = (enabled || previous.is_some())
-        && unsafe { native::offer_keyboard_message(msg.hwnd, msg.message, msg.wParam, msg.lParam) };
-    let capture = previous.unwrap_or(offered);
+    let initial = matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN) && previous.is_none();
+    let reserved = if initial {
+        enabled && unsafe { native::captures_key(msg.hwnd, msg.wParam, msg.lParam) }
+    } else {
+        previous.unwrap_or(false)
+    };
+    // Publish edges before event delivery can pump another keyboard message.
+    // No write after dispatch may resurrect a key released by a nested callback.
     let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
     if let Some(owner) = state
         .get_mut(&unsafe { GetCurrentThreadId() })
         .and_then(|thread| thread.windows.get_mut(&(msg.hwnd as usize)))
     {
         if let Some(held) = owner.held.get_mut(scan) {
-            *held = match msg.message {
-                WM_KEYUP | WM_SYSKEYUP => None,
-                WM_KEYDOWN | WM_SYSKEYDOWN => Some(capture),
-                _ => *held,
-            };
+            match msg.message {
+                WM_KEYUP | WM_SYSKEYUP => *held = None,
+                WM_KEYDOWN | WM_SYSKEYDOWN if initial => *held = Some(reserved),
+                _ => {}
+            }
         }
     }
     drop(state);
+    // Ignored edges still update the editor's modifier state.
+    let offered = (enabled || previous.is_some())
+        && unsafe {
+            native::offer_keyboard_message(
+                msg.hwnd,
+                msg.message,
+                msg.wParam,
+                msg.lParam,
+                initial.then_some(reserved),
+            )
+        };
+    let capture = if initial || previous.is_some() { reserved } else { offered };
     if !capture {
         let parent = unsafe { GetParent(msg.hwnd) };
         if !parent.is_null() {
@@ -208,7 +223,7 @@ mod tests {
             HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
         };
         use std::num::NonZeroIsize;
-        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::sync::{Arc, Mutex};
         use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
         use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -227,7 +242,13 @@ mod tests {
                 }
             }
         }
-        struct Probe(Arc<Mutex<Vec<KeyState>>>, Arc<AtomicUsize>);
+        struct Probe(
+            Arc<Mutex<Vec<KeyState>>>,
+            Arc<AtomicUsize>,
+            Arc<AtomicUsize>,
+            Arc<AtomicBool>,
+            Arc<AtomicBool>,
+        );
         impl WindowHandler for Probe {
             fn captures_key(&self, key: &keyboard_types::KeyboardEvent) -> bool {
                 key.key == Key::Character(" ".into())
@@ -242,6 +263,18 @@ mod tests {
                 if let Event::Keyboard(key) = event {
                     if key.key == Key::Character(" ".into()) {
                         self.0.lock().unwrap().push(key.state);
+                        if key.state == KeyState::Down && self.3.swap(false, Ordering::Relaxed) {
+                            unsafe {
+                                let hwnd = self.2.load(Ordering::Relaxed) as HWND;
+                                assert_ne!(PostMessageW(hwnd, WM_KEYUP, 0x20, 0x39 << 16), 0);
+                                let mut release = MSG::default();
+                                assert_ne!(
+                                    PeekMessageW(&mut release, hwnd, WM_KEYUP, WM_KEYUP, PM_REMOVE),
+                                    0
+                                );
+                                self.4.store(release.message == WM_NULL, Ordering::Relaxed);
+                            }
+                        }
                         // A hook may only claim the down. Its up must still stay out of the host.
                         return if key.state == KeyState::Down {
                             EventStatus::Captured
@@ -281,6 +314,11 @@ mod tests {
             let log = Arc::clone(&heard);
             let other_events = Arc::new(AtomicUsize::new(0));
             let other_log = Arc::clone(&other_events);
+            let reenter = Arc::new(AtomicBool::new(false));
+            let reenter_probe = Arc::clone(&reenter);
+            let nested_captured = Arc::new(AtomicBool::new(false));
+            let nested_probe = Arc::clone(&nested_captured);
+            let probe_handle = Arc::clone(&handle);
             let child = Window::create(WindowSettings::new().with_parent(&parent), move |cx| {
                 let RawWindowHandle::Win32(hwnd) =
                     cx.platform_handle().window_handle().unwrap().as_raw()
@@ -288,7 +326,7 @@ mod tests {
                     unreachable!()
                 };
                 native.store(hwnd.hwnd.get() as usize, Ordering::Relaxed);
-                Ok(Probe(log, other_log))
+                Ok(Probe(log, other_log, probe_handle, reenter_probe, nested_probe))
             })
             .unwrap();
             child.show().unwrap();
@@ -359,10 +397,23 @@ mod tests {
                 [KeyState::Down, KeyState::Down, KeyState::Up, KeyState::Down, KeyState::Up,]
             );
             assert_eq!(other_events.load(Ordering::Relaxed), 6);
+            reenter.store(true, Ordering::Relaxed);
+            let mut reentrant_down = message(WM_KEYDOWN, 0x20, 0x39);
+            assert!(offer_message_to_baseview(&mut reentrant_down));
+            assert!(
+                nested_captured.load(Ordering::Relaxed),
+                "the reentrant release follows its press"
+            );
+            assert_eq!(
+                HOOK_STATE.read().unwrap()[&GetCurrentThreadId()].windows[&(hwnd as usize)].held
+                    [0x39],
+                None,
+                "the outer down must not resurrect a released key"
+            );
             SetFocus(parent.0);
             let mut unfocused = message(WM_KEYDOWN, 0x20, 0x39);
             assert!(!offer_message_to_baseview(&mut unfocused));
-            assert_eq!(heard.lock().unwrap().len(), 5);
+            assert_eq!(heard.lock().unwrap().len(), 7);
             drop(child);
         }
     }

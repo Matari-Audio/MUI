@@ -775,15 +775,19 @@ impl WindowImpl for BaseviewWindow {
 }
 
 impl BaseviewWindow {
+    pub(super) fn captures_key(&self, wparam: WPARAM, lparam: LPARAM) -> bool {
+        let key = self.window_state.keyboard_state.borrow().key_down(wparam, lparam);
+        self.handler.with(|handler| handler.captures_key(&key)).unwrap_or(false)
+    }
+
     pub(super) unsafe fn offer_keyboard_message(
         &self, window: HWnd, msg: u32, wparam: WPARAM, lparam: LPARAM,
+        reservation: Option<bool>,
     ) -> bool {
-        let reserved = if matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN) {
+        if let Some(captured) = reservation {
             let key = self.window_state.keyboard_state.borrow().key_down(wparam, lparam);
-            Some(self.handler.with(|handler| handler.captures_key(&key)).unwrap_or(false))
-        } else {
-            None
-        };
+            self.handle_event(Event::KeyboardCapture { key, captured });
+        }
         let event = self.window_state.keyboard_state.borrow_mut().process_message(
             window.as_raw(),
             msg,
@@ -801,7 +805,7 @@ impl BaseviewWindow {
             false
         };
         self.finish_close(window);
-        reserved.unwrap_or(captured)
+        captured
     }
 }
 
@@ -1051,7 +1055,7 @@ unsafe fn wnd_proc_inner(
         WM_IME_CHAR => Some(0),
         WM_CHAR | WM_SYSCHAR | WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
         | WM_INPUTLANGCHANGE => {
-            window_bv.offer_keyboard_message(window, msg, wparam, lparam);
+            window_bv.offer_keyboard_message(window, msg, wparam, lparam, None);
 
             if msg != WM_SYSKEYDOWN {
                 Some(0)
