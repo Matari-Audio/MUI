@@ -69,6 +69,10 @@ use raw_window_handle::HasWindowHandle;
 /// the key come up. Runs on the model worker with its retained `Ui`; native calls belong in the native pump.
 pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 
+/// Selects native shortcuts without borrowing the model or waiting for its worker.
+/// Runs on the window thread; keep it short and independent of UI state.
+pub type KeyFilter = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
+
 /// A native-close signal. Runs before borrowing the model or handler; it must
 /// never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
@@ -107,6 +111,7 @@ pub struct Requests {
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
+    key_filter: Mutex<Option<KeyFilter>>,
     pointer: Mutex<Option<PointerHook>>,
     wheel: Mutex<WheelPolicy>,
     #[cfg(target_os = "linux")]
@@ -377,6 +382,31 @@ impl Requests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
     }
+    /// Reserve selected shortcuts for a worker key hook on Windows.
+    /// Other keys retain normal text-field and host routing. A selected key is
+    /// reserved even when the hook later declines it and MUI handles it instead.
+    pub fn on_key_filtered(&self, filter: KeyFilter, hook: KeyHook) {
+        self.on_key(hook);
+        *self
+            .key_filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(filter);
+        self.redraw();
+    }
+
+    fn offers_keys(&self) -> bool {
+        self.key_filter.lock().is_ok_and(|filter| filter.is_some())
+    }
+
+    fn claims_key(&self, event: &KeyEvent) -> bool {
+        let filter = self
+            .key_filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        filter.is_some_and(|filter| filter(event))
+    }
+
     /// Resize the child window to `width` x `height` logical points.
     pub fn resize(&self, width: u32, height: u32) {
         self.size.store(
@@ -787,11 +817,8 @@ impl<V: View> Handler<V> {
                 .driver
                 .ime_configuration(&s.ui)
                 .map(|config| native_ime(config, self.driver.ui_scale()));
-            // A key hook must hear shortcuts outside text fields as well.
-            // Windows offers keys to the editor and forwards ignored ones to
-            // the host. Changing capture can also hand native focus back.
-            capture = s.ui.focus_is_text()
-                || self.requests.keys.lock().is_ok_and(|keys| keys.is_some());
+            // Selected shortcuts must reach hooks outside text fields too.
+            capture = s.ui.focus_is_text() || self.requests.offers_keys();
             if let Some((_, a11y)) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {

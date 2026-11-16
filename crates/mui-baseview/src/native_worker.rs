@@ -381,9 +381,9 @@ impl NativeAdapter {
     }
     fn apply(&self, output: Output) {
         self.demand.set(output.demand);
-        if self.capture.replace(output.capture) != output.capture {
-            self.cx.set_keyboard_capture(output.capture);
-        }
+        self.capture.set(output.capture);
+        self.cx
+            .set_keyboard_capture(output.capture || self.requests.offers_keys());
         if self.ime.borrow().as_ref() != Some(&output.ime) {
             self.cx.set_ime_configuration(output.ime.clone());
             *self.ime.borrow_mut() = Some(output.ime);
@@ -685,7 +685,11 @@ impl WindowHandler for NativeAdapter {
         }
         self.requests.wake();
         match event {
-            Event::Keyboard(_) if !self.capture.get() => EventStatus::Ignored,
+            Event::Keyboard(ref key)
+                if !self.capture.get() && !self.requests.claims_key(&key_event(key)) =>
+            {
+                EventStatus::Ignored
+            }
             Event::Mouse(
                 MouseEvent::DragEntered { ref data, .. }
                 | MouseEvent::DragMoved { ref data, .. }

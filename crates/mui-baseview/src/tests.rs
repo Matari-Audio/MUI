@@ -815,6 +815,45 @@ fn focus_request_wakes_the_native_thread_and_coalesces_until_taken() {
 }
 
 #[test]
+fn native_shortcut_filter_reserves_space_without_running_the_worker_hook() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(AtomicUsize::new(0));
+    let log = Arc::clone(&heard);
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.key == NativeKey::Text(" ".into())),
+        Arc::new(Mutex::new(move |_: &Ui, _: &KeyEvent| {
+            log.fetch_add(1, Ordering::Relaxed);
+            true
+        })),
+    );
+    let space = key(
+        HostKey::Character(" ".into()),
+        Code::Space,
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    let other = key(
+        HostKey::Character("a".into()),
+        Code::KeyA,
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    let Event::Keyboard(space_key) = &space else {
+        unreachable!()
+    };
+    let Event::Keyboard(other_key) = &other else {
+        unreachable!()
+    };
+    assert!(h.requests.claims_key(&key_event(space_key)));
+    assert!(!h.requests.claims_key(&key_event(other_key)));
+    assert_eq!(heard.load(Ordering::Relaxed), 0);
+    h.step();
+    assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
+    assert_eq!(heard.load(Ordering::Relaxed), 1);
+}
+
+#[test]
 fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
     let mut h = handler((400, 300), 1.0);
     let heard = Arc::new(Mutex::new(Vec::new()));
