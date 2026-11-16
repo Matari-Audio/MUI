@@ -413,17 +413,16 @@ impl Requests {
         filter.is_some_and(|filter| filter(event))
     }
 
-    fn key_hook_for(&self, ui: &mui::Ui, event: &KeyEvent) -> Option<KeyHook> {
-        let previous = {
-            let mut routes = self
-                .key_routes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if event.down {
-                routes.get(&event.code).cloned()
-            } else {
-                routes.remove(&event.code)
-            }
+    fn key_hook_for(
+        &self,
+        routes: &mut KeyRoutes,
+        ui: &mui::Ui,
+        event: &KeyEvent,
+    ) -> Option<KeyHook> {
+        let previous = if event.down {
+            routes.get(&event.code).cloned()
+        } else {
+            routes.remove(&event.code)
         };
         if let Some(hook) = previous {
             return hook;
