@@ -1059,7 +1059,11 @@ impl<V: View> Handler<V> {
             Event::Ime(event) => d.ime(native::ime_event(event)),
             Event::Keyboard(key) => {
                 let event = key_event(key);
-                let hook = self.requests.key_hook_for(&lock(&self.shared).ui, &event);
+                let hook = self.requests.key_hook_for(
+                    &mut self.key_routes,
+                    &lock(&self.shared).ui,
+                    &event,
+                );
                 if let Some(hook) = hook {
                     let mut hook = hook
                         .lock()
