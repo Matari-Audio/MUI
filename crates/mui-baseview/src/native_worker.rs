@@ -1040,7 +1040,7 @@ fn dispatch<V: View>(
         event,
         Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
     ) {
-        requests.clear_key_routes();
+        key_routes.clear();
     }
     let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
     match event {
