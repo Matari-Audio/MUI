@@ -299,6 +299,7 @@ mod tests {
             };
             let mut space = message(WM_KEYDOWN, 0x20, 0x39);
             assert!(offer_message_to_baseview(&mut space));
+            assert!(set_keyboard_capture(hwnd, false));
             let mut repeat = message(WM_KEYDOWN, 0x20, 0x39);
             repeat.lParam |= 1 << 30;
             assert!(offer_message_to_baseview(&mut repeat));
