@@ -781,8 +781,7 @@ impl BaseviewWindow {
     }
 
     pub(super) unsafe fn offer_keyboard_message(
-        &self, window: HWnd, msg: u32, wparam: WPARAM, lparam: LPARAM,
-        reservation: Option<bool>,
+        &self, window: HWnd, msg: u32, wparam: WPARAM, lparam: LPARAM, reservation: Option<bool>,
     ) -> bool {
         if let Some(captured) = reservation {
             let key = self.window_state.keyboard_state.borrow().key_down(wparam, lparam);
