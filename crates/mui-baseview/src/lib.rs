@@ -446,13 +446,6 @@ impl Requests {
         hook
     }
 
-    fn clear_key_routes(&self) {
-        self.key_routes
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
-    }
-
     /// Resize the child window to `width` x `height` logical points.
     pub fn resize(&self, width: u32, height: u32) {
         self.size.store(
