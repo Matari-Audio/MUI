@@ -73,6 +73,8 @@ pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 /// May run on the window or model thread; keep it short and independent of UI state.
 pub type KeyFilter = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 
+type KeyRoutes = HashMap<u64, Option<KeyHook>>;
+
 /// A native-close signal. Runs before borrowing the model or handler; it must
 /// never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
