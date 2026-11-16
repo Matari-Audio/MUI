@@ -114,7 +114,6 @@ pub struct Requests {
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
     key_filter: Mutex<Option<KeyFilter>>,
-    key_routes: Mutex<HashMap<u64, Option<KeyHook>>>,
     pointer: Mutex<Option<PointerHook>>,
     wheel: Mutex<WheelPolicy>,
     #[cfg(target_os = "linux")]
