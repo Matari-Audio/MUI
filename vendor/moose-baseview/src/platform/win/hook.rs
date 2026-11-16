@@ -172,7 +172,8 @@ unsafe fn offer_message_to_baseview(msg: &mut MSG) -> bool {
         && unsafe { native::offer_keyboard_message(msg.hwnd, msg.message, msg.wParam, msg.lParam) };
     let capture = enabled && previous.unwrap_or(offered);
     let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
-    if let Some(owner) = state.get_mut(&unsafe { GetCurrentThreadId() })
+    if let Some(owner) = state
+        .get_mut(&unsafe { GetCurrentThreadId() })
         .and_then(|thread| thread.windows.get_mut(&(msg.hwnd as usize)))
     {
         if let Some(held) = owner.held.get_mut(scan) {
