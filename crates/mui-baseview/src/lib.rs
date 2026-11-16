@@ -441,10 +441,7 @@ impl Requests {
                 .clone()
         };
         if event.down {
-            self.key_routes
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .insert(event.code, hook.clone());
+            routes.insert(event.code, hook.clone());
         }
         hook
     }
