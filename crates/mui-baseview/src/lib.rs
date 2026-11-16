@@ -14,7 +14,7 @@ compile_error!(
     "mui-baseview requires panic=unwind for host-safe callback containment; allow-panic-abort explicitly accepts that a panic terminates the host"
 );
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -112,6 +112,7 @@ pub struct Requests {
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
     key_filter: Mutex<Option<KeyFilter>>,
+    key_routes: Mutex<HashMap<u64, Option<KeyHook>>>,
     pointer: Mutex<Option<PointerHook>>,
     wheel: Mutex<WheelPolicy>,
     #[cfg(target_os = "linux")]
@@ -387,6 +388,8 @@ impl Requests {
     /// reserved even when the hook later declines it and MUI handles it instead.
     /// On Windows the filter also runs before text assembly, using the layout's
     /// base key. The hook receives the completed text event only once.
+    /// Each physical press keeps its hook route through repeats and release,
+    /// even if modifiers change. Losing window focus clears these routes.
     pub fn on_key_filtered(&self, filter: KeyFilter, hook: KeyHook) {
         self.on_key(hook);
         *self
@@ -410,18 +413,47 @@ impl Requests {
     }
 
     fn key_hook_for(&self, ui: &mui::Ui, event: &KeyEvent) -> Option<KeyHook> {
+        let previous = {
+            let mut routes = self
+                .key_routes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if event.down {
+                routes.get(&event.code).cloned()
+            } else {
+                routes.remove(&event.code)
+            }
+        };
+        if let Some(hook) = previous {
+            return hook;
+        }
         let filter = self
             .key_filter
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        if !ui.focus_is_text() && filter.is_some_and(|filter| !filter(event)) {
-            return None;
+        let hook = if !ui.focus_is_text() && filter.is_some_and(|filter| !filter(event)) {
+            None
+        } else {
+            self.keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        };
+        if event.down {
+            self.key_routes
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .insert(event.code, hook.clone());
         }
-        self.keys
+        hook
+    }
+
+    fn clear_key_routes(&self) {
+        self.key_routes
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone()
+            .clear();
     }
 
     /// Resize the child window to `width` x `height` logical points.
@@ -1009,6 +1041,12 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        if matches!(
+            event,
+            Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
+        ) {
+            self.requests.clear_key_routes();
+        }
         self.drag.observe(&self.requests.drag, event);
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
             self.drag.close(&self.requests.drag);

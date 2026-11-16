@@ -856,6 +856,55 @@ fn native_shortcut_filter_reserves_space_without_running_the_worker_hook() {
 }
 
 #[test]
+fn a_filtered_hook_keeps_the_press_route_after_modifiers_change() {
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&heard);
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.mods.ctrl),
+        Arc::new(Mutex::new(move |_: &Ui, event: &KeyEvent| {
+            log.lock().unwrap().push((event.key.clone(), event.down));
+            true
+        })),
+    );
+    h.step();
+    let a = |state, modifiers| key(HostKey::Character("a".into()), Code::KeyA, state, modifiers);
+    for (state, modifiers) in [
+        (KeyState::Down, Modifiers::CONTROL),
+        (KeyState::Down, Modifiers::empty()),
+        (KeyState::Up, Modifiers::empty()),
+    ] {
+        assert_eq!(
+            h.on_event_inner(&a(state, modifiers)),
+            EventStatus::Captured
+        );
+    }
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            (NativeKey::Text("a".into()), true),
+            (NativeKey::Text("a".into()), true),
+            (NativeKey::Text("a".into()), false),
+        ]
+    );
+    // A press rejected before Ctrl is held must not enter the hook mid-press.
+    for (state, modifiers) in [
+        (KeyState::Down, Modifiers::empty()),
+        (KeyState::Down, Modifiers::CONTROL),
+        (KeyState::Up, Modifiers::CONTROL),
+    ] {
+        h.on_event_inner(&a(state, modifiers));
+    }
+    assert_eq!(heard.lock().unwrap().len(), 3);
+    // Losing native focus discards ownership before the next physical press.
+    h.on_event_inner(&a(KeyState::Down, Modifiers::empty()));
+    h.on_event_inner(&Event::Window(WindowEvent::Unfocused));
+    h.on_event_inner(&a(KeyState::Down, Modifiers::CONTROL));
+    h.on_event_inner(&a(KeyState::Up, Modifiers::empty()));
+    assert_eq!(heard.lock().unwrap().len(), 5);
+}
+
+#[test]
 fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
     let mut h = handler((400, 300), 1.0);
     let heard = Arc::new(Mutex::new(Vec::new()));

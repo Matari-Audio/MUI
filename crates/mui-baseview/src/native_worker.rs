@@ -1036,6 +1036,12 @@ fn dispatch<V: View>(
     scale: f64,
     event: Event,
 ) {
+    if matches!(
+        event,
+        Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
+    ) {
+        requests.clear_key_routes();
+    }
     let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
     match event {
         Event::Keyboard(key) => {
