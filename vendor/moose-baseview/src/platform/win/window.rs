@@ -798,7 +798,6 @@ impl BaseviewWindow {
         self.finish_close(window);
         captured
     }
-
 }
 
 /// Our custom `wnd_proc` handler. If the result contains a value, then this is returned after
