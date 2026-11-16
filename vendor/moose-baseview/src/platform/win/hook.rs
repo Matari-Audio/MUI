@@ -306,6 +306,7 @@ mod tests {
             let mut up = message(WM_KEYUP, 0x20, 0x39);
             assert!(offer_message_to_baseview(&mut up));
             assert_eq!(*heard.lock().unwrap(), [KeyState::Down, KeyState::Down, KeyState::Up]);
+            assert!(set_keyboard_capture(hwnd, true));
             for kind in [WM_KEYDOWN, WM_KEYUP] {
                 let mut other = message(kind, 0x41, 0x1e);
                 assert!(!offer_message_to_baseview(&mut other));
