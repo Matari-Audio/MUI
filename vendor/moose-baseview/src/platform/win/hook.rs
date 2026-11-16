@@ -163,29 +163,33 @@ unsafe fn offer_message_to_baseview(msg: &mut MSG) -> bool {
     let Some(held) = owner.held.get_mut(scan) else {
         return false;
     };
-    let capture = if !owner.capture {
-        *held = None;
-        false
-    } else {
-        match msg.message {
-            WM_KEYDOWN | WM_SYSKEYDOWN => *held.get_or_insert(true),
-            WM_KEYUP | WM_SYSKEYUP => held.take().unwrap_or(true),
-            _ => held.unwrap_or(true),
-        }
-    };
+    let enabled = owner.capture;
+    let previous = *held;
     // Never hold the registry lock over a reentrant window/handler callback.
+    drop(state);
+    let offered = enabled && previous != Some(false)
+        && unsafe { native::offer_keyboard_message(msg.hwnd, msg.message, msg.wParam, msg.lParam) };
+    let capture = enabled && previous.unwrap_or(offered);
+    let mut state = HOOK_STATE.write().unwrap_or_else(PoisonError::into_inner);
+    if let Some(owner) = state.get_mut(&unsafe { GetCurrentThreadId() })
+        .and_then(|thread| thread.windows.get_mut(&(msg.hwnd as usize)))
+    {
+        if let Some(held) = owner.held.get_mut(scan) {
+            *held = match msg.message {
+                WM_KEYUP | WM_SYSKEYUP => None,
+                WM_KEYDOWN | WM_SYSKEYDOWN => Some(capture),
+                _ => *held,
+            };
+        }
+    }
     drop(state);
     if !capture {
         let parent = unsafe { GetParent(msg.hwnd) };
         if !parent.is_null() {
             msg.hwnd = parent;
         }
-        return false;
     }
-    unsafe {
-        native::wnd_proc(msg.hwnd, msg.message, msg.wParam, msg.lParam);
-    }
-    true
+    capture
 }
 
 #[cfg(test)]

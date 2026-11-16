@@ -774,6 +774,30 @@ impl WindowImpl for BaseviewWindow {
     }
 }
 
+impl BaseviewWindow {
+    pub(super) unsafe fn offer_keyboard_message(
+        &self, window: HWnd, msg: u32, wparam: WPARAM, lparam: LPARAM,
+    ) -> bool {
+        let event = self.window_state.keyboard_state.borrow_mut().process_message(
+            window.as_raw(), msg, wparam, lparam,
+        );
+        let captured = if let Some(mut event) = event {
+            if self.window_state.ime.composing.get()
+                && matches!(event.key, keyboard_types::Key::Character(_))
+            {
+                event.key = keyboard_types::Key::Named(keyboard_types::NamedKey::Process);
+            }
+            self.handle_event(Event::Keyboard(event)) == EventStatus::Captured
+        } else {
+            // A multi-message key is still being assembled by KeyboardState.
+            true
+        };
+        self.finish_close(window);
+        captured
+    }
+
+}
+
 /// Our custom `wnd_proc` handler. If the result contains a value, then this is returned after
 /// handling any deferred tasks. otherwise the default window procedure is invoked.
 unsafe fn wnd_proc_inner(
@@ -1020,21 +1044,7 @@ unsafe fn wnd_proc_inner(
         WM_IME_CHAR => Some(0),
         WM_CHAR | WM_SYSCHAR | WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP
         | WM_INPUTLANGCHANGE => {
-            let opt_event = window_state.keyboard_state.borrow_mut().process_message(
-                window.as_raw(),
-                msg,
-                wparam,
-                lparam,
-            );
-
-            if let Some(mut event) = opt_event {
-                if window_state.ime.composing.get()
-                    && matches!(event.key, keyboard_types::Key::Character(_))
-                {
-                    event.key = keyboard_types::Key::Named(keyboard_types::NamedKey::Process);
-                }
-                window_bv.handle_event(Event::Keyboard(event));
-            }
+            window_bv.offer_keyboard_message(window, msg, wparam, lparam);
 
             if msg != WM_SYSKEYDOWN {
                 Some(0)

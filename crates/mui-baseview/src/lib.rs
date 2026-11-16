@@ -787,11 +787,11 @@ impl<V: View> Handler<V> {
                 .driver
                 .ime_configuration(&s.ui)
                 .map(|config| native_ime(config, self.driver.ui_scale()));
-            // Keys typed into a field must not reach the host's shortcuts;
-            // every other key does. Windows only; a no-op elsewhere, where an
-            // ignored key already goes to the host. Only on a change: each
-            // call also moves focus.
-            capture = s.ui.focus_is_text();
+            // A key hook must hear shortcuts outside text fields as well.
+            // Windows offers keys to the editor and forwards ignored ones to
+            // the host. Changing capture can also hand native focus back.
+            capture = s.ui.focus_is_text()
+                || self.requests.keys.lock().is_ok_and(|keys| keys.is_some());
             if let Some((_, a11y)) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
