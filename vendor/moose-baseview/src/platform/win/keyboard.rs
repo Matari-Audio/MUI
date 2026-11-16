@@ -432,23 +432,7 @@ impl KeyboardState {
                 let scan_code = ((lparam & SCAN_MASK) >> 16) as u32;
                 let vk = self.refine_vk(wparam as u8, scan_code);
                 if is_last_message(hwnd, msg, lparam) {
-                    let modifiers = self.get_modifiers();
-                    let code = scan_to_code(scan_code);
-                    let key = vk_to_key(vk).unwrap_or_else(|| self.get_base_key(vk, modifiers));
-                    let repeat = (lparam & 0x4000_0000) != 0;
-                    let is_extended = (lparam & 0x100_0000) != 0;
-                    let location = vk_to_location(vk, is_extended);
-                    let state = KeyState::Down;
-                    let event = KeyboardEvent {
-                        state,
-                        modifiers,
-                        code,
-                        key,
-                        is_composing: false,
-                        location,
-                        repeat,
-                    };
-                    Some(event)
+                    Some(self.key_down(wparam, lparam))
                 } else {
                     self.stash_vk = Some(vk);
                     None
@@ -519,6 +503,22 @@ impl KeyboardState {
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Describes a press before queued characters or composition are assembled.
+    pub(crate) fn key_down(&self, wparam: WPARAM, lparam: LPARAM) -> KeyboardEvent {
+        let scan_code = ((lparam & SCAN_MASK) >> 16) as u32;
+        let vk = self.refine_vk(wparam as u8, scan_code);
+        let modifiers = self.get_modifiers();
+        KeyboardEvent {
+            state: KeyState::Down,
+            modifiers,
+            code: scan_to_code(scan_code),
+            key: vk_to_key(vk).unwrap_or_else(|| self.get_base_key(vk, modifiers)),
+            is_composing: false,
+            location: vk_to_location(vk, (lparam & 0x100_0000) != 0),
+            repeat: (lparam & 0x4000_0000) != 0,
         }
     }
 

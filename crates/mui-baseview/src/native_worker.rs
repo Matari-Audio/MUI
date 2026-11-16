@@ -219,6 +219,7 @@ pub(super) fn build<V: View + Send + 'static>(
 
 enum Command {
     Event(Event, u64),
+    KeyReservation(u64, Option<KeyHook>),
     Resize(WindowSize),
     Tick(Option<(u64, u64)>),
     Invalidate,
@@ -338,7 +339,10 @@ impl NativeAdapter {
     }
     fn send(&self, command: Command) {
         if !self.stopped.load(Ordering::Acquire) {
-            if matches!(command, Command::Event(_, _) | Command::Resize(_)) {
+            if matches!(
+                command,
+                Command::Event(_, _) | Command::KeyReservation(_, _) | Command::Resize(_)
+            ) {
                 self.input_pending.set(true);
             }
             let _ = self.send.send(command);
@@ -381,9 +385,9 @@ impl NativeAdapter {
     }
     fn apply(&self, output: Output) {
         self.demand.set(output.demand);
-        if self.capture.replace(output.capture) != output.capture {
-            self.cx.set_keyboard_capture(output.capture);
-        }
+        self.capture.set(output.capture);
+        self.cx
+            .set_keyboard_capture(output.capture || self.requests.offers_keys());
         if self.ime.borrow().as_ref() != Some(&output.ime) {
             self.cx.set_ime_configuration(output.ime.clone());
             *self.ime.borrow_mut() = Some(output.ime);
@@ -509,6 +513,9 @@ impl Drop for NativeAdapter {
     }
 }
 impl WindowHandler for NativeAdapter {
+    fn captures_key(&self, key: &KeyboardEvent) -> bool {
+        self.capture.get() || self.requests.claims_key(&key_event(key))
+    }
     fn frame_demand(&self) -> baseview::FrameDemand {
         if self.stopped.load(Ordering::Acquire) {
             return baseview::FrameDemand::Idle;
@@ -645,6 +652,14 @@ impl WindowHandler for NativeAdapter {
         Ok(())
     }
     fn on_event(&self, mut event: Event) -> EventStatus {
+        if let Event::KeyboardCapture { key, captured } = &event {
+            self.send(Command::KeyReservation(
+                key_event(key).code,
+                self.requests.reserved_key_hook(*captured),
+            ));
+            self.requests.wake();
+            return EventStatus::Captured;
+        }
         if !matches!(event, Event::Window(WindowEvent::RedrawRequested)) {
             self.pointer.borrow_mut().observe(&event);
         }
@@ -685,7 +700,11 @@ impl WindowHandler for NativeAdapter {
         }
         self.requests.wake();
         match event {
-            Event::Keyboard(_) if !self.capture.get() => EventStatus::Ignored,
+            Event::Keyboard(ref key)
+                if !self.capture.get() && !self.requests.claims_key(&key_event(key)) =>
+            {
+                EventStatus::Ignored
+            }
             Event::Mouse(
                 MouseEvent::DragEntered { ref data, .. }
                 | MouseEvent::DragMoved { ref data, .. }
@@ -728,6 +747,7 @@ fn worker<V: View>(
     driver.display_paced = true;
     let mut scale = size.scale_factor;
     let mut input_revision = 0;
+    let mut key_routes = KeyRoutes::new();
     let mut gpu = None::<Offscreen>;
     let software_only = std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
     let mut init = (!software_only).then(|| GpuInit::new(true));
@@ -750,9 +770,13 @@ fn worker<V: View>(
                 driver.resized((size.physical.width, size.physical.height), scale);
                 continue;
             }
+            Command::KeyReservation(code, hook) => {
+                key_routes.insert(code, hook);
+                continue;
+            }
             Command::Event(event, revision) => {
                 input_revision = revision;
-                dispatch(&mut driver, shared, requests, scale, event);
+                dispatch(&mut driver, shared, requests, &mut key_routes, scale, event);
                 continue;
             }
             Command::Tick(drag) => {
@@ -1026,18 +1050,21 @@ fn dispatch<V: View>(
     driver: &mut Driver,
     shared: &Mutex<Shared<V>>,
     requests: &Requests,
+    key_routes: &mut KeyRoutes,
     scale: f64,
     event: Event,
 ) {
+    if matches!(
+        event,
+        Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
+    ) {
+        key_routes.clear();
+    }
     let points = |p: PhysicalPosition<f64>| Point::new(p.x / scale, p.y / scale);
     match event {
         Event::Keyboard(key) => {
             let event = key_event(&key);
-            let hook = requests
-                .keys
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone();
+            let hook = requests.key_hook_for(key_routes, &lock(shared).ui, &event);
             let kept = hook.is_some_and(|hook| {
                 hook.lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)(

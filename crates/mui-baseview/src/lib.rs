@@ -14,7 +14,7 @@ compile_error!(
     "mui-baseview requires panic=unwind for host-safe callback containment; allow-panic-abort explicitly accepts that a panic terminates the host"
 );
 use std::cell::{Cell, RefCell};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -69,6 +69,12 @@ use raw_window_handle::HasWindowHandle;
 /// the key come up. Runs on the model worker with its retained `Ui`; native calls belong in the native pump.
 pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 
+/// Selects native shortcuts without borrowing the model or waiting for its worker.
+/// May run on the window or model thread; keep it short and independent of UI state.
+pub type KeyFilter = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
+
+type KeyRoutes = HashMap<u64, Option<KeyHook>>;
+
 /// A native-close signal. Runs before borrowing the model or handler; it must
 /// never borrow the UI/model or wait for workers.
 pub type CloseHook = Arc<dyn Fn() + Send + Sync>;
@@ -107,6 +113,7 @@ pub struct Requests {
     /// Microseconds; 0 is the default model heartbeat.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
+    key_filter: Mutex<Option<KeyFilter>>,
     pointer: Mutex<Option<PointerHook>>,
     wheel: Mutex<WheelPolicy>,
     #[cfg(target_os = "linux")]
@@ -377,6 +384,79 @@ impl Requests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
     }
+    /// Reserve selected shortcuts for a worker key hook on Windows.
+    /// Other keys retain normal text-field and host routing. A selected key is
+    /// reserved even when the hook later declines it and MUI handles it instead.
+    /// On Windows the filter also runs before text assembly, using the layout's
+    /// base key. The hook receives the completed text event only once.
+    /// Each physical press keeps its hook route through repeats and release,
+    /// even if modifiers change. Losing window focus clears these routes.
+    pub fn on_key_filtered(&self, filter: KeyFilter, hook: KeyHook) {
+        self.on_key(hook);
+        *self
+            .key_filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(filter);
+        self.redraw();
+    }
+
+    fn offers_keys(&self) -> bool {
+        self.key_filter.lock().is_ok_and(|filter| filter.is_some())
+    }
+
+    fn claims_key(&self, event: &KeyEvent) -> bool {
+        let filter = self
+            .key_filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        filter.is_some_and(|filter| filter(event))
+    }
+
+    fn reserved_key_hook(&self, captured: bool) -> Option<KeyHook> {
+        if captured {
+            self.keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        } else {
+            None
+        }
+    }
+
+    fn key_hook_for(
+        &self,
+        routes: &mut KeyRoutes,
+        ui: &mui::Ui,
+        event: &KeyEvent,
+    ) -> Option<KeyHook> {
+        let previous = if event.down {
+            routes.get(&event.code).cloned()
+        } else {
+            routes.remove(&event.code)
+        };
+        if let Some(hook) = previous {
+            return hook;
+        }
+        let filter = self
+            .key_filter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let hook = if !ui.focus_is_text() && filter.is_some_and(|filter| !filter(event)) {
+            None
+        } else {
+            self.keys
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+        };
+        if event.down {
+            routes.insert(event.code, hook.clone());
+        }
+        hook
+    }
+
     /// Resize the child window to `width` x `height` logical points.
     pub fn resize(&self, width: u32, height: u32) {
         self.size.store(
@@ -557,6 +637,7 @@ pub struct Handler<V> {
     applied_ime: Option<Option<baseview::ImeConfiguration>>,
     /// The queue and the frame schedule.
     pub driver: Driver,
+    key_routes: KeyRoutes,
     #[cfg(target_os = "linux")]
     x11_window: u32,
     /// Outbound drag sessions, and whether the window is a host's child.
@@ -614,6 +695,7 @@ impl<V: View> Handler<V> {
             captured: None,
             applied_ime: None,
             driver: Driver::new(size, scale, Box::new(Clipboard::default())),
+            key_routes: KeyRoutes::new(),
             #[cfg(target_os = "linux")]
             x11_window: 0,
             drag,
@@ -787,11 +869,8 @@ impl<V: View> Handler<V> {
                 .driver
                 .ime_configuration(&s.ui)
                 .map(|config| native_ime(config, self.driver.ui_scale()));
-            // Keys typed into a field must not reach the host's shortcuts;
-            // every other key does. Windows only; a no-op elsewhere, where an
-            // ignored key already goes to the host. Only on a change: each
-            // call also moves focus.
-            capture = s.ui.focus_is_text();
+            // Selected shortcuts must reach hooks outside text fields too.
+            capture = s.ui.focus_is_text() || self.requests.offers_keys();
             if let Some((_, a11y)) = self.a11y.as_mut()
                 && (fresh || a11y.wants_tree())
             {
@@ -965,6 +1044,12 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        if matches!(
+            event,
+            Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)
+        ) {
+            self.key_routes.clear();
+        }
         self.drag.observe(&self.requests.drag, event);
         if matches!(event, Event::Window(WindowEvent::WillClose)) {
             self.drag.close(&self.requests.drag);
@@ -985,9 +1070,19 @@ impl<V: View> Handler<V> {
                 }
             }
             Event::Ime(event) => d.ime(native::ime_event(event)),
+            Event::KeyboardCapture { key, captured } => {
+                self.key_routes.insert(
+                    key_event(key).code,
+                    self.requests.reserved_key_hook(*captured),
+                );
+            }
             Event::Keyboard(key) => {
                 let event = key_event(key);
-                let hook = self.requests.keys.lock().ok().and_then(|h| h.clone());
+                let hook = self.requests.key_hook_for(
+                    &mut self.key_routes,
+                    &lock(&self.shared).ui,
+                    &event,
+                );
                 if let Some(hook) = hook {
                     let mut hook = hook
                         .lock()
@@ -1215,6 +1310,14 @@ fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -
 }
 
 impl<V: View + 'static> WindowHandler for Adapter<V> {
+    fn captures_key(&self, key: &KeyboardEvent) -> bool {
+        let Ok(h) = self.handler.try_borrow() else {
+            return false;
+        };
+        let text = lock(&h.shared).ui.focus_is_text();
+        text || h.requests.claims_key(&key_event(key))
+    }
+
     fn frame_demand(&self) -> baseview::FrameDemand {
         // ponytail: View::changed, plugin meters and a11y requests are polled.
         // Push-based change notifications would remove this idle heartbeat.

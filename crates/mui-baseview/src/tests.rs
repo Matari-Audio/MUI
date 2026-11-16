@@ -815,6 +815,163 @@ fn focus_request_wakes_the_native_thread_and_coalesces_until_taken() {
 }
 
 #[test]
+fn native_shortcut_filter_reserves_space_without_running_the_worker_hook() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(AtomicUsize::new(0));
+    let log = Arc::clone(&heard);
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.key == NativeKey::Text(" ".into())),
+        Arc::new(Mutex::new(move |_: &Ui, _: &KeyEvent| {
+            log.fetch_add(1, Ordering::Relaxed);
+            true
+        })),
+    );
+    let space = key(
+        HostKey::Character(" ".into()),
+        Code::Space,
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    let other = key(
+        HostKey::Character("a".into()),
+        Code::KeyA,
+        KeyState::Down,
+        Modifiers::default(),
+    );
+    let Event::Keyboard(space_key) = &space else {
+        unreachable!()
+    };
+    let Event::Keyboard(other_key) = &other else {
+        unreachable!()
+    };
+    assert!(h.requests.claims_key(&key_event(space_key)));
+    assert!(!h.requests.claims_key(&key_event(other_key)));
+    assert_eq!(heard.load(Ordering::Relaxed), 0);
+    h.step();
+    assert_eq!(h.on_event_inner(&other), EventStatus::Ignored);
+    assert_eq!(heard.load(Ordering::Relaxed), 0);
+    assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
+    assert_eq!(heard.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn a_pre_text_selection_survives_translated_characters() {
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&heard);
+    let hook: KeyHook = Arc::new(Mutex::new(move |_: &Ui, event: &KeyEvent| {
+        log.lock().unwrap().push((event.key.clone(), event.down));
+        true
+    }));
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.key == NativeKey::Text("a".into())),
+        Arc::clone(&hook),
+    );
+    h.step();
+    let Event::Keyboard(base) = key(
+        HostKey::Character("a".into()),
+        Code::KeyA,
+        KeyState::Down,
+        Modifiers::CAPS_LOCK,
+    ) else {
+        unreachable!()
+    };
+    h.on_event_inner(&Event::KeyboardCapture {
+        key: base.clone(),
+        captured: true,
+    });
+    for state in [KeyState::Down, KeyState::Up] {
+        assert_eq!(
+            h.on_event_inner(&key(
+                HostKey::Character("A".into()),
+                Code::KeyA,
+                state,
+                Modifiers::CAPS_LOCK
+            )),
+            EventStatus::Captured
+        );
+    }
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            (NativeKey::Text("A".into()), true),
+            (NativeKey::Text("A".into()), false),
+        ]
+    );
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.key == NativeKey::Text("A".into())),
+        hook,
+    );
+    h.on_event_inner(&Event::KeyboardCapture {
+        key: base,
+        captured: false,
+    });
+    for state in [KeyState::Down, KeyState::Up] {
+        h.on_event_inner(&key(
+            HostKey::Character("A".into()),
+            Code::KeyA,
+            state,
+            Modifiers::CAPS_LOCK,
+        ));
+    }
+    assert_eq!(
+        heard.lock().unwrap().len(),
+        2,
+        "declined base keys must not enter the hook after translation"
+    );
+}
+
+#[test]
+fn a_filtered_hook_keeps_the_press_route_after_modifiers_change() {
+    let mut h = handler((400, 300), 1.0);
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&heard);
+    h.requests.on_key_filtered(
+        Arc::new(|event| event.mods.ctrl),
+        Arc::new(Mutex::new(move |_: &Ui, event: &KeyEvent| {
+            log.lock().unwrap().push((event.key.clone(), event.down));
+            true
+        })),
+    );
+    h.step();
+    let a = |state, modifiers| key(HostKey::Character("a".into()), Code::KeyA, state, modifiers);
+    for (state, modifiers) in [
+        (KeyState::Down, Modifiers::CONTROL),
+        (KeyState::Down, Modifiers::empty()),
+        (KeyState::Up, Modifiers::empty()),
+    ] {
+        assert_eq!(
+            h.on_event_inner(&a(state, modifiers)),
+            EventStatus::Captured
+        );
+    }
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            (NativeKey::Text("a".into()), true),
+            (NativeKey::Text("a".into()), true),
+            (NativeKey::Text("a".into()), false),
+        ]
+    );
+    // A press rejected before Ctrl is held must not enter the hook mid-press.
+    for (state, modifiers) in [
+        (KeyState::Down, Modifiers::empty()),
+        (KeyState::Down, Modifiers::CONTROL),
+        (KeyState::Up, Modifiers::CONTROL),
+    ] {
+        h.on_event_inner(&a(state, modifiers));
+    }
+    assert_eq!(heard.lock().unwrap().len(), 3);
+    // Losing native focus discards ownership before the next physical press.
+    h.on_event_inner(&a(KeyState::Down, Modifiers::empty()));
+    h.on_event_inner(&Event::Window(WindowEvent::Unfocused));
+    h.on_event_inner(&a(KeyState::Down, Modifiers::CONTROL));
+    h.on_event_inner(&a(KeyState::Up, Modifiers::empty()));
+    assert_eq!(heard.lock().unwrap().len(), 5);
+}
+
+#[test]
 fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
     let mut h = handler((400, 300), 1.0);
     let heard = Arc::new(Mutex::new(Vec::new()));

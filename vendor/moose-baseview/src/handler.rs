@@ -170,6 +170,16 @@ pub trait WindowHandler: 'static {
     /// It will also attempt to resize the underlying platform window and parent window back to the
     /// previous size, but this is only a best-effort attempt since those operations can also fail.
     fn resized(&self, new_size: WindowSize) -> core::result::Result<(), HandlerError>;
+    /// Reserves a Windows key press while keyboard capture is enabled.
+    /// Called before text assembly, with the layout's base key rather than
+    /// composed text. This must not dispatch events, pump native messages or
+    /// mutate the window. `KeyboardCapture` publishes the decision afterward.
+    /// The route lasts through repeats, text messages and release. Override
+    /// this for selective shortcuts; the default reserves all captured input.
+    fn captures_key(&self, _key: &keyboard_types::KeyboardEvent) -> bool {
+        true
+    }
+
     fn on_event(&self, event: Event) -> EventStatus;
 }
 

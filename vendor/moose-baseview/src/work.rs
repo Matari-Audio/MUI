@@ -310,6 +310,9 @@ impl ScheduledHandler {
     }
 }
 impl WindowHandler for ScheduledHandler {
+    fn captures_key(&self, key: &keyboard_types::KeyboardEvent) -> bool {
+        !self.work.is_closed() && self.inner.captures_key(key)
+    }
     fn frame_demand(&self) -> FrameDemand {
         if self.work.is_closed() {
             return FrameDemand::Idle;
