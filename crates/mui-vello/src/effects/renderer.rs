@@ -331,6 +331,15 @@ impl GpuRenderer {
                 .all(|(key, material)| self.welds.is_current(key, material))
     }
 
+    /// Present the retained frame to the next view even though nothing in
+    /// it changed (a new or handed-off surface), without drawing it again:
+    /// the next [`render`](Self::render) is one present pass. Use it, not
+    /// [`render_with_overlay`](Self::render_with_overlay) with an empty
+    /// overlay, which redraws the whole frame on the CPU.
+    pub fn present_again(&mut self) {
+        self.presented = None;
+    }
+
     /// Device rectangles the last successful render changed on `target`.
     pub fn damage(&self) -> &[[u32; 4]] {
         &self.damage
@@ -486,7 +495,8 @@ impl GpuRenderer {
                         &format!("quad pass refused entry {index}: {reason}"),
                     );
                 }
-                let stats = self.cpu_frame(resolved, xf, None::<fn(&mut dyn Canvas)>)?;
+                let mut stats = self.cpu_frame(resolved, xf, None::<fn(&mut dyn Canvas)>)?;
+                stats.cpu_fallback = Some(reason);
                 self.fallback.frames += 1;
                 self.fallback.last = Some((index, reason));
                 self.fallback.active = true;

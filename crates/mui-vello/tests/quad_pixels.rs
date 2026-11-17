@@ -337,6 +337,27 @@ fn clips(scale: f64) -> ResolvedScene {
     scene_at(ground(vec![outer, rounded_outside]), scale)
 }
 
+/// A rounded clip inside a rounded clip: the second rides the path slot,
+/// its outline exact against `vello_cpu`'s clip mask.
+fn nested_clips(scale: f64) -> ResolvedScene {
+    let bar = |y: f64, c: Color| block(200., 18.).radius(4.).fill(c).at(-30., y);
+    let inner = stack![
+        bar(0., Color::srgb(0.9, 0.3, 0.2)),
+        bar(22., Color::srgb(0.2, 0.8, 0.4)),
+        bar(44., Color::srgb(0.2, 0.4, 0.95)),
+    ]
+    .size(110., 70.)
+    .radius(20.)
+    .clip()
+    .at(-20., -15.);
+    let outer = stack![inner]
+        .size(140., 110.)
+        .radius(28.)
+        .clip()
+        .at(60.5, 40.25);
+    scene_at(ground(vec![outer]), scale)
+}
+
 /// Overlapping translucent fills: order and blending.
 fn overlap(scale: f64) -> ResolvedScene {
     let kids: Vec<El> = [
@@ -450,6 +471,9 @@ fn the_quad_pass_matches_vello_cpu() {
     compare(&mut gpu, f, "ramps", corners(55, 0.14), ramps);
     compare(&mut gpu, f, "shadows", corners(51, 0.15), shadows);
     compare(&mut gpu, f, "clips", corners(45, 0.005), clips);
+    // Not yet measured: an outline clip's exact area against a clip mask,
+    // as `path-clipped` in `quad_paths`.
+    compare(&mut gpu, f, "nested-clips", corners(60, 0.04), nested_clips);
     compare(&mut gpu, f, "overlap", corners(37, 0.18), overlap);
     // Mean 0.030 on Vulkan, 0.0306 on DX12 WARP at 1x (max 29 there): the
     // same rotated corner edges, rounded differently by a software rasteriser.

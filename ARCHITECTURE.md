@@ -116,10 +116,15 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |                        when present. No compute, no storage buffers. An
    |                        unchanged list submits nothing; an in-place change
    |                        redraws its box. One present pass puts the frame on
-   |                        the window. What it refuses (vector paints, colour
-   |                        glyphs, rotated text, a path clip in a path clip,
+   |                        the window. Turned, sheared or oversized glyphs
+   |                        and glyphs the atlas has no room for are drawn from
+   |                        their outlines as path records. What it refuses
+   |                        (vector paints, colour glyphs, a third nested
+   |                        rounded/path clip or a path clip in a path clip,
    |                        over-budget frames) is drawn by vello_cpu into the
-   |                        same frame, counted in `GpuRenderer::fallback`.
+   |                        same frame, reported per frame in
+   |                        `EffectStats::cpu_fallback` and counted in
+   |                        `GpuRenderer::fallback`.
    |
    v  mui-vello paint       Canvas: Cpu { ctx, resources, cache } over
                             vello_cpu (CPU hosts, snapshots, the GPU's

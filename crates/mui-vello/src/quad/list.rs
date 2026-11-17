@@ -54,15 +54,14 @@ impl Instances {
         self.cache.tick();
         self.walk.paths.begin();
         self.atlas.begin();
-        self.atlas.flushed = false;
         self.boxes.resize(entries, build::EMPTY);
     }
 
     /// The instances of the entries of `paint` that `keep` names, into
     /// `self.list`, each kept entry's box updated; their count. Every entry
     /// is walked, so an unsupported one is refused whether kept or not. A
-    /// frame the glyph atlas or the path texture cannot hold empties it and
-    /// tries once more.
+    /// frame the path texture cannot hold empties it and tries once more; a
+    /// glyph the atlas has no room for is drawn from its outline.
     pub fn build(
         &mut self,
         paint: &[Painted],
@@ -71,13 +70,6 @@ impl Instances {
         welds: Option<Welds>,
     ) -> Result<usize, Error> {
         match self.list(paint, transform, keep, welds) {
-            Err(Error::Unsupported {
-                reason: Reason::GlyphBudget,
-                ..
-            }) if !self.atlas.flushed => {
-                self.atlas.flush();
-                self.build(paint, transform, keep, welds)
-            }
             Err(Error::Unsupported {
                 reason: Reason::PathBudget,
                 ..
@@ -200,11 +192,18 @@ impl Instances {
                     self.layers.push(at, Bind::None, Compose::Over);
                     let xf = crate::placed(transform, p);
                     self.atlas
-                        .draw(&mut self.cache, text, xf, &one, &mut self.list)
+                        .draw(
+                            &mut self.cache,
+                            &mut self.walk.paths,
+                            text,
+                            xf,
+                            &one,
+                            &mut self.list,
+                        )
                         .map_err(|f| {
                             refuse(match f {
                                 text::Failure::Colour => Reason::Text,
-                                text::Failure::Full => Reason::GlyphBudget,
+                                text::Failure::Path(f) => build::refuse(f),
                             })
                         })?;
                     super::ramp::spans(&mut self.list, start, &p.paint);

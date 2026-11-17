@@ -63,13 +63,6 @@ pub enum Reason {
     /// A glyph run with a bitmap or colour glyph in it (found when drawn,
     /// not by [`classify`]).
     Text,
-    /// A glyph run under a rotation, shear or non-uniform scale.
-    TextTransform,
-    /// A glyph run larger than [`MAX_GLYPH_PX`] device pixels per em.
-    TextSize,
-    /// More glyphs in one frame than the atlas budget holds, even emptied
-    /// (found when drawn).
-    GlyphBudget,
     /// An image paint on a glyph run.
     Image,
     /// An image larger than the device's largest texture (found when
@@ -83,8 +76,9 @@ pub enum Reason {
     /// More path records in one frame than the path budget holds, even
     /// emptied (found when drawn).
     PathBudget,
-    /// A rounded or rotated clip inside another, or a path clip inside
-    /// another: an instance carries one of each.
+    /// A third rounded, rotated or path clip in force: an instance carries
+    /// one rounded rect and one path, and a second rounded rect rides as a
+    /// path, so two nest but not three (and not a path inside a path).
     ClipDepth,
     /// A blend layer's end with none open, a layer never closed, or a mask
     /// outside any layer: a malformed list (found when drawn).
@@ -101,11 +95,8 @@ pub enum Reason {
 }
 
 impl Reason {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 11] = [
         Self::Text,
-        Self::TextTransform,
-        Self::TextSize,
-        Self::GlyphBudget,
         Self::Image,
         Self::ImageSize,
         Self::Vector,
@@ -297,8 +288,8 @@ impl QuadRenderer {
 
     /// A pass whose glyph atlas holds at most `budget` bytes: square
     /// single-channel pages of up to 1024 pixels, as many as fit, at least
-    /// one. Glyphs unused for 64 frames are evicted; a frame that needs more
-    /// than fits empties the atlas and rasterises again.
+    /// one. Glyphs unused for 64 frames are evicted; a glyph with no room left
+    /// is drawn from its outline.
     pub fn with_atlas_budget(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,

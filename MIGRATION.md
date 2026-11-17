@@ -219,6 +219,26 @@ Mods`, `native_cursor(Cursor) -> MouseCursor` and `native_ime(config, scale)
 -> baseview::ImeConfiguration`, beside the existing `ime_event` and
 `ime_configuration`. A host of your own deletes its copies.
 
+GPU quad pass refuses less (`mui-vello`, feature `gpu-quad`):
+
+- Text under a rotation, shear or non-uniform scale, glyphs over
+  `MAX_GLYPH_PX`, and glyphs the atlas has no room for are drawn from their
+  outlines as path records instead of the whole frame falling back to the
+  CPU. `quad::Reason::{TextTransform, TextSize, GlyphBudget}` are removed
+  (`Reason::ALL` has 11 entries); delete those match arms.
+- A rounded or rotated clip nested in another takes the path-clip slot as its
+  outline, so two such clips nest on the GPU; `Reason::ClipDepth` now means a
+  third, or a path clip inside a path clip.
+- `EffectStats::cpu_fallback: Option<Reason>` (new field) is set on a frame
+  the pass refused and `vello_cpu` drew, so a host sees each whole-window CPU
+  frame in the stats `Host::present` returns. A struct literal of
+  `EffectStats` needs the field (or `..Default::default()`).
+- `GpuRenderer::present_again()` (new): the next render presents the
+  retained frame to a new view without redrawing. Use it instead of
+  `render_with_overlay(.., |_| {})` / `Host::present_with_overlay(.., |_|
+  {})` as a forced present, which redraws the frame on the CPU. (`Host`
+  gains the matching one-line forwarder on the window-host branch.)
+
 ## v0.4.1
 
 Breaking (by hand; `mui-migrate` has no rule for it):

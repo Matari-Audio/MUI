@@ -38,6 +38,10 @@ pub struct EffectStats {
     pub rendered_pixels: u64,
     pub resident_texture_bytes: u64,
     pub peak_texture_bytes: u64,
+    /// The quad pass refused this frame, for this reason, and it was
+    /// rasterised on the CPU instead: a whole-window CPU frame to count.
+    /// [`GpuRenderer::fallback`](super::GpuRenderer::fallback) keeps the tally.
+    pub cpu_fallback: Option<crate::quad::Reason>,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ContentState {
