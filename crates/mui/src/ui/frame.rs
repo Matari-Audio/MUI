@@ -506,7 +506,11 @@ impl Ui {
             .map(|s| s.key.clone())
     }
 
-    pub(super) fn owns_wheel(&self, scene: &ResolvedScene, surface: &mui_scene::ResolvedSurface) -> bool {
+    pub(super) fn owns_wheel(
+        &self,
+        scene: &ResolvedScene,
+        surface: &mui_scene::ResolvedSurface,
+    ) -> bool {
         let Some(owner) = &self.wheel_capture else {
             return true;
         };

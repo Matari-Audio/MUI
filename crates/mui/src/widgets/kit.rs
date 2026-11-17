@@ -197,7 +197,7 @@ pub fn toast(ui: &mut Ui, message: impl Into<Arc<str>>) {
 pub fn toasts(ui: &mut Ui) -> Option<El> {
     let now = ui.time();
     let mut list: Vec<(Arc<str>, f64)> = ui.stash(TOASTS).cloned().unwrap_or_default();
-    let key = |i: usize| Id::runtime(&format!("{TOASTS}/{i}"));
+    let key = |i: usize| Id::runtime_slot(TOASTS, i);
     let mut i = 0;
     list.retain(|(_, until)| {
         let keep = *until > now && !ui.get(key(i).as_str()).activated();
