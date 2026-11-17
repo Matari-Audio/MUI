@@ -415,7 +415,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
                 }
             }
         }
-        if std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1") {
+        if debug_damage() {
             for &[x, y, w, h] in &damage {
                 for row in y..y + h {
                     for col in x..x + w {
@@ -493,7 +493,10 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
     ) -> Result<(), String> {
         use std::num::NonZeroU32;
         dimensions(size)?;
-        if x + w > size.0 || y + h > size.1 || pixels.len() != w as usize * h as usize {
+        if x.checked_add(w).is_none_or(|r| r > size.0)
+            || y.checked_add(h).is_none_or(|b| b > size.1)
+            || pixels.len() != w as usize * h as usize
+        {
             return Err("invalid bitmap patch".into());
         }
         if self.size != size {
@@ -559,14 +562,15 @@ fn softbuffer_rects(rects: &[[u32; 4]]) -> Vec<softbuffer::Rect> {
         .collect()
 }
 
+fn debug_damage() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1"))
+}
+
 /// Diagnostic only: `MUI_DEBUG_DAMAGE=1` flashes the automatically derived
 /// damaged rectangle's outline. App code never supplies invalidation regions.
 pub fn damage_flash(pixels: &[u32], size: (u32, u32)) -> Option<Vec<u32>> {
-    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if !*ENABLED.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1"))
-        || size.0 == 0
-        || size.1 == 0
-    {
+    if !debug_damage() || size.0 == 0 || size.1 == 0 {
         return None;
     }
     let mut out = pixels.to_vec();
