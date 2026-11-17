@@ -18,6 +18,10 @@ use crate::effects::{Budget, EffectStats, GpuRenderer};
 use crate::kurbo::Affine;
 
 mod crash_guard;
+pub use crash_guard::{
+    EXPIRY as GPU_DENIAL_EXPIRY, GpuDenial, STRIKES as GPU_DENIAL_STRIKES, clear_gpu_denials,
+    gpu_denials,
+};
 mod initialization;
 mod selection;
 #[cfg(any(test, feature = "test-support"))]
