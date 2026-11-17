@@ -4,6 +4,15 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+GPU crash guard. A process that dies during a GPU trial no longer denies the
+GPU forever. One unfinished trial costs one retry. A key is denied only after
+unfinished trials in `GPU_DENIAL_STRIKES` (2) different processes. A trial
+that completes clears the dead ones for its key, and markers expire after
+`GPU_DENIAL_EXPIRY` (7 days). The key now also carries the kernel release, so
+a driver or OS update retries the GPU. Apps can show and reset denials with
+`mui::vello::host::gpu_denials()`, which returns `GpuDenial { identity,
+processes, since }`, and `clear_gpu_denials()`. No call sites change.
+
 Automatic retention (`perf/auto-retain`). No builder call changes: `Ui`,
 `El`, `Ui::memo` and widgets build what they did. Three things a caller can
 notice:
