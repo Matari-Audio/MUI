@@ -152,6 +152,7 @@ mod controls;
 mod curve;
 mod grapheme;
 mod kit;
+mod meter;
 mod overlay;
 mod pick;
 pub mod presets;
@@ -162,12 +163,13 @@ pub use bins::{BinAxis, BinEdit, Bins, bins, bins_hover};
 pub use color_picker::{ColorFormat, OklchPicker, PickerShape, oklch_picker};
 pub use composition::{Setting, group, setting};
 pub(crate) use controls::step;
-pub use controls::{Control, Variant, button, drag_value, knob, slider, stepped, toggle};
+pub use controls::{Control, Domain, Variant, button, drag_value, knob, slider, stepped, toggle};
 pub use curve::{CurveEdit, curve};
 pub use kit::{Column, TOAST_SECS, Tab, Tabs, table, tabs, toast, toasts, tree_row};
+pub use meter::{Levels, Meter, meter, meter_position};
 pub use overlay::{MenuRow, Overlay, SelectHead, dialog, menu, popover, select};
 pub use pick::{ColorOpts, color_picker};
-pub use presets::{card, chip, glass, meter, panel, tile};
+pub use presets::{card, chip, glass, panel, tile};
 pub use text::{Newline, TextEdit, TextOpts, text_edit, text_input};
 
 pub use collections::{

@@ -87,7 +87,7 @@ impl View for Panel {
                 let knob = knob(ui, "knob", "Gain", &mut self.value, 0.0..=1.0)
                     .el
                     .into();
-                let meter = meter(ui, "meter", self.value).w(300.);
+                let meter = meter(ui, "meter", self.value).w(300.).el();
                 col([knob, meter]).gap(12.).w(600.)
             }
             Scenario::Idle | Scenario::Resize | Scenario::Reopen => col((0..24).map(|i| {

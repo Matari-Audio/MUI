@@ -31,7 +31,7 @@ impl View for Mixer {
             row([
                 text(format!("Channel {i:02}")).w(120.),
                 knob(ui, format!("gain/{i}"), "Gain", value, 0.0..=1.0).into(),
-                meter(ui, format!("meter/{i}"), *value).w(240.),
+                meter(ui, format!("meter/{i}"), *value).w(240.).el(),
             ])
             .gap(8.)
             .id(format!("channel/{i}"))

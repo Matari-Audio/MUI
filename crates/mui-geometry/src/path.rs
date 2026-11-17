@@ -356,6 +356,14 @@ impl Path {
         }
         if closed { p.close() } else { p }
     }
+    /// The axis-aligned rectangle from `(x0, y0)` to `(x1, y1)`, closed: the
+    /// shape a meter segment, a bar or a selection is filled with.
+    pub fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {
+        Self::polyline(
+            [(x0, y0), (x1, y0), (x1, y1), (x0, y1)].map(|(x, y)| Point::new(x, y)),
+            true,
+        )
+    }
     /// A centered, exact vertical capsule. This is a widget shape, not an
     /// automatically merged tab; its radius is exactly width/2.
     pub fn capsule(width: f64, height: f64) -> Result<Self, Error> {

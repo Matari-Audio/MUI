@@ -7,6 +7,8 @@
 //! [`mui::host::Driver`], builds and rasters into persistent offscreen targets,
 //! then returns changed bitmap regions for native presentation. Baseview's
 //! display source paces demand; idle content submits no rendering work.
+// wgpu-core's storage types nest past the default limit when proving `Send`.
+#![recursion_limit = "256"]
 #![deny(unsafe_code)]
 
 #[cfg(all(panic = "abort", not(feature = "allow-panic-abort")))]

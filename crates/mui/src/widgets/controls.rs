@@ -10,6 +10,57 @@ use mui_scene::{Palette, Px, SpacingToken, Spring, Stroke};
 use crate::Ui;
 use crate::widgets::{Response, TextOpts, text_edit};
 
+/// What a ranged control edits: its range, the value a double click puts
+/// back, and where its fill grows from. A bare `lo..=hi` converts, so a
+/// plain range still works everywhere a `Domain` is asked for.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let mut pan = 0.0;
+/// // Fills from the centre (a range symmetric about 0 does by default);
+/// // a double click puts it back to 0.
+/// let p = knob(&mut ui, "pan", "Pan", &mut pan, Domain::new(-1.0..=1.0).default(0.0));
+/// ```
+#[derive(Clone, Debug)]
+pub struct Domain {
+    range: RangeInclusive<f64>,
+    default: Option<f64>,
+    origin: Option<f64>,
+}
+impl Domain {
+    pub fn new(range: RangeInclusive<f64>) -> Self {
+        Self {
+            range,
+            default: None,
+            origin: None,
+        }
+    }
+    /// The value a double click restores.
+    pub fn default(mut self, value: f64) -> Self {
+        self.default = Some(value);
+        self
+    }
+    /// Where the fill or arc starts. Default: the centre of a range
+    /// symmetric about zero (pan, detune), otherwise its start.
+    pub fn origin(mut self, value: f64) -> Self {
+        self.origin = Some(value);
+        self
+    }
+    fn origin_t(&self) -> f64 {
+        let (lo, hi) = (*self.range.start(), *self.range.end());
+        let origin = self
+            .origin
+            .unwrap_or(if lo == -hi && lo != 0.0 { 0.0 } else { lo });
+        unit(origin, &self.range)
+    }
+}
+impl From<RangeInclusive<f64>> for Domain {
+    fn from(range: RangeInclusive<f64>) -> Self {
+        Self::new(range)
+    }
+}
+
 /// How solid a control looks. daisyUI's four button styles, resolved from
 /// the role and the palette rather than from a table of colours.
 ///
@@ -145,6 +196,8 @@ pub struct Control {
     kind: Kind,
     disabled: bool,
     label_visible: bool,
+    quiet: bool,
+    vertical: bool,
 }
 
 /// Which control, with what it read from the runtime: the tree waits for
@@ -168,6 +221,8 @@ struct Dial {
     min: f64,
     max: f64,
     t: f64,
+    /// Where the fill starts, 0..1 along the travel.
+    origin: f64,
     hover: f64,
 }
 impl Dial {
@@ -177,16 +232,24 @@ impl Dial {
         ui: &mut Ui,
         id: &Id,
         value: &mut f64,
-        range: &RangeInclusive<f64>,
+        domain: &Domain,
         travel: f64,
         vertical: bool,
     ) -> Self {
+        let range = &domain.range;
         ui.drag(id, value, range.clone(), travel, vertical);
         stepped(ui, id, value, range);
+        if let Some(default) = domain.default
+            && ui.double_click(id.clone())
+        {
+            *value = default;
+        }
         // Fast enough that a drag still feels direct, slow enough that a
         // preset change is a glide. The value and readout stay exact.
         let t = ui.tween_with(id, unit(*value, range), Spring::new(0.12, 1.0));
-        Self::of(*value, range, t, ui.state(id).hover)
+        let mut dial = Self::of(*value, range, t, ui.state(id).hover);
+        dial.origin = domain.origin_t();
+        dial
     }
     fn of(value: f64, range: &RangeInclusive<f64>, t: f64, hover: f64) -> Self {
         let (min, max) = (*range.start(), *range.end());
@@ -195,8 +258,13 @@ impl Dial {
             min,
             max,
             t,
+            origin: 0.0,
             hover,
         }
+    }
+    /// The filled span along the travel, low end first.
+    fn span(&self) -> (f64, f64) {
+        (self.origin.min(self.t), self.origin.max(self.t))
     }
     fn a11y(&self) -> A11y {
         A11y::Slider {
@@ -233,6 +301,8 @@ impl Control {
             kind,
             disabled: false,
             label_visible: true,
+            quiet: false,
+            vertical: false,
         }
     }
 
@@ -307,6 +377,19 @@ impl Control {
         self.label_visible = false;
         self
     }
+    /// No caption and no readout: the name and the reading move to the
+    /// tooltip, so a strip of these stays quiet until asked.
+    pub fn quiet(mut self) -> Self {
+        self.label_visible = false;
+        self.quiet = true;
+        self
+    }
+    /// A slider that rises instead of running left to right (a fader). Its
+    /// drag follows its shape: taller than wide drags vertically.
+    pub fn vertical(mut self) -> Self {
+        self.vertical = true;
+        self
+    }
     /// Override a knob's arc and centered value with a custom instrument accent.
     /// Other controls retain their palette role.
     pub fn dial_color(mut self, fill: impl Into<Fill>) -> Self {
@@ -374,13 +457,36 @@ impl Control {
         self.look.px = self.px.unwrap_or(self.look.px * steps);
         let look = &self.look;
         let label_visible = self.label_visible;
+        let tip = match &self.kind {
+            Kind::Slider(_, label, d) | Kind::Knob(_, label, d, _) if self.quiet => {
+                let reading = look
+                    .text
+                    .clone()
+                    .unwrap_or_else(|| format!("{:.2}", d.value));
+                Some(format!("{label} {reading}"))
+            }
+            _ => None,
+        };
         let el = match self.kind {
+            Kind::Slider(id, label, d) if self.vertical => {
+                fader_el(look, id, label, d, label_visible && !self.quiet)
+            }
+            Kind::Slider(id, label, d) if self.quiet => fader_el(look, id, label, d, false),
             Kind::Slider(id, label, d) => slider_el(look, id, label, d, label_visible),
-            Kind::Knob(id, label, d, cache) => knob_el(look, id, label, d, &cache, label_visible),
+            Kind::Knob(id, label, d, cache) if self.quiet => {
+                knob_el(look, id, label, d, &cache, false, false)
+            }
+            Kind::Knob(id, label, d, cache) => {
+                knob_el(look, id, label, d, &cache, label_visible, true)
+            }
             Kind::Button(id, label) => button_el(look, id, label),
             Kind::Toggle(id, label, on) => toggle_el(look, id, label, on),
             Kind::Drag(id, label, d) => drag_el(look, id, label, d),
             Kind::Field(el, width) => look.describe(el.w(width), false),
+        };
+        let el = match tip {
+            Some(tip) => el.tip(tip),
+            None => el,
         };
         el.on(State::Disabled, |style| style.opacity(0.45))
             .when(self.disabled, Styled::disabled)
@@ -514,32 +620,43 @@ pub fn slider(
     id: impl Into<Id>,
     label: &str,
     value: &mut f64,
-    range: RangeInclusive<f64>,
+    range: impl Into<Domain>,
 ) -> Response<bool, Control> {
     let id: Id = id.into();
+    let domain = range.into();
+    let range = domain.range.clone();
     let before = *value;
     let h = ui.state(&id).hover;
     // Last frame's lane, less the thumb riding it, is the travel a
-    // full-range drag covers; before the first frame nothing can drag.
-    let (grip, travel) = ui
-        .scene()
-        .and_then(|s| s.surface(&id))
-        .map_or((0.0, 0.0), |s| {
-            let grip = s.frame.size.height * THUMB / LANE + 2.0 * h;
-            (grip, s.frame.size.width - grip)
-        });
+    // full-range drag covers; before the first frame nothing can drag. A
+    // lane taller than wide is a fader: it travels, and drags, vertically.
+    let (grip, travel, vertical) =
+        ui.scene()
+            .and_then(|s| s.surface(&id))
+            .map_or((0.0, 0.0, false), |s| {
+                let (w, h_) = (s.frame.size.width, s.frame.size.height);
+                if h_ > w {
+                    let grip = w * THUMB / LANE + 2.0 * h;
+                    (grip, h_ - grip, true)
+                } else {
+                    let grip = h_ * THUMB / LANE + 2.0 * h;
+                    (grip, w - grip, false)
+                }
+            });
     if ui.get(&id).pressed
         && travel > 0.0
         && let Some(p) = ui.local(&id)
     {
-        // Off the thumb, a press puts the thumb's centre under it.
+        // Off the thumb, a press puts the thumb's centre under it. A fader's
+        // travel runs bottom to top.
+        let along = if vertical { travel + grip - p.y } else { p.x };
         let at = unit(*value, &range) * travel + grip / 2.0;
-        if (p.x - at).abs() > grip / 2.0 {
-            let t = ((p.x - grip / 2.0) / travel).clamp(0.0, 1.0);
+        if (along - at).abs() > grip / 2.0 {
+            let t = ((along - grip / 2.0) / travel).clamp(0.0, 1.0);
             *value = range.start() + t * (range.end() - range.start());
         }
     }
-    let dial = Dial::read(ui, &id, value, &range, travel, false);
+    let dial = Dial::read(ui, &id, value, &domain, travel, vertical);
     Response {
         changed: moved(before, *value),
         el: Control::new(ui, Kind::Slider(id, label.into(), dial)),
@@ -551,6 +668,7 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool)
     // moves the track, the thumb and the row together.
     let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
     let (t, h) = (d.t, d.hover);
+    let (a, b) = d.span();
     let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
         .pill()
         .fill(look.role);
@@ -569,8 +687,9 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool)
         look.describe(
             stack([
                 row([
-                    block(0.0, track).grow(t).pill().fill(look.role),
-                    block(0.0, track).grow(1.0 - t),
+                    block(0.0, track).grow(a),
+                    block(0.0, track).grow(b - a).pill().fill(look.role),
+                    block(0.0, track).grow(1.0 - b),
                 ])
                 .anchor(Align::Stretch, Align::Center)
                 .pill()
@@ -589,6 +708,47 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool)
         ),
     ])
     .gap(Xs)
+}
+
+/// A slider standing up (or a quiet one lying down): the lane alone, the
+/// caption under it when shown. The fill grows from the origin.
+fn fader_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
+    let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
+    let (t, h) = (d.t, d.hover);
+    let (a, b) = d.span();
+    let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
+        .pill()
+        .fill(look.role);
+    let input = look.describe(
+        stack([
+            col([
+                block(track, 0.0).grow(1.0 - b),
+                block(track, 0.0).grow(b - a).pill().fill(look.role),
+                block(track, 0.0).grow(a),
+            ])
+            .anchor(Align::Center, Align::Stretch)
+            .pill()
+            .preset(look.face(Role::Field)),
+            col([spacer().grow(1.0 - t), grip, spacer().grow(t)])
+                .anchor(Align::Center, Align::Stretch),
+        ])
+        .w(lane)
+        .h(pct(100.))
+        .a11y(d.a11y())
+        .named(label.clone())
+        .focusable()
+        .cursor(Cursor::ResizeV)
+        .on(State::FocusVisible, focus_ring)
+        .id(id),
+        true,
+    );
+    if label_visible && !label.is_empty() {
+        col([input, text(label).fill(Role::Dim)])
+            .gap(Xs)
+            .align(Align::Center)
+    } else {
+        input
+    }
 }
 
 /// A dial: vertical drag, pointer on a 270° sweep; returns the control and
@@ -613,9 +773,10 @@ pub fn knob(
     id: impl Into<Id>,
     label: &str,
     value: &mut f64,
-    range: RangeInclusive<f64>,
+    range: impl Into<Domain>,
 ) -> Response<bool, Control> {
     let id: Id = id.into();
+    let range = range.into();
     let before = *value;
     // Unlike a slider's, a dial's travel is a hand distance, not a geometry:
     // the whole face is the target and 120 px of vertical drag sweeps the
@@ -634,7 +795,7 @@ pub fn knob(
 }
 
 /// What a knob's painted dial reads: its sweep, colour and stroke width.
-type DialCache = CanvasCache<(u64, Fill, u64)>;
+type DialCache = CanvasCache<(u64, u64, Fill, u64)>;
 
 fn knob_el(
     look: &Look,
@@ -643,6 +804,7 @@ fn knob_el(
     d: Dial,
     cache: &DialCache,
     label_visible: bool,
+    reading_visible: bool,
 ) -> El {
     // The macro grammar: a quiet inner disc, a 270-degree value arc and the
     // formatted reading in its centre. The square keeps one size across
@@ -652,17 +814,22 @@ fn knob_el(
     let active = color.map(&look.palette, look.palette.surface(), |color| {
         color.with_alpha((0.82 + d.hover * 0.18) as f32)
     });
-    let amount = d.t;
+    let (from, to) = d.span();
     let width = look.px / 16.;
-    let key = (amount.to_bits(), active.clone(), width.to_bits());
+    let key = (
+        from.to_bits(),
+        to.to_bits(),
+        active.clone(),
+        width.to_bits(),
+    );
     let paint = canvas_keyed(cache, key, move |size| {
         let center = Point::new(size.width * 0.5, size.height * 0.5);
         let radius = size.width.min(size.height) * 0.42;
-        let arc = |amount: f64| {
+        let arc = |from: f64, to: f64| {
             Path::polyline(
                 (0..=48).map(|i| {
                     let angle = std::f64::consts::PI * 0.75
-                        + std::f64::consts::PI * 1.5 * amount * f64::from(i) / 48.;
+                        + std::f64::consts::PI * 1.5 * (from + (to - from) * f64::from(i) / 48.);
                     Point::new(
                         center.x + angle.cos() * radius,
                         center.y + angle.sin() * radius,
@@ -682,8 +849,8 @@ fn knob_el(
             true,
         );
         vec![
-            Draw::stroke(arc(1.), Role::Dim.alpha(0.12), width),
-            Draw::stroke(arc(amount), active.clone(), width),
+            Draw::stroke(arc(0., 1.), Role::Dim.alpha(0.12), width),
+            Draw::stroke(arc(from, to), active.clone(), width),
             Draw::fill(disc, Role::Field),
         ]
     })
@@ -715,7 +882,11 @@ fn knob_el(
     );
     // The single input target sits above the painted arc and reading. Clicking
     // the value must begin the same drag as clicking anywhere else on the dial.
-    let face = stack![paint, col![reading].center().full(), input].square(size);
+    let face = if reading_visible {
+        stack![paint, col![reading].center().full(), input].square(size)
+    } else {
+        stack![paint, input].square(size)
+    };
     let mut content = vec![face];
     if label_visible && !label.is_empty() {
         content.push(text(label).text_size(look.px * 0.3).fill(Role::Dim));

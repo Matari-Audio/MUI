@@ -586,7 +586,7 @@ impl QuadRenderer {
             damage
         };
         let count = self.cpu.list.len();
-        let mut retained = kept.map(|r| r.paint).unwrap_or_default();
+        let mut retained = kept.map_or_default(|r| r.paint);
         retained.clear();
         retained.extend_from_slice(paint);
         self.retained = Some(Retained {

@@ -164,8 +164,7 @@ impl FontDatabase {
     pub fn fallbacks(self: Arc<Self>) -> impl Fn(&[Font], &str) -> Vec<Font> + Send + Sync {
         move |chain, text| {
             self.prepare_with(chain, &FontQuery::default(), text)
-                .map(|s| s.fonts[chain.len()..].to_vec())
-                .unwrap_or_default()
+                .map_or_default(|s| s.fonts[chain.len()..].to_vec())
         }
     }
 
