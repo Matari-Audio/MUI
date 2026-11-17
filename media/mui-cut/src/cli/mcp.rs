@@ -1645,10 +1645,7 @@ fn fps(raw: &Value) -> f64 {
 
 /// A scene's index in the JSON by name, or the first.
 fn scene_index(raw: &Value, scene: Option<&str>) -> Result<usize> {
-    let scenes = raw["scenes"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let scenes = raw["scenes"].as_array().map_or_default(Vec::as_slice);
     match scene {
         None if scenes.is_empty() => Err("the project has no scenes".into()),
         None => Ok(0),
