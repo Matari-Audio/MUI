@@ -17,11 +17,6 @@ use crate::Canvas;
 use crate::effects::{Budget, EffectStats, GpuRenderer};
 use crate::kurbo::Affine;
 
-mod crash_guard;
-pub use crash_guard::{
-    EXPIRY as GPU_DENIAL_EXPIRY, GpuDenial, STRIKES as GPU_DENIAL_STRIKES, clear_gpu_denials,
-    gpu_denials,
-};
 mod initialization;
 mod selection;
 #[cfg(any(test, feature = "test-support"))]
@@ -169,6 +164,17 @@ fn plugin_directory() -> Option<std::path::PathBuf> {
 
 // Opening every API eagerly loads GL/EGL even when Vulkan/Metal/DX12 succeeds.
 // Keep the caller's enabled backends, but pay for the secondary APIs only on failure.
+/// Earlier MUI kept crash markers in `gpu-trials`; nothing reads them now.
+fn forget_gpu_trials() {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            let _ = std::fs::remove_dir_all(crate::diagnostics::directory().join("gpu-trials"));
+        });
+    }
+}
+
 fn try_backends<T>(
     enabled: wgpu::Backends,
     mut open: impl FnMut(wgpu::Backends) -> Result<T, String>,
@@ -536,8 +542,6 @@ struct OnDevice {
     /// Raised by wgpu's device-lost callback, on whatever thread wgpu calls it.
     errors: Arc<DeviceErrors>,
     diagnostics: GpuDiagnostics,
-    // Drop driver resources before disarming an unfinished trial.
-    trial: Arc<crash_guard::Attempt>,
 }
 
 impl OnDevice {
@@ -549,7 +553,7 @@ impl OnDevice {
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, HostError> {
-        Self::open_filtered(instance, surface, size, transparency, &[], None)
+        Self::open_filtered(instance, surface, size, transparency, &[])
     }
 
     fn open_filtered(
@@ -558,7 +562,6 @@ impl OnDevice {
         size: (u32, u32),
         transparency: Transparency,
         excluded: &[(String, wgpu::Backend)],
-        enumeration: Option<&crash_guard::Attempt>,
     ) -> Result<Self, HostError> {
         // Enumeration remains constrained by the instance's enabled backends
         // (including WGPU_BACKEND when its descriptor was built from env).
@@ -574,40 +577,15 @@ impl OnDevice {
             ),
             None,
         );
-        let mut adapters = Vec::new();
-        if let Some(trial) = enumeration {
-            trial.phase("enumerate");
-            adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+        forget_gpu_trials();
+        let mut adapters: Vec<_> =
+            pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
                 .into_iter()
                 .map(|adapter| {
                     let info = adapter.get_info();
                     (adapter, info)
                 })
                 .collect();
-            trial.finish();
-        } else {
-            // For an externally supplied instance we cannot guard its creation,
-            // but can still isolate enumeration of each enabled native API.
-            for backend in backend_order()
-                .into_iter()
-                .filter(|backend| wgpu::Instance::enabled_backend_features().contains(*backend))
-            {
-                if let Ok(trial) =
-                    crash_guard::Attempt::begin(&crash_guard::Key::enumeration(backend))
-                {
-                    trial.phase("enumerate");
-                    adapters.extend(
-                        pollster::block_on(instance.enumerate_adapters(backend))
-                            .into_iter()
-                            .map(|adapter| {
-                                let info = adapter.get_info();
-                                (adapter, info)
-                            }),
-                    );
-                    trial.finish();
-                }
-            }
-        }
         drop(operation);
         adapters.retain(|(_, info)| {
             let rejected = excluded
@@ -626,7 +604,6 @@ impl OnDevice {
         let candidates = adapters.into_iter().map(|(adapter, info)| {
             let candidate = AdapterDiagnostic {
                 adapter: info,
-                // Query capabilities only after the adapter trial is armed.
                 supported_limits: wgpu::Limits::default(),
                 requested_limits: wgpu::Limits::default(),
                 stage: GpuStage::Capabilities,
@@ -650,10 +627,6 @@ impl OnDevice {
         transparency: Transparency,
         candidate: &mut AdapterDiagnostic,
     ) -> Result<Self, String> {
-        let trial = Arc::new(crash_guard::Attempt::begin(&crash_guard::Key::adapter(
-            &candidate.adapter,
-        ))?);
-        trial.phase("request_device");
         candidate.supported_limits = adapter.limits();
         // WebGL2-class limits at the adapter's own texture size: see
         // `selection::requested_limits`.
@@ -692,7 +665,6 @@ impl OnDevice {
             &format!("{candidate:?}"),
             Some(&candidate.adapter),
         );
-        trial.phase("request_device");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("MUI retained renderer"),
             required_limits: candidate.requested_limits.clone(),
@@ -730,7 +702,6 @@ impl OnDevice {
             &format!("format={:?}; size=({width},{height})", config.format),
             Some(&candidate.adapter),
         );
-        trial.phase("create_renderer");
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
@@ -763,7 +734,6 @@ impl OnDevice {
             return Err(format!("device error during initialization: {error}"));
         }
         Ok(Self {
-            trial,
             adapter: adapter.clone(),
             device,
             queue,
@@ -864,10 +834,8 @@ impl Host {
         let enabled = wgpu::InstanceDescriptor::new_without_display_handle_from_env().backends
             & wgpu::Instance::enabled_backend_features();
         try_backends(enabled, |backends| {
-            let trial = crash_guard::Attempt::begin(&crash_guard::Key::enumeration(backends))?;
-            trial.phase("enumerate");
             let (instance, surface) = create(backends)?;
-            Self::with_transparency_guarded(instance, surface, size, transparency, Some(&trial))
+            Self::with_transparency(instance, surface, size, transparency)
                 .map_err(|e| e.to_string())
         })
     }
@@ -892,24 +860,7 @@ impl Host {
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, HostError> {
-        Self::with_transparency_guarded(instance, surface, size, transparency, None)
-    }
-
-    fn with_transparency_guarded(
-        instance: wgpu::Instance,
-        surface: wgpu::Surface<'static>,
-        size: (u32, u32),
-        transparency: Transparency,
-        enumeration: Option<&crash_guard::Attempt>,
-    ) -> Result<Self, HostError> {
-        let gpu = OnDevice::open_filtered(
-            &instance,
-            Some(&surface),
-            size,
-            transparency,
-            &[],
-            enumeration,
-        )?;
+        let gpu = OnDevice::open_filtered(&instance, Some(&surface), size, transparency, &[])?;
         Ok(Self {
             instance,
             shared: None,
@@ -1173,15 +1124,11 @@ impl Host {
                     .map(|c| &c.adapter),
             )
         });
-        if self.first_frame {
-            self.gpu.trial.phase("first_render");
-        }
         let OnDevice {
             device,
             queue,
             config,
             renderer,
-            trial,
             ..
         } = &mut self.gpu;
         if overlay.is_none() && renderer.is_current(scene, xf) {
@@ -1211,11 +1158,7 @@ impl Host {
         queue.present(frame);
         // Driver compilation can fault after submit returns, before work completes.
         if let Some(operation) = operation {
-            let trial = trial.clone();
-            queue.on_submitted_work_done(move || {
-                trial.finish();
-                drop(operation);
-            });
+            queue.on_submitted_work_done(move || drop(operation));
         }
         if self.first_frame {
             crate::diagnostics::breadcrumb(
