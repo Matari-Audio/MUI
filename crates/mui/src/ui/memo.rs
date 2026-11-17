@@ -275,7 +275,11 @@ impl Ui {
         found.push((path.to_vec(), id));
         for (rel, inner) in nested {
             let at: Vec<usize> = path.iter().chain(&rel).copied().collect();
-            self.fill(node_at(n, &rel), &at, inner, found);
+            // A path the kept tree no longer has leaves that memo out; the
+            // capture below finds nothing there and forgets it.
+            if let Some(slot) = node_at(n, &rel) {
+                self.fill(slot, &at, inner, found);
+            }
         }
     }
     /// Take every memo's styled subtree back out of the resolved tree,
@@ -302,7 +306,14 @@ impl Ui {
                 placeholder(*id, s.delivered.as_ref().unwrap_or(&s.built))
             })
             .unwrap_or_else(|| placeholder(*id, &mui_scene::block(0.0, 0.0)));
-            let tree = std::mem::replace(node_at(&mut root, path), mark);
+            let Some(slot) = node_at(&mut root, path) else {
+                // The tree moved under a recorded path: never index out of
+                // bounds in a host. Forget the memo; its next call builds it.
+                debug_assert!(false, "memo {id} lost its path {path:?}");
+                self.forget_memo(*id);
+                continue;
+            };
+            let tree = std::mem::replace(slot, mark);
             let nested = found
                 .iter()
                 .zip(&parents)
@@ -318,6 +329,20 @@ impl Ui {
             }
         }
         root
+    }
+}
+
+impl Ui {
+    /// Drop everything kept for memo `id`: its next call builds it.
+    fn forget_memo(&mut self, id: u64) {
+        if let Some(k) = self.kept.remove(&id) {
+            self.memo_ids.remove(&k.id);
+        }
+        let old = TREES.with(|t| t.borrow_mut().remove(&(self.me, id)));
+        if let Some(old) = old {
+            Self::retire_tree(old);
+        }
+        put_shells(self.me, id, None);
     }
 }
 
@@ -471,9 +496,10 @@ pub(super) fn shell_of(n: &El) -> El {
     s
 }
 
-/// The node at child-index `path` below `n`.
-pub(super) fn node_at<'a>(n: &'a mut El, path: &[usize]) -> &'a mut El {
-    path.iter().fold(n, |n, &j| &mut n.children_mut()[j])
+/// The node at child-index `path` below `n`, if the tree still has one
+/// there.
+pub(super) fn node_at<'a>(n: &'a mut El, path: &[usize]) -> Option<&'a mut El> {
+    path.iter().try_fold(n, |n, &j| n.children_mut().get_mut(j))
 }
 
 #[cfg(test)]

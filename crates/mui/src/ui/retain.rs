@@ -22,6 +22,12 @@
 //!   glide or scroll in flight, a `set_scroll`, or a theme, font or scale
 //!   change.
 //!
+//! Judging is bottom-up; adopting is top-down. Each outermost reused
+//! boundary is swapped for last frame's styled copy (scroll offsets and
+//! restyled looks included), and every kept `Ui::memo` subtree inside it,
+//! which last frame's copy holds only as a placeholder, goes back to the
+//! frame at the path the splice recorded for it.
+//!
 //! Last frame's tree is the runtime's own (hover and states applied,
 //! springs stepped, scroll offsets written). A node whose look the runtime
 //! changed therefore never compares equal, and reuse never skips something
@@ -58,7 +64,13 @@ struct Judged {
     floats: bool,
     /// Declared as last frame's, and reused wherever it is a boundary.
     same: bool,
+    /// Holds a kept `Ui::memo` subtree.
+    memos: bool,
 }
+
+/// The boundaries reused this frame, each with whether it holds a kept
+/// `Ui::memo` subtree.
+type Reused = FxHashMap<u64, bool>;
 
 impl Ui {
     /// Mark every boundary in `root` reused or rebuilt. `was` holds the
@@ -71,18 +83,21 @@ impl Ui {
             let dirty = self.dirty_memos(was);
             let fresh = !self.auto_cold;
             let frames = self.frames;
-            let mut last = (previous.as_mut())
+            let last = (previous.as_mut())
                 .filter(|(frame, _)| fresh && *frame == frames)
                 .map(|(_, tree)| tree);
             self.frames += 1;
-            let pairs = Pairs::new(
-                root.children(),
-                last.as_deref().map_or(&[][..], El::children),
-            );
+            let mut reused = Reused::default();
+            let empty = &[][..];
+            let kids = last.as_deref().map_or(empty, El::children);
+            let pairs = Pairs::new(root.children(), kids);
             for (j, c) in root.children_mut().iter_mut().enumerate() {
-                let k = (last.as_deref_mut()).and_then(|p| pairs.get(j, c.key(), p.children_mut()));
+                let k = pairs.get(j, c.key(), kids);
                 let at = c.key().map_or_else(|| slot(0, j), keyed);
-                self.judge(c, k, at, &dirty);
+                self.judge(c, k, at, &dirty, &mut reused);
+            }
+            if let Some(last) = last.filter(|_| !reused.is_empty()) {
+                self.adopt_children(root, last, &reused);
             }
             let frame = self.frames;
             self.boundaries.retain(|_, b| b.seen == frame);
@@ -127,12 +142,18 @@ impl Ui {
     }
 
     /// Judge fresh `f` against `k`, last frame's node in its place: first
-    /// its children, then `f` itself if it is a boundary. `at` is `f`'s
-    /// identity across frames: its key, or its slot under its parent. A
-    /// reused boundary trades places with `k`, so the frame carries last
-    /// frame's styled subtree, scroll offsets and all, as a reused
-    /// `Ui::memo` does.
-    fn judge(&mut self, f: &mut El, k: Option<&mut El>, at: u64, dirty: &FxHashSet<u64>) -> Judged {
+    /// its children, then `f` itself if it is a boundary, marked reused or
+    /// rebuilt. `at` is `f`'s identity across frames: its key, or its slot
+    /// under its parent. Reused boundaries go into `reused`, for
+    /// [`Ui::adopt`] to take last frame's copies of.
+    fn judge(
+        &mut self,
+        f: &mut El,
+        k: Option<&El>,
+        at: u64,
+        dirty: &FxHashSet<u64>,
+        reused: &mut Reused,
+    ) -> Judged {
         let memo = f.payload().extras().memo;
         if let Some(m) = memo.filter(|m| m.reused) {
             // A kept `Ui::memo` subtree, spliced in whole. Last frame's tree
@@ -143,29 +164,33 @@ impl Ui {
                 same: k
                     .and_then(|k| k.payload().extras().memo)
                     .is_some_and(|p| p.id == m.id),
+                memos: true,
             };
         }
         // A fresh `Ui::memo` root is the caller's boundary, not ours. Last
         // frame holds only its placeholder, so nothing below it pairs up.
         let user = memo.is_some();
-        let mut k = k.filter(|_| !user);
+        let k = k.filter(|_| !user);
         let mut judged = Judged {
             nodes: 1,
             floats: f.is_float(),
-            same: k.as_deref().is_some_and(|k| {
+            same: k.is_some_and(|k| {
                 let declared = k.payload().extras().declared.as_deref();
                 f.children().len() == k.children().len()
                     && f.same_shell(declared.unwrap_or(k), Element::same_declaration)
             }),
+            memos: user,
         };
-        let pairs = Pairs::new(f.children(), k.as_deref().map_or(&[][..], El::children));
+        let kids = k.map_or(&[][..], El::children);
+        let pairs = Pairs::new(f.children(), kids);
         for (j, c) in f.children_mut().iter_mut().enumerate() {
             let child_at = c.key().map_or_else(|| slot(at, j), keyed);
-            let pair = (k.as_deref_mut()).and_then(|k| pairs.get(j, c.key(), k.children_mut()));
-            let child = self.judge(c, pair, child_at, dirty);
+            let pair = pairs.get(j, c.key(), kids);
+            let child = self.judge(c, pair, child_at, dirty, reused);
             judged.nodes = judged.nodes.saturating_add(child.nodes);
             judged.floats |= child.floats;
             judged.same &= child.same;
+            judged.memos |= child.memos;
         }
         if user || judged.floats || judged.nodes < MIN_NODES || f.children().is_empty() {
             return judged;
@@ -174,14 +199,62 @@ impl Ui {
             return judged;
         };
         judged.same &= !dirty.contains(&number);
-        if let Some(k) = k.filter(|_| judged.same) {
-            std::mem::swap(f, k);
+        if judged.same {
+            reused.insert(number, judged.memos);
         }
         f.payload_mut().extras_mut().memo = Some(mui_scene::Memo {
             id: number,
             reused: judged.same,
         });
         judged
+    }
+
+    /// Top-down, take last frame's styled copy of each outermost reused
+    /// boundary under `f`, from `k` in its place: the frame then carries
+    /// scroll offsets and restyled looks, as a reused `Ui::memo` does. Only
+    /// the outermost: a reused boundary inside one comes with it.
+    fn adopt(&self, f: &mut El, k: &mut El, reused: &Reused) {
+        if let Some(m) = f.payload().extras().memo {
+            if let Some(&memos) = reused.get(&m.id) {
+                std::mem::swap(f, k);
+                f.payload_mut().extras_mut().memo = Some(m);
+                if memos {
+                    self.give_back(f, k);
+                }
+                return;
+            }
+            if self.kept.contains_key(&m.id) {
+                // A `Ui::memo`: last frame holds its placeholder.
+                return;
+            }
+        }
+        self.adopt_children(f, k, reused);
+    }
+
+    fn adopt_children(&self, f: &mut El, k: &mut El, reused: &Reused) {
+        let pairs = Pairs::new(f.children(), k.children());
+        let kids = k.children_mut();
+        for (j, c) in f.children_mut().iter_mut().enumerate() {
+            if let Some(i) = pairs.index(j, c.key(), kids) {
+                self.adopt(c, &mut kids[i], reused);
+            }
+        }
+    }
+
+    /// `adopted` is last frame's copy of a reused boundary, now in the
+    /// frame, and `fresh` this frame's build of it, declared the same. Last
+    /// frame's copy holds a placeholder where each kept `Ui::memo` subtree
+    /// goes: give the frame back the subtree this frame spliced in, at the
+    /// path the frame recorded for it.
+    fn give_back(&self, adopted: &mut El, fresh: &mut El) {
+        let memo = fresh.payload().extras().memo;
+        if memo.is_some_and(|m| self.kept.contains_key(&m.id)) {
+            std::mem::swap(adopted, fresh);
+            return;
+        }
+        for (a, f) in adopted.children_mut().iter_mut().zip(fresh.children_mut()) {
+            self.give_back(a, f);
+        }
     }
 
     /// The memo number for the boundary at `at`: last frame's, or a new
@@ -235,13 +308,18 @@ impl Pairs {
         )
     }
 
-    /// Last frame's child for fresh child `j`, which has `key`.
-    fn get<'a>(&self, j: usize, key: Option<&str>, kids: &'a mut [El]) -> Option<&'a mut El> {
+    /// Where last frame's child for fresh child `j`, which has `key`, is.
+    fn index(&self, j: usize, key: Option<&str>, kids: &[El]) -> Option<usize> {
         let i = match self {
             Self::InPlace => j,
             Self::Keyed(at) => at[j]?,
         };
-        kids.get_mut(i).filter(|k| k.key() == key)
+        kids.get(i).filter(|k| k.key() == key).map(|_| i)
+    }
+
+    /// Last frame's child for fresh child `j`, which has `key`.
+    fn get<'a>(&self, j: usize, key: Option<&str>, kids: &'a [El]) -> Option<&'a El> {
+        self.index(j, key, kids).map(|i| &kids[i])
     }
 }
 
