@@ -57,7 +57,6 @@ struct Context {
     diagnostics: GpuDiagnostics,
     shared: crate::effects::renderer::Shared,
     generation: u64,
-    trial: Arc<crash_guard::Attempt>,
 }
 
 fn run(detached: bool, work: impl FnOnce() + Send + 'static) -> bool {
@@ -154,9 +153,6 @@ impl Session {
                 }
                 let mut failure_class = FailureClass::Permanent;
                 let (instance, gpu) = try_backends(descriptor.backends, |backends| {
-                    let trial =
-                        crash_guard::Attempt::begin(&crash_guard::Key::enumeration(backends))?;
-                    trial.phase("enumerate");
                     let mut descriptor = session_descriptor(transparency);
                     descriptor.backends = backends;
                     let instance = wgpu::Instance::new(descriptor);
@@ -166,7 +162,6 @@ impl Session {
                         (1, 1),
                         Transparency::Opaque,
                         &excluded,
-                        Some(&trial),
                     )
                     .map_err(|error| {
                         if error.failure_class() == FailureClass::Transient {
@@ -181,7 +176,6 @@ impl Session {
                     class: failure_class,
                 })?;
                 Ok(Arc::new(Context {
-                    trial: gpu.trial,
                     instance,
                     adapter: gpu.adapter,
                     device: gpu.device,
@@ -438,17 +432,6 @@ impl GpuInit {
             let completion_gate = self.completion_gate.clone();
             let _ = run(self.session.detached, move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let trial = Arc::new(
-                        crash_guard::Attempt::begin(&crash_guard::Key::adapter(
-                            &context.adapter.get_info(),
-                        ))
-                        .map_err(|message| HostError::Unavailable {
-                            message,
-                            class: FailureClass::Permanent,
-                        })?,
-                    );
-                    context.trial.finish();
-                    trial.phase("create_renderer");
                     let limit = context.device.limits().max_texture_dimension_2d;
                     let (width, height) = (size.0.min(limit), size.1.min(limit));
                     let renderer = pollster::block_on(GpuRenderer::new_shared(
@@ -461,7 +444,6 @@ impl GpuInit {
                     ))
                     .map_err(HostError::Render)?;
                     Ok(OnDevice {
-                        trial,
                         adapter: context.adapter.clone(),
                         device: context.device.clone(),
                         queue: context.queue.clone(),
@@ -624,7 +606,6 @@ pub struct Offscreen {
     readback: wgpu::Buffer,
     size: (u32, u32),
     error_cursor: u64,
-    trial: Arc<crash_guard::Attempt>,
 }
 
 impl GpuInit {
@@ -638,19 +619,6 @@ impl GpuInit {
             let Some(context) = self.session.context()? else {
                 return Ok(None);
             };
-            let trial = Arc::new(
-                crash_guard::Attempt::begin(&crash_guard::Key::adapter(
-                    &context.adapter.get_info(),
-                ))
-                .map_err(|message| HostError::Unavailable {
-                    message,
-                    class: FailureClass::Permanent,
-                })?,
-            );
-            // Per-editor trials now cover renderer creation/readback, including
-            // concurrent editors sharing the process-lifetime context.
-            context.trial.finish();
-            trial.phase("create_renderer");
             let size = offscreen_size(&context.device, size)?;
             let mut renderer = pollster::block_on(GpuRenderer::new_shared(
                 &context.device,
@@ -665,7 +633,6 @@ impl GpuInit {
             let (target, readback, _) = offscreen_target(&context.device, size);
             let view = target.create_view(&wgpu::TextureViewDescriptor::default());
             Ok(Some(Offscreen {
-                trial,
                 first_frame: true,
                 context,
                 renderer,
@@ -754,9 +721,6 @@ impl Offscreen {
         transform: Affine,
         size: (u32, u32),
     ) -> Result<Vec<BitmapPatch>, HostError> {
-        if self.first_frame {
-            self.trial.phase("first_render");
-        }
         offscreen_size(&self.context.device, size)?;
         if self.context.errors.lost.load(Ordering::Acquire) {
             return Err(HostError::Configuration("offscreen device lost".into()));
@@ -877,12 +841,11 @@ impl Offscreen {
             return Err(HostError::Configuration(error));
         }
         if self.first_frame {
-            self.trial.finish();
             self.first_frame = false;
             crate::diagnostics::breadcrumb(
                 "mui-vello",
                 "first_readback_complete",
-                "GPU trial confirmed",
+                "first GPU frame read back",
             );
         }
         Ok(patches)

@@ -14,7 +14,7 @@ the coarse shader's 8 storage buffers / 256 invocations / 16 KiB workgroup
 storage) is gone with it. Adapter selection now asks WebGL2-class limits at
 the adapter's own texture size and the texture usages the pass creates
 (`host/selection.rs`); compute is no longer required. Everything else here
-holds: DX12-first backend order, the WARP gate, the crash guard, the pipeline
+holds: DX12-first backend order, the WARP gate, the pipeline
 cache, DX12 pipeline creation serialised per plugin image (now MUI's own
 gate in `effects::gate`), device-loss rebuild, CPU first frame and retry
 pacing.
