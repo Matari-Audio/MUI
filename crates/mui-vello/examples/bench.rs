@@ -286,7 +286,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
     let start = Instant::now();
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
-            // Vello's compute pipeline needs more than the downlevel defaults.
+            // Bench on everything the adapter offers, as a desktop host would.
             required_limits: adapter.limits(),
             ..Default::default()
         })
