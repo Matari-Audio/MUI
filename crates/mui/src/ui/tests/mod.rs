@@ -72,6 +72,7 @@ mod input;
 mod memo;
 mod motion;
 mod pointer;
+mod retain;
 mod scroll;
 mod snapshots;
 mod view_input;

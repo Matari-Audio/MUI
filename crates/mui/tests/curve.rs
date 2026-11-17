@@ -117,7 +117,7 @@ fn the_drawn_spine_is_the_models_cubic_and_matches_the_sampler() {
     let mut c = Curve::default();
     let el = curve(&mut ui, "env", &mut c).el;
     let draws = match &el.payload().content {
-        Content::Canvas(f) => f.0(Size::new(SIZE, SIZE)),
+        Content::Canvas(f) => f.draw(Size::new(SIZE, SIZE)),
         _ => panic!("a canvas"),
     };
     let point = |p: mui::scene::curve::CurvePoint| {

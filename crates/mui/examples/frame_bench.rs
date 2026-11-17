@@ -236,6 +236,8 @@ fn count(n: &El) -> usize {
 fn main() {
     let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
     let mut ui = Ui::default().font(font);
+    // `AUTO=0`: no automatic retention, every frame laid out and walked.
+    ui.set_auto_retain(std::env::var_os("AUTO").is_none_or(|v| v != "0"));
     let mut values = vec![0.5; TRACKS * 5];
     let size = |w: f64| Some(Size::new(w, 1400.0));
     let away = PointerInput {

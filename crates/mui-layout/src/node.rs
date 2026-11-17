@@ -349,6 +349,70 @@ impl<P> Node<P> {
             rare: self.rare.clone(),
         }
     }
+    /// Whether `o` is declared as this node is, children aside, with
+    /// `payload` judging the payloads. A [`shell`](Self::shell) compares
+    /// equal to the node it was taken from.
+    pub fn same_shell(&self, o: &Self, payload: impl FnOnce(&P, &P) -> bool) -> bool {
+        let Self {
+            id,
+            kind,
+            payload: mine,
+            gap,
+            padding,
+            pad,
+            minimum,
+            width,
+            height,
+            grow,
+            basis,
+            shrink,
+            align,
+            align_self,
+            justify,
+            anchor,
+            offset,
+            scroll,
+            clip,
+            scrolled,
+            sticky,
+            float,
+            wrap,
+            span,
+            order,
+            rare,
+        } = self;
+        let kind = std::mem::discriminant(kind) == std::mem::discriminant(&o.kind)
+            && match (kind, &o.kind) {
+                (Kind::Branch { vertical: v, .. }, Kind::Branch { vertical: w, .. }) => v == w,
+                (Kind::Grid { cols: c, .. }, Kind::Grid { cols: d, .. }) => c == d,
+                _ => true,
+            };
+        kind && *id == o.id
+            && *gap == o.gap
+            && *padding == o.padding
+            && *pad == o.pad
+            && *minimum == o.minimum
+            && *width == o.width
+            && *height == o.height
+            && *grow == o.grow
+            && *basis == o.basis
+            && *shrink == o.shrink
+            && *align == o.align
+            && *align_self == o.align_self
+            && *justify == o.justify
+            && *anchor == o.anchor
+            && *offset == o.offset
+            && *scroll == o.scroll
+            && *clip == o.clip
+            && *scrolled == o.scrolled
+            && *sticky == o.sticky
+            && *float == o.float
+            && *wrap == o.wrap
+            && *span == o.span
+            && *order == o.order
+            && *rare == o.rare
+            && payload(mine, &o.payload)
+    }
     /// Move `from`'s children under this node, returning the ones this node
     /// held. A leaf takes none and hands `from`'s back.
     pub fn swap_children(&mut self, from: &mut Self) {

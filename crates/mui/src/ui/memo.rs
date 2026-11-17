@@ -137,7 +137,14 @@ impl Ui {
         if let Some(old) = old {
             Self::retire_tree(old);
         }
-        put_shells(me, key, Some(Shells { built, delivered: None }));
+        put_shells(
+            me,
+            key,
+            Some(Shells {
+                built,
+                delivered: None,
+            }),
+        );
         self.kept.insert(
             key,
             Kept {
@@ -272,8 +279,9 @@ impl Ui {
         }
     }
     /// Take every memo's styled subtree back out of the resolved tree,
-    /// innermost first, leaving placeholders for nested ones.
-    pub(super) fn capture(&mut self, mut root: El, found: &[(Vec<usize>, u64)]) {
+    /// innermost first, leaving placeholders for nested ones. What is left
+    /// is the tree automatic retention judges the next frame against.
+    pub(super) fn capture(&mut self, mut root: El, found: &[(Vec<usize>, u64)]) -> El {
         // Each root's nearest enclosing root.
         let parent = |p: &[usize]| {
             found
@@ -309,7 +317,7 @@ impl Ui {
                 }
             }
         }
-        Self::retire_tree(root);
+        root
     }
 }
 
@@ -358,7 +366,11 @@ impl Ui {
         }
         let shells = SHELLS.try_with(|shells| {
             let mut shells = shells.borrow_mut();
-            let keys: Vec<_> = shells.keys().filter(|(ui, _)| *ui == self.me).copied().collect();
+            let keys: Vec<_> = shells
+                .keys()
+                .filter(|(ui, _)| *ui == self.me)
+                .copied()
+                .collect();
             keys.into_iter()
                 .filter_map(|key| shells.remove(&key))
                 .collect::<Vec<_>>()
@@ -370,6 +382,10 @@ impl Ui {
                     Self::discard_tree(d);
                 }
             }
+        }
+        let previous = super::retain::PREVIOUS.try_with(|p| p.borrow_mut().remove(&self.me));
+        if let Ok(Some((_, root))) = previous {
+            Self::discard_tree(root);
         }
         mui_scene::clear_declaration_storage();
     }

@@ -234,7 +234,7 @@ fn a_thousand_bins_at_two_hundred_pixels_draw_one_bar_per_column() {
     let Content::Canvas(f) = &el.payload().content else {
         panic!("a canvas")
     };
-    let draws = f.0(Size::new(W, H));
+    let draws = f.draw(Size::new(W, H));
     let bars = draws.iter().filter(|d| d.width == 0.0).count();
     assert!(bars <= W as usize, "{bars} bars for {W} px");
     assert!(bars > W as usize / 2, "coalesced away: {bars} bars");
