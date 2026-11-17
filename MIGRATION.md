@@ -212,6 +212,13 @@ Overlays and tabs take a look (`mui::widgets`):
 - `Raster` keeps its `mui::vello::Cache` across `draw` calls (it built a
   fresh one per frame, re-interning every font).
 
+`mui_baseview::native` carries every event translation `mui-baseview` uses,
+public (they were private in `lib.rs`): `key_event(&KeyboardEvent) ->
+KeyEvent`, `mouse_button(MouseButton) -> Option<Button>`, `mods(Modifiers) ->
+Mods`, `native_cursor(Cursor) -> MouseCursor` and `native_ime(config, scale)
+-> baseview::ImeConfiguration`, beside the existing `ime_event` and
+`ime_configuration`. A host of your own deletes its copies.
+
 ## v0.4.1
 
 Breaking (by hand; `mui-migrate` has no rule for it):
