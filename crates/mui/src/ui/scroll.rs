@@ -135,11 +135,12 @@ impl Ui {
     /// for virtual lists, whose constructed rows must match the drawn offset.
     pub fn set_scroll(&mut self, id: impl Into<Id>, offset: [f64; 2]) -> bool {
         self.retained_root = None;
+        let id: Id = id.into();
         if !offset.iter().all(|v| v.is_finite()) {
             return false;
         }
-        let id: Id = id.into();
         node(&mut self.nodes, id.as_str()).scroll = Some(offset.map(|v| Spring::at(v.max(0.0))));
+        self.touched.push(id);
         true
     }
 

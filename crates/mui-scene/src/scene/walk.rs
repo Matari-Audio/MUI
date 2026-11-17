@@ -651,7 +651,7 @@ impl<'a> Walk<'a> {
             Content::Canvas(c) => {
                 // Local to the frame corner, where the canvas draws from.
                 let origin = Point::new(frame.x, frame.y);
-                let draws = (c.0)(frame.size);
+                let draws = c.draw(frame.size);
                 let generation = self.caches.outlines.generation;
                 let paths = match self.caches.outlines.canvases.get_mut(key) {
                     // A plain canvas draws a fresh list every frame, most

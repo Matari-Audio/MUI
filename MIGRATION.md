@@ -4,6 +4,20 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+Automatic retention (`perf/auto-retain`). No builder call changes: `Ui`,
+`El`, `Ui::memo` and widgets build what they did. Three things a caller can
+notice:
+
+- `Canvas` is one pointer wide and its closure is private:
+  `canvas.0(size)` -> `canvas.draw(size)`; `Canvas(Arc::new(f))` ->
+  `Canvas::new(f)`. A `Canvas` from `canvas_keyed` compares equal to a
+  later one from the same cache with an equal key (it was `Arc` identity).
+- `Node::same_shell` ignores children entirely (it compared their count).
+- `Ui::set_auto_retain(false)` turns automatic retention off; it is on by
+  default and paints exactly what a full rebuild does. A frame bench that
+  measured the full rebuild sets it off.
+
+
 GPU renderer: the instanced SDF quad pass replaces compute-shader Vello, and
 Vello's GPU path is deleted. The checklist is the diff of the public API,
 features and manifests between `0c865588` (the last tree with Vello on the

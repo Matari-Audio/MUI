@@ -120,11 +120,38 @@ impl Draw {
 /// (the [`Resolver`](crate::Resolver)'s caches, `mui::Ui`) keeps a closure,
 /// only what it drew, so those stay `Send` without asking it of the tree.
 ///
-/// Equality is identity: two are equal when they are the same `Arc`. A
+/// Equality is identity: two are equal when they are the same `Arc`, or
+/// both come from [`canvas_keyed`] on the same cache with equal keys (its
+/// contract: the key covers everything the closure reads). Any other
 /// rebuilt closure compares unequal even when it draws the same thing, so
 /// `==` on a tree can say "changed" when nothing did, never the reverse.
 #[derive(Clone)]
-pub struct Canvas(pub Arc<dyn Fn(Size) -> Arc<[Draw]>>);
+pub struct Canvas(Arc<Drawer<DrawFn>>);
+
+/// What a canvas runs to draw at a size.
+type DrawFn = dyn Fn(Size) -> Arc<[Draw]>;
+
+/// A canvas's closure, with what a keyed one draws from beside it: one
+/// allocation, and a canvas one pointer wide.
+struct Drawer<F: ?Sized> {
+    key: Option<CanvasKey>,
+    draw: F,
+}
+
+/// What a [`canvas_keyed`] canvas draws from: its cache slot and its key.
+struct CanvasKey {
+    slot: usize,
+    key: Box<dyn std::any::Any>,
+    eq: fn(&dyn std::any::Any, &dyn std::any::Any) -> bool,
+}
+impl CanvasKey {
+    fn same(&self, o: &Self) -> bool {
+        self.slot == o.slot && (self.eq)(&*self.key, &*o.key)
+    }
+}
+fn any_eq<K: PartialEq + 'static>(a: &dyn std::any::Any, b: &dyn std::any::Any) -> bool {
+    matches!((a.downcast_ref::<K>(), b.downcast_ref::<K>()), (Some(a), Some(b)) if a == b)
+}
 impl std::fmt::Debug for Canvas {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("Canvas(..)")
@@ -133,6 +160,17 @@ impl std::fmt::Debug for Canvas {
 impl PartialEq for Canvas {
     fn eq(&self, o: &Self) -> bool {
         Arc::ptr_eq(&self.0, &o.0)
+            || matches!((&self.0.key, &o.0.key), (Some(a), Some(b)) if a.same(b))
+    }
+}
+impl Canvas {
+    /// A canvas drawing with `f`, compared by identity.
+    pub fn new(f: impl Fn(Size) -> Arc<[Draw]> + 'static) -> Self {
+        Self(Arc::new(Drawer { key: None, draw: f }))
+    }
+    /// What it draws at `size`.
+    pub fn draw(&self, size: Size) -> Arc<[Draw]> {
+        (self.0.draw)(size)
     }
 }
 
@@ -409,6 +447,12 @@ pub struct Extras {
     /// Retained with memoized subtrees; never changes native surface sizes or
     /// tree budgets.
     pub virtual_scroll_extent: Option<f64>,
+    /// Set by the runtime on a node it restyled (a state look, a
+    /// transition, hover and press, a scroll offset): the node as declared,
+    /// without its children. Last frame's tree is compared with the next
+    /// one's declarations through it, never through what the runtime made
+    /// of them.
+    pub declared: Option<Box<El>>,
 }
 
 /// The root of a memoised subtree. A resolve records where each memo's
@@ -420,6 +464,60 @@ pub struct Memo {
     pub reused: bool,
 }
 impl Extras {
+    /// Equal but for the [`Memo`] mark and the runtime's
+    /// [`declared`](Self::declared) copy.
+    fn same_declaration(&self, o: &Self) -> bool {
+        let Self {
+            alpha_mask,
+            editable_text,
+            rotation,
+            reserve,
+            reserve_all,
+            description,
+            value_description,
+            numeric_step,
+            measure_as,
+            tip,
+            transition,
+            layout_transition,
+            appear,
+            identity,
+            morph,
+            welding,
+            outline,
+            border_ramp,
+            inside,
+            surface_padding,
+            inset_surface,
+            border_join,
+            memo: _,
+            virtual_scroll_extent,
+            declared: _,
+        } = self;
+        *alpha_mask == o.alpha_mask
+            && *editable_text == o.editable_text
+            && *rotation == o.rotation
+            && *reserve == o.reserve
+            && *reserve_all == o.reserve_all
+            && *description == o.description
+            && *value_description == o.value_description
+            && *numeric_step == o.numeric_step
+            && *measure_as == o.measure_as
+            && *tip == o.tip
+            && *transition == o.transition
+            && *layout_transition == o.layout_transition
+            && *appear == o.appear
+            && *identity == o.identity
+            && *morph == o.morph
+            && *welding == o.welding
+            && *outline == o.outline
+            && *border_ramp == o.border_ramp
+            && *inside == o.inside
+            && *surface_padding == o.surface_padding
+            && *inset_surface == o.inset_surface
+            && *border_join == o.border_join
+            && *virtual_scroll_extent == o.virtual_scroll_extent
+    }
     const NONE: Self = Self {
         alpha_mask: None,
         editable_text: None,
@@ -445,6 +543,7 @@ impl Extras {
         border_join: None,
         memo: None,
         virtual_scroll_extent: None,
+        declared: None,
     };
 }
 impl Default for Extras {
@@ -452,6 +551,48 @@ impl Default for Extras {
         Self::NONE
     }
 }
+impl Element {
+    /// Whether `o` declares what this does, for reusing last frame's work:
+    /// [`PartialEq`] but for the [`Memo`] mark, with each state look
+    /// compared by what it makes of the resting style rather than by
+    /// closure identity. Unequal when unsure, never equal when not.
+    pub fn same_declaration(&self, o: &Self) -> bool {
+        let Self {
+            style,
+            content,
+            text_size,
+            text_role,
+            axes,
+            font,
+            lines,
+            semantics,
+            states,
+            carve,
+            bend,
+            border_align,
+            flags,
+            extras: _,
+        } = self;
+        *style == o.style
+            && *content == o.content
+            && *text_size == o.text_size
+            && *text_role == o.text_role
+            && *axes == o.axes
+            && *font == o.font
+            && *lines == o.lines
+            && *semantics == o.semantics
+            && *carve == o.carve
+            && bend.to_bits() == o.bend.to_bits()
+            && *border_align == o.border_align
+            && *flags == o.flags
+            && self.extras().same_declaration(o.extras())
+            && states.len() == o.states.len()
+            && states.iter().zip(&o.states).all(|((s, a), (t, b))| {
+                s == t && (Arc::ptr_eq(&a.0, &b.0) || a.0(style.clone()) == b.0(o.style.clone()))
+            })
+    }
+}
+
 impl Element {
     /// Takes keyboard focus on click and on Tab.
     pub const FOCUSABLE: u16 = 1 << 0;
@@ -623,7 +764,7 @@ pub fn icon(symbol: char) -> El {
 /// container: give it `.size(..)`, `.aspect(..)` or let it stretch.
 pub fn canvas(f: impl Fn(Size) -> Vec<Draw> + 'static) -> El {
     Node::stack([]).with(Element {
-        content: Content::Canvas(Canvas(Arc::new(move |size| f(size).into()))),
+        content: Content::Canvas(Canvas::new(move |size| f(size).into())),
         ..Element::default()
     })
 }
@@ -634,17 +775,26 @@ pub fn canvas_keyed<K: Clone + PartialEq + 'static>(
     f: impl Fn(Size) -> Vec<Draw> + 'static,
 ) -> El {
     let cache = cache.clone();
+    let identity = CanvasKey {
+        slot: Arc::as_ptr(&cache.0) as *const () as usize,
+        key: Box::new(key.clone()),
+        eq: any_eq::<K>,
+    };
+    let draw = move |size| {
+        if let Some((old_key, old_size, draws)) = cache.slot().as_ref()
+            && *old_key == key
+            && *old_size == size
+        {
+            return Arc::clone(draws);
+        }
+        let draws: Arc<[Draw]> = f(size).into();
+        *cache.slot() = Some((key.clone(), size, Arc::clone(&draws)));
+        draws
+    };
     Node::stack([]).with(Element {
-        content: Content::Canvas(Canvas(Arc::new(move |size| {
-            if let Some((old_key, old_size, draws)) = cache.slot().as_ref()
-                && *old_key == key
-                && *old_size == size
-            {
-                return Arc::clone(draws);
-            }
-            let draws: Arc<[Draw]> = f(size).into();
-            *cache.slot() = Some((key.clone(), size, Arc::clone(&draws)));
-            draws
+        content: Content::Canvas(Canvas(Arc::new(Drawer {
+            key: Some(identity),
+            draw,
         }))),
         ..Element::default()
     })
@@ -1336,8 +1486,8 @@ mod tests {
         let Content::Canvas(first) = &first.payload().content else {
             panic!("a canvas")
         };
-        let a = (first.0)(size);
-        let b = (first.0)(size);
+        let a = first.draw(size);
+        let b = first.draw(size);
         assert!(Arc::ptr_eq(&a, &b));
         assert_eq!(calls.get(), 1);
 
@@ -1345,8 +1495,8 @@ mod tests {
         let Content::Canvas(changed) = &changed.payload().content else {
             panic!("a canvas")
         };
-        let _ = (changed.0)(size);
-        let _ = (changed.0)(Size::new(81., 40.));
+        let _ = changed.draw(size);
+        let _ = changed.draw(Size::new(81., 40.));
         assert_eq!(calls.get(), 3);
     }
 

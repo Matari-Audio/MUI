@@ -14,6 +14,17 @@ Input (pointer with its Buttons and Mods, wheel, keys, text)
    |                        clipboard in and out. ui.keys(id) is focus-gated;
    |                        ui.shortcuts() is not, except by a typing field
    |
+   v  automatic retention   the new tree is paired with last frame's (by place,
+   |                        or by key when a list changed length); every
+   |                        subtree of 4+ nodes declared as before, with no
+   |                        hover, press, focus, spring, tween or scroll moving
+   |                        in it, is marked a reused memo and swapped for last
+   |                        frame's styled copy: layout replays its stamps, the
+   |                        walk copies its paint. The runtime keeps each
+   |                        restyled node's declaration beside it
+   |                        (Extras::declared), so the comparison never sees
+   |                        what the sweep made of it. ui/retain.rs
+   |
    v  declared states       a node's .on(Hover | Press | Focus | Disabled, ..)
    |                        closures run first, so the style the springs chase
    |                        is the one the node asked for in the state it is

@@ -62,6 +62,7 @@ impl Ui {
         for kept in self.kept.values_mut() {
             kept.still = false;
         }
+        self.auto_cold = true;
         if reduced {
             self.ghosts.clear();
             self.play_until = self.time;
@@ -225,12 +226,17 @@ impl Ui {
         let pal = self.theme.palette;
         // Scrolls step before the walk slides the tree by them.
         let mut animating = false;
-        for n in self.nodes.values_mut() {
+        for (k, n) in &mut self.nodes {
             if let Some((_, s)) = &mut n.tween {
                 // The tree already drew the value before this step: a step
-                // that snaps onto the target still owes the frame that shows it.
+                // that snaps onto the target still owes the frame that shows
+                // it, and the memos that read it owe a rebuild.
                 let drawn = s.value;
-                animating |= step_spring(s, dt, reduced) || s.value != drawn;
+                let moving = step_spring(s, dt, reduced);
+                if !moving && s.value != drawn {
+                    self.touched.push(Id::runtime(k));
+                }
+                animating |= moving || s.value != drawn;
             }
             for s in n.scroll.iter_mut().flatten() {
                 animating |= step_spring(s, dt, reduced);
@@ -632,17 +638,21 @@ impl Sweep<'_> {
             self.nodes.get_mut(key)
         };
         let springs = st.as_ref().and_then(|s| s.springs);
+        let scroll = st.as_ref().and_then(|s| s.scroll);
+        // Everything below restyles the node: keep what it declared, so the
+        // next frame's tree is judged against that (see `ui::retain`).
+        if !n.payload().states.is_empty()
+            || transition.is_some()
+            || springs.is_some()
+            || scroll.is_some()
+        {
+            keep_declared(n);
+        }
         declared_states(n, springs, [focused, focused && self.focus_visible], off);
         let mut animating = st
             .as_mut()
             .is_some_and(|s| transitions(n, &mut s.motion, self.pal, self.dt, self.reduced));
-        state(
-            n,
-            self.pal,
-            springs,
-            st.as_ref().and_then(|s| s.scroll),
-            off,
-        );
+        state(n, self.pal, springs, scroll, off);
         let spring = transition.unwrap_or(Spring::DEFAULT);
         if let (Some(s), Some(_)) = (st, appear) {
             s.appearing = Some((true, spring));
@@ -658,6 +668,15 @@ impl Sweep<'_> {
             path.truncate(mark);
         }
         animating
+    }
+}
+
+/// Keep `n` as declared, once: a subtree spliced back in was restyled
+/// already, and its first copy is the declaration.
+fn keep_declared(n: &mut El) {
+    if n.payload().extras().declared.is_none() {
+        let shell = Box::new(n.shell());
+        n.payload_mut().extras_mut().declared = Some(shell);
     }
 }
 

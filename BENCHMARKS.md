@@ -53,6 +53,26 @@ scroll redraw. Both use one draw call for the editor; the modal costs 3 draws
 in 5 passes on the frames that blur. No compute shader and no storage buffer
 is involved.
 
+## Automatic retention (2026-11-17)
+
+Same bench, `--profile perf`, load average ~15 on 16 threads, so minimums
+of 60 (medians swing 30%). `AUTO=0` turns automatic retention off.
+
+| frame | `AUTO=0` | automatic | automatic + `MEMO=1` |
+|---|---:|---:|---:|
+| steady | 1.72 ms | 0.91 ms | 0.88 ms |
+| hover (new target every frame) | 1.76 ms | 1.22 ms | 1.23 ms |
+| hover10 | 1.72 ms | 1.19 ms | 0.99 ms |
+| resize | 4.15 ms | 4.21 ms | 4.37 ms |
+| tooltip | 1.86 ms | 1.06 ms | 0.96 ms |
+
+Steady frame: 2284 of 2319 nodes replay their layout, 8092 -> 6243
+allocations. What it says: with no `Ui::memo` in the app, every frame gets
+almost all of what hand-placed memos gave; the rest of the steady frame is
+the walk copying spans (~0.3 ms), which splicing them in place would
+remove. Resize is unchanged: every frame size is new, and layout is
+re-solved whatever is retained.
+
 ## Retained memos and layout replay (2026-11-12)
 
 `cargo run -p mui --profile perf --example frame_bench` (2319 nodes, thread

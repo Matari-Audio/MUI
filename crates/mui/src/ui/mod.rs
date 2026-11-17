@@ -25,6 +25,7 @@ mod input;
 pub use input::TextInputState;
 mod memo;
 mod motion;
+mod retain;
 mod scroll;
 mod text_runs;
 use input::*;
@@ -229,6 +230,20 @@ pub struct Ui {
     /// moved; `hot_all` for every one.
     hot: BTreeSet<u64>,
     hot_all: bool,
+    /// Compare each frame's tree with the last and reuse what did not
+    /// change; see [`Ui::set_auto_retain`].
+    auto_retain: bool,
+    /// Something every subtree reads changed (theme, font, scale): nothing
+    /// is reused automatically on the next frame.
+    auto_cold: bool,
+    /// Keys whose runtime state moved outside a spring's flight since
+    /// the last judgment (`set_scroll`, a tween snapping home): read by
+    /// [`Ui::stirred`], cleared by `retain_auto`.
+    touched: Vec<Id>,
+    /// Frames judged for automatic retention.
+    frames: u64,
+    /// Each automatic boundary by its identity across frames.
+    boundaries: rustc_hash::FxHashMap<u64, retain::Boundary>,
     /// Memo roots the build under way has handed out.
     issued: usize,
     /// The memos whose closures are running, innermost last, each with where
@@ -347,12 +362,31 @@ impl Ui {
             me: NEXT_UI.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hot: BTreeSet::new(),
             hot_all: false,
+            auto_retain: true,
+            auto_cold: false,
+            touched: Vec::new(),
+            frames: 0,
+            boundaries: rustc_hash::FxHashMap::default(),
             issued: 0,
             building: Vec::new(),
             read: Vec::new(),
             retained_root: None,
             retained_frame: false,
         }
+    }
+    /// Something every subtree reads changed: no kept subtree, `Ui::memo`
+    /// or automatic, is reused on the next frame.
+    fn invalidate_retained(&mut self) {
+        self.retained_root = None;
+        self.hot_all = true;
+        self.auto_cold = true;
+    }
+    /// Compare each frame's tree with the last and lay out and paint every
+    /// unchanged subtree from last frame's work. On by default; a frame
+    /// built off produces the same scene, only slower. See the `retain`
+    /// module docs for what counts as unchanged.
+    pub fn set_auto_retain(&mut self, on: bool) {
+        self.auto_retain = on;
     }
     /// The theme every frame resolves with.
     pub fn theme(&self) -> &Theme {
@@ -362,7 +396,7 @@ impl Ui {
     /// control size.
     pub fn set_theme(&mut self, theme: Theme) {
         if self.theme != theme {
-            self.retained_root = None;
+            self.invalidate_retained();
         }
         self.theme = theme;
     }
@@ -394,7 +428,7 @@ impl Ui {
     /// 0.6em guess. [`Ui::font`] is the builder form.
     pub fn set_font(&mut self, font: Option<Font>) {
         if self.font != font {
-            self.retained_root = None;
+            self.invalidate_retained();
         }
         self.font = font;
     }
@@ -413,7 +447,7 @@ impl Ui {
     /// ```
     pub fn set_scale(&mut self, scale: Option<f64>) {
         if self.scale != scale {
-            self.retained_root = None;
+            self.invalidate_retained();
         }
         self.scale = scale;
     }
@@ -431,7 +465,7 @@ impl Ui {
     }
     /// Set the font.
     pub fn font(mut self, font: Font) -> Self {
-        self.retained_root = None;
+        self.invalidate_retained();
         self.font = Some(font);
         self
     }
@@ -446,7 +480,7 @@ impl Ui {
     /// The selected face is retained in the scene text payload, so CPU and
     /// GPU renderers use the same fallback choice.
     pub fn fallback_font(mut self, font: Font) -> Self {
-        self.retained_root = None;
+        self.invalidate_retained();
         self.fallback_fonts.push(font);
         self.runs.set_fallbacks(self.fallback_fonts.clone());
         self
@@ -454,7 +488,7 @@ impl Ui {
     /// Run `.weld(..)` / `weld!` on the analytic GPU backend: this `Ui`'s
     /// [`SceneSpec::weld_backend`](mui_scene::SceneSpec::weld_backend).
     pub fn gpu_welding(mut self) -> Self {
-        self.retained_root = None;
+        self.invalidate_retained();
         self.weld_backend = mui_scene::WeldBackend::AnalyticGpu;
         self
     }
@@ -468,6 +502,7 @@ impl Ui {
             self.scene = None;
             self.resolver = Resolver::default();
             self.hot_all = true;
+            self.auto_cold = true;
         }
     }
     /// Morph-only render update: keep the application declaration synchronized.
@@ -1007,7 +1042,11 @@ impl Ui {
             && self.cancelled.is_none()
             && self.ime_caret.is_none();
         if quiet
-            && memo.is_some_and(|(id, reused)| reused && previous_root == Some((id, offered)))
+            && memo.is_some_and(|(id, reused)| {
+                reused
+                    && previous_root == Some((id, offered))
+                    && self.declared_as_delivered(&root, id)
+            })
             && let Some(scene) = self.scene.as_ref().map(Arc::clone)
         {
             let previous_blink = self.blink();
@@ -1113,6 +1152,9 @@ impl Ui {
         self.follow_identities(&root);
         animating |= self.hover_springs(&root, dt);
         self.intake_focus(was, keys, text, ime);
+        // Bar heats tween first: one that starts moving now stirs its node.
+        let heats = self.bar_heats();
+        self.retain_auto(&mut root, &before);
         let hovered = self.interaction.hovered().map(Id::runtime);
         let (tip, tip_pending) = self.tip_due(hovered.as_deref(), dt);
         animating |= tip_pending;
@@ -1125,11 +1167,11 @@ impl Ui {
             Self::discard_tree(root);
             return Err(error);
         }
-        let heats = self.bar_heats();
         let (moving, shaped) = self.sweep(&mut root, dt);
         animating |= moving;
         let (mut scene, glided, root) = self.resolve(root, offered, dt, heats)?;
-        self.capture(root, &memos);
+        let root = self.capture(root, &memos);
+        self.keep_previous(root);
         animating |= glided;
         animating |= self.after_motion(&mut scene, shaped, dt);
         self.wheel_capture = self.wheel_capture_for(&scene);
@@ -1394,7 +1436,7 @@ impl Ui {
         )?;
         let found = self.resolver.take_found_fallbacks();
         if !found.is_empty() {
-            self.retained_root = None;
+            self.invalidate_retained();
             self.fallback_fonts.extend(found);
             self.runs.set_fallbacks(self.fallback_fonts.clone());
             self.repaint_in(0.0);

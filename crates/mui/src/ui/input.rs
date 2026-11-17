@@ -832,6 +832,7 @@ impl Ui {
                 if let Some(old) = old {
                     Self::retire_tree(old);
                 }
+                super::memo::put_shells(me, *id, None);
                 ids.remove(&k.id);
             }
             live
@@ -842,9 +843,26 @@ impl Ui {
             || self.pasted.is_some()
             || self.preedit.is_some()
             || !self.delivered.is_empty();
-        if self.kept.is_empty() || self.hot_all {
+        // Automatic retention reads `hot` too, with or without kept memos.
+        if (self.kept.is_empty() && !self.auto_retain) || self.hot_all {
             return;
         }
+        let hot: Vec<u64> = (self.stirred(was).into_iter())
+            .flat_map(|k| scene.memos_at(k).map(|(id, _)| id))
+            .collect();
+        self.hot.extend(hot);
+        self.hot.extend(
+            scene
+                .memos_floating()
+                .filter(|id| self.kept.get(id).is_none_or(|k| !k.layout_floats)),
+        );
+    }
+
+    /// The keys whose runtime state moves: hover, press and tag changed
+    /// since `was`, the held and focused keys, the hovered one under a turning
+    /// wheel, every node with a spring, glide, morph or tween in flight, and
+    /// the keys [`touched`](Ui::touched) since the last judgment.
+    pub(super) fn stirred<'a>(&'a self, was: &'a [Option<Id>; 3]) -> Vec<&'a str> {
         let now = [
             self.interaction.hovered(),
             self.interaction.held(),
@@ -878,14 +896,12 @@ impl Ui {
                 keys.push(bar);
             }
         }
-        for k in keys {
-            self.hot.extend(scene.memos_at(k).map(|(id, _)| id));
+        // Moved outside a spring's flight: `set_scroll`, a tween that
+        // snapped home after it was drawn.
+        for k in &self.touched {
+            keys.push(k.strip_prefix("/bar/").unwrap_or(k));
         }
-        self.hot.extend(
-            scene
-                .memos_floating()
-                .filter(|id| self.kept.get(id).is_none_or(|k| !k.layout_floats)),
-        );
+        keys
     }
 
     /// Focus follows a press on a focusable surface, and a press on anything

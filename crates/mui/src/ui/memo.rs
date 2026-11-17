@@ -21,9 +21,11 @@ impl Ui {
     /// `build` reads: the model, sizes, the clock, the raw pointer, and the
     /// enclosing subtree's disabled state. A cheap hash of generation
     /// counters is the idea; a missed input paints last frame's subtree.
-    /// What the caller does to the returned element (a size, a cursor) is
-    /// kept with the subtree: fold it into `deps` too, or do it inside
-    /// `build`. `id` must be unique among the frame's memos. Memos nest. A memo
+    /// What the caller declares on the returned element (a size, a cursor)
+    /// is honoured every frame: a reuse hands back the root as `build` made
+    /// it, and a root declared differently from last frame is laid out and
+    /// painted again over the kept children, without running `build`.
+    /// `id` must be unique among the frame's memos. Memos nest. A memo
     /// whose subtree floats a node (a popup) is built every frame: memoise
     /// what is under the float instead.
     ///
@@ -109,13 +111,16 @@ impl Ui {
                     self.read.extend(read.iter().cloned());
                 }
                 self.kept.get_mut(&key).expect("just read").read = read;
-                return placeholder(key);
+                if let Some(el) = shells(me, key, |s| placeholder(key, &s.built)) {
+                    return el;
+                }
             }
         }
         self.building.push((key, self.read.len(), true));
         let mut el = build(self);
         let (_, from, still) = self.building.pop().expect("pushed above");
         let read = self.read[from..].to_vec();
+        let built = shell_of(&el);
         if self.building.is_empty() {
             self.read.clear();
         }
@@ -132,6 +137,14 @@ impl Ui {
         if let Some(old) = old {
             Self::retire_tree(old);
         }
+        put_shells(
+            me,
+            key,
+            Some(Shells {
+                built,
+                delivered: None,
+            }),
+        );
         self.kept.insert(
             key,
             Kept {
@@ -145,6 +158,14 @@ impl Ui {
             },
         );
         el
+    }
+    /// Whether placeholder `n` of memo `id` is declared as the caller last
+    /// delivered that memo's root.
+    pub(super) fn declared_as_delivered(&self, n: &El, id: u64) -> bool {
+        let got = shell_of(n);
+        let same = shells(self.me, id, |s| s.delivered.as_ref() == Some(&got)).unwrap_or(false);
+        Self::retire_tree(got);
+        same
     }
     /// Put every kept memo subtree back where the build left its
     /// placeholder, and return where each memo's root is, by child-index
@@ -196,6 +217,13 @@ impl Ui {
                 return *left == 0;
             }
             found.push((path.clone(), m.id));
+            // What the caller made of the root it was handed, to tell next
+            // frame whether its placeholder was declared the same way.
+            let delivered = shell_of(n);
+            let old = shells(self.me, m.id, |s| s.delivered.replace(delivered)).flatten();
+            if let Some(old) = old {
+                Self::retire_tree(old);
+            }
         }
         for (j, c) in n.children_mut().iter_mut().enumerate() {
             if *left == 0 {
@@ -224,10 +252,26 @@ impl Ui {
         };
         k.live = true;
         let nested = std::mem::take(&mut k.nested);
-        Self::retire_tree(std::mem::replace(n, tree));
-        if let Some(m) = &mut n.payload_mut().extras_mut().memo {
-            m.reused = true;
+        // The placeholder is the root as built, plus whatever the caller did
+        // to it this frame. Declared as last frame, the kept tree stands;
+        // otherwise the root takes this frame's declaration over the kept
+        // children and the subtree is laid out and walked again, not
+        // painted from a stale root.
+        let got = shell_of(n);
+        let same = shells(me, id, |s| s.delivered.as_ref() == Some(&got)).unwrap_or(false);
+        let mut tree = tree;
+        if same {
+            Self::retire_tree(got);
+            Self::retire_tree(std::mem::replace(n, tree));
+        } else {
+            n.swap_children(&mut tree);
+            Self::retire_tree(tree);
+            let old = shells(me, id, |s| s.delivered.replace(got)).flatten();
+            if let Some(old) = old {
+                Self::retire_tree(old);
+            }
         }
+        n.payload_mut().extras_mut().memo = Some(mui_scene::Memo { id, reused: same });
         found.push((path.to_vec(), id));
         for (rel, inner) in nested {
             let at: Vec<usize> = path.iter().chain(&rel).copied().collect();
@@ -235,8 +279,9 @@ impl Ui {
         }
     }
     /// Take every memo's styled subtree back out of the resolved tree,
-    /// innermost first, leaving placeholders for nested ones.
-    pub(super) fn capture(&mut self, mut root: El, found: &[(Vec<usize>, u64)]) {
+    /// innermost first, leaving placeholders for nested ones. What is left
+    /// is the tree automatic retention judges the next frame against.
+    pub(super) fn capture(&mut self, mut root: El, found: &[(Vec<usize>, u64)]) -> El {
         // Each root's nearest enclosing root.
         let parent = |p: &[usize]| {
             found
@@ -251,7 +296,13 @@ impl Ui {
         order.sort_by_key(|&i| std::cmp::Reverse(found[i].0.len()));
         for i in order {
             let (path, id) = &found[i];
-            let tree = std::mem::replace(node_at(&mut root, path), placeholder(*id));
+            // A nested memo's placeholder is declared as it was delivered:
+            // an outer memo reused next frame refills it unchanged.
+            let mark = shells(self.me, *id, |s| {
+                placeholder(*id, s.delivered.as_ref().unwrap_or(&s.built))
+            })
+            .unwrap_or_else(|| placeholder(*id, &mui_scene::block(0.0, 0.0)));
+            let tree = std::mem::replace(node_at(&mut root, path), mark);
             let nested = found
                 .iter()
                 .zip(&parents)
@@ -266,7 +317,7 @@ impl Ui {
                 }
             }
         }
-        Self::retire_tree(root);
+        root
     }
 }
 
@@ -280,6 +331,9 @@ thread_local! {
     /// probed per memo per frame. Move it onto `Ui` if `El` ever becomes
     /// `Send`, or if a host runs many `Ui`s on one thread.
     pub(super) static TREES: std::cell::RefCell<HashMap<(u64, u64), El>> =
+        std::cell::RefCell::new(HashMap::new());
+    /// Each kept memo's root declarations; see [`Shells`].
+    pub(super) static SHELLS: std::cell::RefCell<HashMap<(u64, u64), Shells>> =
         std::cell::RefCell::new(HashMap::new());
 }
 pub(super) static NEXT_UI: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -310,6 +364,29 @@ impl Ui {
                 Self::discard_tree(root);
             }
         }
+        let shells = SHELLS.try_with(|shells| {
+            let mut shells = shells.borrow_mut();
+            let keys: Vec<_> = shells
+                .keys()
+                .filter(|(ui, _)| *ui == self.me)
+                .copied()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| shells.remove(&key))
+                .collect::<Vec<_>>()
+        });
+        if let Ok(shells) = shells {
+            for s in shells {
+                Self::discard_tree(s.built);
+                if let Some(d) = s.delivered {
+                    Self::discard_tree(d);
+                }
+            }
+        }
+        let previous = super::retain::PREVIOUS.try_with(|p| p.borrow_mut().remove(&self.me));
+        if let Ok(Some((_, root))) = previous {
+            Self::discard_tree(root);
+        }
         mui_scene::clear_declaration_storage();
     }
 }
@@ -338,12 +415,60 @@ pub(super) struct Kept {
     pub(super) live: bool,
 }
 
+/// A memo's root declaration, without children, kept beside its tree in
+/// [`SHELLS`] (an `El` is not `Send`, so it cannot live on the `Ui`).
+pub(super) struct Shells {
+    /// As `build` returned it: what a reuse hands back for the caller to
+    /// declare on again.
+    pub(super) built: El,
+    /// As the caller last delivered it to a frame.
+    pub(super) delivered: Option<El>,
+}
+
+/// Run `f` on memo `key`'s shells, if it has any. `f` must not drop an `El`
+/// (destructors can re-enter the table): hand anything replaced back out.
+pub(super) fn shells<R>(me: u64, key: u64, f: impl FnOnce(&mut Shells) -> R) -> Option<R> {
+    SHELLS.with(|t| t.borrow_mut().get_mut(&(me, key)).map(f))
+}
+
+/// Replace (or with `None` remove) memo `key`'s shells, dropping the old
+/// ones outside the table borrow.
+pub(super) fn put_shells(me: u64, key: u64, new: Option<Shells>) {
+    let old = SHELLS.with(|t| {
+        let mut t = t.borrow_mut();
+        match new {
+            Some(s) => t.insert((me, key), s),
+            None => t.remove(&(me, key)),
+        }
+    });
+    if let Some(old) = old {
+        Ui::retire_tree(old.built);
+        if let Some(d) = old.delivered {
+            Ui::retire_tree(d);
+        }
+    }
+}
+
 /// What [`Ui::memo`] hands back for a subtree it kept: the frame puts the
 /// kept one in its place.
-pub(super) fn placeholder(id: u64) -> El {
-    let mut el = mui_scene::block(0.0, 0.0);
+pub(super) fn placeholder(id: u64, built: &El) -> El {
+    let mut el = built.clone();
     el.payload_mut().extras_mut().memo = Some(mui_scene::Memo { id, reused: true });
     el
+}
+
+/// `n` without its children or memo mark: the declaration a caller can
+/// change on a memo's root.
+pub(super) fn shell_of(n: &El) -> El {
+    let mut s = n.shell();
+    let element = s.payload_mut();
+    if let Some(extras) = element.extras.as_mut() {
+        extras.memo = None;
+        if **extras == mui_scene::Extras::default() {
+            element.extras = None;
+        }
+    }
+    s
 }
 
 /// The node at child-index `path` below `n`.
