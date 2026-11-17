@@ -832,6 +832,7 @@ impl Ui {
                 if let Some(old) = old {
                     Self::retire_tree(old);
                 }
+                super::memo::put_shells(me, *id, None);
                 ids.remove(&k.id);
             }
             live

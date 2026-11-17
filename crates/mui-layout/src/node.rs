@@ -300,6 +300,75 @@ impl<P> Node<P> {
             Kind::Leaf => &mut [],
         }
     }
+    /// This node with no children: the same kind and declaration, emptied.
+    /// Two shells compare equal when everything but the children does.
+    pub fn shell(&self) -> Self
+    where
+        P: Clone,
+    {
+        let kind = match &self.kind {
+            Kind::Leaf => Kind::Leaf,
+            Kind::Content(_) => Kind::Content(Vec::new()),
+            Kind::Branch { vertical, .. } => Kind::Branch {
+                vertical: *vertical,
+                children: Vec::new(),
+            },
+            Kind::Overlay(_) => Kind::Overlay(Vec::new()),
+            Kind::Grid { cols, .. } => Kind::Grid {
+                cols: *cols,
+                children: Vec::new(),
+            },
+            Kind::Fits(_) => Kind::Fits(Vec::new()),
+        };
+        Self {
+            id: self.id.clone(),
+            kind,
+            payload: self.payload.clone(),
+            gap: self.gap,
+            padding: self.padding,
+            pad: self.pad,
+            minimum: self.minimum,
+            width: self.width,
+            height: self.height,
+            grow: self.grow,
+            basis: self.basis,
+            shrink: self.shrink,
+            align: self.align,
+            align_self: self.align_self,
+            justify: self.justify,
+            anchor: self.anchor,
+            offset: self.offset,
+            scroll: self.scroll,
+            clip: self.clip,
+            scrolled: self.scrolled,
+            sticky: self.sticky,
+            float: self.float,
+            wrap: self.wrap,
+            span: self.span,
+            order: self.order,
+            rare: self.rare.clone(),
+        }
+    }
+    /// Move `from`'s children under this node, returning the ones this node
+    /// held. A leaf takes none and hands `from`'s back.
+    pub fn swap_children(&mut self, from: &mut Self) {
+        let mine = match &mut self.kind {
+            Kind::Branch { children, .. }
+            | Kind::Overlay(children)
+            | Kind::Content(children)
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => children,
+            Kind::Leaf => return,
+        };
+        match &mut from.kind {
+            Kind::Branch { children, .. }
+            | Kind::Overlay(children)
+            | Kind::Content(children)
+            | Kind::Grid { children, .. }
+            | Kind::Fits(children) => std::mem::swap(mine, children),
+            Kind::Leaf => {}
+        }
+    }
     /// Containers stretch; content centres. This is what `Align::Stretch`
     /// consults.
     pub fn is_container(&self) -> bool {

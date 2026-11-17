@@ -1007,7 +1007,9 @@ impl Ui {
             && self.cancelled.is_none()
             && self.ime_caret.is_none();
         if quiet
-            && memo.is_some_and(|(id, reused)| reused && previous_root == Some((id, offered)))
+            && memo.is_some_and(|(id, reused)| {
+                reused && previous_root == Some((id, offered)) && self.declared_as_delivered(&root, id)
+            })
             && let Some(scene) = self.scene.as_ref().map(Arc::clone)
         {
             let previous_blink = self.blink();

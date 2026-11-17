@@ -360,3 +360,34 @@ fn settled_root_memo_reuses_scene_but_configuration_and_input_resolve_again() {
         .is_err()
     );
 }
+
+/// What a caller declares on a reused memo's root lands on the kept
+/// subtree: a padding changed after reuse moves the children without a
+/// rebuild, and an unchanged one keeps the subtree reused.
+#[test]
+fn a_reused_memo_root_takes_the_callers_declaration() {
+    let mut ui = Ui::default();
+    let mut built = 0;
+    let frame = |ui: &mut Ui, pad: f64, built: &mut usize| {
+        let t = memo_tree(ui, 1, 50., built);
+        let mut t = t;
+        let panel = &mut t.children_mut()[1];
+        *panel = std::mem::replace(panel, block(0., 0.)).pad(pad);
+        let f = ui.frame(t, ROOM, PointerInput::default(), 0.016).unwrap();
+        let x = f.scene.surface("m.a").unwrap().frame.x;
+        let reused = f.scene.memos_at("m.a").any(|(_, reused)| reused);
+        (x, reused)
+    };
+    let (x0, _) = frame(&mut ui, 0., &mut built);
+    let (x1, reused) = frame(&mut ui, 0., &mut built);
+    assert_eq!((x1, built), (x0, 1));
+    assert!(reused, "an unchanged root keeps the subtree reused");
+    let (x2, _) = frame(&mut ui, 20., &mut built);
+    assert_eq!(built, 1, "a root declaration is not a rebuild");
+    assert_eq!(x2, x0 + 20., "the caller's padding reached the kept root");
+    let (x3, reused) = frame(&mut ui, 20., &mut built);
+    assert_eq!((x3, built), (x2, 1));
+    assert!(reused, "declared the same again, it is reused again");
+    let (x4, _) = frame(&mut ui, 0., &mut built);
+    assert_eq!((x4, built), (x0, 1), "and back");
+}
