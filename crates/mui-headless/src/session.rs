@@ -18,7 +18,7 @@ use crate::{Error, Scene};
 
 /// Where a pointer event lands.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Pos {
+pub enum Target {
     /// Logical units.
     Xy(f64, f64),
     /// The centre of the surface with this id, resolved when the event fires.
@@ -27,10 +27,10 @@ pub(crate) enum Pos {
     Origin(f64, f64),
 }
 
-/// One primitive input, due on a frame.
+/// One primitive input, as a host delivers it.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum Act {
-    Move(Pos),
+pub enum Event {
+    Move(Target),
     Down(Button),
     Up(Button),
     Wheel(f64, f64),
@@ -44,7 +44,7 @@ pub(crate) enum Act {
 pub(crate) struct Ev {
     /// The step (1-based) whose input carries this.
     pub frame: u64,
-    pub act: Act,
+    pub act: Event,
 }
 
 /// What one step did, owned so the `Ui` is free again.
@@ -62,9 +62,52 @@ pub struct Step {
 const MAX_SIDE: f64 = 16384.0;
 const MAX_AREA: f64 = 16_777_216.0;
 
+/// How a [`Session`] runs its scene. `Options::default()` is the scene's
+/// own size at scale 1, its own theme, 60 frames a second.
+#[derive(Clone, Copy, Debug)]
+pub struct Options {
+    /// Logical size; `None` is the scene's.
+    pub size: Option<(u32, u32)>,
+    /// Device scale: layout is logical, pixels are `size * scale`.
+    pub scale: f64,
+    /// Light or dark over the scene's own palette.
+    pub theme: Option<Mode>,
+    /// Steps a second of the virtual clock.
+    pub fps: u32,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            size: None,
+            scale: 1.0,
+            theme: None,
+            fps: 60,
+        }
+    }
+}
+
+/// One scene on the virtual clock: send it input, step it, look at its tree
+/// and its pixels. This is the CLI's engine, for a test harness to embed.
+///
+/// ```no_run
+/// use mui::prelude::*;
+/// use mui_headless::{Options, Scene, Session};
+///
+/// let mut on = false;
+/// let scene = Scene::new("bypass", (200, 80), Ui::default(), move |ui| {
+///     toggle(ui, "bypass", "Bypass", &mut on).el.into_el()
+/// });
+/// let mut s = Session::new(scene, Options::default()).unwrap();
+/// s.click("bypass").unwrap();
+/// s.settle(240).unwrap();
+/// let rgba = s.rgba().unwrap();
+/// assert_eq!(rgba.len(), 200 * 80 * 4);
+/// ```
 pub struct Session {
     ui: Ui,
-    build: Box<dyn FnMut(&mut Ui) -> El>,
+    build: crate::Build,
+    raster: Option<crate::Raster>,
     pub(crate) size: Size,
     pub(crate) scale: f64,
     pub(crate) fps: u32,
@@ -89,13 +132,16 @@ pub(crate) fn due(t: f64, fps: u32) -> u64 {
 }
 
 impl Session {
-    pub(crate) fn new(
-        scene: Scene,
-        size: Option<(u32, u32)>,
-        scale: f64,
-        theme: Option<Mode>,
-        fps: u32,
-    ) -> Result<Self, Error> {
+    /// Open `scene` and run its two warm-up frames (the first has no gesture
+    /// state; the second is what a host draws every frame), so an event
+    /// addressed by id has a scene to resolve against.
+    pub fn new(scene: Scene, opts: Options) -> Result<Self, Error> {
+        let Options {
+            size,
+            scale,
+            theme,
+            fps,
+        } = opts;
         if !(1..=crate::script::MAX_FPS).contains(&fps) || !(scale.is_finite() && scale > 0.0) {
             return Err(Error::new(format!(
                 "fps must be 1..={} and scale positive",
@@ -131,6 +177,7 @@ impl Session {
         let mut s = Self {
             ui,
             build,
+            raster: None,
             size: Size::new(f64::from(w), f64::from(h)),
             scale,
             fps,
@@ -153,6 +200,75 @@ impl Session {
             s.advance(Input::default(), 0.0)?;
         }
         Ok(s)
+    }
+
+    /// Queue `script`, its time 0 at the next step.
+    pub fn play(&mut self, script: &crate::Script) {
+        let now = self.frame;
+        self.push(script.events.iter().map(|e| Ev {
+            frame: e.frame + now,
+            act: e.act.clone(),
+        }));
+    }
+
+    /// Queue `event` for the next step. Two button changes never share a
+    /// step: a press and its release land on consecutive ones.
+    pub fn send(&mut self, event: Event) {
+        self.push([Ev {
+            frame: self.frame + 1,
+            act: event,
+        }]);
+    }
+
+    /// Whether queued input is still waiting for a step.
+    pub fn pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    /// A primary click at the centre of `id` as last laid out: move, press,
+    /// release, then one quiet step for the tree that reads the click.
+    pub fn click(&mut self, id: &str) -> Result<(), Error> {
+        for ev in [
+            Event::Move(Target::Key(id.to_owned())),
+            Event::Down(Button::Primary),
+            Event::Up(Button::Primary),
+        ] {
+            self.send(ev);
+        }
+        while self.pending() {
+            self.step()?;
+        }
+        self.step().map(drop)
+    }
+
+    /// Step until nothing animates and no input is queued, at most `max`
+    /// steps; whether it settled.
+    pub fn settle(&mut self, max: u32) -> Result<bool, Error> {
+        for _ in 0..max {
+            if !self.animating && !self.pending() {
+                return Ok(true);
+            }
+            self.step()?;
+        }
+        Ok(!self.animating && !self.pending())
+    }
+
+    /// The last frame, rasterised on the CPU at the session's scale:
+    /// straight RGBA, [`pixels`](Self::pixels) wide and high.
+    pub fn rgba(&mut self) -> Result<Vec<u8>, Error> {
+        let (w, h) = self.pixels();
+        let scene = self
+            .ui
+            .scene()
+            .ok_or_else(|| Error::new("the Ui has no scene yet"))?;
+        self.raster
+            .get_or_insert_with(|| crate::Raster::new(w, h))
+            .draw(scene, self.scale)
+    }
+
+    /// The `Ui`, to focus a node or read its state between steps.
+    pub fn ui_mut(&mut self) -> &mut Ui {
+        &mut self.ui
     }
 
     pub(crate) fn push(&mut self, events: impl IntoIterator<Item = Ev>) {
@@ -202,11 +318,11 @@ impl Session {
         )
     }
 
-    fn resolve(&self, p: &Pos) -> Result<Point, Error> {
+    fn resolve(&self, p: &Target) -> Result<Point, Error> {
         match p {
-            Pos::Xy(x, y) => Ok(Point::new(*x, *y)),
-            Pos::Origin(dx, dy) => Ok(Point::new(self.origin.x + dx, self.origin.y + dy)),
-            Pos::Key(k) => {
+            Target::Xy(x, y) => Ok(Point::new(*x, *y)),
+            Target::Origin(dx, dy) => Ok(Point::new(self.origin.x + dx, self.origin.y + dy)),
+            Target::Key(k) => {
                 let scene = self.scene()?;
                 let f = scene
                     .surface(k)
@@ -245,8 +361,8 @@ impl Session {
             // it: the second button change waits for the next step, and so
             // does a move after it, or a press would land where the next
             // gesture starts.
-            let button = matches!(ev.act, Act::Down(_) | Act::Up(_));
-            if changed && (button || matches!(ev.act, Act::Move(_))) {
+            let button = matches!(ev.act, Event::Down(_) | Event::Up(_));
+            if changed && (button || matches!(ev.act, Event::Move(_))) {
                 break;
             }
             changed |= button;
@@ -254,18 +370,18 @@ impl Session {
                 break;
             };
             match ev.act {
-                Act::Move(p) => self.pointer = Some(self.resolve(&p)?),
-                Act::Down(b) => {
+                Event::Move(p) => self.pointer = Some(self.resolve(&p)?),
+                Event::Down(b) => {
                     self.buttons = self.buttons.set(b, true);
                     self.origin = self.pointer.unwrap_or(self.origin);
                 }
-                Act::Up(b) => self.buttons = self.buttons.set(b, false),
-                Act::Wheel(dx, dy) => {
+                Event::Up(b) => self.buttons = self.buttons.set(b, false),
+                Event::Wheel(dx, dy) => {
                     input.wheel = Vec2::new(input.wheel.x + dx, input.wheel.y + dy);
                 }
-                Act::Key(k) => input.keys.push(k),
-                Act::Text(s) => input.text.push_str(&s),
-                Act::Mods(m) => self.mods = m,
+                Event::Key(k) => input.keys.push(k),
+                Event::Text(s) => input.text.push_str(&s),
+                Event::Mods(m) => self.mods = m,
             }
         }
         self.advance(input, 1.0 / f64::from(self.fps))?;
@@ -290,7 +406,7 @@ impl Session {
             buttons: self.buttons,
             mods: self.mods,
         };
-        let root = (self.build)(&mut self.ui);
+        let root = (self.build)(&mut self.ui, &input);
         let frame = self
             .ui
             .frame(root, Some(self.size), input, dt)

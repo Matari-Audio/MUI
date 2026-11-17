@@ -199,6 +199,19 @@ Overlays and tabs take a look (`mui::widgets`):
   them; `.show(..)` strings them. `tabs(ui, id, labels, &mut i)` is
   `Tabs::default().show(..)`, unchanged.
 
+`mui-headless` is a library as well as a CLI:
+
+- `Session::new(scene, Options { size, scale, theme, fps })` is public
+  (`Options::default()`: the scene's size, scale 1, 60 fps); it was
+  `pub(crate)` with positional arguments. New on `Session`: `send(Event)`,
+  `play(&Script)` (time 0 at the next step), `click(id)`, `settle(max)`,
+  `pending()`, `rgba()` (a `Raster` kept by the session) and `ui_mut()`.
+  `Event` and `Target` (were the private `Act` and `Pos`) are exported.
+- `Scene::with_input(name, size, ui, |ui, input| ..)`: the builder sees each
+  frame's `Input` before `Ui::frame`, for an editor that reads raw input.
+- `Raster` keeps its `mui::vello::Cache` across `draw` calls (it built a
+  fresh one per frame, re-interning every font).
+
 ## v0.4.1
 
 Breaking (by hand; `mui-migrate` has no rule for it):

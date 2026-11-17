@@ -26,6 +26,12 @@
 //! app --list-scenes
 //! ```
 //!
+//! A test harness embeds the same engine: [`Session::new`] opens a scene,
+//! [`Session::send`] / [`Session::click`] / [`Session::play`] queue input,
+//! [`Session::step`] and [`Session::settle`] advance the clock,
+//! [`Session::scene`] and [`tree::tree`] read what was resolved and
+//! [`Session::rgba`] rasterises it.
+//!
 //! See [`script`] for the event format, [`tree`](mod@tree) and [`trace`] for the output formats,
 //! and `AGENTS.md` at the repository root for the five-line version.
 //!
@@ -51,7 +57,7 @@ pub use render::{Raster, contact_sheet, write_png};
 pub use script::Script;
 /// The JSON type reports and trees are returned as.
 pub use serde_json::{self, Value};
-pub use session::{Session, Step};
+pub use session::{Event, Options, Session, Step, Target};
 
 /// Why a run failed. The message says what to change.
 #[derive(Debug)]
@@ -91,15 +97,29 @@ pub struct Scene {
     pub(crate) name: String,
     pub(crate) size: (u32, u32),
     pub(crate) ui: Ui,
-    pub(crate) build: Box<dyn FnMut(&mut Ui) -> El>,
+    pub(crate) build: Build,
 }
+
+/// A scene's tree builder, handed the frame's input before `Ui::frame` sees it.
+pub(crate) type Build = Box<dyn FnMut(&mut Ui, &Input) -> El>;
 
 impl Scene {
     pub fn new(
         name: impl Into<String>,
         size: (u32, u32),
         ui: Ui,
-        build: impl FnMut(&mut Ui) -> El + 'static,
+        mut build: impl FnMut(&mut Ui) -> El + 'static,
+    ) -> Self {
+        Self::with_input(name, size, ui, move |ui, _| build(ui))
+    }
+
+    /// A scene whose builder also sees each frame's [`Input`] first, as an
+    /// editor that reads raw input before building does in its host.
+    pub fn with_input(
+        name: impl Into<String>,
+        size: (u32, u32),
+        ui: Ui,
+        build: impl FnMut(&mut Ui, &Input) -> El + 'static,
     ) -> Self {
         Self {
             name: name.into(),

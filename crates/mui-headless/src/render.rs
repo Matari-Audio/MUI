@@ -18,6 +18,8 @@ pub struct Raster {
     pub h: u16,
     ctx: RenderContext,
     res: Resources,
+    /// Interned fonts and images: kept, so the hinted-outline cache survives.
+    cache: mui::vello::Cache,
 }
 
 impl Raster {
@@ -27,6 +29,7 @@ impl Raster {
             h,
             ctx: RenderContext::new(w, h),
             res: Resources::default(),
+            cache: mui::vello::Cache::default(),
         }
     }
 
@@ -37,7 +40,7 @@ impl Raster {
             &mut mui::vello::Cpu {
                 ctx: &mut self.ctx,
                 resources: &mut self.res,
-                cache: &mut mui::vello::Cache::default(),
+                cache: &mut self.cache,
             },
             scene,
             Affine::scale(scale),
