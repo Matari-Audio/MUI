@@ -344,13 +344,11 @@ pub fn clear_gpu_denials() -> std::io::Result<usize> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn denials_at(directory: &Path) -> std::io::Result<Vec<GpuDenial>> {
+    use std::collections::{BTreeMap, BTreeSet};
     let _registry = registry(directory)?;
-    let mut by: std::collections::BTreeMap<
-        String,
-        (std::collections::BTreeSet<u32>, std::time::SystemTime),
-    > = std::collections::BTreeMap::new();
+    let mut by: BTreeMap<String, (BTreeSet<u32>, std::time::SystemTime)> = BTreeMap::new();
     for d in unfinished(directory, None, None)? {
-        let (pids, since) = by.entry(d.identity).or_insert((Default::default(), d.at));
+        let (pids, since) = by.entry(d.identity).or_insert((BTreeSet::new(), d.at));
         pids.insert(d.pid);
         *since = (*since).max(d.at);
     }
