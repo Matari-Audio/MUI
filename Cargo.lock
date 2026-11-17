@@ -1896,7 +1896,6 @@ dependencies = [
 [[package]]
 name = "matari-audio-drag-and-drop"
 version = "0.1.6"
-source = "git+https://github.com/Matari-Audio/matari-audio-drag-and-drop?rev=cdf658f67ba5a17b7370dd0577a347ab41a88978#cdf658f67ba5a17b7370dd0577a347ab41a88978"
 dependencies = [
  "libc",
  "objc2 0.6.4",
@@ -5372,3 +5371,55 @@ dependencies = [
  "syn 3.0.5",
  "winnow",
 ]
+
+[[patch.unused]]
+name = "derpcat-access"
+version = "0.1.0"
+
+[[patch.unused]]
+name = "moose"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-au"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-clap"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-core"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-derive"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-egui"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-font"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-params"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-standalone"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-test"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-utils"
+version = "7.0.0"
+
+[[patch.unused]]
+name = "moose-vst3"
+version = "7.0.0"
