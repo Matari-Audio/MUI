@@ -171,6 +171,34 @@ Behaviour:
 - `Ui::text_run` outlines at 0.1 px tolerance (was 0.05) and keeps up to
   2048 runs (was 512).
 
+Overlays and tabs take a look (`mui::widgets`):
+
+- `Overlay` (new, in the prelude) is `popover`, `menu`, `select` and
+  `dialog` with every look a slot: `.frame(&f)` replaces the card (fill,
+  radius, padding and shadow; nothing is merged under it), `.row(&f)` dresses
+  a `MenuRow { label, index, selected }`, `.head(&f)` a `SelectHead { label,
+  open }`, `.scrim(&f)` the dialog's window layer. Placement is `.area`,
+  `.fallback`, `.gap`, `.match_width`, `.min_w` (was a fixed 140) and
+  `.row_h` (was a fixed 32); `.persistent()` turns off the outside-press and
+  Escape close; `.weld()` opens a select's list over its own field, headed by
+  the open head. A face is only the look: MUI adds the id, focus, role, name
+  and cursor and reads the activation. The free functions are
+  `Overlay::default()` and keep their signatures.
+- `Overlay::select(ui, id, options, &mut selected, &mut open)` takes the
+  open state from the caller (one slot per panel, say);
+  `select(ui, id, options, &mut selected)` still keeps it in the `Ui`.
+- `select`'s head is one pressable field (label and drop-down arrow) where
+  it was a `button` `Control` beside an arrow icon: a test that reads the
+  button's look, or `.variant`/`.size` on it, must restyle through
+  `.head(&f)`. Its id is still `id`; the list is still `"{id}/list"`, rows
+  `"{id}/list/{i}"`.
+- `Tabs` (new) is `tabs` with `.vertical()` (Up/Down step it, the strip is a
+  column) and `.face(&f)` dressing a `Tab { label, index, selected }`, so an
+  icon sidebar is a tab strip. `.items(..)` returns the tabs loose
+  (`Response<bool, Vec<El>>`) for a sidebar that puts other rows between
+  them; `.show(..)` strings them. `tabs(ui, id, labels, &mut i)` is
+  `Tabs::default().show(..)`, unchanged.
+
 ## v0.4.1
 
 Breaking (by hand; `mui-migrate` has no rule for it):

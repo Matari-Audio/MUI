@@ -10,9 +10,150 @@ use crate::Ui;
 use crate::widgets::presets::card;
 use crate::widgets::{ListEvent, ListItem, ListOptions, ListState, Response, uniform_list};
 
-/// A row of `labels`, one selected. A press picks a tab; Left and Right on a
-/// focused tab move the selection and the focus with it. `changed` is whether
-/// `*selected` moved this frame.
+/// One tab, for [`Tabs::face`] to dress.
+#[derive(Clone, Copy, Debug)]
+pub struct Tab<'a> {
+    pub label: &'a str,
+    pub index: usize,
+    pub selected: bool,
+}
+
+/// A strip of tabs, one selected: a press picks one, and the arrow keys
+/// along the strip (Left/Right, or Up/Down when [`vertical`](Self::vertical))
+/// move the selection and the focus with it. The face is the caller's -- an
+/// icon and a label, a pill, anything -- and MUI adds the id (`"{id}/{i}"`),
+/// focus, the role, the name and the cursor.
+///
+/// [`items`](Self::items) hands the tabs back loose, for a sidebar that
+/// puts other things between them; [`show`](Self::show) strings them in a
+/// row or a column.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let mut page = 0;
+/// let face = |t: Tab<'_>| row![icon(sym::SETTINGS), text(t.label)].gap(Xs);
+/// let side = Tabs::default().vertical().face(&face).show(&mut ui, "side", &["Audio", "MIDI"], &mut page);
+/// assert!(!side.changed);
+/// ```
+#[derive(Clone, Copy)]
+pub struct Tabs<'a> {
+    vertical: bool,
+    face: &'a dyn for<'r> Fn(Tab<'r>) -> El,
+}
+
+impl Default for Tabs<'_> {
+    fn default() -> Self {
+        Self {
+            vertical: false,
+            face: &tab_face,
+        }
+    }
+}
+
+impl<'a> Tabs<'a> {
+    /// A column of tabs, stepped with Up and Down.
+    pub fn vertical(mut self) -> Self {
+        self.vertical = true;
+        self
+    }
+    /// A tab's face.
+    pub fn face(mut self, f: &'a dyn for<'r> Fn(Tab<'r>) -> El) -> Self {
+        self.face = f;
+        self
+    }
+
+    /// The tabs, one element each, in order. `changed` is whether
+    /// `*selected` moved this frame.
+    pub fn items(
+        &self,
+        ui: &mut Ui,
+        id: impl Into<Id>,
+        labels: &[&str],
+        selected: &mut usize,
+    ) -> Response<bool, Vec<El>> {
+        let id: Id = id.into();
+        let before = *selected;
+        let (back, on) = if self.vertical {
+            (Key::Up, Key::Down)
+        } else {
+            (Key::Left, Key::Right)
+        };
+        for i in 0..labels.len() {
+            if ui.get(id.slot(i)).activated() {
+                *selected = i;
+            }
+            let step: isize = ui.keys(id.slot(i)).iter().fold(0, |d, k| match k.key {
+                k if k == on => d + 1,
+                k if k == back => d - 1,
+                _ => d,
+            });
+            if step != 0 {
+                *selected = (i as isize + step).rem_euclid(labels.len() as isize) as usize;
+                // Focus moves on, so the tab it lands on would read these keys again.
+                ui.focus(id.slot(*selected));
+                break;
+            }
+        }
+        let el = labels
+            .iter()
+            .enumerate()
+            .map(|(index, &label)| {
+                let selected = index == *selected;
+                (self.face)(Tab {
+                    label,
+                    index,
+                    selected,
+                })
+                .cursor(Cursor::Hand)
+                .a11y(A11y::Toggle { on: selected })
+                .named(label)
+                .focusable()
+                .id(id.slot(index))
+            })
+            .collect();
+        Response {
+            el,
+            changed: *selected != before,
+        }
+    }
+
+    /// The tabs in a row, or a column when vertical, as one group `id`.
+    pub fn show(
+        &self,
+        ui: &mut Ui,
+        id: impl Into<Id>,
+        labels: &[&str],
+        selected: &mut usize,
+    ) -> Response<bool, El> {
+        let id: Id = id.into();
+        let Response { el, changed } = self.items(ui, id.clone(), labels, selected);
+        let strip = if self.vertical { col(el) } else { row(el) };
+        Response {
+            el: strip.gap(Xs).a11y(A11y::Group).id(id),
+            changed,
+        }
+    }
+}
+
+/// MUI's tab: the label, the selected one in the accent on a field.
+fn tab_face(t: Tab<'_>) -> El {
+    let ink = if t.selected { Role::Primary } else { Role::Dim };
+    let tab = row([text(t.label).fill(ink)])
+        .h(32.0)
+        .align(Align::Center)
+        .pad((12.0, 0.0))
+        .radius(6.0)
+        .on(State::Hover, |s| s.fill(Role::Field))
+        .on(State::FocusVisible, |s| s.fill(Role::Field));
+    if t.selected {
+        tab.fill(Role::Field)
+    } else {
+        tab
+    }
+}
+
+/// A row of `labels` in MUI's look, one selected: [`Tabs::show`].
 ///
 /// ```
 /// use mui::prelude::*;
@@ -27,48 +168,7 @@ pub fn tabs(
     labels: &[&str],
     selected: &mut usize,
 ) -> Response<bool, El> {
-    let id: Id = id.into();
-    let before = *selected;
-    let key = |i: usize| Id::runtime(&format!("{}/{i}", id.as_str()));
-    for i in 0..labels.len() {
-        if ui.get(key(i).as_str()).activated() {
-            *selected = i;
-        }
-        let step: isize = ui.keys(key(i)).iter().fold(0, |d, k| match k.key {
-            Key::Right => d + 1,
-            Key::Left => d - 1,
-            _ => d,
-        });
-        if step != 0 {
-            *selected = (i as isize + step).rem_euclid(labels.len() as isize) as usize;
-            // Focus moves on, so the tab it lands on would read these keys again.
-            ui.focus(key(*selected));
-            break;
-        }
-    }
-    let row_el = row(labels.iter().enumerate().map(|(i, label)| {
-        let on = i == *selected;
-        let tab = row([text(*label).fill(if on { Role::Primary } else { Role::Dim })])
-            .h(32.0)
-            .align(Align::Center)
-            .pad((12.0, 0.0))
-            .radius(6.0)
-            .on(State::Hover, |s| s.fill(Role::Field))
-            .on(State::FocusVisible, |s| s.fill(Role::Field))
-            .cursor(Cursor::Hand)
-            .a11y(A11y::Toggle { on })
-            .named(*label)
-            .focusable()
-            .id(key(i));
-        if on { tab.fill(Role::Field) } else { tab }
-    }))
-    .gap(Xs)
-    .a11y(A11y::Group)
-    .id(id);
-    Response {
-        el: row_el,
-        changed: *selected != before,
-    }
+    Tabs::default().show(ui, id, labels, selected)
 }
 
 /// How long a toast stays up, in seconds.
