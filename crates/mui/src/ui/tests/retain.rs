@@ -42,18 +42,30 @@ fn app(ui: &mut Ui, s: &mut App, step: usize) -> El {
         .id(format!("item{i}"))
     });
     let clicks = s.clicks;
+    // A memoised page inside a memoised panel, inside the shell's retained
+    // subtree: what a plug-in's editor nests.
     let panel = ui.memo("panel", clicks as u64 / 2, |ui| {
         let ok = button(ui, "ok", "Ok");
-        row([ok.into_el(), text(format!("{clicks} clicks"))]).gap(4.)
+        let page = ui.memo("page", clicks as u64 / 3, |_| {
+            col([
+                text(format!("page {}", clicks / 3)),
+                block(30., 8.).fill(Role::Raised),
+            ])
+            .id("page")
+        });
+        row([ok.into_el(), page, text(format!("{clicks} clicks"))]).gap(4.)
     });
-    col([
+    let list = col(items.collect::<Vec<_>>())
+        .size(200., 60.)
+        .scroll()
+        .id("list");
+    // Everything under one shell, and the list two retained levels down.
+    col([col([
         col(rows).gap(4.),
-        panel,
-        col(items.collect::<Vec<_>>())
-            .size(200., 60.)
-            .scroll()
-            .id("list"),
+        row([text("panel"), panel, block(10., 10.)]).gap(4.),
+        col([text("list"), list]),
     ])
+    .id("shell")])
     .align(Align::Start)
 }
 
