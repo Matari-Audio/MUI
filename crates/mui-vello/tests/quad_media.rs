@@ -208,11 +208,12 @@ const TEXT: Limit = Limit { max: 2, mean: 0.03 };
 /// Glyphs drawn from outlines on both sides (turned, or past the atlas):
 /// exact box-filter area of polygons flattened at 0.1 px against
 /// `vello_cpu`'s 0.25 px, as `path-turned` in `quad_paths`; at 1x and 1.5x
-/// the title comes from both atlases, as `TEXT`. Not yet measured: set from
-/// `path-turned`'s curved edges; tighten once CI prints the PIXELS line.
+/// the title comes from both atlases, as `TEXT`. Measured on RADV: max 46,
+/// 46, 58 and mean 0.092, 0.096, 0.088 at 1x, 1.5x and 2x, every difference
+/// on a glyph edge (the image is mostly edges, hence the mean).
 const TURNED: Limit = Limit {
     max: 80,
-    mean: 0.05,
+    mean: 0.12,
 };
 /// The same, for the case with a variable face, unhinted runs and combining
 /// marks. DX12 on the WARP software adapter measured max 3 at 1x and 4 at 2x

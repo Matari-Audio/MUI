@@ -271,7 +271,8 @@ pub fn instance_buffer(device: &wgpu::Device, count: u64) -> wgpu::Buffer {
 
 impl QuadRenderer {
     /// Bring the atlas texture up to date with what the frame rasterised:
-    /// grown by a page, and each new or evicted cell written.
+    /// grown by a page, zeroed after a flush, and each new or evicted cell
+    /// written.
     pub(super) fn upload_glyphs(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         let atlas = &mut self.cpu.atlas;
         let before = atlas.rasterised;
@@ -279,17 +280,19 @@ impl QuadRenderer {
         let side = u32::from(atlas.side());
         let layers = atlas_layers(atlas.pages());
         let grow = layers > self.atlas.depth_or_array_layers();
-        if grow {
+        if atlas.flushed || grow {
             let next = atlas_texture(device, side, layers);
-            // The old pages, copied before this frame's cells land.
-            let mut encoder =
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            encoder.copy_texture_to_texture(
-                self.atlas.as_image_copy(),
-                next.as_image_copy(),
-                self.atlas.size(),
-            );
-            queue.submit([encoder.finish()]);
+            if !atlas.flushed {
+                // The old pages, copied before this frame's cells land.
+                let mut encoder =
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+                encoder.copy_texture_to_texture(
+                    self.atlas.as_image_copy(),
+                    next.as_image_copy(),
+                    self.atlas.size(),
+                );
+                queue.submit([encoder.finish()]);
+            }
             self.atlas = next;
             self.bind = view_group(
                 device,

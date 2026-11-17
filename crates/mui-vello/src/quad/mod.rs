@@ -63,6 +63,9 @@ pub enum Reason {
     /// A glyph run with a bitmap or colour glyph in it (found when drawn,
     /// not by [`classify`]).
     Text,
+    /// A glyph the atlas takes found it full: the frame empties the atlas
+    /// and draws again, so a caller never sees this (found when drawn).
+    GlyphBudget,
     /// An image paint on a glyph run.
     Image,
     /// An image larger than the device's largest texture (found when
@@ -95,8 +98,9 @@ pub enum Reason {
 }
 
 impl Reason {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::Text,
+        Self::GlyphBudget,
         Self::Image,
         Self::ImageSize,
         Self::Vector,
@@ -288,8 +292,9 @@ impl QuadRenderer {
 
     /// A pass whose glyph atlas holds at most `budget` bytes: square
     /// single-channel pages of up to 1024 pixels, as many as fit, at least
-    /// one. Glyphs unused for 64 frames are evicted; a glyph with no room left
-    /// is drawn from its outline.
+    /// one. Glyphs unused for 64 frames are evicted; a frame that needs more
+    /// than fits empties the atlas and rasterises again, and a glyph that
+    /// still has no room is drawn from its outline.
     pub fn with_atlas_budget(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
