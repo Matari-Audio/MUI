@@ -41,10 +41,6 @@ fn scene(root: El, font: Option<Font>) -> ResolvedScene {
     mui_scene::resolve(&spec).expect("resolves")
 }
 
-fn hack() -> Option<Font> {
-    Some(Font::new(epaint_default_fonts::HACK_REGULAR).expect("font"))
-}
-
 fn star(s: Size) -> Path {
     Path::default()
         .move_to(Point::new(s.width / 2., 0.))
@@ -87,14 +83,6 @@ fn refused() -> Vec<(&'static str, ResolvedScene, Reason)> {
             "bitmap glyph",
             scene(text("\u{E000}").text_size(32.).at(20., 20.), Some(bitmap)),
             Reason::Text,
-        ),
-        (
-            "rotated text",
-            scene(
-                text("turned").text_size(14.).rotation(0.3).at(20., 40.),
-                hack(),
-            ),
-            Reason::TextTransform,
         ),
         (
             "nested path clip",
@@ -247,14 +235,16 @@ fn consecutive_refused_frames_upload_their_damage() {
         Budget::default(),
     ))
     .expect("renderer");
+    let vector = refused().swap_remove(0).1;
+    assert_eq!(classify(&vector.paint).unsupported(Reason::Vector), 1);
     let turned = |x: f64| {
-        scene(
-            stack![
-                text("turned").text_size(14.).rotation(0.3).at(20., 40.),
-                block(10., 10.).fill(Color::srgb(0., 0., 1.)).at(x, 90.),
-            ],
-            hack(),
-        )
+        let mut s = scene(
+            block(10., 10.).fill(Color::srgb(0., 0., 1.)).at(x, 90.),
+            None,
+        );
+        // The refused vector entry first, so both frames fall back.
+        s.paint.splice(0..0, vector.paint.iter().cloned());
+        s
     };
     r.render(&turned(10.), Affine::IDENTITY, &view).unwrap();
     let stats = r.render(&turned(30.), Affine::IDENTITY, &view).unwrap();

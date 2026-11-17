@@ -15,7 +15,6 @@ compile_error!(
 );
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
-use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -44,7 +43,9 @@ use baseview::{
     ScrollDelta, Window, WindowContext, WindowEvent, WindowHandler, WindowSettings, WindowSize,
 };
 pub use drag::DragQueueError;
-use keyboard_types::{Key as HostKey, KeyState, KeyboardEvent, Modifiers, NamedKey};
+use keyboard_types::KeyboardEvent;
+#[cfg(test)]
+use keyboard_types::Modifiers;
 /// Drag images and protocol lifecycle values shared by product editors.
 pub use matari_audio_drag_and_drop::{
     DragImage, DragPreview, FailureStage, LinuxOutcome, Outcome, PreviewImageError, PreviewStatus,
@@ -52,11 +53,12 @@ pub use matari_audio_drag_and_drop::{
 };
 /// What a [`KeyHook`] is handed.
 pub use mui::host::KeyEvent;
-use mui::host::{Driver, Modifier, NativeKey, Wheel};
+use mui::host::{Driver, Wheel};
 pub use mui::host::{Shared, View, lock};
-use mui::prelude::{Button, Cursor, Key, Mods, Point};
+use mui::prelude::{Button, Mods, Point};
 use mui::vello::host::{FailureClass, Frame, GpuInit, Host, Retry, target_size};
 use mui::vello::kurbo::Affine;
+use native::{key_event, mods, mouse_button, native_cursor, native_ime};
 use native_worker::build;
 pub use policies::{WheelAcceleration, WheelPolicy};
 #[cfg(target_os = "linux")]
@@ -1406,74 +1408,6 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
         let status = guard(&mut h, |h| h.on_event_inner(&event)).unwrap_or(EventStatus::Ignored);
         self.drain(&mut h);
         status
-    }
-}
-
-/// Scene geometry is in UI points; baseview's IME contract uses client pixels.
-fn native_ime(config: mui::host::ImeConfiguration, scale: f64) -> baseview::ImeConfiguration {
-    let config = native::ime_configuration(config, scale);
-    baseview::ImeConfiguration {
-        id: config.id,
-        position: PhysicalPosition::new(config.area.0.x, config.area.0.y),
-        size: baseview::dpi::PhysicalSize::new(config.area.1.width, config.area.1.height),
-        text: config.text,
-        selection: config.selection,
-        marked: config.marked,
-    }
-}
-
-/// A baseview key as `mui::host` names it.
-fn key_event(key: &KeyboardEvent) -> KeyEvent {
-    let mut code = DefaultHasher::new();
-    key.code.hash(&mut code);
-    KeyEvent {
-        code: code.finish(),
-        key: match &key.key {
-            HostKey::Character(s) => NativeKey::Text(s.clone()),
-            HostKey::Named(NamedKey::Shift) => NativeKey::Modifier(Modifier::Shift),
-            HostKey::Named(NamedKey::Control) => NativeKey::Modifier(Modifier::Ctrl),
-            HostKey::Named(NamedKey::Alt | NamedKey::AltGraph) => {
-                NativeKey::Modifier(Modifier::Alt)
-            }
-            HostKey::Named(NamedKey::Meta) => NativeKey::Modifier(Modifier::Cmd),
-            // keyboard-types prints the W3C name `Key::from_name` reads.
-            HostKey::Named(other) => {
-                Key::from_fmt(format_args!("{other}")).map_or(NativeKey::Other, NativeKey::Named)
-            }
-        },
-        down: key.state == KeyState::Down,
-        mods: mods(key.modifiers),
-    }
-}
-
-const fn mouse_button(b: MouseButton) -> Option<Button> {
-    match b {
-        MouseButton::Left => Some(Button::Primary),
-        MouseButton::Right => Some(Button::Secondary),
-        MouseButton::Middle => Some(Button::Middle),
-        _ => None,
-    }
-}
-
-const fn mods(m: Modifiers) -> Mods {
-    Mods {
-        shift: m.contains(Modifiers::SHIFT),
-        ctrl: m.contains(Modifiers::CONTROL),
-        alt: m.contains(Modifiers::ALT),
-        cmd: m.contains(Modifiers::META),
-    }
-}
-
-const fn native_cursor(cursor: Cursor) -> MouseCursor {
-    match cursor {
-        Cursor::Arrow => MouseCursor::Default,
-        Cursor::Hand | Cursor::Grab => MouseCursor::Hand,
-        Cursor::Grabbing => MouseCursor::HandGrabbing,
-        Cursor::Text => MouseCursor::Text,
-        Cursor::ResizeH => MouseCursor::EwResize,
-        Cursor::ResizeV => MouseCursor::NsResize,
-        Cursor::Crosshair => MouseCursor::Crosshair,
-        Cursor::Forbidden => MouseCursor::NotAllowed,
     }
 }
 

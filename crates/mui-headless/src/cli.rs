@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::render::{Raster, contact_sheet, write_png};
 use crate::script::Script;
-use crate::session::{Session, Step};
+use crate::session::{Options, Session, Step};
 use crate::trace::Tracer;
 use crate::tree::{r4, tree};
 use crate::{Error, Scene};
@@ -216,12 +216,14 @@ pub fn run(mut scenes: Vec<Scene>, args: &[String]) -> Result<Value, Error> {
     };
     let mut s = Session::new(
         scenes.swap_remove(at_scene),
-        a.size,
-        a.scale.unwrap_or(1.0),
-        a.theme,
-        fps,
+        Options {
+            size: a.size,
+            scale: a.scale.unwrap_or(1.0),
+            theme: a.theme,
+            fps,
+        },
     )?;
-    s.push(script.events.iter().cloned());
+    s.play(&script);
 
     let to_frame = |t: f64| (t.max(0.0) * f64::from(fps)).round() as u64;
     let end = match &a.at {

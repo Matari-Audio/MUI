@@ -28,7 +28,7 @@ use mui::prelude::*;
 use serde_json::Value;
 
 use crate::Error;
-use crate::session::{Act, Ev, Pos, due};
+use crate::session::{Ev, Event, Target, due};
 
 /// A compiled script.
 pub struct Script {
@@ -50,14 +50,14 @@ fn num(e: &Value, k: &str, d: f64) -> Result<f64, Error> {
     }
 }
 
-fn target(e: &Value) -> Result<Option<Pos>, Error> {
+fn target(e: &Value) -> Result<Option<Target>, Error> {
     if let Some(k) = e.get("key").and_then(Value::as_str)
         && !is_key_event(e)
     {
-        return Ok(Some(Pos::Key(k.to_owned())));
+        return Ok(Some(Target::Key(k.to_owned())));
     }
     match (e.get("x"), e.get("y")) {
-        (Some(_), Some(_)) => Ok(Some(Pos::Xy(num(e, "x", 0.0)?, num(e, "y", 0.0)?))),
+        (Some(_), Some(_)) => Ok(Some(Target::Xy(num(e, "x", 0.0)?, num(e, "y", 0.0)?))),
         (None, None) => Ok(None),
         _ => Err(Error::new("a target needs both 'x' and 'y'")),
     }
@@ -135,25 +135,25 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
     let m = mods(e);
     let to = target(e)?;
     let mut out: Vec<Ev> = Vec::new();
-    let mut ev = |frame: u64, act: Act| out.push(Ev { frame, act });
+    let mut ev = |frame: u64, act: Event| out.push(Ev { frame, act });
     let mut done = t;
     match ty {
         "move" => {
             let p = to.ok_or_else(|| Error::new("'move' needs a target"))?;
-            ev(f0, Act::Move(p));
+            ev(f0, Event::Move(p));
         }
         "down" | "up" => {
             let b = button(e)?;
             if let Some(p) = to {
-                ev(f0, Act::Move(p));
+                ev(f0, Event::Move(p));
             }
-            ev(f0, Act::Mods(m));
+            ev(f0, Event::Mods(m));
             ev(
                 f0,
                 if ty == "down" {
-                    Act::Down(b)
+                    Event::Down(b)
                 } else {
-                    Act::Up(b)
+                    Event::Up(b)
                 },
             );
         }
@@ -166,12 +166,12 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
             for n in 0..presses {
                 let at = f0 + gap * n;
                 if let Some(p) = &to {
-                    ev(at, Act::Move(p.clone()));
+                    ev(at, Event::Move(p.clone()));
                 }
-                ev(at, Act::Mods(m));
-                ev(at, Act::Down(b));
-                ev(at + hold, Act::Up(b));
-                ev(at + hold, Act::Mods(Mods::default()));
+                ev(at, Event::Mods(m));
+                ev(at, Event::Down(b));
+                ev(at + hold, Event::Up(b));
+                ev(at + hold, Event::Mods(Mods::default()));
             }
             done = t + (gap * (presses - 1) + hold) as f64 * frame_secs;
         }
@@ -180,27 +180,27 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
             let (dx, dy) = (num(e, "dx", 0.0)?, num(e, "dy", 0.0)?);
             let steps = frames(num(e, "dur", 0.3)?, fps, 1)?;
             if let Some(p) = to {
-                ev(f0, Act::Move(p));
+                ev(f0, Event::Move(p));
             }
-            ev(f0, Act::Mods(m));
-            ev(f0, Act::Down(b));
+            ev(f0, Event::Mods(m));
+            ev(f0, Event::Down(b));
             for k in 1..=steps {
                 let x = k as f64 / steps as f64;
                 // Smoothstep: the hand starts and stops gently.
                 let f = x * x * (3.0 - 2.0 * x);
-                ev(f0 + k, Act::Move(Pos::Origin(dx * f, dy * f)));
+                ev(f0 + k, Event::Move(Target::Origin(dx * f, dy * f)));
             }
             // One frame after the last move, so the release sees the pointer
             // where the drag ended.
-            ev(f0 + steps + 1, Act::Up(b));
-            ev(f0 + steps + 1, Act::Mods(Mods::default()));
+            ev(f0 + steps + 1, Event::Up(b));
+            ev(f0 + steps + 1, Event::Mods(Mods::default()));
             done = t + (steps + 1) as f64 * frame_secs;
         }
         "wheel" => {
             if let Some(p) = to {
-                ev(f0, Act::Move(p));
+                ev(f0, Event::Move(p));
             }
-            ev(f0, Act::Wheel(num(e, "dx", 0.0)?, num(e, "dy", 0.0)?));
+            ev(f0, Event::Wheel(num(e, "dx", 0.0)?, num(e, "dy", 0.0)?));
         }
         "key" => {
             let name = e
@@ -209,12 +209,12 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::new("'key' needs a 'name'"))?;
             let k = key(name)?;
-            ev(f0, Act::Key(KeyPress { key: k, mods: m }));
+            ev(f0, Event::Key(KeyPress { key: k, mods: m }));
             // A host sends printable keys as text too.
             if !(m.ctrl || m.cmd) {
                 match k {
-                    Key::Char(c) => ev(f0, Act::Text(c.to_string())),
-                    Key::Space => ev(f0, Act::Text(" ".into())),
+                    Key::Char(c) => ev(f0, Event::Text(c.to_string())),
+                    Key::Space => ev(f0, Event::Text(" ".into())),
                     _ => {}
                 }
             }
@@ -224,7 +224,7 @@ fn compile(e: &Value, ty: &str, t: f64, fps: u32) -> Result<(Vec<Ev>, f64), Erro
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or_else(|| Error::new("'text' needs a 'text' string"))?;
-            ev(f0, Act::Text(text.to_owned()));
+            ev(f0, Event::Text(text.to_owned()));
         }
         other => {
             return Err(Error::new(format!(
@@ -282,7 +282,7 @@ impl Script {
                     let (events, end) = compile(e, ty, t, fps).map_err(|x| at(x.to_string()))?;
                     // One hand: a press before the last release would land
                     // while that button is still held.
-                    let first_down = events.iter().find(|v| matches!(v.act, Act::Down(_)));
+                    let first_down = events.iter().find(|v| matches!(v.act, Event::Down(_)));
                     if let Some(d) = first_down
                         && d.frame < released
                     {
@@ -292,7 +292,7 @@ impl Script {
                             d.frame
                         )));
                     }
-                    let up = events.iter().filter(|v| matches!(v.act, Act::Up(_)));
+                    let up = events.iter().filter(|v| matches!(v.act, Event::Up(_)));
                     released = up.map(|v| v.frame).fold(released, u64::max);
                     s.events.extend(events);
                     done = end;

@@ -4,8 +4,14 @@
 //! draws every glyph as a whole-pixel box that reads its cell 1:1 and
 //! multiplies the entry's paint by it. A steady frame finds every glyph in
 //! the atlas, so it rasterises and uploads nothing.
+//!
+//! A glyph the atlas cannot take -- under a rotation, shear or non-uniform
+//! scale, larger than [`MAX_GLYPH_PX`](super::build::MAX_GLYPH_PX), or with
+//! no room left in the atlas -- glifo hands over as an outline, and it is drawn as a
+//! path record (see [`super::path`]), exact at any angle and size.
 
-use super::build::{Instance, SHAPE_GLYPH, code};
+use super::build::{Instance, SHAPE_GLYPH, SHAPE_PATH, code};
+use super::path::{self, Store};
 use crate::Cache;
 use crate::kurbo::{Affine, BezPath, Rect, Shape as _};
 use glifo::atlas::{
@@ -20,7 +26,10 @@ use vello_common::peniko::color::{AlphaColor, Srgb, palette::css::BLACK};
 pub enum Failure {
     /// A bitmap or colour glyph: not a coverage mask.
     Colour,
-    /// The atlas is out of room.
+    /// An outline the path store refused.
+    Path(path::Fail),
+    /// A glyph the atlas takes found no room left: the frame empties the
+    /// atlas and draws again (see [`Atlas::flush`]).
     Full,
 }
 
@@ -44,7 +53,8 @@ pub struct Atlas {
     /// What [`Atlas::rasterise`] left for the GPU, cleared each frame.
     pub uploads: Vec<Upload>,
     pub bytes: Vec<u8>,
-    /// The atlas was emptied: every page must start transparent.
+    /// The atlas was emptied this frame: every page must start transparent,
+    /// and a glyph still without room is drawn from its outline.
     pub flushed: bool,
     /// Glyph cells rasterised, ever: what a steady frame must not add to.
     pub rasterised: u64,
@@ -89,8 +99,8 @@ impl Atlas {
         self.prep.maintain();
     }
 
-    /// Empty the atlas: what a frame does when it ran out of room, before it
-    /// tries again with every page free.
+    /// Empty the atlas: what a frame does when it ran out of room, before
+    /// it tries again with every page free.
     pub fn flush(&mut self) {
         self.glyphs = atlas();
         self.cells = ImageCache::new_with_config(self.config);
@@ -102,14 +112,28 @@ impl Atlas {
     pub fn draw(
         &mut self,
         cache: &mut Cache,
+        paths: &mut Store,
         text: &mui_scene::Text,
         xf: Affine,
         template: &Instance,
         out: &mut Vec<Instance>,
     ) -> Result<usize, Failure> {
+        // A run the atlas takes (upright, uniform scale, not oversized) that
+        // finds it full empties it and draws again from hinted masks: the
+        // same pixels. Only once emptied, or for a run no atlas takes, are
+        // glyphs drawn from their outlines.
+        let [a, b, c, d, ..] = xf.as_coeffs();
+        let uniform = a > 0.
+            && (a - d).abs() <= NEARLY_ZERO
+            && b.abs() <= NEARLY_ZERO
+            && c.abs() <= NEARLY_ZERO;
+        let atlas_run = uniform && text.size * a as f32 <= super::build::MAX_GLYPH_PX;
         let mut sink = Sink {
             template,
             out,
+            paths,
+            xf,
+            flush_first: atlas_run && !self.flushed,
             count: 0,
             transform: Affine::IDENTITY,
             paint_transform: Affine::IDENTITY,
@@ -238,6 +262,13 @@ fn mask(
 struct Sink<'a> {
     template: &'a Instance,
     out: &'a mut Vec<Instance>,
+    /// Where an outline the atlas could not take becomes a record.
+    paths: &'a mut Store,
+    /// The entry's local-to-device transform: the template's.
+    xf: Affine,
+    /// An outline handed over means a full atlas the frame should empty
+    /// first, not a glyph to draw from its outline.
+    flush_first: bool,
     count: usize,
     transform: Affine,
     paint_transform: Affine,
@@ -255,6 +286,9 @@ impl Sink<'_> {
     }
 }
 
+/// glifo's tolerance for a uniform, unskewed scale.
+const NEARLY_ZERO: f64 = 1. / 4096.;
+
 /// glifo only asks a solid paint's colour, to tint the mask; the entry's
 /// own paint, solid or gradient, is in the template.
 const SOLID: PaintType = PaintType::Solid(BLACK);
@@ -267,9 +301,29 @@ impl glifo::DrawSink for Sink<'_> {
     fn set_paint_transform(&mut self, t: Affine) {
         self.paint_transform = t;
     }
-    /// glifo fills an outline itself only when the atlas could not take it.
-    fn fill_path(&mut self, _: &BezPath) {
-        self.fail(Failure::Full);
+    /// glifo fills an outline itself only when the atlas could not take it:
+    /// drawn from a path record, in the entry's space, so the run's paint
+    /// stays fitted to the run.
+    fn fill_path(&mut self, outline: &BezPath) {
+        if self.flush_first {
+            return self.fail(Failure::Full);
+        }
+        let local = (self.xf.inverse() * self.transform) * outline.clone();
+        match self.paths.find_outline(&local, self.xf, 0.) {
+            Ok(path::Found {
+                record: Some(record),
+                bounds,
+            }) => {
+                let mut one = *self.template;
+                let paint = one[3][0] - code(SHAPE_GLYPH, 0.);
+                one[2] = [bounds.x0, bounds.y0, bounds.x1, bounds.y1].map(|v| v as f32);
+                one[3] = [code(SHAPE_PATH, paint), one[3][1], record as f32, 0.];
+                self.out.push(one);
+                self.count += 1;
+            }
+            Ok(_) => {}
+            Err(f) => self.fail(Failure::Path(f)),
+        }
     }
     fn fill_rect(&mut self, rect: &Rect) {
         let (Some(page), true) = (self.page, self.tint) else {

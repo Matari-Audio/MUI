@@ -51,11 +51,11 @@ pub mod prelude {
     pub use crate::widgets::presets::{card, chip, glass, meter, panel, tile};
     pub use crate::widgets::{
         BinAxis, BinEdit, Bins, ColorFormat, ColorOpts, Column, Control, CurveEdit, ListEvent,
-        ListItem, ListOptions, ListRow, ListState, Newline, OklchPicker, PickerShape, Response,
-        ScrollTo, Setting, TOAST_SECS, TextEdit, TextOpts, Variant, bins, bins_hover, button,
-        color_picker, curve, dialog, drag_value, group, knob, menu, oklch_picker, popover, select,
-        setting, slider, stepped, table, tabs, text_edit, text_input, toast, toasts, toggle,
-        tree_row, uniform_list, variable_list,
+        ListItem, ListOptions, ListRow, ListState, MenuRow, Newline, OklchPicker, Overlay,
+        PickerShape, Response, ScrollTo, SelectHead, Setting, TOAST_SECS, Tab, Tabs, TextEdit,
+        TextOpts, Variant, bins, bins_hover, button, color_picker, curve, dialog, drag_value,
+        group, knob, menu, oklch_picker, popover, select, setting, slider, stepped, table, tabs,
+        text_edit, text_input, toast, toasts, toggle, tree_row, uniform_list, variable_list,
     };
     pub use crate::{Edit, Frame, Interaction, MotionPolicy, SemanticAction, Ui};
     pub use mui_input::{

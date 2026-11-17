@@ -42,7 +42,7 @@ pub fn color_picker(
     opts: ColorOpts,
 ) -> Response {
     let (id, alpha): (Id, bool) = (id.into(), opts.alpha);
-    let [sv, hue, opacity, hex] = ["sv", "hue", "alpha", "hex"].map(|k| format!("{id}/{k}"));
+    let [sv, hue, opacity, hex] = ["sv", "hue", "alpha", "hex"].map(|k| id.field(k));
     let rgba = srgba(*value);
     // The hue and saturation a grey no longer carries: last frame's, if the
     // colour is still the one that frame made.
@@ -123,7 +123,7 @@ pub fn color_picker(
     .size(w, sh)
     .cursor(Cursor::Crosshair)
     .id(sv);
-    let strip = |key: String, label: &str, t: f32, v: f64, max: f64, fill: Gradient| {
+    let strip = |key: Id, label: &str, t: f32, v: f64, max: f64, fill: Gradient| {
         stack([
             block(w, bar).pill().fill(fill),
             ring(bar + 4.0)

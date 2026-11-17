@@ -45,7 +45,7 @@ const SHAPE_STROKE: f32 = 1.;
 pub(super) const SHAPE_BLUR: f32 = 2.;
 pub(super) const SHAPE_BLUR_INVERT: f32 = 3.;
 pub const SHAPE_GLYPH: f32 = 4.;
-const SHAPE_PATH: f32 = 5.;
+pub(super) const SHAPE_PATH: f32 = 5.;
 const SHAPE_PATH_STROKE: f32 = 6.;
 const SHAPE_PATH_BLUR: f32 = 7.;
 pub const PAINT_IMAGE: f32 = 4.;
@@ -117,12 +117,9 @@ pub fn clear(size: [u32; 2]) -> Instance {
     out
 }
 
-/// The largest glyph, in device pixels per em, the atlas takes. A larger run
-/// is [`Reason::TextSize`].
+/// The largest glyph, in device pixels per em, the atlas takes. A larger
+/// glyph is drawn from its outline.
 pub const MAX_GLYPH_PX: f32 = 256.;
-
-/// glifo's tolerance for a uniform, unskewed scale.
-const NEARLY_ZERO: f64 = 1. / 4096.;
 
 /// What one entry of the list asks of the renderer.
 #[derive(Debug)]
@@ -159,8 +156,9 @@ const OPEN: [f32; 4] = [-1e9, -1e9, 1e9, 1e9];
 
 /// The clip state in force: the intersection of every axis-aligned clip as
 /// one device rect, at most one other rounded or rotated rect carried
-/// exactly in its own space, and at most one path. All multiply into
-/// coverage, as `vello_cpu`'s clip masks do.
+/// exactly in its own space, and at most one path (a second rounded rect
+/// takes this slot as its outline). All multiply into coverage, as
+/// `vello_cpu`'s clip masks do.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Clip {
     device: [f32; 4],
@@ -291,7 +289,7 @@ impl Default for Walk {
     }
 }
 
-fn refuse(f: Fail) -> Reason {
+pub(super) fn refuse(f: Fail) -> Reason {
     match f {
         Fail::Invalid => Reason::Path,
         Fail::Full => Reason::PathBudget,
@@ -338,8 +336,11 @@ impl Walk {
             }
             Layer::Clip => {
                 let top = self.clip();
-                let next = match p.rect {
-                    Some(rr) => top.push(rr.bounds(), rr.radius(), xf),
+                // A rounded or rotated rect takes the general slot; when that
+                // is held it is still a path, and takes the path slot.
+                let general = p.rect.and_then(|rr| top.push(rr.bounds(), rr.radius(), xf));
+                let next = match general {
+                    Some(next) => Some(next),
                     None => match self.paths.find(&p.path, xf, 0.) {
                         Ok(found) => top.push_path(found.record, xf),
                         Err(f) => {
@@ -595,9 +596,9 @@ impl Walk {
     }
 
     /// A glyph run's template: its paint, clip and local-to-device affine.
-    /// The atlas draws glyphs under translation and uniform scale only;
-    /// anything else is refused rather than drawn from a mask at the wrong
-    /// size or angle.
+    /// The atlas draws glyphs under translation and uniform scale; a turned,
+    /// sheared or oversized glyph is drawn from its outline instead (see
+    /// [`super::text`]), never from a mask at the wrong size or angle.
     fn text<'p>(
         &self,
         p: &Painted,
@@ -611,17 +612,6 @@ impl Walk {
         let [a, b, c, d, e, f] = xf.as_coeffs();
         if a * d - b * c == 0. || text.glyphs.is_empty() {
             return Ok(Drawn::Nothing);
-        }
-        // glifo's test for a run it can take from its atlas.
-        let uniform = a > 0.
-            && (a - d).abs() <= NEARLY_ZERO
-            && b.abs() <= NEARLY_ZERO
-            && c.abs() <= NEARLY_ZERO;
-        if !uniform {
-            return Err(Reason::TextTransform);
-        }
-        if text.size * a as f32 > MAX_GLYPH_PX {
-            return Err(Reason::TextSize);
         }
         out[0] = [a as f32, b as f32, c as f32, d as f32];
         out[1] = [e as f32, f as f32, 0., 0.];

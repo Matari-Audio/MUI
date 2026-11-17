@@ -123,12 +123,18 @@ fn what_the_pass_cannot_draw_is_counted_by_reason() {
     let paint = resolved(
         stack![
             block(60., 60.).outline(star).fill(Color::srgb(1., 0., 0.)),
-            // A rounded clip inside a rounded clip.
+            // A rounded clip inside a rounded clip inside a rounded clip:
+            // two nest (the second as a path), the third does not.
             stack![
-                stack![block(40., 40.).fill(Color::srgb(0., 1., 0.))]
-                    .size(50., 50.)
-                    .radius(10.)
-                    .clip()
+                stack![
+                    stack![block(30., 30.).fill(Color::srgb(0., 1., 0.))]
+                        .size(40., 40.)
+                        .radius(8.)
+                        .clip()
+                ]
+                .size(50., 50.)
+                .radius(10.)
+                .clip()
             ]
             .size(80., 80.)
             .radius(12.)
@@ -242,10 +248,10 @@ fn an_instance_box_holds_its_quad() {
     }
 }
 
-/// Text the atlas cannot hold at the right size or angle is refused, by
-/// reason; upright text at any uniform scale is not.
+/// Text the atlas cannot hold at the right size or angle is drawn from its
+/// outlines, so a run at any angle or size classifies as drawable.
 #[test]
-fn text_under_rotation_or_past_the_atlas_size_is_refused() {
+fn text_under_rotation_or_past_the_atlas_size_is_drawn() {
     let mut spec = SceneSpec::new(
         stack![
             text("upright").text_size(14.),
@@ -258,11 +264,5 @@ fn text_under_rotation_or_past_the_atlas_size_is_refused() {
     spec.font = Some(mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
     let paint = mui_scene::resolve(&spec).expect("resolves").paint;
     let coverage = classify(&paint);
-    assert_eq!(
-        coverage.unsupported(Reason::TextTransform),
-        1,
-        "{coverage:?}"
-    );
-    assert_eq!(coverage.unsupported(Reason::TextSize), 1, "{coverage:?}");
-    assert_eq!(coverage.supported + 2, paint.len(), "{coverage:?}");
+    assert!(coverage.complete(), "{coverage:?}");
 }

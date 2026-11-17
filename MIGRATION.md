@@ -171,6 +171,74 @@ Behaviour:
 - `Ui::text_run` outlines at 0.1 px tolerance (was 0.05) and keeps up to
   2048 runs (was 512).
 
+Overlays and tabs take a look (`mui::widgets`):
+
+- `Overlay` (new, in the prelude) is `popover`, `menu`, `select` and
+  `dialog` with every look a slot: `.frame(&f)` replaces the card (fill,
+  radius, padding and shadow; nothing is merged under it), `.row(&f)` dresses
+  a `MenuRow { label, index, selected }`, `.head(&f)` a `SelectHead { label,
+  open }`, `.scrim(&f)` the dialog's window layer. Placement is `.area`,
+  `.fallback`, `.gap`, `.match_width`, `.min_w` (was a fixed 140) and
+  `.row_h` (was a fixed 32); `.persistent()` turns off the outside-press and
+  Escape close; `.weld()` opens a select's list over its own field, headed by
+  the open head. A face is only the look: MUI adds the id, focus, role, name
+  and cursor and reads the activation. The free functions are
+  `Overlay::default()` and keep their signatures.
+- `Overlay::select(ui, id, options, &mut selected, &mut open)` takes the
+  open state from the caller (one slot per panel, say);
+  `select(ui, id, options, &mut selected)` still keeps it in the `Ui`.
+- `select`'s head is one pressable field (label and drop-down arrow) where
+  it was a `button` `Control` beside an arrow icon: a test that reads the
+  button's look, or `.variant`/`.size` on it, must restyle through
+  `.head(&f)`. Its id is still `id`; the list is still `"{id}/list"`, rows
+  `"{id}/list/{i}"`.
+- `Tabs` (new) is `tabs` with `.vertical()` (Up/Down step it, the strip is a
+  column) and `.face(&f)` dressing a `Tab { label, index, selected }`, so an
+  icon sidebar is a tab strip. `.items(..)` returns the tabs loose
+  (`Response<bool, Vec<El>>`) for a sidebar that puts other rows between
+  them; `.show(..)` strings them. `tabs(ui, id, labels, &mut i)` is
+  `Tabs::default().show(..)`, unchanged.
+
+`mui-headless` is a library as well as a CLI:
+
+- `Session::new(scene, Options { size, scale, theme, fps })` is public
+  (`Options::default()`: the scene's size, scale 1, 60 fps); it was
+  `pub(crate)` with positional arguments. New on `Session`: `send(Event)`,
+  `play(&Script)` (time 0 at the next step), `click(id)`, `settle(max)`,
+  `pending()`, `rgba()` (a `Raster` kept by the session) and `ui_mut()`.
+  `Event` and `Target` (were the private `Act` and `Pos`) are exported.
+- `Scene::with_input(name, size, ui, |ui, input| ..)`: the builder sees each
+  frame's `Input` before `Ui::frame`, for an editor that reads raw input.
+- `Raster` keeps its `mui::vello::Cache` across `draw` calls (it built a
+  fresh one per frame, re-interning every font).
+
+`mui_baseview::native` carries every event translation `mui-baseview` uses,
+public (they were private in `lib.rs`): `key_event(&KeyboardEvent) ->
+KeyEvent`, `mouse_button(MouseButton) -> Option<Button>`, `mods(Modifiers) ->
+Mods`, `native_cursor(Cursor) -> MouseCursor` and `native_ime(config, scale)
+-> baseview::ImeConfiguration`, beside the existing `ime_event` and
+`ime_configuration`. A host of your own deletes its copies.
+
+GPU quad pass refuses less (`mui-vello`, feature `gpu-quad`):
+
+- Text under a rotation, shear or non-uniform scale, glyphs over
+  `MAX_GLYPH_PX`, and glyphs the atlas has no room for are drawn from their
+  outlines as path records instead of the whole frame falling back to the
+  CPU. `quad::Reason::{TextTransform, TextSize, GlyphBudget}` are removed
+  (`Reason::ALL` has 11 entries); delete those match arms.
+- A rounded or rotated clip nested in another takes the path-clip slot as its
+  outline, so two such clips nest on the GPU; `Reason::ClipDepth` now means a
+  third, or a path clip inside a path clip.
+- `EffectStats::cpu_fallback: Option<Reason>` (new field) is set on a frame
+  the pass refused and `vello_cpu` drew, so a host sees each whole-window CPU
+  frame in the stats `Host::present` returns. A struct literal of
+  `EffectStats` needs the field (or `..Default::default()`).
+- `GpuRenderer::present_again()` (new): the next render presents the
+  retained frame to a new view without redrawing. Use it instead of
+  `render_with_overlay(.., |_| {})` / `Host::present_with_overlay(.., |_|
+  {})` as a forced present, which redraws the frame on the CPU. (`Host`
+  gains the matching one-line forwarder on the window-host branch.)
+
 ## v0.4.1
 
 Breaking (by hand; `mui-migrate` has no rule for it):

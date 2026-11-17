@@ -43,6 +43,7 @@
 use crate::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape as _};
 use mui_geometry::Path;
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 /// Texels a row of the data texture.
@@ -76,14 +77,32 @@ pub struct Found {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Key {
+    /// The path's `Arc` address, or an outline's content hash (odd).
     path: usize,
     linear: [u64; 4],
     width: u64,
 }
 
+impl Key {
+    fn new(path: usize, xf: Affine, width: f64) -> Self {
+        let [a, b, c, d, ..] = xf.as_coeffs();
+        Self {
+            path,
+            linear: [a, b, c, d].map(f64::to_bits),
+            width: width.to_bits(),
+        }
+    }
+}
+
+/// What a record was built from, held so its key stays its own: a path's
+/// address cannot be reused, an outline's hash is checked against it.
+enum Held {
+    Path(#[expect(dead_code, reason = "kept alive so its address stays its own")] Arc<Path>),
+    Outline(BezPath),
+}
+
 struct Entry {
-    /// Held so its address cannot be reused by another path.
-    _path: Arc<Path>,
+    held: Held,
     at: u32,
     len: u32,
     found: Found,
@@ -157,19 +176,60 @@ impl Store {
     /// The record of `path` under the linear part of `xf`, stroked `width`
     /// wide (`0` fills), built if this frame is the first to ask.
     pub fn find(&mut self, path: &Arc<Path>, xf: Affine, width: f64) -> Result<Found, Fail> {
-        let [a, b, c, d, ..] = xf.as_coeffs();
-        let key = Key {
-            path: Arc::as_ptr(path) as usize,
-            linear: [a, b, c, d].map(f64::to_bits),
-            width: width.to_bits(),
-        };
+        let key = Key::new(Arc::as_ptr(path) as usize, xf, width);
+        if let Some(found) = self.hit(&key) {
+            return Ok(found);
+        }
+        crate::bez_path_into(path, crate::ARC_TOLERANCE, &mut self.bez)
+            .map_err(|_| Fail::Invalid)?;
+        self.insert(key, xf, width, Held::Path(path.clone()))
+    }
+
+    /// [`Store::find`] for an outline the store cannot hold by `Arc` (a
+    /// glyph's, handed over by glifo): keyed by its content, so the same
+    /// glyph at the same size and angle keeps its record frame to frame.
+    pub fn find_outline(&mut self, bez: &BezPath, xf: Affine, width: f64) -> Result<Found, Fail> {
+        let mut h = rustc_hash::FxHasher::default();
+        for el in bez.elements() {
+            // The variant, then its points: the same points as another
+            // command never collide.
+            std::mem::discriminant(el).hash(&mut h);
+            let o = Point::ORIGIN;
+            let (points, n) = match *el {
+                PathEl::MoveTo(p) | PathEl::LineTo(p) => ([p, o, o], 1),
+                PathEl::QuadTo(a, p) => ([a, p, o], 2),
+                PathEl::CurveTo(a, b, p) => ([a, b, p], 3),
+                PathEl::ClosePath => ([o; 3], 0),
+            };
+            for p in &points[..n] {
+                (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
+            }
+        }
+        // An `Arc` address is aligned, so an odd key never names one.
+        let key = Key::new((h.finish() as usize) | 1, xf, width);
         if let Some(e) = self.map.get_mut(&key) {
+            // Another outline under the same hash: refuse rather than draw
+            // the wrong glyph (the frame falls back to the CPU).
+            if !matches!(&e.held, Held::Outline(b) if b == bez) {
+                return Err(Fail::Full);
+            }
             e.used = self.frame;
             return Ok(e.found);
         }
+        self.bez.clone_from(bez);
+        self.insert(key, xf, width, Held::Outline(bez.clone()))
+    }
+
+    fn hit(&mut self, key: &Key) -> Option<Found> {
+        let e = self.map.get_mut(key)?;
+        e.used = self.frame;
+        Some(e.found)
+    }
+
+    /// Build `self.bez`'s record under `xf` and keep it under `key`.
+    fn insert(&mut self, key: Key, xf: Affine, width: f64, held: Held) -> Result<Found, Fail> {
+        let [a, b, c, d, ..] = xf.as_coeffs();
         let linear = Affine::new([a, b, c, d, 0., 0.]);
-        crate::bez_path_into(path, crate::ARC_TOLERANCE, &mut self.bez)
-            .map_err(|_| Fail::Invalid)?;
         let bounds = self.bez.bounding_box();
         let found = |record| Found { record, bounds };
         let Some(mut record) = self.record(linear, width) else {
@@ -189,7 +249,7 @@ impl Store {
         self.map.insert(
             key,
             Entry {
-                _path: path.clone(),
+                held,
                 at,
                 len,
                 found,

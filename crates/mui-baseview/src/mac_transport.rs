@@ -221,7 +221,8 @@ impl Presenter {
                     false
                 }
             });
-            if std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1") {
+            static FLASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            if *FLASH.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1")) {
                 let layer: *mut Object = msg_send![class!(CALayer), new];
                 let frame = Rect {
                     x: f64::from(rect[0]) / scale,

@@ -1,7 +1,9 @@
 //! Event translation checks and an opt-in native presentation regression.
 use super::*;
-use keyboard_types::Code;
+use keyboard_types::{Code, Key as HostKey, KeyState, NamedKey};
 use mui::Ui;
+use mui::host::NativeKey;
+use mui::prelude::Key;
 use mui::prelude::{El, Input, knob};
 
 /// WGPU_BACKEND=metal on Linux exercises automatic fallback. Otherwise this

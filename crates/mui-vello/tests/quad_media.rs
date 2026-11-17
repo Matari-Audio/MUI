@@ -12,7 +12,7 @@ use quad_support::*;
 use mui_scene::prelude::*;
 use mui_scene::{Font, Image, ResolvedScene};
 use mui_vello::kurbo::Affine;
-use mui_vello::quad::{Error, QuadRenderer, Reason};
+use mui_vello::quad::QuadRenderer;
 use std::sync::Arc;
 
 fn hack() -> Font {
@@ -41,6 +41,27 @@ fn sizes(scale: f64) -> ResolvedScene {
         kids.push(text("Quartz 0.25 dB").text_size(size).fill(white).at(6., y));
         y += size * 1.25;
     }
+    resolve_with(ground(kids), scale, hack())
+}
+
+/// Text the atlas cannot take, drawn from glyph outlines: a run turned and
+/// one sheared by its rotation's neighbour, and a title past
+/// `MAX_GLYPH_PX` at 2x (from the atlas at 1x and 1.5x).
+fn turned(scale: f64) -> ResolvedScene {
+    let white = Color::srgb(0.95, 0.95, 0.92);
+    let kids = vec![
+        text("Turned 0.35")
+            .text_size(18.)
+            .fill(white)
+            .rotation(0.35)
+            .at(20., 30.),
+        text("Steep")
+            .text_size(26.)
+            .fill(white)
+            .rotation(-1.1)
+            .at(200., 90.),
+        text("Ag").text_size(140.).fill(white).at(10., 40.),
+    ];
     resolve_with(ground(kids), scale, hack())
 }
 
@@ -175,6 +196,7 @@ fn text_matches_vello_cpu() {
     compare_keep(&mut gpu, f, "text-faces", FACES, true, faces);
     compare_keep(&mut gpu, f, "text-painted", TEXT, true, painted);
     compare_keep(&mut gpu, f, "text-gradient", GRADIENT, true, gradient);
+    compare_keep(&mut gpu, f, "text-turned", TURNED, true, turned);
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     if let Some(error) = pollster::block_on(scope.pop()) {
         panic!("wgpu validation: {error}");
@@ -183,6 +205,16 @@ fn text_matches_vello_cpu() {
 
 /// Measured on RADV: max 2 at every scale, mean at most 0.025.
 const TEXT: Limit = Limit { max: 2, mean: 0.03 };
+/// Glyphs drawn from outlines on both sides (turned, or past the atlas):
+/// exact box-filter area of polygons flattened at 0.1 px against
+/// `vello_cpu`'s 0.25 px, as `path-turned` in `quad_paths`; at 1x and 1.5x
+/// the title comes from both atlases, as `TEXT`. Measured on RADV: max 46,
+/// 46, 58 and mean 0.092, 0.096, 0.088 at 1x, 1.5x and 2x, every difference
+/// on a glyph edge (the image is mostly edges, hence the mean).
+const TURNED: Limit = Limit {
+    max: 80,
+    mean: 0.12,
+};
 /// The same, for the case with a variable face, unhinted runs and combining
 /// marks. DX12 on the WARP software adapter measured max 3 at 1x and 4 at 2x
 /// (RADV: 2), means 0.016 / 0.0078, well inside the limit: one or two 8-bit
@@ -525,18 +557,14 @@ fn a_small_atlas_evicts_and_still_draws_every_frame_right() {
         again |= repeat && frame.rasterised > 0;
     }
     assert!(again, "the small atlas never let go of a size");
-    // A frame that cannot fit even in an empty atlas is refused, by entry.
+    // Glyphs no page can hold are drawn from their outlines instead.
     let huge = label(120.);
     std::mem::swap(&mut gpu.quad, &mut small);
-    let refused = try_gpu_pixels(&mut gpu, &huge.paint, Affine::IDENTITY, size);
+    let drawn = try_gpu_pixels(&mut gpu, &huge.paint, Affine::IDENTITY, size);
+    let frame = gpu.quad.frame();
     std::mem::swap(&mut gpu.quad, &mut small);
-    match refused {
-        Err(Error::Unsupported {
-            index,
-            reason: Reason::GlyphBudget,
-        }) => assert!(huge.paint[index].text.is_some(), "refused a non-text entry"),
-        other => panic!("not refused for its budget: {:?}", other.map(|_| ())),
-    }
+    assert!(drawn.is_ok(), "refused: {:?}", drawn.map(|_| ()));
+    assert!(frame.paths_built > 0, "no outline drawn: {frame:?}");
 }
 
 #[test]

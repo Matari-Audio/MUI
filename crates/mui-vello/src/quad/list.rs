@@ -62,7 +62,8 @@ impl Instances {
     /// `self.list`, each kept entry's box updated; their count. Every entry
     /// is walked, so an unsupported one is refused whether kept or not. A
     /// frame the glyph atlas or the path texture cannot hold empties it and
-    /// tries once more.
+    /// tries once more; a glyph the emptied atlas still has no room for is
+    /// drawn from its outline.
     pub fn build(
         &mut self,
         paint: &[Painted],
@@ -200,10 +201,18 @@ impl Instances {
                     self.layers.push(at, Bind::None, Compose::Over);
                     let xf = crate::placed(transform, p);
                     self.atlas
-                        .draw(&mut self.cache, text, xf, &one, &mut self.list)
+                        .draw(
+                            &mut self.cache,
+                            &mut self.walk.paths,
+                            text,
+                            xf,
+                            &one,
+                            &mut self.list,
+                        )
                         .map_err(|f| {
                             refuse(match f {
                                 text::Failure::Colour => Reason::Text,
+                                text::Failure::Path(f) => build::refuse(f),
                                 text::Failure::Full => Reason::GlyphBudget,
                             })
                         })?;
