@@ -55,6 +55,8 @@ pub async fn device() -> Result<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> 
     } else {
         wgpu::Features::empty()
     };
+    // As a host asks it (`host::open`): pipelines built through a cache.
+    let features = features | (adapter.features() & wgpu::Features::PIPELINE_CACHE);
     let (device, queue) = adapter
         .request_device(&wgpu::DeviceDescriptor {
             required_features: features,

@@ -442,6 +442,7 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     rounds(gpu, timer, "cold", jobs, 0, 7, &mut rows);
     let cold = fresh_quads[0].frame();
     drop(fresh_quads);
+    open(gpu, &still);
     let mut quad = gpu.quad();
     let (mut wired, wv) = (gpu.wired(), gpu.target());
     let jobs = pair(
@@ -473,6 +474,38 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
     note("scroll", scrolled);
     pngs(gpu, &still, "", &mut gpu.quad());
     pngs(gpu, &under_menu(&still), "-under-menu", &mut gpu.quad());
+}
+
+/// An editor opening: a `GpuRenderer` made on a warm device and its first
+/// frame drawn and finished, wall time, median of seven, each phase alone.
+/// The first renderer on the device pays shader compilation; the pipeline
+/// cache on disk (when the device has `PIPELINE_CACHE`) is what later
+/// launches find.
+fn open(gpu: &Gpu, still: &ResolvedScene) {
+    let wait = || {
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("poll")
+    };
+    let mut made = Vec::new();
+    let mut first = Vec::new();
+    for _ in 0..7 {
+        let view = gpu.target();
+        let t = Instant::now();
+        let mut r = gpu.wired();
+        made.push(ms(t));
+        let t = Instant::now();
+        wired_frame(&mut r, still, Affine::IDENTITY, &view);
+        wait();
+        first.push(ms(t));
+    }
+    println!(
+        "editor open: renderer {:.3} ms (first {:.3}), first frame {:.3} ms (first {:.3})",
+        median(&mut made.clone()),
+        made[0],
+        median(&mut first.clone()),
+        first[0],
+    );
 }
 
 /// A 1,000-point polyline that changes every frame, over 300 static cards.
