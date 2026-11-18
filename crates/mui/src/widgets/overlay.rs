@@ -1,5 +1,5 @@
 //! Things that float over the editor: a popover pinned to what opened it,
-//! a menu in one, a select that opens one, and a modal dialog.
+//! a menu in one, a select or a dropdown that opens one, and a modal dialog.
 //!
 //! Each returns the floating element, or `None` while closed, for the caller
 //! to push anywhere in its tree: a float is absolute and painted after
@@ -12,6 +12,7 @@
 //! select's head, the dialog's scrim, and where the float is pinned. A
 //! consumer with its own design system keeps its look and drops its own
 //! open/close, dismissal, wheel and focus handling.
+use mui_input::Key;
 use mui_scene::prelude::*;
 
 use crate::Ui;
@@ -26,7 +27,8 @@ type Look<'a> = &'a dyn Fn(El) -> El;
 pub struct MenuRow<'a> {
     pub label: &'a str,
     pub index: usize,
-    /// The select's current option. Always `false` in a menu.
+    /// The select's or dropdown's current option; in a menu, the row
+    /// [`Overlay::current`] names.
     pub selected: bool,
 }
 
@@ -69,6 +71,8 @@ pub struct Overlay<'a> {
     match_width: bool,
     min_w: f64,
     row_h: f64,
+    columns: usize,
+    current: Option<usize>,
     persistent: bool,
     weld: bool,
     frame: Option<Look<'a>>,
@@ -86,6 +90,8 @@ impl Default for Overlay<'_> {
             match_width: false,
             min_w: 140.0,
             row_h: 32.0,
+            columns: 1,
+            current: None,
             persistent: false,
             weld: false,
             frame: None,
@@ -128,6 +134,17 @@ impl<'a> Overlay<'a> {
     /// face asks, so a list knows its height before it is laid out.
     pub fn row_h(mut self, h: f64) -> Self {
         self.row_h = h;
+        self
+    }
+    /// Lay a list out `n` to a row: a grid of short picks (notes, MIDI
+    /// channels). The arrow keys walk it in two dimensions. Default 1.
+    pub fn columns(mut self, n: usize) -> Self {
+        self.columns = n.max(1);
+        self
+    }
+    /// The menu row marked selected, and where Down on the anchor enters.
+    pub fn current(mut self, index: Option<usize>) -> Self {
+        self.current = index;
         self
     }
     /// No closing on an outside press or Escape: the caller closes it.
@@ -218,7 +235,11 @@ impl<'a> Overlay<'a> {
         labels: &[&str],
     ) -> Response<Option<usize>, Option<El>> {
         let id: Id = id.into();
-        let (list, chosen) = self.items(ui, &id, anchor, labels, None);
+        // Down on the anchor enters the list.
+        if *open && ui.keys(anchor).iter().any(|k| k.key == Key::Down) {
+            ui.focus(id.slot(self.current.unwrap_or(0)));
+        }
+        let (list, chosen) = self.items(ui, &id, anchor, labels, self.current);
         if chosen.is_some() {
             *open = false;
         }
@@ -289,6 +310,51 @@ impl<'a> Overlay<'a> {
         Response { el, changed }
     }
 
+    /// `face` as a button that opens `labels` under it while `*open`; the
+    /// index picked comes back and closes the list. `current` is marked
+    /// selected and is where the Down key enters the list. The face is the
+    /// caller's whole head -- an icon, a [`chooser`], a waveform -- and MUI
+    /// makes it pressable as `id`, named `name`. The list is `"{id}/list"`,
+    /// its rows `"{id}/list/{i}"`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a select's arguments plus its face and name"
+    )]
+    pub fn dropdown(
+        &self,
+        ui: &mut Ui,
+        id: impl Into<Id>,
+        name: &str,
+        face: impl IntoEl,
+        open: &mut bool,
+        labels: &[&str],
+        current: Option<usize>,
+    ) -> Response<Option<usize>, El> {
+        let id: Id = id.into();
+        let list_id = id.field("list");
+        if ui.get(id.clone()).activated() {
+            *open = !*open;
+        }
+        if *open && ui.keys(id.clone()).iter().any(|k| k.key == Key::Down) {
+            ui.focus(list_id.slot(current.unwrap_or(0)));
+        }
+        let (list, chosen) = self.items(ui, &list_id, id.as_str(), labels, current);
+        if chosen.is_some() {
+            *open = false;
+        }
+        let head = press(face.into_el(), name, id.clone()).a11y(A11y::Button);
+        // The pointer rests on the head that opened the list: its tip would
+        // float over the list.
+        let el = match self.popover(ui, list_id, id.as_str(), open, list) {
+            Some(pop) => stack([head, pop]),
+            None => head,
+        };
+        Response {
+            el,
+            changed: chosen,
+        }
+    }
+
     /// `content` in the frame centred over the [`scrim`](Self::scrim),
     /// while `*open`. The scrim takes every press, so nothing under it
     /// responds; a press on it or Escape sets `*open` false. Keyboard focus
@@ -330,7 +396,9 @@ impl<'a> Overlay<'a> {
         selected: Option<usize>,
     ) -> (El, Option<usize>) {
         let mut chosen = None;
-        let rows: Vec<El> = labels
+        let columns = self.columns;
+        walk(ui, id, labels.len(), columns);
+        let mut cells: Vec<El> = labels
             .iter()
             .enumerate()
             .map(|(index, &label)| {
@@ -343,20 +411,58 @@ impl<'a> Overlay<'a> {
                     index,
                     selected: selected == Some(index),
                 };
-                press((self.row)(row), label, key)
+                let cell = press((self.row)(row), label, key)
                     .a11y(A11y::Button)
-                    .h(self.row_h)
-                    .w(Len::Pct(100.0))
+                    .h(self.row_h);
+                // A list's rows reach its edge; a grid's cells share a row.
+                if columns == 1 {
+                    cell
+                } else {
+                    cell.grow(1.0).basis(0.0)
+                }
             })
             .collect();
+        let rows = if columns == 1 {
+            cells
+        } else {
+            let mut rows = Vec::new();
+            while !cells.is_empty() {
+                let rest = cells.split_off(columns.min(cells.len()));
+                rows.push(row(std::mem::replace(&mut cells, rest)).gap(0.0));
+            }
+            rows
+        };
+        let lines = rows.len();
         let mut list = col(rows).gap(0.0).min_w(self.min_w);
-        let tall = self.row_h * labels.len() as f64;
+        let tall = self.row_h * lines as f64;
         if let Some(room) = room(ui, anchor, self.row_h).filter(|&room| tall > room) {
             let scroller = id.field("rows");
-            reveal(ui, id, &scroller, labels.len(), room, self.row_h);
+            reveal(ui, id, &scroller, labels.len(), columns, room, self.row_h);
             list = list.h(room).scroll().id(scroller);
         }
         (list, chosen)
+    }
+}
+
+/// The arrow keys on a focused row move the focus a row (Up, Down) or a
+/// cell (Left, Right, in a grid), stopping at the ends.
+fn walk(ui: &mut Ui, id: &Id, len: usize, columns: usize) {
+    for i in 0..len {
+        let by = ui
+            .keys(id.slot(i))
+            .iter()
+            .fold(0isize, |at, k| match k.key {
+                Key::Down => at + columns as isize,
+                Key::Up => at - columns as isize,
+                Key::Right if columns > 1 => at + 1,
+                Key::Left if columns > 1 => at - 1,
+                _ => at,
+            });
+        if by != 0 {
+            let to = i.saturating_add_signed(by).min(len - 1);
+            ui.focus(id.slot(to));
+            return;
+        }
     }
 }
 
@@ -377,21 +483,34 @@ fn row_face(r: MenuRow<'_>) -> El {
         .on(State::FocusVisible, |s| s.fill(Role::Field))
 }
 
-/// MUI's select head: the label and a drop-down arrow on a field.
+/// MUI's select head: a [`chooser`] on a field.
 fn head_face(h: SelectHead<'_>) -> El {
-    let arrow = if h.open {
-        sym::ARROW_DROP_UP
-    } else {
-        sym::ARROW_DROP_DOWN
-    };
-    row([text(h.label), icon(arrow)])
-        .gap(Xs)
-        .align(Align::Center)
+    chooser(text(h.label), h.open)
         .h(32.0)
         .pad((10.0, 0.0))
         .radius(6.0)
         .fill(Role::Field)
         .on(State::Hover, |s| s.fill(Role::Raised))
+}
+
+/// What says "this opens a list": `face` (the current pick, an icon and a
+/// name, a waveform) and a dim drop arrow after it, pointing up while
+/// `open`. Hand it to [`Overlay::dropdown`] or
+/// [`Overlay::head`]; it carries no id, so it is not yet pressable.
+///
+/// ```
+/// use mui::prelude::*;
+/// let head = chooser(text("Saw").fill(Role::Primary), false).pad(S);
+/// ```
+pub fn chooser(face: impl IntoEl, open: bool) -> El {
+    let arrow = if open {
+        sym::ARROW_DROP_UP
+    } else {
+        sym::ARROW_DROP_DOWN
+    };
+    row([face.into_el(), icon(arrow).fill(Role::Dim)])
+        .gap(Xs)
+        .align(Align::Center)
 }
 
 /// MUI's scrim: the window dimmed.
@@ -401,8 +520,8 @@ fn scrim_face(layer: El) -> El {
 
 /// Scroll a list just far enough to show the row keyboard focus moved to.
 /// Only on a move, so a wheel scroll away from a focused row stays put.
-fn reveal(ui: &mut Ui, id: &Id, scroller: &Id, rows: usize, room: f64, row_h: f64) {
-    let focused = (0..rows).find(|&i| ui.focus_visible(id.slot(i)));
+fn reveal(ui: &mut Ui, id: &Id, scroller: &Id, len: usize, columns: usize, room: f64, row_h: f64) {
+    let focused = (0..len).find(|&i| ui.focus_visible(id.slot(i)));
     if focused == ui.stash::<usize>(scroller.as_str()).copied() {
         return;
     }
@@ -411,7 +530,8 @@ fn reveal(ui: &mut Ui, id: &Id, scroller: &Id, rows: usize, room: f64, row_h: f6
         return;
     };
     let [x, y] = ui.scroll(scroller.clone());
-    let (top, bottom) = (i as f64 * row_h, (i + 1) as f64 * row_h);
+    let line = (i / columns) as f64;
+    let (top, bottom) = (line * row_h, (line + 1.0) * row_h);
     let y = if top < y {
         top
     } else if bottom > y + room {
@@ -518,4 +638,29 @@ pub fn select(
 /// ```
 pub fn dialog(ui: &mut Ui, id: impl Into<Id>, open: &mut bool, content: impl IntoEl) -> Option<El> {
     Overlay::default().dialog(ui, id, open, content)
+}
+
+/// `face` as a button that opens `labels` in a list under it; the index
+/// picked comes back. The open state is the `Ui`'s, kept under `id`; own it
+/// with [`Overlay::dropdown`], which also takes a grid and a look.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let d = dropdown(&mut ui, "voices", "Voices", chooser(text("8"), false), &["1", "8", "16"], Some(1));
+/// assert_eq!(d.changed, None);
+/// ```
+pub fn dropdown(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    name: &str,
+    face: impl IntoEl,
+    labels: &[&str],
+    current: Option<usize>,
+) -> Response<Option<usize>, El> {
+    let id: Id = id.into();
+    let mut open = ui.stash::<bool>(id.as_str()).copied().unwrap_or(false);
+    let r = Overlay::default().dropdown(ui, id.clone(), name, face, &mut open, labels, current);
+    ui.set_stash(id.as_str(), open.then_some(true));
+    r
 }

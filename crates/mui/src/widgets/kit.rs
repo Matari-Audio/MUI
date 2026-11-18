@@ -171,6 +171,54 @@ pub fn tabs(
     Tabs::default().show(ui, id, labels, selected)
 }
 
+/// A segmented control: `labels` side by side in one track, sharing its
+/// width, one selected -- [`Tabs`] with every segment the same share. For
+/// another look, give [`Tabs::face`] your own segment and wrap
+/// [`Tabs::items`] in your own track.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let mut mode = 0;
+/// let s = segmented(&mut ui, "mode", &["Mono", "Poly", "Legato"], &mut mode);
+/// assert!(!s.changed);
+/// ```
+pub fn segmented(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    labels: &[&str],
+    selected: &mut usize,
+) -> Response<bool, El> {
+    let id: Id = id.into();
+    let Response { el, changed } =
+        Tabs::default()
+            .face(&segment_face)
+            .items(ui, id.clone(), labels, selected);
+    let cells = el.into_iter().map(|e| e.grow(1.0).basis(0.0).min_w(0.0));
+    Response {
+        el: row(cells)
+            .gap(2.0)
+            .pad(2.0)
+            .radius(Corner::Field)
+            .fill(Role::Field)
+            .a11y(A11y::Group)
+            .id(id),
+        changed,
+    }
+}
+
+/// MUI's segment: the label centred, the selected one raised.
+fn segment_face(t: Tab<'_>) -> El {
+    let ink = if t.selected { Role::Ink } else { Role::Dim };
+    row([text(t.label).fill(ink).lines(1)])
+        .h(28.0)
+        .center()
+        .pad((8.0, 0.0))
+        .radius(Corner::Field)
+        .when(t.selected, |e| e.fill(Role::Raised))
+        .on(State::Hover, |s| s.fill(Role::Raised))
+}
+
 /// How long a toast stays up, in seconds.
 pub const TOAST_SECS: f64 = 4.0;
 const TOASTS: &str = "mui/toasts";

@@ -104,6 +104,7 @@ impl<C> Response<C, Control> {
         value_reserve(s: impl Into<String>);
         value_reserve_all(samples: impl Into<Arc<[String]>>);
         px(px: impl Px);
+        modulation(m: Modulation);
     }
 }
 impl<C> Response<C, El> {
@@ -156,6 +157,7 @@ mod color_picker;
 mod composition;
 mod controls;
 mod curve;
+mod entry;
 mod grapheme;
 mod kit;
 mod meter;
@@ -169,11 +171,14 @@ pub use bins::{BinAxis, BinEdit, Bins, bins, bins_hover};
 pub use color_picker::{ColorFormat, OklchPicker, PickerShape, oklch_picker};
 pub use composition::{Setting, group, setting};
 pub(crate) use controls::step;
-pub use controls::{Control, Domain, Variant, button, drag_value, knob, slider, stepped, toggle};
+pub use controls::{
+    Control, Domain, Modulation, Variant, button, drag_value, knob, slider, stepped, toggle,
+};
 pub use curve::{CurveEdit, curve};
-pub use kit::{Column, TOAST_SECS, Tab, Tabs, table, tabs, toast, toasts, tree_row};
+pub use entry::{Entered, ExactEntry};
+pub use kit::{Column, TOAST_SECS, Tab, Tabs, segmented, table, tabs, toast, toasts, tree_row};
 pub use meter::{Levels, Meter, meter, meter_position};
-pub use overlay::{MenuRow, Overlay, SelectHead, dialog, menu, popover, select};
+pub use overlay::{MenuRow, Overlay, SelectHead, chooser, dialog, dropdown, menu, popover, select};
 pub use pick::{ColorOpts, color_picker};
 pub use presets::{card, chip, glass, panel, tile};
 pub use text::{Newline, TextEdit, TextOpts, text_edit, text_input};

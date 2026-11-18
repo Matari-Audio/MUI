@@ -85,6 +85,36 @@ pub enum Variant {
     Ghost,
 }
 
+/// What modulates a control, as fractions (`0..=1`) of its travel: the
+/// reach of its routes from `lo` to `hi`, the base value `at` they swing
+/// about, and where the modulated value is now, while it runs. A knob draws
+/// it on a ring outside its arc; a plugin's own faces read the same numbers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Modulation {
+    pub at: f64,
+    pub lo: f64,
+    pub hi: f64,
+    pub live: Option<f64>,
+    pub fill: Fill,
+}
+
+impl Modulation {
+    /// Signed offsets in travel fractions -- `lo` and `hi` the routes'
+    /// summed depths, `live` the current swing -- placed about the base
+    /// `at` and clamped to the travel.
+    pub fn around(at: f64, lo: f64, hi: f64, live: Option<f64>, fill: impl Into<Fill>) -> Self {
+        let at = at.clamp(0.0, 1.0);
+        let place = |offset: f64| (at + offset).clamp(0.0, 1.0);
+        Self {
+            at,
+            lo: place(lo),
+            hi: place(hi),
+            live: live.map(place),
+            fill: fill.into(),
+        }
+    }
+}
+
 /// A control's look, resolved: the pixel height it was sized to, the
 /// palette the variant does its arithmetic with, and what the readout was
 /// told to say.
@@ -93,6 +123,7 @@ struct Look {
     variant: Variant,
     role: Role,
     dial_color: Option<Fill>,
+    modulation: Option<Modulation>,
     palette: Palette,
     text: Option<String>,
     reserve: Option<Arc<[String]>>,
@@ -290,6 +321,7 @@ impl Control {
                 variant: Variant::Solid,
                 role: Role::Primary,
                 dial_color: None,
+                modulation: None,
                 palette: ui.theme().palette,
                 text: None,
                 reserve: None,
@@ -394,6 +426,20 @@ impl Control {
     /// Other controls retain their palette role.
     pub fn dial_color(mut self, fill: impl Into<Fill>) -> Self {
         self.look.dial_color = Some(fill.into());
+        self
+    }
+    /// The modulation on this control, drawn on a ring outside a knob's
+    /// arc.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let mut cut = 0.5;
+    /// let lfo = Modulation::around(0.5, -0.2, 0.3, Some(0.1), Role::Secondary);
+    /// let k = knob(&mut ui, "cut", "Cutoff", &mut cut, 0.0..=1.0).modulation(lfo);
+    /// ```
+    pub fn modulation(mut self, m: Modulation) -> Self {
+        self.look.modulation = Some(m);
         self
     }
     /// Reserve a readout sample in the actual font instead of padding the
@@ -794,8 +840,9 @@ pub fn knob(
     }
 }
 
-/// What a knob's painted dial reads: its sweep, colour and stroke width.
-type DialCache = CanvasCache<(u64, u64, Fill, u64)>;
+/// What a knob's painted dial reads: its sweep, colour, stroke width and
+/// modulation.
+type DialCache = CanvasCache<(u64, u64, Fill, u64, Option<Modulation>)>;
 
 fn knob_el(
     look: &Look,
@@ -816,16 +863,18 @@ fn knob_el(
     });
     let (from, to) = d.span();
     let width = look.px / 16.;
+    let modulation = look.modulation.clone();
     let key = (
         from.to_bits(),
         to.to_bits(),
         active.clone(),
         width.to_bits(),
+        look.modulation.clone(),
     );
     let paint = canvas_keyed(cache, key, move |size| {
         let center = Point::new(size.width * 0.5, size.height * 0.5);
         let radius = size.width.min(size.height) * 0.42;
-        let arc = |from: f64, to: f64| {
+        let arc_at = |from: f64, to: f64, radius: f64| {
             Path::polyline(
                 (0..=48).map(|i| {
                     let angle = std::f64::consts::PI * 0.75
@@ -838,6 +887,7 @@ fn knob_el(
                 false,
             )
         };
+        let arc = |from: f64, to: f64| arc_at(from, to, radius);
         let disc = Path::polyline(
             (0..64).map(|i| {
                 let angle = std::f64::consts::TAU * f64::from(i) / 64.;
@@ -848,11 +898,26 @@ fn knob_el(
             }),
             true,
         );
-        vec![
+        let mut draws = vec![
             Draw::stroke(arc(0., 1.), Role::Dim.alpha(0.12), width),
             Draw::stroke(arc(from, to), active.clone(), width),
             Draw::fill(disc, Role::Field),
-        ]
+        ];
+        // The modulation rides a thin ring just outside the value arc: its
+        // reach faint, base to live value solid.
+        if let Some(m) = &modulation {
+            let ring = radius + width * 1.5;
+            let faint = m.fill.clone().faded(0.35);
+            draws.push(Draw::stroke(arc_at(m.lo, m.hi, ring), faint, width * 0.5));
+            if let Some(live) = m.live {
+                draws.push(Draw::stroke(
+                    arc_at(m.at.min(live), m.at.max(live), ring),
+                    m.fill.clone(),
+                    width * 0.5,
+                ));
+            }
+        }
+        draws
     })
     .full();
     let reading =

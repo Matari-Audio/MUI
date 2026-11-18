@@ -306,6 +306,24 @@ impl Paint {
 }
 
 impl Fill {
+    /// The same fill taken to `a` of its alpha: a role fades as
+    /// [`Role::alpha`] does, a colour keeps its hue. A ramp, image or vector
+    /// is returned unchanged.
+    ///
+    /// ```
+    /// use mui_style::{Fill, Role};
+    /// assert_eq!(Fill::from(Role::Primary).faded(0.5), Role::Primary.alpha(0.5));
+    /// assert_eq!(Role::Primary.alpha(0.5).faded(0.5), Role::Primary.alpha(0.25));
+    /// ```
+    #[must_use]
+    pub fn faded(self, a: f32) -> Fill {
+        match self {
+            Self::Role(r) => Self::Faded(r, a),
+            Self::Faded(r, b) => Self::Faded(r, a * b),
+            Self::Color(c) => Self::Color(c.with_alpha(c.alpha() * a)),
+            other => other,
+        }
+    }
     pub fn is_none(&self) -> bool {
         matches!(self, Self::None)
     }

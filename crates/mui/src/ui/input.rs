@@ -463,9 +463,11 @@ impl Ui {
         self.interaction.held()?;
         self.drag.as_ref()?.1.downcast_ref::<T>()
     }
-    /// Take the payload of a drag released over `id` this frame. Delivered
-    /// exactly once: the next call, on this frame or any later one, is
-    /// `None`. A release anywhere else delivers nothing to `id`, and a
+    /// Take the payload of a drag released over `id` this frame, or over
+    /// anything nested under it: a preset dropped on a header's knob lands
+    /// on the header. Delivered exactly once: the next call, on this frame
+    /// or any later one, is `None`, so where targets nest, ask the inner one
+    /// first. A release anywhere else delivers nothing to `id`, and a
     /// payload of another type is left in place for whoever wants it.
     ///
     /// ```
@@ -485,7 +487,7 @@ impl Ui {
         if !self
             .interaction
             .dropped()
-            .is_some_and(|(src, target)| target == id && from == Some(src))
+            .is_some_and(|(src, target)| from == Some(src) && self.within(target, id))
         {
             return None;
         }
@@ -497,6 +499,20 @@ impl Ui {
                 None
             }
         }
+    }
+    /// Whether the last scene nests `key` under `id`, or `key` is `id`.
+    fn within(&self, key: &str, id: &str) -> bool {
+        let Some(scene) = self.scene.as_ref() else {
+            return key == id;
+        };
+        let mut at = Some(key);
+        while let Some(k) = at {
+            if k == id {
+                return true;
+            }
+            at = scene.surface(k).and_then(|s| s.parent.as_deref());
+        }
+        false
     }
     /// A button went down this frame outside every one of `ids`: the signal a
     /// popup or menu closes on. Pass the popup and whatever opened it, so
