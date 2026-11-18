@@ -1231,40 +1231,36 @@ pub fn glb(bytes: &[u8]) -> Result<Mesh, String> {
         }
         skins.push(Skin { joints, inverse });
     }
-    let channels: Vec<Channel> = g
-        .animations()
-        .next()
-        .map(|a| {
-            a.channels()
-                .filter_map(|c| {
-                    use gltf::animation::util::ReadOutputs;
-                    let r = c.reader(get);
-                    let times: Vec<f32> = r.read_inputs()?.collect();
-                    let (path, values): (u8, Vec<[f32; 4]>) = match r.read_outputs()? {
-                        ReadOutputs::Translations(v) => {
-                            (0, v.map(|p| [p[0], p[1], p[2], 0.]).collect())
-                        }
-                        ReadOutputs::Rotations(v) => (1, v.into_f32().collect()),
-                        ReadOutputs::Scales(v) => (2, v.map(|p| [p[0], p[1], p[2], 0.]).collect()),
-                        ReadOutputs::MorphTargetWeights(_) => return None,
-                    };
-                    let interp = c.sampler().interpolation();
-                    let per = if interp == gltf::animation::Interpolation::CubicSpline {
-                        3
-                    } else {
-                        1
-                    };
-                    (!times.is_empty() && values.len() >= per * times.len()).then_some(Channel {
-                        node: c.target().node().index(),
-                        path,
-                        times,
-                        values,
-                        interp,
-                    })
+    let channels: Vec<Channel> = g.animations().next().map_or_default(|a| {
+        a.channels()
+            .filter_map(|c| {
+                use gltf::animation::util::ReadOutputs;
+                let r = c.reader(get);
+                let times: Vec<f32> = r.read_inputs()?.collect();
+                let (path, values): (u8, Vec<[f32; 4]>) = match r.read_outputs()? {
+                    ReadOutputs::Translations(v) => {
+                        (0, v.map(|p| [p[0], p[1], p[2], 0.]).collect())
+                    }
+                    ReadOutputs::Rotations(v) => (1, v.into_f32().collect()),
+                    ReadOutputs::Scales(v) => (2, v.map(|p| [p[0], p[1], p[2], 0.]).collect()),
+                    ReadOutputs::MorphTargetWeights(_) => return None,
+                };
+                let interp = c.sampler().interpolation();
+                let per = if interp == gltf::animation::Interpolation::CubicSpline {
+                    3
+                } else {
+                    1
+                };
+                (!times.is_empty() && values.len() >= per * times.len()).then_some(Channel {
+                    node: c.target().node().index(),
+                    path,
+                    times,
+                    values,
+                    interp,
                 })
-                .collect()
-        })
-        .unwrap_or_default();
+            })
+            .collect()
+    });
     let mut parts = Vec::new();
     // Depth first, in the file's order.
     let mut stack: Vec<gltf::Node<'_>> = scene.nodes().collect();

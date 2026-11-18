@@ -307,14 +307,12 @@ fn add(argv: &[String]) -> Result<()> {
         return Ok(());
     }
     let list = |k: &str| {
-        r[k].as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default()
+        r[k].as_array().map_or_default(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
     };
     println!(
         "added `{}` ({}) to {} as source `{}`",

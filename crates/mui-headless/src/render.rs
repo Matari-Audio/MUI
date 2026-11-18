@@ -1,25 +1,24 @@
 //! The CPU rasteriser, PNG files and the contact sheet.
 //!
-//! The paint path is `mui-reel`'s `Raster` (and `crates/mui/examples/snapshot.rs`
-//! before it): `mui::vello::paint` into a `vello_cpu` context under one scale
+//! The paint path is `mui::vello::software::Renderer` under one scale
 //! transform, so a 2x render is a 2x rasterisation, not a resampled 1x.
 
 use std::path::Path;
 
 use mui::scene::ResolvedScene;
 use mui::vello::kurbo::Affine;
-use mui::vello::vello_cpu::{Pixmap, RenderContext, Resources};
+use mui::vello::software::Renderer;
 
 use crate::Error;
 
-/// A rasteriser reused across frames.
+/// A rasteriser reused across frames: [`software::Renderer`] at a scale,
+/// giving straight RGBA.
+///
+/// [`software::Renderer`]: mui::vello::software::Renderer
 pub struct Raster {
     pub w: u16,
     pub h: u16,
-    ctx: RenderContext,
-    res: Resources,
-    /// Interned fonts and images: kept, so the hinted-outline cache survives.
-    cache: mui::vello::Cache,
+    renderer: Option<Renderer>,
 }
 
 impl Raster {
@@ -27,33 +26,24 @@ impl Raster {
         Self {
             w,
             h,
-            ctx: RenderContext::new(w, h),
-            res: Resources::default(),
-            cache: mui::vello::Cache::default(),
+            renderer: None,
         }
     }
 
     /// Straight RGBA, `w * h * 4` bytes, of `scene` at `scale`.
     pub fn draw(&mut self, scene: &ResolvedScene, scale: f64) -> Result<Vec<u8>, Error> {
-        self.ctx.reset();
-        mui::vello::paint(
-            &mut mui::vello::Cpu {
-                ctx: &mut self.ctx,
-                resources: &mut self.res,
-                cache: &mut self.cache,
-            },
-            scene,
-            Affine::scale(scale),
-        )
-        .map_err(|e| {
+        let renderer = match &mut self.renderer {
+            Some(r) => r,
+            None => self
+                .renderer
+                .insert(Renderer::new((self.w.into(), self.h.into())).map_err(Error::new)?),
+        };
+        renderer.render(scene, Affine::scale(scale)).map_err(|e| {
             Error::new(format!(
-                "paint: {e:?} (the CPU renderer cannot draw native GPU materials)"
+                "paint: {e} (the CPU renderer cannot draw native GPU materials)"
             ))
         })?;
-        self.ctx.flush();
-        let mut pix = Pixmap::new(self.w, self.h);
-        self.ctx.render(&mut pix, &mut self.res);
-        Ok(pix.take_rgba8(mui::vello::peniko::ImageAlphaType::Alpha))
+        Ok(renderer.rgba8())
     }
 }
 

@@ -84,6 +84,14 @@ impl Renderer {
         self.pixels.data_as_u8_slice()
     }
 
+    /// Straight-alpha sRGB RGBA8, top-to-bottom: what a PNG or an image
+    /// upload wants. Valid after a successful render.
+    pub fn rgba8(&self) -> Vec<u8> {
+        let mut rgba = self.pixels().to_vec();
+        vello_common::pixmap::unpremultiply_rgba8(&mut rgba);
+        rgba
+    }
+
     /// Returns whether pixels changed. GPU materials must first be resolved
     /// with `WeldBackend::Reference`; unsupported scenes fail without presenting.
     pub fn render(&mut self, scene: &ResolvedScene, transform: Affine) -> Result<bool, String> {
@@ -218,6 +226,19 @@ impl Renderer {
         self.transform = (!has_overlay).then_some(transform);
         Ok(true)
     }
+}
+
+/// `scene` under `transform`, rasterised once on a `size` target: straight
+/// sRGB RGBA8, top-to-bottom. For a snapshot or a test; a loop that draws
+/// every frame keeps a [`Renderer`] so fonts and unchanged frames are reused.
+pub fn rgba8(
+    scene: &ResolvedScene,
+    transform: Affine,
+    size: (u32, u32),
+) -> Result<Vec<u8>, String> {
+    let mut renderer = Renderer::new(size)?;
+    renderer.render(scene, transform)?;
+    Ok(renderer.rgba8())
 }
 
 /// An opaque native window presenting CPU pixels. No wgpu device or surface is used.

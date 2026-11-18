@@ -227,7 +227,7 @@ fn view(ui: &mut Ui, m: &mut Model, size: Size, peak: f64) -> El {
         "out",
         col([
             dial(ui, m, ("out", "level"), "Level"),
-            meter(ui, "out-meter", peak.min(1.)).w(Len::Pct(100.)),
+            meter(ui, "out-meter", peak.min(1.)).el().w(Len::Pct(100.)),
         ])
         .gap(14.)
         .align(Align::Center),

@@ -26,22 +26,11 @@ fn raster(
     height: u16,
     scale: f64,
 ) -> Result<Raster, String> {
-    let mut ctx = RenderContext::new(width, height);
-    let mut res = Resources::default();
-    mui_vello::paint(
-        &mut mui_vello::Cpu {
-            ctx: &mut ctx,
-            resources: &mut res,
-            cache: &mut mui_vello::Cache::default(),
-        },
+    let pixels = mui_vello::software::rgba8(
         scene,
         mui_vello::kurbo::Affine::scale(scale),
-    )
-    .map_err(|e| e.to_string())?;
-    ctx.flush();
-    let mut pix = Pixmap::new(width, height);
-    ctx.render(&mut pix, &mut res);
-    let pixels = pix.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha);
+        (width.into(), height.into()),
+    )?;
     let (mut x0, mut y0, mut x1, mut y1) = (usize::from(width), usize::from(height), 0, 0);
     for (i, _) in pixels
         .as_chunks::<4>()
@@ -79,7 +68,6 @@ fn raster(
         base64::engine::general_purpose::STANDARD.encode(bytes),
     )))
 }
-use mui_vello::vello_cpu::{Pixmap, RenderContext, Resources};
 fn capture_cached(
     scene: &mui_scene::ResolvedScene,
     width: u16,

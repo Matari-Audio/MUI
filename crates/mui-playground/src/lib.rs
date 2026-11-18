@@ -285,25 +285,15 @@ pub fn render(source: &str, width: u16, height: u16) -> Result<Frame, String> {
         mui_scene::Palette::from_seed(Color::oklch(0.75, 0.14, 260.), mui_scene::Mode::Dark);
     spec.theme.palette.neutral = mui_scene::Palette::NEUTRAL.neutral;
     let scene = resolve(&spec).map_err(|e| e.to_string())?;
-    let mut ctx = vello_cpu::RenderContext::new(width, height);
-    let mut resources = vello_cpu::Resources::default();
-    mui_vello::paint(
-        &mut mui_vello::Cpu {
-            ctx: &mut ctx,
-            resources: &mut resources,
-            cache: &mut mui_vello::Cache::default(),
-        },
+    let pixels = mui_vello::software::rgba8(
         &scene,
         mui_vello::kurbo::Affine::IDENTITY,
-    )
-    .map_err(|e| e.to_string())?;
-    ctx.flush();
-    let mut pixmap = vello_cpu::Pixmap::new(width, height);
-    ctx.render(&mut pixmap, &mut resources);
+        (width.into(), height.into()),
+    )?;
     Ok(Frame {
         surfaces: scene.surfaces().count() as u32,
         paint_ops: scene.paint.len() as u32,
-        pixels: pixmap.take_rgba8(mui_vello::peniko::ImageAlphaType::Alpha),
+        pixels,
     })
 }
 

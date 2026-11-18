@@ -213,8 +213,7 @@ impl Issues {
 fn props_of(node: &Value) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = node["properties"]
         .as_object()
-        .map(|o| o.keys().cloned().collect())
-        .unwrap_or_default();
+        .map_or_default(|o| o.keys().cloned().collect());
     for k in ["oneOf", "anyOf", "allOf"] {
         for m in node[k].as_array().into_iter().flatten() {
             out.extend(props_of(m));
@@ -227,16 +226,13 @@ fn props_of(node: &Value) -> BTreeSet<String> {
 fn variant(node: &Value, kind: &str) -> BTreeSet<String> {
     let top: BTreeSet<String> = node["properties"]
         .as_object()
-        .map(|o| o.keys().cloned().collect())
-        .unwrap_or_default();
+        .map_or_default(|o| o.keys().cloned().collect());
     let v = node["oneOf"]
         .as_array()
         .into_iter()
         .flatten()
         .find(|m| m["properties"]["kind"]["const"].as_str() == Some(kind));
-    top.into_iter()
-        .chain(v.map(props_of).unwrap_or_default())
-        .collect()
+    top.into_iter().chain(v.map_or_default(props_of)).collect()
 }
 
 /// The closest known name, if it is close enough to be a typo.
@@ -307,8 +303,7 @@ fn fields(raw: &Value, p: &Project, out: &mut Issues) {
     let all_layer = props_of(&layer);
     let top_layer: BTreeSet<String> = layer["properties"]
         .as_object()
-        .map(|o| o.keys().cloned().collect())
-        .unwrap_or_default();
+        .map_or_default(|o| o.keys().cloned().collect());
     for (si, (rs, s)) in raw["scenes"]
         .as_array()
         .into_iter()

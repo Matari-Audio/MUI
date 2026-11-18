@@ -198,9 +198,7 @@ pub fn detect(dir: &Path) -> Result<Plugin> {
         .collect();
     mui.sort();
     mui.dedup();
-    let pinned = std::fs::read_to_string(pkg_dir.join("Cargo.toml"))
-        .map(|t| pinned(&t))
-        .unwrap_or_default();
+    let pinned = std::fs::read_to_string(pkg_dir.join("Cargo.toml")).map_or_default(|t| pinned(&t));
     Ok(Plugin {
         dir: pkg_dir,
         package,
@@ -564,8 +562,7 @@ pub fn adapter(plugin: &str, features: &[String], project_dir: &Path) -> Result<
         .map_err(|e| format!("{}: {e}", lock_path.display()))?;
     write_adapter(&dir, &p, &root, &used, features)?;
     let specs = std::fs::read_to_string(dir.join("Cargo.lock"))
-        .map(|lock| locked_mui_specs(&lock))
-        .unwrap_or_default();
+        .map_or_default(|lock| locked_mui_specs(&lock));
     if !specs.is_empty() {
         let mut update = cargo(&dir);
         update.arg("update").args(&specs);
