@@ -1,26 +1,33 @@
-//! Native Wayland layer surfaces on a toolkit-owned queue and owner thread.
+//! Native Wayland surfaces on a toolkit-owned queue and owner thread: a dock
+//! (wlr layer shell) or a floating window (xdg toplevel, with client-side
+//! decorations when the compositor draws none).
 mod context;
 mod drag;
 mod input;
 mod outputs;
 pub(super) use outputs::names as output_names;
 mod text_input;
+mod toplevel;
 
 use super::{linux, x11::PlatformError};
 use crate::{dpi::*, window::WindowInitializer, *};
 use calloop::{channel, EventLoop, LoopSignal};
 use calloop_wayland_source::WaylandSource;
+use context::Role;
 pub use context::{Context, PlatformHandle};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
     output::{OutputHandler, OutputState},
+    reexports::csd_frame::DecorationsFrame,
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
     seat::SeatState,
     shell::{
         wlr_layer::{Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
+        xdg::{window::WindowDecorations, XdgShell},
         WaylandSurface,
     },
+    subcompositor::SubcompositorState,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -47,10 +54,12 @@ struct Shared {
     visible: AtomicBool,
     desired_visible: AtomicBool,
     redraw: AtomicBool,
+    /// A toplevel that is not resizable keeps min = max = its size.
+    fixed: AtomicBool,
     size: AtomicU64,
     scale: AtomicU64,
     error: Mutex<Option<String>>,
-    surface: Mutex<Option<(LayerSurface, Connection)>>,
+    surface: Mutex<Option<(Role, Connection)>>,
 }
 impl Shared {
     fn size(&self) -> WindowSize {
@@ -66,6 +75,7 @@ enum Command {
     Show,
     Hide,
     Resize(Size),
+    Title(String),
     Close,
 }
 
@@ -78,29 +88,36 @@ pub struct WindowHandle {
 }
 impl WindowHandle {
     pub fn create_window(init: WindowInitializer) -> linux::Result<Self> {
-        if init.settings.parent.is_some() || init.settings.wait_for_parent {
-            return Err(failure("a desktop dock cannot be a host-owned child"));
+        let WindowInitializer { settings, builder, host } = init;
+        drop(host);
+        Self::spawn(settings, builder)
+    }
+    /// Opens the surface on its own owner thread; no host callbacks are attached.
+    pub(crate) fn spawn(
+        settings: WindowSettings, builder: crate::handler::WindowHandlerBuilder,
+    ) -> linux::Result<Self> {
+        if settings.parent.is_some() || settings.wait_for_parent {
+            return Err(failure("a native Wayland surface cannot be a host-owned X11 child"));
         }
         if !crate::pin_current_image_for_detached_work() {
-            return Err(failure("could not pin the dock's executable image"));
+            return Err(failure("could not pin the window's executable image"));
         }
         let shared = Arc::new(Shared {
             open: AtomicBool::new(true),
             visible: AtomicBool::new(false),
             desired_visible: AtomicBool::new(false),
             redraw: AtomicBool::new(true),
+            fixed: AtomicBool::new(!settings.resizable),
             size: AtomicU64::new((800_u64 << 32) | 160),
             scale: AtomicU64::new(1_f64.to_bits()),
             error: Mutex::new(None),
             surface: Mutex::new(None),
         });
-        let WindowInitializer { settings, builder, host } = init;
-        drop(host);
         let (send, recv) = mpsc::sync_channel(1);
         let (sender, receiver) = channel::sync_channel(8);
         let state = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
-            .name("mui-dock-wayland".into())
+            .name("mui-wayland".into())
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -128,7 +145,7 @@ impl WindowHandle {
                 let error = match result {
                     Ok(Ok(())) => None,
                     Ok(Err(e)) => Some(e.to_string()),
-                    Err(_) => Some("panic in native dock runtime".into()),
+                    Err(_) => Some("panic in native Wayland runtime".into()),
                 };
                 if let Some(error) = error {
                     let _ = send.try_send(Err(error.clone()));
@@ -153,7 +170,7 @@ impl WindowHandle {
                 Err(failure(match result {
                     Ok(Err(e)) => e,
                     Err(e) => e.to_string(),
-                    _ => "dock creation failed".into(),
+                    _ => "Wayland window creation failed".into(),
                 }))
             }
         }
@@ -166,6 +183,9 @@ impl WindowHandle {
     }
     pub fn resize(&self, size: Size) -> linux::Result<()> {
         self.command(Command::Resize(size))
+    }
+    pub fn set_title(&self, title: &str) -> linux::Result<()> {
+        self.command(Command::Title(title.into()))
     }
     pub fn show(&self) -> linux::Result<()> {
         self.shared.desired_visible.store(true, Ordering::Release);
@@ -191,7 +211,7 @@ impl WindowHandle {
         self.shared.open.load(Ordering::Acquire)
     }
     pub fn is_resizable(&self) -> bool {
-        false
+        !self.shared.fixed.load(Ordering::Acquire)
     }
     pub fn min_size(&self) -> Option<Size> {
         None
@@ -201,7 +221,7 @@ impl WindowHandle {
     }
     pub fn handle_main_thread_callback(&self) {}
     pub fn set_parent(&self, _: super::x11::ParentWindowHandle) -> linux::Result<()> {
-        Err(failure("a layer surface cannot be embedded"))
+        Err(failure("a native Wayland surface cannot be embedded in X11"))
     }
     pub fn visibility_control(&self) -> WindowVisibility {
         let shared = Arc::downgrade(&self.shared);
@@ -245,12 +265,10 @@ impl Drop for WindowHandle {
         // Release the reservation even when a product renderer is stalled.
         // Wayland proxies/Connection support requests from another thread; only
         // the native owner dispatches events or accesses the product handler.
-        if let Some((layer, conn)) =
+        if let Some((role, conn)) =
             self.shared.surface.lock().unwrap_or_else(|e| e.into_inner()).take()
         {
-            layer.set_exclusive_zone(0);
-            layer.wl_surface().attach(None, 0, 0);
-            layer.wl_surface().commit();
+            role.unmap();
             let _ = conn.flush();
         }
         if let Some(thread) = self.thread.take() {
@@ -277,8 +295,19 @@ struct Runtime {
     keyboard: Option<wayland_client::protocol::wl_keyboard::WlKeyboard>,
     pointer: Option<wayland_client::protocol::wl_pointer::WlPointer>,
     data: drag::Data,
+    /// Toplevel only: the fallback frame's decorations are subsurfaces.
+    subcompositor: Option<Arc<SubcompositorState>>,
+    _xdg: Option<XdgShell>,
+    /// Report a compositor close request as `WillClose` and keep the window.
+    defer_close: bool,
     modifiers: keyboard_types::Modifiers,
     ready: bool,
+    /// A frame callback has fired since the last map: the compositor shows us.
+    /// Before that a callback may never come (nothing attached yet), so frames
+    /// are not gated on it.
+    mapped: bool,
+    /// When the last frame was committed while waiting for its callback.
+    committed: Instant,
     configured: bool,
     exit: bool,
 }
@@ -291,7 +320,6 @@ impl Runtime {
         let (globals, mut queue) = registry_queue_init(&conn).map_err(failure)?;
         let qh = queue.handle();
         let compositor = CompositorState::bind(&globals, &qh).map_err(failure)?;
-        let layers = LayerShell::bind(&globals, &qh).map_err(failure)?;
         let mut runtime = Self {
             registry: RegistryState::new(&globals),
             outputs: OutputState::new(&globals, &qh),
@@ -302,37 +330,37 @@ impl Runtime {
             handler: None,
             keyboard: None,
             pointer: None,
+            subcompositor: None,
+            _xdg: None,
+            defer_close: settings.defer_user_close,
             modifiers: keyboard_types::Modifiers::empty(),
             ready: true,
+            mapped: false,
+            committed: Instant::now(),
             configured: false,
             exit: false,
         };
         queue.roundtrip(&mut runtime).map_err(failure)?;
-        let options = settings.dock.ok_or_else(|| failure("missing dock options"))?;
-        let output = runtime.outputs.outputs().find(|output| {
-            options.output.as_ref().is_none_or(|name| {
-                runtime.outputs.info(output).is_some_and(|i| i.name.as_ref() == Some(name))
-            })
-        });
-        if options.output.is_some() && output.is_none() {
-            return Err(failure("selected dock output is unavailable"));
-        }
         let surface = compositor.create_surface(&qh);
-        let layer = layers.create_layer_surface(
-            &qh,
-            surface,
-            Layer::Top,
-            Some("mui-dock"),
-            output.as_ref(),
-        );
-        if matches!(layer.kind(), smithay_client_toolkit::shell::wlr_layer::SurfaceKind::Wlr(w) if w.version() < 4)
-        {
-            return Err(failure("layer-shell version 4 is required for on-demand keyboard focus"));
-        }
+        let logical = settings.size.to_logical::<f64>(1.0);
+        let logical =
+            ((logical.width.round() as u32).max(1), (logical.height.round() as u32).max(1));
+        let (role, options) = match settings.dock.clone() {
+            Some(options) => {
+                let layer = runtime.dock(&globals, &qh, surface, &options)?;
+                (Role::Layer(layer), Some(options))
+            }
+            None => {
+                let window =
+                    runtime.toplevel(&globals, &qh, &compositor, surface, &settings, logical)?;
+                (Role::Toplevel(window), None)
+            }
+        };
         let context = Rc::new(Context::new(
             conn.clone(),
-            layer,
+            role,
             options,
+            logical,
             qh.clone(),
             shared,
             event_loop.get_signal(),
@@ -342,7 +370,7 @@ impl Runtime {
             context.text.borrow_mut().seat(&seat, &qh);
         }
         *runtime.shared.surface.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some((context.layer.clone(), context.conn.clone()));
+            Some((context.role.clone(), context.conn.clone()));
         runtime.context = Some(Rc::clone(&context));
         runtime.refresh_outputs();
         // Configure without a buffer, and acknowledge before any presenter can attach.
@@ -367,10 +395,36 @@ impl Runtime {
         WaylandSource::new(conn, queue).insert(event_loop.handle()).map_err(failure)?;
         Ok(runtime)
     }
+    fn dock(
+        &self, globals: &wayland_client::globals::GlobalList, qh: &QueueHandle<Self>,
+        surface: wl_surface::WlSurface, options: &DockOptions,
+    ) -> linux::Result<LayerSurface> {
+        let layers = LayerShell::bind(globals, qh).map_err(failure)?;
+        let output = self.outputs.outputs().find(|output| {
+            options.output.as_ref().is_none_or(|name| {
+                self.outputs.info(output).is_some_and(|i| i.name.as_ref() == Some(name))
+            })
+        });
+        if options.output.is_some() && output.is_none() {
+            return Err(failure("selected dock output is unavailable"));
+        }
+        let layer =
+            layers.create_layer_surface(qh, surface, Layer::Top, Some("mui-dock"), output.as_ref());
+        if matches!(layer.kind(), smithay_client_toolkit::shell::wlr_layer::SurfaceKind::Wlr(w) if w.version() < 4)
+        {
+            return Err(failure("layer-shell version 4 is required for on-demand keyboard focus"));
+        }
+        Ok(layer)
+    }
     fn command(&mut self, command: Command) {
         let Some(cx) = &self.context else { return };
         match command {
             Command::Close => self.exit = true,
+            Command::Title(title) => {
+                if let Role::Toplevel(window) = &cx.role {
+                    window.set_title(title);
+                }
+            }
             Command::Resize(size) => {
                 let _ = cx.resize(size);
                 self.shared.redraw.store(true, Ordering::Release);
@@ -385,9 +439,8 @@ impl Runtime {
             Command::Hide => {
                 self.shared.visible.store(false, Ordering::Release);
                 self.configured = false;
-                cx.layer.set_exclusive_zone(0);
-                cx.surface().attach(None, 0, 0);
-                cx.surface().commit();
+                self.mapped = false;
+                cx.role.unmap();
                 self.data.cancel();
                 cx.primary.set(false);
                 cx.drag_active.set(false);
@@ -406,7 +459,13 @@ impl Runtime {
         }
         self.start_pending_drag();
         self.data.progress(self.handler.as_deref());
+        if self.context.as_ref().is_some_and(|cx| cx.resize_pending.replace(false)) {
+            self.resized();
+        }
         let (Some(cx), Some(handler)) = (&self.context, &self.handler) else { return Ok(()) };
+        if !self.ready && self.explicit_overdue() {
+            self.ready = true;
+        }
         if !self.shared.visible.load(Ordering::Acquire) || !self.configured || !self.ready {
             return Ok(());
         }
@@ -418,17 +477,35 @@ impl Runtime {
             _ => true,
         };
         if requested || due {
-            self.ready = false;
+            self.ready = !self.mapped;
+            self.committed = now;
             cx.surface().frame(&cx.qh, FrameCallbackData(cx.surface().clone()));
             handler.on_frame().map_err(failure)?;
+            if let Some(frame) = cx.frame.borrow_mut().as_mut() {
+                if frame.is_dirty() && !frame.is_hidden() {
+                    frame.draw();
+                }
+            }
             cx.surface().commit();
             cx.conn.flush().map_err(failure)?;
         }
         Ok(())
     }
+    /// A commit that paints nothing earns no frame callback on some compositors
+    /// (wlroots, Hyprland). An explicit request (event, resize, redraw) waits at
+    /// most this long for one; continuous animation stays callback-paced, so a
+    /// hidden window stays throttled.
+    const CALLBACK_GRACE: Duration = Duration::from_millis(50);
+    fn explicit_overdue(&self) -> bool {
+        self.shared.redraw.load(Ordering::Acquire)
+            && self.committed.elapsed() >= Self::CALLBACK_GRACE
+    }
     fn deadline(&self) -> Option<Duration> {
         if self.data.has_transfers() {
             return Some(Duration::from_millis(2));
+        }
+        if !self.ready && self.shared.redraw.load(Ordering::Acquire) {
+            return Some(Self::CALLBACK_GRACE.saturating_sub(self.committed.elapsed()));
         }
         if !self.ready || !self.configured || !self.shared.visible.load(Ordering::Acquire) {
             return None;
@@ -448,6 +525,11 @@ impl Runtime {
         self.handler.as_ref().map_or(EventStatus::Ignored, |h| h.on_event(event))
     }
     fn resized(&mut self) {
+        if let Some(cx) = &self.context {
+            if let Some(frame) = cx.frame.borrow_mut().as_mut() {
+                frame.set_scaling_factor(cx.scale_factor());
+            }
+        }
         if let (Some(cx), Some(h)) = (&self.context, &self.handler) {
             let _ = h.resized(cx.size());
         }
@@ -501,6 +583,7 @@ impl CompositorHandler for Runtime {
     ) {
     }
     fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, _: &wl_surface::WlSurface, _: u32) {
+        self.mapped = true;
         self.ready = true;
     }
     fn surface_enter(

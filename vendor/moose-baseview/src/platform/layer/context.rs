@@ -4,8 +4,12 @@ use raw_window_handle::{
     WindowHandle,
 };
 use smithay_client_toolkit::dispatch2::Dispatch2;
+use smithay_client_toolkit::reexports::csd_frame::DecorationsFrame;
 use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity};
-use std::ptr::NonNull;
+use smithay_client_toolkit::shell::xdg::{
+    fallback_frame::FallbackFrame, window::Window as Toplevel, XdgSurface,
+};
+use std::{num::NonZeroU32, ptr::NonNull};
 use wayland_client::{globals::GlobalList, protocol::wl_data_device::WlDataDevice};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
@@ -19,9 +23,32 @@ use wayland_protocols::wp::{
     viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
 };
 
+/// What the one `wl_surface` is: a dock (layer shell) or a floating window (xdg toplevel).
+#[derive(Clone, Debug)]
+pub(super) enum Role {
+    Layer(LayerSurface),
+    Toplevel(Toplevel),
+}
+impl Role {
+    pub(super) fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            Self::Layer(layer) => layer.wl_surface(),
+            Self::Toplevel(window) => window.wl_surface(),
+        }
+    }
+    /// Unmaps without destroying: a later bufferless commit restarts configure.
+    pub(super) fn unmap(&self) {
+        if let Self::Layer(layer) = self {
+            layer.set_exclusive_zone(0);
+        }
+        self.wl_surface().attach(None, 0, 0);
+        self.wl_surface().commit();
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PlatformHandle {
-    layer: LayerSurface,
+    role: Role,
     connection: Connection,
     live: Arc<AtomicBool>,
 }
@@ -30,8 +57,8 @@ impl PlatformHandle {
         if !self.live.load(Ordering::Acquire) {
             return None;
         }
-        let pointer = NonNull::new(self.layer.wl_surface().id().as_ptr().cast())?;
-        // SAFETY: the retained LayerSurface owns this wl_surface until all
+        let pointer = NonNull::new(self.role.wl_surface().id().as_ptr().cast())?;
+        // SAFETY: the retained role object owns this wl_surface until all
         // presentation handles have dropped; close revokes future borrows.
         Some(unsafe {
             WindowHandle::borrow_raw(RawWindowHandle::Wayland(WaylandWindowHandle::new(pointer)))
@@ -49,10 +76,17 @@ impl PlatformHandle {
 }
 
 pub struct Context {
-    pub(super) layer: LayerSurface,
+    pub(super) role: Role,
     pub(super) conn: Connection,
     pub(super) qh: QueueHandle<Runtime>,
-    options: RefCell<DockOptions>,
+    /// `None` for a toplevel.
+    options: RefCell<Option<DockOptions>>,
+    /// Client-side decorations, when the compositor asks a toplevel for them.
+    pub(super) frame: RefCell<Option<FallbackFrame<Runtime>>>,
+    /// A client resize the compositor will not configure; the runtime reports it.
+    pub(super) resize_pending: Cell<bool>,
+    /// The compositor set the toplevel's size (tiled, maximized): client resizes wait.
+    pub(super) imposed: Cell<bool>,
     pub(super) outputs: RefCell<Vec<String>>,
     shared: Arc<Shared>,
     live: Arc<AtomicBool>,
@@ -73,14 +107,14 @@ pub struct Context {
 }
 impl Context {
     pub(super) fn new(
-        conn: Connection, layer: LayerSurface, options: DockOptions, qh: QueueHandle<Runtime>,
-        shared: Arc<Shared>, signal: LoopSignal, globals: &GlobalList,
+        conn: Connection, role: Role, options: Option<DockOptions>, logical: (u32, u32),
+        qh: QueueHandle<Runtime>, shared: Arc<Shared>, signal: LoopSignal, globals: &GlobalList,
     ) -> linux::Result<Self> {
         let viewporter: Option<WpViewporter> = globals.bind(&qh, 1..=1, Noop).ok();
-        let viewport = viewporter.as_ref().map(|v| v.get_viewport(layer.wl_surface(), &qh, Noop));
+        let viewport = viewporter.as_ref().map(|v| v.get_viewport(role.wl_surface(), &qh, Noop));
         let manager: Option<WpFractionalScaleManagerV1> = globals.bind(&qh, 1..=1, Noop).ok();
         let fractional = if viewport.is_some() {
-            manager.as_ref().map(|m| m.get_fractional_scale(layer.wl_surface(), &qh, FractionData))
+            manager.as_ref().map(|m| m.get_fractional_scale(role.wl_surface(), &qh, FractionData))
         } else {
             None
         };
@@ -91,12 +125,18 @@ impl Context {
             v.destroy();
         }
         let cursor_manager = globals.bind(&qh, 1..=1, Noop).ok();
-        let thickness = options.height;
-        let logical = if options.edge.is_vertical() { (thickness, 800) } else { (800, thickness) };
+        let logical = match &options {
+            Some(o) if o.edge.is_vertical() => (o.height, 800),
+            Some(o) => (800, o.height),
+            None => logical,
+        };
         Ok(Self {
             conn,
-            layer,
+            role,
             options: RefCell::new(options),
+            frame: RefCell::new(None),
+            resize_pending: Cell::new(false),
+            imposed: Cell::new(false),
             outputs: RefCell::new(Vec::new()),
             qh: qh.clone(),
             shared,
@@ -118,10 +158,16 @@ impl Context {
         })
     }
     pub(super) fn surface(&self) -> &wl_surface::WlSurface {
-        self.layer.wl_surface()
+        self.role.wl_surface()
     }
     pub(super) fn configure(&self) {
+        let layer = match &self.role {
+            Role::Layer(layer) => layer,
+            // The first bufferless commit maps; the compositor answers with a configure.
+            Role::Toplevel(window) => return window.commit(),
+        };
         let options = self.options.borrow();
+        let Some(options) = options.as_ref() else { return };
         let thickness = options.height;
         // Anchoring both cross-axis edges makes the compositor fill the monitor extent.
         let (anchor, size) = match options.edge {
@@ -130,19 +176,21 @@ impl Context {
             DockEdge::Left => (Anchor::LEFT | Anchor::TOP | Anchor::BOTTOM, (thickness, 0)),
             DockEdge::Right => (Anchor::RIGHT | Anchor::TOP | Anchor::BOTTOM, (thickness, 0)),
         };
-        self.layer.set_anchor(anchor);
-        self.layer.set_size(size.0, size.1);
-        self.layer.set_exclusive_zone(thickness as i32);
-        self.layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+        layer.set_anchor(anchor);
+        layer.set_size(size.0, size.1);
+        layer.set_exclusive_zone(thickness as i32);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
         self.surface().commit();
     }
     pub(super) fn set_size(&self, size: (u32, u32)) {
         let old = self.logical.get();
-        let options = self.options.borrow();
-        let thickness = options.height;
-        // The length axis is compositor-chosen and keeps its last value; the thickness axis is ours.
-        let (fallback_w, fallback_h) =
-            if options.edge.is_vertical() { (thickness, old.1) } else { (old.0, thickness) };
+        // The length axis is compositor-chosen and keeps its last value; the thickness axis is
+        // ours. A toplevel keeps its own size on an axis the compositor leaves to the client.
+        let (fallback_w, fallback_h) = match self.options.borrow().as_ref() {
+            Some(o) if o.edge.is_vertical() => (o.height, old.1),
+            Some(o) => (old.0, o.height),
+            None => old,
+        };
         self.logical.set((
             if size.0 == 0 { fallback_w } else { size.0 },
             if size.1 == 0 { fallback_h } else { size.1 },
@@ -159,6 +207,21 @@ impl Context {
         if let Some(viewport) = &self.viewport {
             viewport.set_destination(w as i32, h as i32);
         }
+        if let Role::Toplevel(window) = &self.role {
+            // With client-side decorations the window geometry includes our frame's borders.
+            let (x, y, gw, gh) = match self.frame.borrow_mut().as_mut() {
+                Some(frame) if !frame.is_hidden() => {
+                    if let (Some(fw), Some(fh)) = (NonZeroU32::new(w), NonZeroU32::new(h)) {
+                        frame.resize(fw, fh);
+                    }
+                    let (x, y) = frame.location();
+                    let (gw, gh) = frame.add_borders(w, h);
+                    (x, y, gw, gh)
+                }
+                _ => (0, 0, w, h),
+            };
+            window.xdg_surface().set_window_geometry(x, y, gw as i32, gh as i32);
+        }
     }
     pub(super) fn set_integer_scale(&self, factor: i32) {
         if self.fractional.is_none() {
@@ -173,7 +236,7 @@ impl Context {
     }
     pub fn platform_handle(&self) -> PlatformHandle {
         PlatformHandle {
-            layer: self.layer.clone(),
+            role: self.role.clone(),
             connection: self.conn.clone(),
             live: Arc::clone(&self.live),
         }
@@ -201,8 +264,24 @@ impl Context {
     }
     pub fn resize(&self, size: Size) -> linux::Result<()> {
         let size: LogicalSize<f64> = size.to_logical(self.scale_factor());
-        let thickness = self.options.borrow().thickness(size);
-        self.options.borrow_mut().height = thickness;
+        if let Role::Toplevel(window) = &self.role {
+            let w = (size.width.round() as u32).max(1);
+            let h = (size.height.round() as u32).max(1);
+            if self.shared.fixed.load(Ordering::Acquire) {
+                window.set_min_size(Some((w, h)));
+                window.set_max_size(Some((w, h)));
+            }
+            // A floating toplevel picks its own size; the next frame commits it.
+            if !self.imposed.get() {
+                self.set_size((w, h));
+            }
+            self.resize_pending.set(true);
+            self.signal.wakeup();
+            return Ok(());
+        }
+        if let Some(options) = self.options.borrow_mut().as_mut() {
+            options.height = options.thickness(size);
+        }
         self.configure();
         Ok(())
     }
@@ -240,6 +319,14 @@ impl Context {
             pointer.set_cursor(serial, None, 0, 0);
         } else {
             let _ = self.set_mouse_cursor(self.cursor.get());
+        }
+    }
+    /// The decoration frame's own cursor, bypassing the content's choice.
+    pub(super) fn set_frame_cursor(&self, shape: Shape) {
+        if let (Some(serial), Some(device)) =
+            (self.cursor_serial.get(), self.cursor_device.borrow().as_ref())
+        {
+            device.set_shape(serial, shape);
         }
     }
     pub(super) fn pointer_leave(&self) {
@@ -312,9 +399,8 @@ impl Context {
     }
     pub(super) fn close(&self) {
         self.live.store(false, Ordering::Release);
-        self.layer.set_exclusive_zone(0);
-        self.surface().attach(None, 0, 0);
-        self.surface().commit();
+        self.frame.borrow_mut().take();
+        self.role.unmap();
         let _ = self.conn.flush();
         self.pending_drag.borrow_mut().take();
     }

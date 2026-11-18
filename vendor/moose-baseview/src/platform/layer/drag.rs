@@ -331,6 +331,11 @@ impl Runtime {
         }
     }
 }
+impl Data {
+    pub(super) fn shm(&self) -> &Shm {
+        &self.shm
+    }
+}
 impl ShmHandler for Runtime {
     fn shm_state(&mut self) -> &mut Shm {
         &mut self.data.shm

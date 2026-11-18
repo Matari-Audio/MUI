@@ -1,8 +1,40 @@
-//! Floating Wayland adapter using MUI's existing winit Driver and presenters.
-//! A surface cannot be embedded through CLAP's Wayland API. Hide destroys the
-//! toplevel; the plugin retains its model and opens a new toplevel on show.
+//! Floating Wayland editors: a native xdg toplevel from baseview, driven by the
+//! same handler, presenters and request queue as X11 windows. A surface cannot be
+//! embedded through CLAP's Wayland API. Hide destroys the toplevel; the plugin
+//! retains its model and opens a new toplevel on show.
 use super::*;
-pub use mui_winit::floating::FloatingWindow;
+
+/// An open floating Wayland editor. Dropping it closes the window.
+pub struct FloatingWindow(Option<baseview::ThreadedWindow>);
+
+impl FloatingWindow {
+    fn window(&self) -> &baseview::ThreadedWindow {
+        self.0.as_ref().expect("taken only by drop")
+    }
+    pub fn is_open(&self) -> bool {
+        self.window().is_open()
+    }
+    /// Physical size and scale, as the compositor last configured them.
+    pub fn size(&self) -> ((u32, u32), f64) {
+        let size = self.window().size();
+        (
+            (size.physical.width, size.physical.height),
+            size.scale_factor,
+        )
+    }
+    pub fn title(&self, title: &str) {
+        let _ = self.window().set_title(title);
+    }
+}
+
+impl Drop for FloatingWindow {
+    fn drop(&mut self) {
+        // The owner thread retires a stalled renderer on its own; never block the host.
+        if let Some(window) = self.0.take() {
+            window.close_bounded(Duration::from_millis(250));
+        }
+    }
+}
 
 pub fn open<V: View + Send + 'static>(
     title: &str,
@@ -12,76 +44,22 @@ pub fn open<V: View + Send + 'static>(
     requests: Arc<Requests>,
     closed: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<FloatingWindow, String> {
-    let poll = requests.clone();
-    let keys = requests.clone();
-    let key_shared = shared.clone();
-    let status = requests.clone();
-    let closing = requests.clone();
-    let mut constrained = false;
-    let hooks = mui_winit::floating::Hooks {
-        poll: Some(Box::new(move |window, driver| {
-            if !constrained {
-                window.set_min_inner_size(Some(winit::dpi::LogicalSize::new(minimum.0, minimum.1)));
-                constrained = true;
-            }
-            let packed = poll.size.swap(0, Ordering::AcqRel);
-            // On Wayland the compositor owns content scale. CLAP set_scale is
-            // ignored, rather than multiplying the compositor's scale twice.
-            poll.scale.store(0, Ordering::Release);
-            if packed != 0 {
-                let _ = window.request_inner_size(winit::dpi::LogicalSize::new(
-                    (packed >> 32) as u32,
-                    packed as u32,
-                ));
-            }
-            if poll.focus.swap(false, Ordering::AcqRel) {
-                window.focus_window();
-            }
-            if poll.redraw.swap(false, Ordering::AcqRel) {
-                driver.redraw();
-                window.request_redraw();
-            }
-            poll.idle();
-        })),
-        key: Some(Box::new(move |event| {
-            let hook = keys.keys.lock().ok().and_then(|hook| hook.clone());
-            hook.is_some_and(|hook| {
-                let mut hook = hook
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                hook(&lock(&key_shared).ui, event)
-            })
-        })),
-        closed: Some(Box::new(move || {
-            closing.wayland_open.store(false, Ordering::Release);
-            closing.bind_requester(None);
-            let hook = closing
-                .close
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take();
-            if let Some(hook) = hook {
-                hook();
-            }
-            closed();
-        })),
-        presented: Some(Box::new(move |size, software| {
-            status.presented(size, software, "Wayland");
-        })),
-    };
-    let window = mui_winit::floating::open(
-        shared,
-        mui_winit::Options {
-            title: title.into(),
-            size,
-            ..Default::default()
-        },
-        hooks,
-    )?;
-    requests.wayland_open.store(true, Ordering::Release);
-    requests.bind_requester(Some(baseview::FrameRequester::new(window.wake())));
-    drop(requests);
-    Ok(window)
+    let closing = Arc::downgrade(&requests);
+    requests.on_close(Arc::new(move || {
+        if let Some(requests) = closing.upgrade() {
+            requests.wayland_open.store(false, Ordering::Release);
+        }
+        closed();
+    }));
+    let opened = Arc::clone(&requests);
+    let settings = settings(title, size)
+        .with_wayland(true)
+        .with_min_size(LogicalSize::new(f64::from(minimum.0), f64::from(minimum.1)));
+    let window = baseview::ThreadedWindow::create(settings, build(shared, requests, false))
+        .and_then(|window| window.show().map(|()| window))
+        .map_err(|e| e.to_string())?;
+    opened.wayland_open.store(true, Ordering::Release);
+    Ok(FloatingWindow(Some(window)))
 }
 
 #[cfg(test)]

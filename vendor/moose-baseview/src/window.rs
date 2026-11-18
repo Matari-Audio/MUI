@@ -346,7 +346,8 @@ impl Window {
     }
 }
 
-/// An X11-only controller that can move between host threads.
+/// A Linux window controller that can move between host threads: an X11
+/// worker, or a native Wayland toplevel with [`WindowSettings::with_wayland`].
 ///
 /// Native state, the handler, and [`WindowContext`] remain on the X11 worker.
 /// Construction cannot attach non-Send [`host::HostCallbacks`]. This type is
@@ -362,7 +363,7 @@ pub struct ThreadedWindow {
 
 #[cfg(target_os = "linux")]
 impl ThreadedWindow {
-    /// Creates a hidden X11 window without main-thread host callbacks.
+    /// Creates a hidden window without main-thread host callbacks.
     ///
     /// Dock settings still select X11 here, even in a Wayland session.
     pub fn create<H: WindowHandler>(
@@ -387,6 +388,12 @@ impl ThreadedWindow {
     #[inline]
     pub fn run_until_closed(self) -> Result<(), Error> {
         self.inner.run_until_closed()?;
+        Ok(())
+    }
+
+    /// Retitles a native Wayland toplevel; an X11 window keeps its creation title.
+    pub fn set_title(&self, title: &str) -> Result<(), Error> {
+        self.inner.set_title(title)?;
         Ok(())
     }
 

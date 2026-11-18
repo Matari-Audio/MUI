@@ -13,6 +13,10 @@ pub struct WindowSettings {
     /// Request an alpha-capable X11 visual for a detached window. Other platforms
     /// retain their native visual selection. Opaque presentation remains the default.
     pub transparent: bool,
+    /// Linux: open a detached [`ThreadedWindow`](crate::ThreadedWindow) as a native
+    /// Wayland toplevel instead of an X11 window. Ignored with a parent; creation
+    /// fails without a Wayland compositor.
+    pub wayland: bool,
     /// The window title.
     pub title: String,
 
@@ -94,6 +98,12 @@ impl WindowSettings {
     /// Request an alpha-capable visual (X11 detached windows only).
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.transparent = transparent;
+        self
+    }
+
+    /// Sets [`wayland`](Self::wayland).
+    pub fn with_wayland(mut self, wayland: bool) -> Self {
+        self.wayland = wayland;
         self
     }
 
@@ -200,6 +210,7 @@ impl Default for WindowSettings {
         Self {
             dock: None,
             transparent: false,
+            wayland: false,
             title: String::from("baseview window"),
             size: LogicalSize { width: 500.0, height: 400.0 }.into(),
             parent: None,

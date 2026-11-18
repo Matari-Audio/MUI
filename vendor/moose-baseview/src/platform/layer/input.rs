@@ -178,10 +178,11 @@ impl PointerHandler for Runtime {
         events: &[PointerEvent],
     ) {
         for event in events {
-            let Some(cx) = &self.context else { continue };
-            if &event.surface != cx.surface() {
+            if self.context.as_ref().is_some_and(|cx| &event.surface != cx.surface()) {
+                self.frame_pointer(pointer, event);
                 continue;
             }
+            let Some(cx) = &self.context else { continue };
             let scale = cx.scale_factor();
             let position =
                 PhysicalPosition::new(event.position.0 * scale, event.position.1 * scale);
