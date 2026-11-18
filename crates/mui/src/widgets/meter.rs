@@ -138,6 +138,11 @@ impl Meter {
         self
     }
 
+    /// The loudest held peak, linear: for a readout drawn elsewhere.
+    pub fn held(&self) -> f32 {
+        self.hold.iter().copied().fold(0.0, f32::max)
+    }
+
     /// The tree, finished.
     pub fn el(self) -> El {
         let Meter {
