@@ -40,6 +40,14 @@ After big code changes, refresh the graph with `graft build` (deterministic,
 no API key, $0).
 <!-- graft:end -->
 
+## Writing MUI UI
+
+Load the `mui-ui` skill (`/.claude/skills/mui-ui/SKILL.md` at the monorepo
+root) before writing or editing UI. The long form is
+[docs/GUIDE.md](docs/GUIDE.md); welding is in
+[docs/MATERIAL-WELDING.md](docs/MATERIAL-WELDING.md). Both are doctests:
+`build-slot cargo test -p mui --doc` compiles every `rust` block.
+
 ## Checking your UI work headlessly
 
 `mui-headless` runs any editor with no window and no GPU, on the CPU renderer and

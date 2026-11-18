@@ -87,6 +87,16 @@ struct DslDoctests;
 #[doc = include_str!("../../../README.md")]
 struct ReadmeDoctests;
 
+/// The agent and author guide, `docs/GUIDE.md`, compiled.
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/GUIDE.md")]
+struct GuideDoctests;
+
+/// The material-welding guide, `docs/MATERIAL-WELDING.md`, compiled.
+#[cfg(doctest)]
+#[doc = include_str!("../../../docs/MATERIAL-WELDING.md")]
+struct WeldingDoctests;
+
 /// Runnable examples for the semantic control compositions.
 #[cfg(doctest)]
 #[doc = include_str!("../../../docs/SEMANTIC-CONTROLS.md")]

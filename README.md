@@ -20,6 +20,15 @@ dependencies at all -- but the renderer, text and accessibility stack does
 not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
 `Cargo.lock`.
 
+## Start here
+
+[docs/GUIDE.md](docs/GUIDE.md) is how to write a MUI editor: flow before
+coordinates, theme tokens before numbers, which shape verb to pick, motion
+verbs, and how to check the result headlessly. Coding agents load the
+`mui-ui` skill (`.claude/skills/mui-ui/SKILL.md` at the monorepo root), which
+summarises it. [docs/MATERIAL-WELDING.md](docs/MATERIAL-WELDING.md) covers
+welding and its GPU backend.
+
 ## Try it in your browser
 
 [Open the MUI playground](https://matari-audio.github.io/MUI/) to edit welded
@@ -57,6 +66,10 @@ limits.
 Use `.union(fill)` for a shared outline, `.inside(padding)` to partition a parent's
 contour, `.bend(amount)` for a curved divider, and `.cut(shape)` / `.keep(shape)`
 for boolean regions. Borders and parallel shells follow the resulting outline.
+`weld![a, b]` or `.weld(Weld::all())` goes further and blends the children's
+fills and borders across the seam; `Ui::gpu_welding()` draws up to three
+rounded plates in a shader and `Ui::set_weld_morph` animates the join without
+a relayout ([material welding](docs/MATERIAL-WELDING.md)).
 `BorderRamp` gives a shared contour continuous color while identifying its tabs.
 See the [shape-layout guide](docs/shape-layout.md) for the full contracts and
 composable examples; the browser playground supports a smaller, explicit subset.
