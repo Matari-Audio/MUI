@@ -126,7 +126,11 @@ pub struct WindowThreadMessage {
 // A host RPC can race a tick synchronously calling VST3 performEdit on the GUI
 // thread. Time out instead of waiting for that thread to service itself.
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(50);
-const OPEN_TIMEOUT: Duration = Duration::from_millis(250);
+// Opening waits on the window thread to create the window, discover its
+// ancestry and answer. A busy machine (a DAW restoring a session, plugins
+// scanning) takes longer than 250 ms; past this the editor is abandoned
+// and stays blank. A stalled X server still frees the host GUI thread.
+pub(super) const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub enum HostCallback {
     Resized { new_size: WindowSize, previous: WindowSize },
@@ -419,8 +423,14 @@ impl WindowThreadControl {
         Ok(())
     }
 
+    /// Showing needs no answer: a window thread still busy opening maps the
+    /// window when it reaches the queued request, so a timeout is not a
+    /// failure. A request that never reached the thread is.
     pub fn show(&self) -> Result<()> {
-        self.request(WindowThreadRequest::Show)
+        match self.request(WindowThreadRequest::Show) {
+            Err(PlatformError::RequestFromMainThreadFailed(RequestFailed::Timeout)) => Ok(()),
+            shown => shown,
+        }
     }
 
     pub fn hide(&self) -> Result<()> {
@@ -569,6 +579,30 @@ mod close_tests {
     }
 
     #[test]
+    fn a_show_still_queued_on_a_busy_window_thread_is_not_a_failure() {
+        let loop_: calloop::EventLoop<'static, ()> = calloop::EventLoop::try_new().unwrap();
+        let (request_sender, queued) = calloop::channel::sync_channel(1);
+        let handle = WindowThreadControl {
+            shared: Arc::new(WindowThreadShared::new()),
+            loop_signal: loop_.get_signal(),
+            event_loop_handle: Cell::new(None),
+            request_sender,
+            can_detach: Cell::new(false),
+            close_timeout: Cell::new(None),
+        };
+        let start = Instant::now();
+        handle.show().unwrap();
+        assert!(start.elapsed() < Duration::from_millis(150));
+        // The show is still there for the window thread to run.
+        drop(handle);
+        let mut shows = 0;
+        while let Ok(m) = queued.try_recv() {
+            shows += usize::from(matches!(m.request, WindowThreadRequest::Show));
+        }
+        assert_eq!(shows, 1);
+    }
+
+    #[test]
     fn full_request_queue_fails_without_blocking() {
         let (sender, _receiver) = calloop::channel::sync_channel(1);
         let (response, _rx) = mpsc::channel();
@@ -686,7 +720,7 @@ impl WindowResultReceiver {
         let result = self
             .0
             .recv_timeout(OPEN_TIMEOUT)
-            .map_err(|_| PlatformError::CreationFailed("X11 window open exceeded 250 ms".into()))?;
+            .map_err(|_| PlatformError::CreationFailed("X11 window open exceeded 5 s".into()))?;
 
         match result {
             WindowOpenResult::Error(e) => Err(PlatformError::CreationFailed(e)),

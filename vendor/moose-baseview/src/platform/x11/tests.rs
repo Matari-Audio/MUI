@@ -480,7 +480,7 @@ fn native_embedded_startup_timeout_waits_for_builder_teardown() {
     let opener = thread::spawn(move || {
         let result = crate::ThreadedWindow::create(embedded_settings(host), move |context| {
             entered.send(()).unwrap();
-            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+            release_rx.recv_timeout(window_thread::OPEN_TIMEOUT + Duration::from_secs(3)).unwrap();
             Ok(OwnedHandler {
                 context,
                 frames: Arc::new(AtomicUsize::new(0)),
@@ -491,8 +491,9 @@ fn native_embedded_startup_timeout_waits_for_builder_teardown() {
         returned.send(result.is_err()).unwrap();
     });
     enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    // Past the open deadline, the failure still waits for the builder.
     assert_eq!(
-        return_rx.recv_timeout(Duration::from_millis(300)),
+        return_rx.recv_timeout(window_thread::OPEN_TIMEOUT + Duration::from_millis(300)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout),
         "startup failure released the parent's lifetime before its builder finished"
     );
