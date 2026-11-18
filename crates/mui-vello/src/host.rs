@@ -628,14 +628,18 @@ impl OnDevice {
         candidate: &mut AdapterDiagnostic,
     ) -> Result<Self, String> {
         candidate.supported_limits = adapter.limits();
-        // WebGL2-class limits at the adapter's own texture size: see
-        // `selection::requested_limits`.
-        candidate.requested_limits = requested_limits(&candidate.supported_limits);
+        // The renderer needs WebGL2-class limits at the adapter's own texture
+        // size (`selection::requested_limits`); an adapter below them is
+        // refused. The device then asks for everything the adapter offers:
+        // an app that borrows it (BUFFR's spectrogram) runs compute and
+        // storage work the quad pass does not, and an adapter always grants
+        // its own limits.
         validate_renderer_requirements(
             &candidate.adapter,
-            &candidate.requested_limits,
+            &requested_limits(&candidate.supported_limits),
             &candidate.supported_limits,
         )?;
+        candidate.requested_limits = candidate.supported_limits.clone();
         selection::validate_texture_formats(adapter)?;
         let limit = candidate.requested_limits.max_texture_dimension_2d;
         let (width, height) = target_size(size.0.min(limit), size.1.min(limit)).unwrap_or((1, 1));

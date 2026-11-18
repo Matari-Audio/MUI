@@ -1,8 +1,9 @@
 //! Driver-independent candidate policy. Device calls stay in the host lifecycle.
 
-/// What the renderer asks of a device: WebGL2-class limits (no compute, no
-/// storage), the adapter's own texture size and buffer alignment, and the
-/// texture array layers the glyph atlas grows into. The quad pass needs 15
+/// What the renderer needs of an adapter: WebGL2-class limits (no compute,
+/// no storage), the adapter's own texture size and buffer alignment, and the
+/// texture array layers the glyph atlas grows into. The device itself is
+/// requested with the adapter's full limits, for apps that borrow it. The quad pass needs 15
 /// vertex attributes and inter-stage variables and a 240-byte instance
 /// stride, all inside these; every buffer it binds is a uniform.
 pub(super) fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
