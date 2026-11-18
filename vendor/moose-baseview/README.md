@@ -46,7 +46,9 @@ Behaviour:
 - Windows: `OleInitialize` balanced with `OleUninitialize`; an MTA host
   thread disables drag and drop instead of failing window creation. System
   DLLs load with `LOAD_LIBRARY_SEARCH_SYSTEM32`.
-- X11: core auto-repeat pairs become one repeated key-down (MOOSE X01);
+- X11: XKB detectable auto-repeat, so held keys repeat as presses only and
+  forwarded keys never reach the host as note-off/note-on pairs; without
+  XKB, core auto-repeat pairs become one repeated key-down (MOOSE X01);
   ignored key events are forwarded to the embed parent, with synthesized
   key-ups on focus loss and close (KURV K26); `Xft.dpi` clamped to 0.5-4
   (KURV K25); override and fallback scale honoured at creation.

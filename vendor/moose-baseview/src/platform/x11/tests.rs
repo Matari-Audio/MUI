@@ -629,3 +629,20 @@ fn native_a_click_takes_the_keyboard_from_the_host_and_a_wheel_does_not() {
     conn.destroy_window(other).unwrap().check().unwrap();
     conn.destroy_window(host).unwrap().check().unwrap();
 }
+
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_held_keys_repeat_without_fake_releases() {
+    use x11rb::protocol::xkb::{ConnectionExt as _, PerClientFlag, ID};
+    let connection = crate::platform::X11Connection::new().unwrap();
+    let conn = connection.conn.xcb_connection();
+    let none = PerClientFlag::from(0u32);
+    let zero = 0u32.into();
+    // Changing nothing reads this client's flags back.
+    let flags = conn
+        .xkb_per_client_flags(ID::USE_CORE_KBD.into(), none, none, zero, zero, zero)
+        .unwrap()
+        .reply()
+        .unwrap();
+    assert!(flags.value.contains(PerClientFlag::DETECTABLE_AUTO_REPEAT));
+}

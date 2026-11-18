@@ -64,6 +64,7 @@ impl X11Connection {
         let screen = conn.default_screen_index();
         let xcb_conn = conn.xcb_connection();
 
+        enable_detectable_auto_repeat(xcb_conn);
         let atoms = Atoms::new(xcb_conn)?.reply()?;
         let resources = resource_manager::new_from_default(xcb_conn)?;
         let cursor_handle = CursorHandle::new(xcb_conn, screen.into(), &resources)?.reply()?;
@@ -182,6 +183,28 @@ impl X11Connection {
 
 /// MOOSE: `Xft.dpi` is a desktop-wide setting that some sessions set to junk (0, or huge
 /// values). Clamp the scale to 0.5..=4 so a bad value cannot produce an unusable window.
+/// Held keys repeat as presses only, the way GTK and Qt hosts already get them.
+/// Core auto-repeat puts a fake release before every repeat. Ignored keys are
+/// forwarded to the host one by one, so a fake release that reaches the host
+/// apart from its press reads as a real release: computer-keyboard MIDI plays
+/// note-off/note-on at the repeat rate. Without XKB the pairing fallback in the
+/// event loop stays.
+fn enable_detectable_auto_repeat(conn: &XCBConnection) {
+    use x11rb::protocol::xkb::{ConnectionExt as _, PerClientFlag, ID};
+    let supported = conn
+        .xkb_use_extension(1, 0)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|reply| reply.supported);
+    if supported {
+        let flag = PerClientFlag::DETECTABLE_AUTO_REPEAT;
+        let none = 0u32.into();
+        let _ = conn
+            .xkb_per_client_flags(ID::USE_CORE_KBD.into(), flag, flag, none, none, none)
+            .map(|cookie| cookie.reply());
+    }
+}
+
 fn xft_dpi_to_scale(dpi: u32) -> f64 {
     (f64::from(dpi) / 96.0).clamp(0.5, 4.0)
 }
