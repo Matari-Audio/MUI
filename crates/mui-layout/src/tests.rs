@@ -1779,3 +1779,61 @@ fn a_leaf_no_room_changes_is_not_measured_again_at_its_share() {
     assert_eq!(calls(false), 2);
     assert_eq!(calls(true), 4);
 }
+
+fn xs(l: &Layout, ids: &[&str]) -> Vec<f64> {
+    ids.iter().map(|k| l.frame(k).unwrap().x).collect()
+}
+fn at(n: &Node, w: f64, h: f64) -> Layout {
+    resolve(n, Some(Size::new(w, h)), Limits::default()).unwrap()
+}
+#[test]
+fn auto_margins_take_the_residual_before_justify() {
+    let b = |k: &str| block(10., 10.).id(k);
+    // `.right()` pushes it and what follows to the end; justify is moot.
+    let r = row([b("a"), b("b").right(), b("c")]).justify(Justify::Center);
+    assert_eq!(xs(&at(&r, 100., 10.), &["a", "b", "c"]), [0., 80., 90.]);
+    // `.left()` pushes what follows; two auto margins split the residual.
+    let r = row([b("a").left(), b("b").left(), b("c")]).gap(5.);
+    assert_eq!(xs(&at(&r, 100., 10.), &["a", "b", "c"]), [0., 45., 90.]);
+    // `.center_x()` alone in a row is centred, whatever the justify.
+    let r = row([b("a").center_x()]).justify(Justify::End);
+    assert_eq!(xs(&at(&r, 100., 10.), &["a"]), [45.]);
+    // Along a column, `.bottom()` is the same thing on y.
+    let c = col([b("a"), b("b").bottom()]);
+    assert_eq!(at(&c, 10., 100.).frame("b").unwrap().y, 90.);
+}
+#[test]
+fn self_placement_overrides_the_cross_axis_and_one_cell_axis() {
+    let b = |k: &str| block(10., 10.).id(k);
+    // Across a column, `.right()` is `align_self(End)`.
+    let c = col([b("a"), b("b").right()]).align(Align::Start);
+    assert_eq!(xs(&at(&c, 100., 20.), &["a", "b"]), [0., 90.]);
+    // In a stack, `.right()` anchors x only; y keeps the parent's centre.
+    let s = stack([b("a").right()]).center();
+    let f = at(&s, 100., 100.).frame("a").unwrap();
+    assert_eq!((f.x, f.y), (90., 45.));
+    // A stretched child placed across its row stops stretching.
+    let r = row([block(10., Len::Auto).id("a").top()]);
+    assert_eq!(at(&r, 100., 40.).frame("a").unwrap().size.height, 0.);
+}
+#[test]
+fn distributions_spread_the_residual() {
+    let b = |k: &str| block(10., 10.).id(k);
+    let ids = ["a", "b", "c"];
+    let r = row([b("a"), b("b"), b("c")]);
+    assert_eq!(
+        xs(&at(&r.clone().evenly(), 70., 10.), &ids),
+        [10., 30., 50.]
+    );
+    assert_eq!(xs(&at(&r.clone().around(), 60., 10.), &ids), [5., 25., 45.]);
+    assert_eq!(xs(&at(&r.between(), 50., 10.), &ids), [0., 20., 40.]);
+}
+#[test]
+fn a_bar_centres_its_middle_on_the_bar() {
+    let b = bar(
+        block(60., 10.).id("s"),
+        block(20., 10.).id("m"),
+        block(10., 10.).id("e"),
+    );
+    assert_eq!(xs(&at(&b, 200., 10.), &["s", "m", "e"]), [0., 90., 190.]);
+}

@@ -543,7 +543,6 @@ pub(crate) fn measure_uncached<'a, P>(
     let sub = [inner[0].or(container[0]), inner[1].or(container[1])];
     let mut children = Vec::with_capacity(node.children().len());
     for (index, c) in node.children().iter().enumerate() {
-        let align = c.align_self.unwrap_or(node.align);
         let mut child_room = room.filter(|_| !node.scroll);
         let promise = match &node.kind {
             // Candidates are measured at what they would like to be: a
@@ -553,7 +552,7 @@ pub(crate) fn measure_uncached<'a, P>(
                 offer(c, true, inner[1], sub[1], false),
             ],
             _ if c.float => {
-                let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
+                let (ax, ay) = c.cell_anchor(node);
                 [
                     offer(c, false, inner[0], sub[0], ax == Align::Stretch),
                     offer(c, true, inner[1], sub[1], ay == Align::Stretch),
@@ -566,20 +565,20 @@ pub(crate) fn measure_uncached<'a, P>(
                     !v,
                     inner[!v as usize],
                     sub[!v as usize],
-                    align == Align::Stretch,
+                    c.cross_align(node, v) == Align::Stretch,
                 );
                 let main = offer(c, v, inner[v as usize], sub[v as usize], false);
                 if v { [cross, main] } else { [main, cross] }
             }
             Kind::Overlay(_) | Kind::Content(_) => {
-                let (ax, ay) = c.anchor.unwrap_or(cell_default(node));
+                let (ax, ay) = c.cell_anchor(node);
                 [
                     offer(c, false, inner[0], sub[0], ax == Align::Stretch),
                     offer(c, true, inner[1], sub[1], ay == Align::Stretch),
                 ]
             }
             Kind::Grid { .. } if explicit_tracks.is_none() => {
-                let (ax, _) = c.anchor.unwrap_or(cell_default(node));
+                let (ax, _) = c.cell_anchor(node);
                 let span = c.span.clamp(1, cols) as f64;
                 let col = inner[0].map(|w| {
                     ((w - gap * (cols - 1) as f64).max(0.0) / cols as f64) * span
@@ -616,7 +615,7 @@ pub(crate) fn measure_uncached<'a, P>(
                 .sum::<f64>()
                 + gap * (p.column_span - 1) as f64;
             let child = &node.children()[p.index];
-            let (ax, _) = child.anchor.unwrap_or(cell_default(node));
+            let (ax, _) = child.cell_anchor(node);
             let promise = [
                 offer(child, false, Some(width), sub[0], ax == Align::Stretch),
                 None,
@@ -666,7 +665,7 @@ pub(crate) fn measure_uncached<'a, P>(
         let height = rows[p.row..p.row + p.row_span].iter().sum::<f64>()
             + line_gap * (p.row_span - 1) as f64;
         let child = &node.children()[p.index];
-        let (ax, ay) = child.anchor.unwrap_or(cell_default(node));
+        let (ax, ay) = child.cell_anchor(node);
         let promise = [
             offer(child, false, Some(width), sub[0], ax == Align::Stretch),
             offer(child, true, Some(height), sub[1], ay == Align::Stretch),
@@ -767,7 +766,7 @@ pub(crate) fn measure_uncached<'a, P>(
                 if !children[index].fluid[axis] || unchanged && !unsettled_height {
                     continue;
                 }
-                let align = c.align_self.unwrap_or(node.align);
+                let align = c.cross_align(node, vertical);
                 let cross = offer(
                     c,
                     !vertical,
@@ -1079,7 +1078,7 @@ pub(crate) fn measure_uncached<'a, P>(
         if !child.is_underlay() && !child.is_overlay() {
             continue;
         }
-        let (ax, ay) = child.anchor.unwrap_or(cell_default(node));
+        let (ax, ay) = child.cell_anchor(node);
         let promise = [
             offer(
                 child,

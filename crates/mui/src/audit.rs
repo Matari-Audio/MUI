@@ -14,6 +14,9 @@
 //! });
 //! assert!(findings.is_empty(), "{findings:#?}");
 //! ```
+//!
+//! [`lint`] reads the declaration alone, for sizes the solver would have
+//! given anyway.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -87,6 +90,20 @@ impl fmt::Display for Finding {
             Fault::Failed { error } => write!(f, "did not resolve: {error}"),
         }
     }
+}
+
+pub use mui_layout::lint::Lint;
+
+/// Sizes in `root` written by hand where intrinsic sizing already holds, or
+/// that fight it. Static, so it costs nothing to run beside [`audit`]:
+///
+/// ```
+/// use mui::prelude::*;
+/// let tree = col![text("Gain").w(Len::Pct(100.)), text("-6 dB").w(48)];
+/// assert_eq!(mui::audit::lint(&tree).len(), 2);
+/// ```
+pub fn lint(root: &El) -> Vec<Lint> {
+    mui_layout::lint::lint(root, |e| matches!(e.content, mui_scene::Content::Text(_)))
 }
 
 /// Every fault `build` has at each of `sizes`, in size order.

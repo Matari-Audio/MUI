@@ -57,8 +57,8 @@ pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCac
 pub use dsl::{body, caption, title};
 pub use element::{
     A11y, Appear, Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Memo,
-    Outline, Paints, Semantics, State, StateStyle, Styled, TextRole, block, canvas, canvas_keyed,
-    col, fits, grid, icon, row, spacer, stack, text,
+    Outline, Paints, Semantics, State, StateStyle, Styled, TextRole, bar, block, canvas,
+    canvas_keyed, col, fits, grid, icon, row, spacer, stack, text,
 };
 pub use mui_geometry::CornerStyle;
 pub use mui_layout::{
@@ -88,8 +88,8 @@ pub mod prelude {
         Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, GridTrack, Id, Image, IntoEl,
         Justify, Keys, Len, Match, Mix, Paints, Pin, Radius, Resolver, Role, SceneSpec, Shadow,
         ShapeLayout, Size, State, Style, Styled, Theme, Weight, Weld, WeldBackend, WeldChannel,
-        WeldQuality, block, body, canvas, canvas_keyed, caption, col, fits, grid, icon, resolve,
-        row, spacer, stack, text, title, weld,
+        WeldQuality, bar, block, body, canvas, canvas_keyed, caption, col, fits, grid, icon,
+        resolve, row, spacer, stack, text, title, weld,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

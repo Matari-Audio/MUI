@@ -706,6 +706,17 @@ pub fn block(width: impl Into<mui_layout::Len>, height: impl Into<mui_layout::Le
 pub fn spacer() -> El {
     Node::block(0.0, 0.0).grow(1.0)
 }
+/// A toolbar: `start` at the left, `end` at the right and `middle` centred
+/// on the bar itself however wide the sides are. See [`mui_layout::bar`].
+///
+/// ```
+/// use mui_scene::prelude::*;
+/// let b = bar("Filter", title("KURV"), row![text("A"), text("B")]);
+/// assert_eq!(b.children().len(), 3);
+/// ```
+pub fn bar(start: impl IntoEl, middle: impl IntoEl, end: impl IntoEl) -> El {
+    mui_layout::bar(start.into_el(), middle.into_el(), end.into_el())
+}
 pub fn row(children: impl IntoIterator<Item = El>) -> El {
     Node::row(children)
 }

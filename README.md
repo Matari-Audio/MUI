@@ -166,8 +166,9 @@ assert_eq!(scene.surface("tab").unwrap().frame.size.width, 92.0);
 | `.w(120)`, `.h(40)`, `.square(28)` | the same sizes taking a bare integer |
 | `.align(..)`, `.justify(..)`, `.anchor(x, y)`, `.offset(dx, dy)` | cross axis, main axis, stack placement, nudge |
 | `.at(dx, dy)`, `.centered_at(dx, dy)` | placed from the parent's top-left corner, or from its centre |
-| `.center()`, `.start()`, `.end()`, `.between()` | the four alignments worth a word |
-| `.justify(Justify::SpaceAround)`, `.justify(Justify::SpaceEvenly)` | the other two CSS distributions |
+| `.center()`, `.start()`, `.end()`, `.between()`, `.around()`, `.evenly()` | how a container lays out its children |
+| `.left()`, `.right()`, `.top()`, `.bottom()`, `.center_x()`, `.center_y()` | where a child sits: across its row/col (`align_self`), along it (a CSS auto margin: `.right()` pushes it and what follows to the end), or on one axis of a stack cell |
+| `bar(start, middle, end)` | a toolbar whose middle is centred on the bar, however wide the sides |
 | `.wrap()` | a row or column that breaks into lines instead of overflowing |
 | `.wrap().line_gap(Xs)` | the space between wrapped lines (and between grid rows) apart from the `gap` between items along a line |
 | `.span(2)`, `.order(-1)` | a grid cell two columns wide; placed before its declaration slot |

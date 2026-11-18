@@ -25,6 +25,7 @@ mod grid;
 mod id;
 pub use grid::GridTrack;
 mod len;
+pub mod lint;
 mod measure;
 mod node;
 mod pin;
@@ -32,7 +33,7 @@ mod pin;
 pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Px, Size};
 mod spacing;
-pub use node::{Node, block, col, fits, grid, row, stack};
+pub use node::{Node, bar, block, col, fits, grid, row, stack};
 pub use spacing::{Pad, Spacing, SpacingScale, SpacingToken};
 
 /// What a measurer says about a content leaf: its size in the room it was

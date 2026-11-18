@@ -112,6 +112,7 @@ pub(crate) fn cell<P>(
 ) -> ([f64; 2], Size) {
     let n = c.node;
     let (ax, ay) = n.anchor.unwrap_or(default);
+    let (ax, ay) = (n.place[0].unwrap_or(ax), n.place[1].unwrap_or(ay));
     let (w, h) = match c.aspect_width(cell) {
         Some((w, a)) => (
             w,
@@ -365,7 +366,23 @@ pub(crate) fn arrange<P>(
                     - allocated.iter().sum::<f64>()
                     - m.gap * (count - 1.0).max(0.0))
                 .max(0.0);
+                // Auto margins take the whole residual before `justify` sees
+                // any, as in CSS: `.right()` on one child pushes it and what
+                // follows to the end of the row.
+                let margins: f64 = line
+                    .iter()
+                    .map(|c| {
+                        let (b, a) = c.node.auto_margins(v);
+                        b + a
+                    })
+                    .sum();
+                let per_margin = if margins > 0.0 {
+                    residual / margins
+                } else {
+                    0.0
+                };
                 let (mut cursor, extra) = match n.justify {
+                    _ if margins > 0.0 => (0.0, 0.0),
                     Justify::SpaceBetween if count > 1.0 => (0.0, residual / (count - 1.0)),
                     // CSS: `space-between` on one item is `flex-start`, so a
                     // header row does not jump when its second child is gone.
@@ -376,7 +393,9 @@ pub(crate) fn arrange<P>(
                     Justify::SpaceEvenly => (residual / (count + 1.0), residual / (count + 1.0)),
                 };
                 for (c, main) in line.iter().zip(allocated) {
-                    let align = c.node.align_self.unwrap_or(n.align);
+                    let (before, after) = c.node.auto_margins(v);
+                    cursor += before * per_margin;
+                    let align = c.node.cross_align(n, v);
                     let aspect_room = if c.node.rare().aspect_fit {
                         Size::axes(main, line_cross, v)
                     } else {
@@ -400,7 +419,7 @@ pub(crate) fn arrange<P>(
                         at(cursor, cross_pos)
                     };
                     placed[c.index] = Some((pos, Size::axes(main, cross, v)));
-                    cursor += main + m.gap + extra;
+                    cursor += main + m.gap + extra + after * per_margin;
                 }
                 line_start += line_cross + m.line_gap;
             }

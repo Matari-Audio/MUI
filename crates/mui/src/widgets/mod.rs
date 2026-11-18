@@ -134,6 +134,12 @@ impl<C, E: IntoEl> Response<C, E> {
         basis(b: impl Px);
         flex(weight: impl Px);
         align_self(a: Align);
+        left();
+        right();
+        top();
+        bottom();
+        center_x();
+        center_y();
         pad(p: impl Into<Pad>);
         at(dx: impl Px, dy: impl Px);
         offset(dx: impl Px, dy: impl Px);

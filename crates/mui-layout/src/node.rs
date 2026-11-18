@@ -46,6 +46,10 @@ pub struct Node<P = ()> {
     pub(crate) align_self: Option<Align>,
     pub(crate) justify: Justify,
     pub(crate) anchor: Option<(Align, Align)>,
+    /// Where this node asks to sit, per physical axis (x, y): see
+    /// [`Node::left`]. Overrides `anchor` in a cell and `align_self` across
+    /// a row or column; along one it is an auto margin.
+    pub(crate) place: [Option<Align>; 2],
     pub(crate) offset: [f64; 2],
     /// Children may overflow the main axis; the frame clips them and
     /// `scrolled` slides them. Implies `clip`.
@@ -141,6 +145,7 @@ impl<P: Default> Node<P> {
             align_self: None,
             justify: Justify::Start,
             anchor: None,
+            place: [None; 2],
             offset: [0.0; 2],
             scroll: false,
             clip: false,
@@ -216,6 +221,25 @@ impl<P: Default> Node<P> {
     pub fn fits(candidates: impl IntoIterator<Item = Self>) -> Self {
         Self::new(Kind::Fits(candidates.into_iter().collect()))
     }
+}
+/// A toolbar: `start` packed left, `end` packed right and `middle` centred
+/// on the bar itself, however wide either side is. `row(..).between()`
+/// centres the middle only between its neighbours, so a wide left side
+/// drags it off-centre; here the two sides take equal shares instead.
+///
+/// ```
+/// use mui_layout::{bar, block, resolve, Size};
+/// let b = bar(block(60, 10), block(20, 10).id("mid"), block(10, 10));
+/// let l = resolve(&b, Some(Size::new(200., 10.)), Default::default()).unwrap();
+/// assert_eq!(l.frame("mid").unwrap().x, 90.);
+/// ```
+pub fn bar<P: Default>(start: Node<P>, middle: Node<P>, end: Node<P>) -> Node<P> {
+    Node::row([
+        Node::row([start]).flex(1),
+        middle,
+        Node::row([end]).flex(1).justify(Justify::End),
+    ])
+    .align(Align::Center)
 }
 
 impl<P> Node<P> {
@@ -337,6 +361,7 @@ impl<P> Node<P> {
             align_self: self.align_self,
             justify: self.justify,
             anchor: self.anchor,
+            place: self.place,
             offset: self.offset,
             scroll: self.scroll,
             clip: self.clip,
@@ -370,6 +395,7 @@ impl<P> Node<P> {
             align_self,
             justify,
             anchor,
+            place,
             offset,
             scroll,
             clip,
@@ -401,6 +427,7 @@ impl<P> Node<P> {
             && *align_self == o.align_self
             && *justify == o.justify
             && *anchor == o.anchor
+            && *place == o.place
             && *offset == o.offset
             && *scroll == o.scroll
             && *clip == o.clip
@@ -544,6 +571,72 @@ impl<P> Node<P> {
     /// Children pushed to the two ends, cross-axis centred.
     pub fn between(self) -> Self {
         self.align(Align::Center).justify(Justify::SpaceBetween)
+    }
+    /// Equal room around each child (half at the ends), cross-axis centred.
+    pub fn around(self) -> Self {
+        self.align(Align::Center).justify(Justify::SpaceAround)
+    }
+    /// Equal room between children and at both ends, cross-axis centred.
+    pub fn evenly(self) -> Self {
+        self.align(Align::Center).justify(Justify::SpaceEvenly)
+    }
+    /// Sit at the left. Across a column this is `align_self`; along a row it
+    /// is an auto margin on the right, so everything after it is pushed
+    /// away -- CSS `margin-right: auto`. In a stack or grid cell it anchors
+    /// the x axis only.
+    ///
+    /// ```
+    /// use mui_layout::{block, resolve, row, Size};
+    /// let bar = row([block(10, 10).id("a"), block(10, 10).right().id("b")]);
+    /// let l = resolve(&bar, Some(Size::new(100., 10.)), Default::default()).unwrap();
+    /// assert_eq!(l.frame("b").unwrap().x, 90.);
+    /// ```
+    pub fn left(self) -> Self {
+        self.place_on(0, Align::Start)
+    }
+    /// Sit at the right; see [`Node::left`].
+    pub fn right(self) -> Self {
+        self.place_on(0, Align::End)
+    }
+    /// Centred horizontally; along a row, auto margins on both sides.
+    pub fn center_x(self) -> Self {
+        self.place_on(0, Align::Center)
+    }
+    /// Sit at the top; see [`Node::left`].
+    pub fn top(self) -> Self {
+        self.place_on(1, Align::Start)
+    }
+    /// Sit at the bottom; see [`Node::left`].
+    pub fn bottom(self) -> Self {
+        self.place_on(1, Align::End)
+    }
+    /// Centred vertically; along a column, auto margins on both sides.
+    pub fn center_y(self) -> Self {
+        self.place_on(1, Align::Center)
+    }
+    fn place_on(mut self, axis: usize, align: Align) -> Self {
+        self.place[axis] = Some(align);
+        self
+    }
+    /// Where this child sits in a stack, overlay or grid cell of `parent`.
+    pub(crate) fn cell_anchor(&self, parent: &Self) -> (Align, Align) {
+        let (x, y) = self.anchor.unwrap_or(crate::measure::cell_default(parent));
+        (self.place[0].unwrap_or(x), self.place[1].unwrap_or(y))
+    }
+    /// Its cross-axis alignment in a row (`vertical == false`) or column.
+    pub(crate) fn cross_align(&self, parent: &Self, vertical: bool) -> Align {
+        self.place[usize::from(!vertical)]
+            .or(self.align_self)
+            .unwrap_or(parent.align)
+    }
+    /// Auto-margin weights `(before, after)` along a row or column.
+    pub(crate) fn auto_margins(&self, vertical: bool) -> (f64, f64) {
+        match self.place[usize::from(vertical)] {
+            Some(Align::Start) => (0.0, 1.0),
+            Some(Align::End) => (1.0, 0.0),
+            Some(Align::Center) => (1.0, 1.0),
+            _ => (0.0, 0.0),
+        }
     }
     /// All of the parent, both axes: `.w(Len::Pct(100.)).h(Len::Pct(100.))`.
     pub fn full(self) -> Self {

@@ -25,7 +25,9 @@ Three consequences shape everything below:
 Use the first rung that expresses the design.
 
 1. **Flow.** `row!`, `col!`, `grid!`, with `.gap(..)`, `.pad(..)`,
-   `.grow(1)`, `spacer()`, `.center()`, `.between()`, `.align(..)`,
+   `.grow(1)`, `.left()`/`.right()`/`.top()`/`.bottom()` (auto margins along a
+   line, `align_self` across it), `bar(start, middle, end)`, `.center()`,
+   `.between()`, `.around()`, `.evenly()`, `.align(..)`,
    `.justify(..)`. This covers almost every panel.
 2. **Responsive flow.** `.wrap()`, `grid(..).min_col(px)`,
    `clamp(min, pct, max)`, `pct(..)`, `cq(..)` and `fits![wide, narrow]`.
