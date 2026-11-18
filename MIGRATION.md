@@ -4,6 +4,13 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+`mui::audit::audit(ui, sizes, build)` builds an editor at each size, lets it
+settle and returns typed `Finding`s: `Escapes`, `FloorViolated`,
+`IdleRebuild`, `Unnamed`, `Occluded` (and `Failed`). A plugin's whole check
+is `assert!(audit(..).is_empty(), "{findings:#?}")`. To support it,
+`ResolvedSurface` gains `floating: bool` (inside a float); a struct literal
+adds `floating: false`.
+
 `mui_layout::Intrinsic` gains `fluid: bool`: whether another room could
 change the measured size. A content leaf that says `false` is not measured
 again at its flex share, and a row of such leaves isn't either. `From<Size>`

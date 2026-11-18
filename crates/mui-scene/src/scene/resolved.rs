@@ -301,6 +301,9 @@ pub struct ResolvedSurface {
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
     pub parent: Option<Id>,
+    /// This node or one above it floats: it is placed against an anchor or
+    /// the window, so it may stand outside its parent's frame by design.
+    pub floating: bool,
     /// A scroll node's children extent inside its padding, unscrolled;
     /// the frame size otherwise.
     pub content: Size,

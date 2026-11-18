@@ -105,6 +105,7 @@ impl<'a> Walk<'a> {
         // A switched-off card switches off what it contains: nothing inside
         // it may be reached while its own frame cannot be.
         inner.disabled = ancestors.disabled || e.has(Element::DISABLED);
+        inner.floating = ancestors.floating || n.is_float();
         self.check_owned(e, at)?;
 
         let start = self.out.paint.len();
@@ -385,6 +386,7 @@ impl<'a> Walk<'a> {
             clip: ancestors.clip,
             clip_path: ancestors.clip_paths.clone(),
             parent: ancestors.parent.clone(),
+            floating: inner.floating,
             content,
             hits,
         });
@@ -940,6 +942,7 @@ impl<'a> Walk<'a> {
                 clip: inner.clip,
                 clip_path: inner.clip_paths.clone(),
                 parent: None,
+                floating: inner.floating,
                 content: strip.size,
                 hits: Vec::new(),
             });
@@ -1051,6 +1054,7 @@ impl<'a> Walk<'a> {
                         parent: inner.parent.clone(),
                         cursor: inner.cursor,
                         disabled: inner.disabled,
+                        floating: inner.floating,
                         ..Ancestors::default()
                     },
                 });

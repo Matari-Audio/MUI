@@ -40,7 +40,7 @@ def select(files, packages):
 
 
 def main(base):
-    diff = subprocess.run(["git", "diff", "--name-only", f"{base}...HEAD"], cwd=ROOT, capture_output=True, text=True, check=True)
+    diff = subprocess.run(["git", "diff", "--name-only", "--relative", f"{base}...HEAD"], cwd=ROOT, capture_output=True, text=True, check=True)
     meta = json.loads(
         subprocess.run(
             ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"], cwd=ROOT, capture_output=True, text=True, check=True

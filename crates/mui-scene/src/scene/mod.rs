@@ -151,6 +151,8 @@ struct Ancestors {
     clip_paths: Option<Arc<[PlacedPath]>>,
     cursor: Option<Cursor>,
     disabled: bool,
+    /// Inside a float: placed against an anchor, not its parent's box.
+    floating: bool,
 }
 
 impl Ancestors {
@@ -166,6 +168,7 @@ impl Ancestors {
             && self.clip == o.clip
             && self.cursor == o.cursor
             && self.disabled == o.disabled
+            && self.floating == o.floating
     }
 }
 

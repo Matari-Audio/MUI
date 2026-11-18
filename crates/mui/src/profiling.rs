@@ -130,6 +130,8 @@ pub struct Profiler {
     totals: [u64; 10],
     counts: [u64; 23],
     sequence: u64,
+    /// Time per phase since [`Profiler::take_frame`] last emptied it.
+    frame: [Duration; 10],
     oldest_input: Option<Instant>,
     present_input: Option<Instant>,
 }
@@ -143,6 +145,7 @@ impl Profiler {
             totals: [0; 10],
             counts: [0; 23],
             sequence: 0,
+            frame: [Duration::ZERO; 10],
             oldest_input: None,
             present_input: None,
         }
@@ -179,6 +182,7 @@ impl Profiler {
         self.sequence = self.sequence.saturating_add(1);
         let i = phase as usize;
         self.totals[i] = self.totals[i].saturating_add(1);
+        self.frame[i] = self.frame[i].saturating_add(duration);
         let ring = &mut self.samples[i];
         if ring.len() == self.capacity {
             ring.pop_front();
@@ -193,6 +197,11 @@ impl Profiler {
         {
             self.record_between(Phase::InputToPresentCall, input, end);
         }
+    }
+    /// Time spent in each phase (indexed by [`Phase`]) since the last call:
+    /// one frame's worth when a host calls it once per frame.
+    pub fn take_frame(&mut self) -> [Duration; 10] {
+        std::mem::take(&mut self.frame)
     }
     pub fn samples(&self, phase: Phase) -> impl Iterator<Item = &Sample> {
         self.samples[phase as usize].iter()
@@ -260,6 +269,108 @@ impl Profiler {
     pub(crate) fn finish_inputs(&mut self) {
         self.oldest_input = None;
         self.discard_pending_presentation();
+    }
+}
+
+/// How a host drew one frame, for [`FrameLog::write`].
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameRecord<'a> {
+    /// Device pixels.
+    pub size: (u32, u32),
+    /// `true` on the GPU presenter, `false` on CPU frames.
+    pub gpu: bool,
+    /// Why the host is on the presenter it is on ("GPU ready", "CPU startup", ...).
+    pub reason: &'a str,
+    /// The frame reached the screen; `false` when nothing had changed or the
+    /// present was skipped (a lost surface, a resize in flight).
+    pub presented: bool,
+    /// The GPU pass refused the frame and it was rasterised whole on the CPU.
+    pub cpu_fallback: Option<&'a dyn std::fmt::Debug>,
+    /// Entries rasterised alone on the CPU, the rest staying on the GPU.
+    pub cpu_patches: usize,
+    /// Pixels the GPU pass drew: the whole window or the box around damage.
+    pub rendered_pixels: u64,
+}
+
+/// One JSON line per frame in the diagnostics directory, for any host to
+/// write when `MUI_FRAME_LOG` is set, so a slow installed plugin can be
+/// read back frame by frame: each phase's time, the presenter, and why a
+/// frame left the GPU. Opt-in; it writes on the UI thread.
+pub struct FrameLog {
+    file: std::fs::File,
+    path: std::path::PathBuf,
+    origin: Instant,
+    written: u64,
+}
+
+impl FrameLog {
+    /// ponytail: stops at 64 MiB (~200k frames); rotate if longer sessions matter.
+    const MAX_BYTES: u64 = 64 << 20;
+
+    /// A log when `MUI_FRAME_LOG` is set to anything but `0`, else `None`.
+    pub fn from_env() -> Option<Self> {
+        let on = std::env::var_os("MUI_FRAME_LOG").is_some_and(|v| !v.is_empty() && v != "0");
+        on.then(|| Self::create(&crate::diagnostics::directory()))?
+            .ok()
+    }
+
+    /// A new log in `directory`, named for this process and window.
+    pub fn create(directory: &std::path::Path) -> io::Result<Self> {
+        std::fs::create_dir_all(directory)?;
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = directory.join(format!("frames-{}-{stamp:x}.jsonl", std::process::id()));
+        let file = std::fs::File::create(&path)?;
+        Ok(Self {
+            file,
+            path,
+            origin: Instant::now(),
+            written: 0,
+        })
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Append `frame` with the phase times `profiler` gathered since the
+    /// last write. A failed write stops the log; it never fails the frame.
+    pub fn write(&mut self, profiler: &mut Profiler, frame: FrameRecord) {
+        use std::fmt::Write as _;
+        let phases = profiler.take_frame();
+        if self.written >= Self::MAX_BYTES {
+            return;
+        }
+        let mut line = format!(
+            r#"{{"t_us":{},"w":{},"h":{},"gpu":{},"reason":{:?},"presented":{},"cpu_patches":{},"rendered_px":{}"#,
+            self.origin.elapsed().as_micros(),
+            frame.size.0,
+            frame.size.1,
+            frame.gpu,
+            frame.reason,
+            frame.presented,
+            frame.cpu_patches,
+            frame.rendered_pixels,
+        );
+        if let Some(reason) = frame.cpu_fallback {
+            let _ = write!(line, r#","cpu_fallback":"{reason:?}""#);
+        }
+        line.push_str(r#","us":{"#);
+        let mut first = true;
+        for phase in Phase::ALL {
+            let time = phases[phase as usize];
+            if !time.is_zero() {
+                let comma = if std::mem::take(&mut first) { "" } else { "," };
+                let _ = write!(line, r#"{comma}"{phase:?}":{}"#, time.as_micros());
+            }
+        }
+        line.push_str("}}\n");
+        match self.file.write_all(line.as_bytes()) {
+            Ok(()) => self.written += line.len() as u64,
+            Err(_) => self.written = Self::MAX_BYTES,
+        }
     }
 }
 
@@ -341,5 +452,45 @@ mod tests {
         assert_eq!(profile.present_input, None);
         profile.record_duration(Phase::PresentCall, Duration::ZERO);
         assert_eq!(profile.percentiles(Phase::InputToPresentCall).total, 1);
+    }
+
+    #[test]
+    fn the_frame_log_writes_a_line_of_phase_times_per_frame() {
+        let dir = std::env::temp_dir().join(format!("mui-frame-log-{}", std::process::id()));
+        let mut log = FrameLog::create(&dir).unwrap();
+        let mut profiler = Profiler::new(ProfileConfig::default());
+        profiler.record_duration(Phase::Resolve, Duration::from_micros(1500));
+        profiler.record_duration(Phase::Resolve, Duration::from_micros(500));
+        log.write(
+            &mut profiler,
+            FrameRecord {
+                size: (800, 600),
+                reason: "CPU startup",
+                presented: true,
+                cpu_fallback: Some(&Phase::Encode),
+                ..FrameRecord::default()
+            },
+        );
+        log.write(&mut profiler, FrameRecord::default());
+        let text = std::fs::read_to_string(log.path()).unwrap();
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(
+            lines[0].contains(r#""us":{"Resolve":2000}"#),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains(r#""reason":"CPU startup""#),
+            "{}",
+            lines[0]
+        );
+        assert!(
+            lines[0].contains(r#""cpu_fallback":"Encode""#),
+            "{}",
+            lines[0]
+        );
+        assert!(lines[1].ends_with(r#""us":{}}"#), "{}", lines[1]);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

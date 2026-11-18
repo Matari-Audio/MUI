@@ -389,6 +389,10 @@ impl Ui {
             scene.external_contains(key, q)
         })
     }
+    /// The target a pointer at `pos` would reach in last frame's hit map.
+    pub(crate) fn target_at(&self, pos: Point) -> Option<&str> {
+        self.under(Some(pos)).map(|(id, _)| id)
+    }
     /// Whether `pos` lands on another hovered target or tagged shape.
     pub(super) fn retargets(&self, pos: Option<Point>) -> bool {
         let under = self.under(pos);

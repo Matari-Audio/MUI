@@ -33,6 +33,7 @@ pub use mui_scene as scene;
 pub use mui_vello as vello;
 
 mod actions;
+pub mod audit;
 pub mod host;
 pub mod profiling;
 mod ui;

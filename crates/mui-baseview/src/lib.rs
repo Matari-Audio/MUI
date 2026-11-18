@@ -627,6 +627,35 @@ fn settings(title: &str, size: (u32, u32)) -> WindowSettings {
         .with_size(LogicalSize::new(f64::from(size.0), f64::from(size.1)))
 }
 
+/// One `MUI_FRAME_LOG` line; `stats` are the GPU renderer's for a presented frame.
+fn log_frame(
+    log: &mut Option<mui::profiling::FrameLog>,
+    driver: &mut Driver,
+    reason: &str,
+    size: (u32, u32),
+    gpu: bool,
+    presented: bool,
+    stats: Option<&mui::vello::effects::EffectStats>,
+) {
+    let (Some(log), Some(profiler)) = (log.as_mut(), driver.profiler_mut()) else {
+        return;
+    };
+    log.write(
+        profiler,
+        mui::profiling::FrameRecord {
+            size,
+            gpu,
+            reason,
+            presented,
+            cpu_fallback: stats
+                .and_then(|s| s.cpu_fallback.as_ref())
+                .map(|r| r as &dyn std::fmt::Debug),
+            cpu_patches: stats.map_or(0, |s| s.cpu_patches),
+            rendered_pixels: stats.map_or(0, |s| s.rendered_pixels),
+        },
+    );
+}
+
 /// The window's event handler. Public so a framework adapter can drive it
 /// headless in its own tests ([`Handler::new`], [`Handler::step`],
 /// [`Handler::on_event_inner`]); a window gets one from [`open`] or [`run`].
@@ -660,6 +689,8 @@ pub struct Handler<V> {
     x11_window: u32,
     /// Outbound drag sessions, and whether the window is a host's child.
     drag: drag::Host,
+    /// `MUI_FRAME_LOG`: a line per painted frame.
+    frame_log: Option<mui::profiling::FrameLog>,
     _reporting: mui::diagnostics::ReportingGuard,
 }
 
@@ -694,6 +725,11 @@ impl<V: View> Handler<V> {
     ) -> Self {
         lock(&shared).ui.set_gpu_welding_available(false);
         let drag = drag::Host::new(&requests);
+        let mut driver = Driver::new(size, scale, Box::new(Clipboard::default()));
+        let frame_log = mui::profiling::FrameLog::from_env();
+        if frame_log.is_some() {
+            driver.enable_profiling(mui::profiling::ProfileConfig::default());
+        }
         Self {
             shared,
             requests,
@@ -712,11 +748,12 @@ impl<V: View> Handler<V> {
             scale,
             captured: None,
             applied_ime: None,
-            driver: Driver::new(size, scale, Box::new(Clipboard::default())),
+            driver,
             key_routes: KeyRoutes::new(),
             #[cfg(target_os = "linux")]
             x11_window: 0,
             drag,
+            frame_log,
             _reporting: mui::diagnostics::retain_reporter(),
         }
     }
@@ -925,6 +962,17 @@ impl<V: View> Handler<V> {
                     profile.discard_pending_presentation();
                 }
             }
+            let painted = matches!(result, Ok(true));
+            let reason = self.presenter_reason;
+            log_frame(
+                &mut self.frame_log,
+                &mut self.driver,
+                reason,
+                size,
+                false,
+                painted,
+                None,
+            );
             match result {
                 Ok(drew) => {
                     self.requests.drag.rendered(drag_frame);
@@ -968,6 +1016,21 @@ impl<V: View> Handler<V> {
                     profiler.record_since(mui::profiling::Phase::PresentCall, start);
                 }
             }
+            let stats = match &frame {
+                Ok(Frame::Presented(stats)) => Some(stats),
+                _ => None,
+            };
+            let reason = self.presenter_reason;
+            let size = gpu.size();
+            log_frame(
+                &mut self.frame_log,
+                &mut self.driver,
+                reason,
+                size,
+                true,
+                stats.is_some(),
+                stats,
+            );
             match frame {
                 Ok(Frame::Presented(_)) => {
                     self.requests.drag.rendered(drag_frame);
