@@ -149,6 +149,9 @@ struct Ancestors {
     parent: Option<Id>,
     clip: Option<Rect>,
     clip_paths: Option<Arc<[PlacedPath]>>,
+    /// Each clip's own rectangle before intersection, parallel to
+    /// `clip_paths`; follows from them, so `same` does not compare it.
+    clip_rects: Option<Arc<[Rect]>>,
     cursor: Option<Cursor>,
     disabled: bool,
     /// Inside a float: placed against an anchor, not its parent's box.

@@ -882,6 +882,52 @@ fn a_moved_memo_translates_its_paint_and_surfaces() {
     assert_eq!(b.surface("m.a").unwrap().frame.x, 70.);
 }
 
+/// A memo scrolling under a viewport, with a clip of its own inside, cut
+/// by the viewport on one frame and not the next.
+fn scrolled_spec(by: f64, reused: bool, draws: &Arc<std::sync::atomic::AtomicUsize>) -> SceneSpec {
+    let count = draws.clone();
+    let strip = row([
+        block(30., 20.).fill(Role::Primary).id("s.a"),
+        canvas(move |_| {
+            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Vec::new()
+        })
+        .size(10., 10.)
+        .id("s.c"),
+    ])
+    .w(60.)
+    .radius(4.)
+    .clip()
+    .id("s.strip");
+    let mut panel = col([block(40., 50.).fill(Role::Raised), strip, block(40., 80.)]).id("s");
+    panel.payload_mut().extras_mut().memo = Some(crate::Memo { id: 9, reused });
+    let view = col([panel])
+        .h(60.)
+        .radius(8.)
+        .scroll()
+        .scrolled(0., by)
+        .id("view");
+    SceneSpec::new(row([view]).align(Align::Start)).offered(Size::new(200., 100.))
+}
+
+/// Scrolling copies the memo under the viewport instead of walking it: its
+/// own clip moves with it and the viewport's stays, as a walk would have it.
+#[test]
+fn a_memo_scrolled_under_a_viewport_is_copied_with_the_viewport_clip_kept() {
+    let d = draws();
+    let mut text = TextState::default();
+    let mut prev = retained(&scrolled_spec(0., false, &d), &mut text, None);
+    for by in [12., 40., 3.] {
+        prev = retained(&scrolled_spec(by, true, &d), &mut text, Some(&prev));
+        let walked = resolve(&scrolled_spec(by, false, &draws())).unwrap();
+        assert_eq!(prev.paint, walked.paint, "paint at {by}");
+        for k in ["s", "s.strip", "s.a", "s.c"] {
+            assert_eq!(prev.surface(k), walked.surface(k), "{k} at {by}");
+        }
+    }
+    assert_eq!(count(&d), 1, "a scrolled memo was walked instead of copied");
+}
+
 /// The caches a copied memo used stay warm while it is copied, and its
 /// walk renews them once they are [`MEMO_AGE`] resolves old.
 #[test]

@@ -385,6 +385,7 @@ impl<'a> Walk<'a> {
             },
             clip: ancestors.clip,
             clip_path: ancestors.clip_paths.clone(),
+            clip_rects: ancestors.clip_rects.clone(),
             parent: ancestors.parent.clone(),
             floating: inner.floating,
             content,
@@ -570,11 +571,10 @@ impl<'a> Walk<'a> {
         let d = Vec2::new(frame.x - old.origin.x, frame.y - old.origin.y);
         let moved = d != Vec2::ZERO;
         let grid = |v: f64| on_grid(v, self.spec.device_scale);
-        // A moved span's clips are its own, so they move with it; an
-        // ancestor's would not.
+        // A moved span's own clips move with it; its ancestors' stay put
+        // (see `Shift`), so content scrolling under a viewport is copied.
         if moved
-            && (ancestors.clip.is_some()
-                || !grid(d.x)
+            && (!grid(d.x)
                 || !grid(d.y)
                 || prev.paint[old.paint.clone()]
                     .iter()
@@ -597,7 +597,7 @@ impl<'a> Walk<'a> {
             return false;
         }
         let (paint, surfaces) = (self.out.paint.len(), self.out.surfaces.len());
-        let mut shift = Shift::new(d);
+        let mut shift = Shift::new(d, ancestors);
         self.out.paint.extend(
             prev.paint[old.paint.clone()]
                 .iter()
@@ -941,6 +941,7 @@ impl<'a> Walk<'a> {
                 text_geometry: None,
                 clip: inner.clip,
                 clip_path: inner.clip_paths.clone(),
+                clip_rects: inner.clip_rects.clone(),
                 parent: None,
                 floating: inner.floating,
                 content: strip.size,
@@ -964,16 +965,10 @@ impl<'a> Walk<'a> {
         let b = self
             .transform
             .transform_rect_bbox(b.unwrap_or_else(|| bounds(frame, self.spec.device_scale)));
-        let b = inner.clip.map_or(b, |c| {
-            Rect::new(
-                b.x0.max(c.x0),
-                b.y0.max(c.y0),
-                b.x1.min(c.x1),
-                b.y1.min(c.y1),
-            )
-        });
+        let rects = inner.clip_rects.as_deref().unwrap_or_default();
+        inner.clip_rects = Some(rects.iter().copied().chain(std::iter::once(b)).collect());
         self.mark_on(Layer::Clip, contour);
-        inner.clip = Some(b);
+        inner.clip = Some(inner.clip.map_or(b, |c| meet(c, b)));
         // Every exact outline in one allocation all descendants share.
         // `clip` remains the rectangular fast path used by existing input
         // adapters; rounded or welded corners can now be tested without
@@ -1143,14 +1138,30 @@ struct LineRun {
     line_height: f64,
 }
 
-struct Shift {
+/// Moves a copied span's paint and surfaces by `d`. The clips of
+/// `outer`, the span's ancestors, stay where they are: a scroller's
+/// viewport does not move with its content.
+struct Shift<'o> {
     d: Vec2,
+    outer: &'o Ancestors,
     lists: Vec<(*const [super::PlacedPath], Clips)>,
 }
-impl Shift {
-    fn new(d: Vec2) -> Self {
+
+/// Two clip rectangles' overlap, as [`Walk::clip`] narrows them.
+fn meet(a: Rect, b: Rect) -> Rect {
+    Rect::new(
+        a.x0.max(b.x0),
+        a.y0.max(b.y0),
+        a.x1.min(b.x1),
+        a.y1.min(b.y1),
+    )
+}
+
+impl<'o> Shift<'o> {
+    fn new(d: Vec2, outer: &'o Ancestors) -> Self {
         Self {
             d,
+            outer,
             lists: Vec::new(),
         }
     }
@@ -1159,6 +1170,8 @@ impl Shift {
         if self.d != Vec2::ZERO {
             match &mut p.text {
                 Some(t) => t.origin += self.d,
+                // A pathless marker (an `Unclip`, a `Blend`) stands nowhere.
+                None if p.path.commands.is_empty() => {}
                 None => p.offset += self.d,
             }
         }
@@ -1174,19 +1187,35 @@ impl Shift {
         s.frame.y += d.y;
         s.bounds = s.bounds.map(|b| b + d);
         s.offset += d;
-        s.clip = s.clip.map(|b| b + d);
-        if let Some(list) = &s.clip_path {
-            let at = Arc::as_ptr(list);
-            s.clip_path = Some(
-                if let Some((_, moved)) = self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
-                    moved.clone()
-                } else {
-                    let moved: Clips = list.iter().map(|(p, o)| (p.clone(), *o + d)).collect();
-                    self.lists.push((at, moved.clone()));
-                    moved
-                },
-            );
+        // The span's own clips are those past its ancestors'; only they move.
+        let kept = self.outer.clip_rects.as_ref().map_or(0, |r| r.len());
+        let (Some(list), Some(rects)) = (&s.clip_path, &s.clip_rects) else {
+            return s;
+        };
+        if rects.len() <= kept {
+            return s;
         }
+        let rects: Arc<[Rect]> = rects
+            .iter()
+            .enumerate()
+            .map(|(i, r)| if i < kept { *r } else { *r + d })
+            .collect();
+        s.clip = rects.iter().copied().reduce(meet);
+        s.clip_rects = Some(rects);
+        let at = Arc::as_ptr(list);
+        s.clip_path = Some(
+            if let Some((_, moved)) = self.lists.iter().find(|(p, _)| std::ptr::eq(*p, at)) {
+                moved.clone()
+            } else {
+                let moved: Clips = list
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (p, o))| (p.clone(), if i < kept { *o } else { *o + d }))
+                    .collect();
+                self.lists.push((at, moved.clone()));
+                moved
+            },
+        );
         s
     }
 }

@@ -298,6 +298,10 @@ pub struct ResolvedSurface {
     /// clipping ancestor's own outline, shared, not a copy, with the offset
     /// that places it.
     pub clip_path: Option<Arc<[PlacedPath]>>,
+    /// Each clipping ancestor's own rectangle, unintersected, parallel to
+    /// [`Self::clip_path`]: what lets a reused subtree that moved under a
+    /// clip it did not move with (a scroller's) recompute [`Self::clip`].
+    pub(super) clip_rects: Option<Arc<[Rect]>>,
     /// Nearest explicitly named ancestor in the authored tree, not a containing
     /// rectangle. A floating node keeps this parent even when it escapes clipping.
     pub parent: Option<Id>,

@@ -117,7 +117,8 @@ fn memo_editor(ui: &mut Ui, values: &mut [f64]) -> El {
             ui.memo(format!("t{t}"), deps, |ui| track(ui, t, v))
         })
         .collect();
-    col([toolbar, ruler].into_iter().chain(tracks))
+    let tracks = col(tracks).gap(4.0).scroll().grow(1.0).id("tracks");
+    col([toolbar, ruler, tracks])
         .gap(4.0)
         .pad(8.0)
         .fill(Role::Background)
@@ -223,7 +224,8 @@ fn editor(ui: &mut Ui, values: &mut [f64]) -> El {
             .fill(Role::Raised)
             .radius(6.0)
     });
-    col([toolbar, ruler].into_iter().chain(tracks))
+    let tracks = col(tracks).gap(4.0).scroll().grow(1.0).id("tracks");
+    col([toolbar, ruler, tracks])
         .gap(4.0)
         .pad(8.0)
         .fill(Role::Background)
@@ -247,10 +249,10 @@ fn main() {
     let mut nodes = 0;
     let memo = std::env::var_os("MEMO").is_some();
     let total = std::env::var_os("TOTAL").is_some();
-    let mut frame = |ui: &mut Ui, w: f64, p: PointerInput, dt: f64| -> f64 {
+    let mut frame = |ui: &mut Ui, w: f64, p: Input, dt: f64| -> f64 {
         let b = cpu_ms();
         if memo {
-            ui.anticipate(p.pos);
+            ui.anticipate(p.pointer.pos);
         }
         let root = if memo {
             memo_editor(ui, &mut values)
@@ -262,7 +264,7 @@ fn main() {
         std::hint::black_box(ui.frame(root, size(w), p, dt).unwrap().scene.paint.len());
         cpu_ms() - s
     };
-    frame(&mut ui, 1800.0, away, 0.016);
+    frame(&mut ui, 1800.0, away.into(), 0.016);
     let at = |ui: &Ui, id: &str| {
         let f = ui.scene().unwrap().layout.frame(id).unwrap();
         let (x, y) = f.center();
@@ -284,6 +286,7 @@ fn main() {
         .map(|id| at(&ui, &id))
         .collect();
     let name = at(&ui, "t3/name");
+    let over_tracks = name;
     // `ONLY=<name>` runs one case long enough to profile.
     let only = std::env::var("ONLY").ok();
     let mut run = |name: &str, f: &mut dyn FnMut(&mut Ui, usize) -> f64| {
@@ -308,24 +311,40 @@ fn main() {
             t[0]
         );
     };
-    run("steady", &mut |ui, _| frame(ui, 1800.0, away, 0.016));
+    run("steady", &mut |ui, _| frame(ui, 1800.0, away.into(), 0.016));
     run("hover", &mut |ui, i| {
-        frame(ui, 1800.0, over[i % over.len()], 0.016)
+        frame(ui, 1800.0, over[i % over.len()].into(), 0.016)
     });
     // A hand on the mouse: a new target every tenth frame (160 ms), long
     // enough for most hover springs to settle in between.
     run("hover10", &mut |ui, i| {
-        frame(ui, 1800.0, over[(i / 10) % over.len()], 0.016)
+        frame(ui, 1800.0, over[(i / 10) % over.len()].into(), 0.016)
     });
     run("resize", &mut |ui, i| {
-        frame(ui, 1500.0 + (i % 50) as f64 * 6.0, away, 0.016)
+        frame(ui, 1500.0 + (i % 50) as f64 * 6.0, away.into(), 0.016)
     });
+    // The wheel over the tracks, down for ten frames and back up.
+    let mut scrolled: f64 = 0.0;
+    run("scroll", &mut |ui, i| {
+        let wheel = Input {
+            pointer: over_tracks,
+            wheel: Vec2::new(0.0, if i % 20 < 10 { 60.0 } else { -60.0 }),
+            ..Input::default()
+        };
+        let ms = frame(ui, 1800.0, wheel, 0.016);
+        scrolled = scrolled.max(ui.scroll("tracks")[1]);
+        ms
+    });
+    assert!(
+        only.is_some() || scrolled > 0.0,
+        "the tracks did not scroll"
+    );
     // The pointer rests on a name until its tip shows, then leaves: a tip
     // comes or goes on two frames in three.
     let mut tips = 0;
     run("tooltip", &mut |ui, i| {
         let p = if i % 3 == 0 { away } else { name };
-        let ms = frame(ui, 1800.0, p, 0.6);
+        let ms = frame(ui, 1800.0, p.into(), 0.6);
         tips += ui.scene().unwrap().layout.frame("/tip").is_some() as usize;
         ms
     });
