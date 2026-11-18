@@ -437,8 +437,9 @@ pub(crate) fn measure_uncached<'a, P>(
     if !pass.redo {
         pass.left -= 1;
     }
-    // The cache's prepass has already validated every node.
-    if pass.cache.is_none() {
+    // The cache's prepass has already validated every node, and a re-measure
+    // revisits only nodes this solve's first pass validated.
+    if pass.cache.is_none() && !pass.redo {
         validate_node(node, l)?;
     }
     let padding = boxed.unwrap_or_else(|| node.padding(pass.scale));
@@ -814,10 +815,16 @@ pub(crate) fn measure_uncached<'a, P>(
     let flow = flow_of(&children);
     let max_of =
         |g: &dyn Fn(&Measured<'_, P>) -> f64| flow.iter().map(|c| g(c)).fold(0.0, f64::max);
+    let mut content_fluid = false;
     let (content, sunk) = match &node.kind {
         Kind::Leaf => (Size::ZERO, Size::ZERO),
         Kind::Content(_) => {
-            let Intrinsic { size, min_width } = (pass.measurer)(&node.payload, room);
+            let Intrinsic {
+                size,
+                min_width,
+                fluid,
+            } = (pass.measurer)(&node.payload, room);
+            content_fluid = fluid;
             if !size.valid(l.extent) || !(0.0..=l.extent).contains(&min_width) {
                 return Err(Error::InvalidValue);
             }
@@ -1120,7 +1127,8 @@ pub(crate) fn measure_uncached<'a, P>(
             ..
         }
     ) && node.wrap;
-    let fluid = matches!(node.kind, Kind::Content(_) | Kind::Fits(_))
+    let fluid = matches!(node.kind, Kind::Fits(_))
+        || matches!(node.kind, Kind::Content(_)) && content_fluid
         || (node.rare().min_col.is_some()
             && inner[0].is_none()
             && matches!(node.kind, Kind::Grid { .. }))

@@ -29,6 +29,7 @@ fn named_minimum_is_the_measured_floor_not_its_allocated_frame() {
         |_: &(), _| Intrinsic {
             size: Size::new(90., 18.),
             min_width: 35.,
+            fluid: true,
         },
     )
     .unwrap();

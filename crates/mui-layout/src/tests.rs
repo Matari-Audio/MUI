@@ -1249,6 +1249,7 @@ fn a_row_shrinks_content_only_down_to_its_min_content() {
             |min: &f64, _| Intrinsic {
                 size: Size::new(100., 10.),
                 min_width: *min,
+                fluid: true,
             },
         )
         .unwrap()
@@ -1388,6 +1389,7 @@ fn a_squeezed_column_of_wrapped_texts_overflows_rather_than_overlapping() {
         Intrinsic {
             size: Size::new(w, 12. * (one / w).ceil()),
             min_width: 30.,
+            fluid: true,
         }
     };
     let lines = |id: usize| "word ".repeat(20 + id * 7);
@@ -1745,4 +1747,35 @@ fn a_pinned_float_in_a_short_row_keeps_its_own_height() {
     let l = resolve(&tree, Some(Size::new(300., 300.)), Limits::default()).unwrap();
     assert_eq!(l.frame("row").unwrap().size.height, 24.);
     assert_eq!(l.frame("menu").unwrap().size.height, 90.);
+}
+
+#[test]
+fn a_leaf_no_room_changes_is_not_measured_again_at_its_share() {
+    // Squeezed: each leaf's share differs from what it measured.
+    let t = Node::row([
+        Node::content().with(()).id("a"),
+        Node::content().with(()).id("b"),
+    ]);
+    let calls = |fluid: bool| {
+        let mut n = 0;
+        let l = resolve_with(
+            &t,
+            Some(Size::new(150., 10.)),
+            Limits::default(),
+            SpacingScale::DEFAULT,
+            |_: &(), _| {
+                n += 1;
+                Intrinsic {
+                    size: Size::new(100., 10.),
+                    min_width: 0.,
+                    fluid,
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(l.frame("a").unwrap().size.width, 75.);
+        n
+    };
+    assert_eq!(calls(false), 2);
+    assert_eq!(calls(true), 4);
 }

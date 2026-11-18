@@ -5,20 +5,20 @@
 //! strings that were identical to last frame's. [`Id`] is the same key space,
 //! a `/`-joined path, held in the value itself until it outgrows the buffer.
 
+use arrayvec::ArrayString;
 use std::borrow::Borrow;
 use std::sync::Arc;
 
 /// How many bytes an id keeps inline. `osc/12/gain` is eleven; the buffer is
-/// sized so a three-segment name never reaches the heap and `Id` still fits
-/// in a cache line.
-const INLINE: usize = 46;
+/// sized so a three-segment name never reaches the heap and `Id` stays 48
+/// bytes, the length and the tag included.
+const INLINE: usize = 40;
 
 #[derive(Clone, Debug)]
 enum Repr {
-    Inline {
-        buf: [u8; INLINE],
-        len: u8,
-    },
+    /// `ArrayString` holds the UTF-8 invariant, so reading the name back is
+    /// free: a layout reads thousands per frame.
+    Inline(ArrayString<INLINE>),
     /// ponytail: one allocation past `INLINE` bytes, shared on clone. Longer
     /// names are a naming problem, not a hot path; intern if one appears.
     Long(Arc<str>),
@@ -26,7 +26,7 @@ enum Repr {
 
 /// A node's name: a gesture target, a spring's key, a lookup into the
 /// resolved scene. Segments join with `/`, and composing one allocates
-/// nothing until the whole name passes 46 bytes.
+/// nothing until the whole name passes 40 bytes.
 ///
 /// `&str` and `String` convert into one, so every `.id(..)` that took a
 /// string still does.
@@ -62,15 +62,9 @@ impl Id {
     /// A name the runtime owns, which may start with `/`: the tooltip's
     /// `/tip`. Application code names nodes with [`Id::of`].
     pub fn runtime(name: &str) -> Self {
-        if name.len() <= INLINE {
-            let mut buf = [0u8; INLINE];
-            buf[..name.len()].copy_from_slice(name.as_bytes());
-            Self(Repr::Inline {
-                buf,
-                len: name.len() as u8,
-            })
-        } else {
-            Self(Repr::Long(Arc::from(name)))
+        match ArrayString::from(name) {
+            Ok(inline) => Self(Repr::Inline(inline)),
+            Err(_) => Self(Repr::Long(Arc::from(name))),
         }
     }
 
@@ -95,20 +89,8 @@ impl Id {
     /// ```
     pub fn as_str(&self) -> &str {
         match &self.0 {
-            // The buffer is only ever written whole `str`s at their own
-            // boundaries, so this branch cannot be taken.
-            Repr::Inline { buf, len } => {
-                std::str::from_utf8(&buf[..*len as usize]).unwrap_or_default()
-            }
+            Repr::Inline(s) => s,
             Repr::Long(s) => s,
-        }
-    }
-    /// The same bytes as [`Id::as_str`] without its UTF-8 check: comparing
-    /// two ids needs no `str`, and a layout compares thousands.
-    fn bytes(&self) -> &[u8] {
-        match &self.0 {
-            Repr::Inline { buf, len } => &buf[..*len as usize],
-            Repr::Long(s) => s.as_bytes(),
         }
     }
 
@@ -189,16 +171,12 @@ impl Id {
     }
 
     fn joined(head: &str, part: &str) -> Self {
-        let len = head.len() + 1 + part.len();
-        if len <= INLINE {
-            let mut buf = [0u8; INLINE];
-            buf[..head.len()].copy_from_slice(head.as_bytes());
-            buf[head.len()] = b'/';
-            buf[head.len() + 1..len].copy_from_slice(part.as_bytes());
-            Self(Repr::Inline {
-                buf,
-                len: len as u8,
-            })
+        if head.len() + 1 + part.len() <= INLINE {
+            let mut inline = ArrayString::new();
+            inline.push_str(head);
+            inline.push('/');
+            inline.push_str(part);
+            Self(Repr::Inline(inline))
         } else {
             Self(Repr::Long(Arc::from(format!("{head}/{part}"))))
         }
@@ -228,7 +206,7 @@ impl std::fmt::Display for Id {
 }
 impl PartialEq for Id {
     fn eq(&self, other: &Self) -> bool {
-        self.bytes() == other.bytes()
+        self.as_str() == other.as_str()
     }
 }
 impl Eq for Id {}
@@ -240,7 +218,7 @@ impl PartialOrd for Id {
 impl Ord for Id {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // UTF-8 orders bytewise as `str` does.
-        self.bytes().cmp(other.bytes())
+        self.as_str().cmp(other.as_str())
     }
 }
 impl std::hash::Hash for Id {
@@ -311,8 +289,8 @@ mod tests {
     #[test]
     fn a_slot_field_id_stays_inline() {
         let id = Id::of("modulators").slot(374).field("depth");
-        assert!(matches!(id.0, Repr::Inline { .. }), "{id} allocated");
-        assert!(size_of::<Id>() <= 64, "an id fits in a cache line");
+        assert!(matches!(id.0, Repr::Inline(_)), "{id} allocated");
+        assert_eq!(size_of::<Id>(), 48, "every node carries one");
         // And the escape hatch still produces the right name.
         let long = Id::of(&"x".repeat(INLINE + 1));
         assert!(matches!(long.0, Repr::Long(_)));

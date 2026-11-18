@@ -4,6 +4,13 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+`mui_layout::Intrinsic` gains `fluid: bool`: whether another room could
+change the measured size. A content leaf that says `false` is not measured
+again at its flex share, and a row of such leaves isn't either. `From<Size>`
+says `true`, so a measurer returning a bare `Size` behaves as before; a
+struct literal adds `fluid: true` (or `false` when the size ignores the room).
+`Id` keeps up to 40 bytes inline (was 46); longer names allocate once.
+
 Multi-rect damage. A frame whose changes sit far apart repaints up to
 `mui_vello::quad::RECTS` (4) separate rects instead of their union.
 `quad::Frame` gains `rects: Rects` (each rect is `[x, y, w, h]` in device

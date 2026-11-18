@@ -587,7 +587,11 @@ pub(super) fn layout_key(e: &Element, th: &Theme, scale: Option<f64>, out: &mut 
 /// asked for an ellipsis instead.
 pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<f64>) -> Intrinsic {
     let Content::Text(t) = &e.content else {
-        return Size::ZERO.into();
+        // Painted content takes its box from the node: no room changes it.
+        return Intrinsic {
+            fluid: false,
+            ..Size::ZERO.into()
+        };
     };
     let face = Face::of(e, th);
     // A stand-in is a one-line box, squeezable like a reservation: its size
@@ -598,6 +602,7 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
         return Intrinsic {
             size: Size::new(width, one_line.height),
             min_width: 0.0,
+            fluid: true,
         };
     }
     let (one_line, word) = runs.measured(t, face);
@@ -605,6 +610,7 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
         return Intrinsic {
             size: Size::new(room.unwrap_or(one_line.width + 2.), one_line.height),
             min_width: 0.0,
+            fluid: true,
         };
     }
     let min_width = if e.lines.is_some() { 0.0 } else { word };
@@ -640,6 +646,9 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
     Intrinsic {
         size: fit,
         min_width,
+        // The room never drops below `min_width`, so a line no wider than
+        // that never wraps: one word, or a value that fits its reservation.
+        fluid: t.contains('\n') || one_line.width > min_width + 0.5,
     }
 }
 #[cfg(test)]

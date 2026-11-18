@@ -279,6 +279,7 @@ pub fn check() {
             Size::new(100., 20.)
         },
         min_width: 20.,
+        fluid: true,
     };
     let fresh = mui_layout::resolve_with(
         &text_grid,

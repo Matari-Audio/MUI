@@ -44,12 +44,18 @@ pub use spacing::{Pad, Spacing, SpacingScale, SpacingToken};
 pub struct Intrinsic {
     pub size: Size,
     pub min_width: f64,
+    /// Whether another room could change `size`: text that wraps, a box
+    /// that fills what it is given. A leaf that says `false` is not measured
+    /// again at its flex share, and neither is a row of such leaves. A bare
+    /// [`Size`] says `true`: nothing is known about how it was measured.
+    pub fluid: bool,
 }
 impl From<Size> for Intrinsic {
     fn from(size: Size) -> Self {
         Self {
             size,
             min_width: 0.0,
+            fluid: true,
         }
     }
 }

@@ -1269,6 +1269,7 @@ fn a_changed_word_moves_the_cached_floor() {
     let words = |t: &Text, room: Option<f64>| Intrinsic {
         size: metric(t, room),
         min_width: t.value.split(' ').map(str::len).max().unwrap_or(0) as f64 * 8.,
+        fluid: true,
     };
     let solve = |n: &Node<Text>, c: &mut LayoutCache| {
         resolve_cached_with(
