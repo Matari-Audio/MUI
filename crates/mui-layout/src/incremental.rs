@@ -42,9 +42,16 @@ struct Stamp {
     /// The `prepare` pass that last visited this address.
     seen: u64,
     /// This revision's measurements, one per constraint it was offered,
-    /// Least recently used first. A new revision is a new stamp, so these
-    /// never go stale. Hits rotate their existing entry to the most recent end.
-    measured: Vec<(MeasureInput, Arc<Frozen>)>,
+    /// least recently used first. A new revision is a new stamp, so these
+    /// never go stale; they only stop being asked for.
+    measured: Vec<Variant>,
+}
+/// One measurement of a stamp and the `prepare` pass that last asked for it.
+#[derive(Clone, Debug, PartialEq)]
+struct Variant {
+    input: MeasureInput,
+    frozen: Arc<Frozen>,
+    used: u64,
 }
 /// One `prepare` walk's state. The buffers live in the cache between frames,
 /// so a warm walk allocates nothing.
@@ -286,8 +293,6 @@ pub struct LayoutCache {
     /// Measurement, placement and offered-size revisions must all agree to
     /// reuse the complete layout rather than arrange the measured tree again.
     last: Option<(u64, u64, Option<[u64; 2]>, Layout)>,
-    /// The size offered last call, cached or not.
-    sized: Option<Option<[u64; 2]>>,
     stats: LayoutStats,
     /// None in ordinary operation: no trace history or export buffers exist.
     trace: Option<Box<crate::diagnostics::Recorder>>,
@@ -322,8 +327,8 @@ impl LayoutCache {
     /// never correctness.
     const VARIANTS: usize = 4;
     // Nested Fits/flex branches can visit dozens of exact offers in one
-    // solve. Retain that bounded working set instead of evicting each pass's
-    // inputs before the next pass. Leaves keep their small four-entry cache.
+    // solve. Retain that working set; what the last two solves did not ask
+    // for is dropped on the next miss. Leaves keep their four entries.
     const BRANCH_VARIANTS: usize = 64;
     /// Validates the tree and returns its measurement and placement revisions.
     #[cfg(test)]
@@ -352,13 +357,12 @@ impl LayoutCache {
             }
             *self = Self {
                 context: Some((limits, scale)),
-                sized: self.sized,
                 trace,
                 ..Self::default()
             };
         }
         if let Some(trace) = self.trace.as_mut() {
-            trace.frame(false);
+            trace.frame();
         }
         self.pointers.clear();
         self.pinned = false;
@@ -730,22 +734,10 @@ pub fn resolve_cached_retained<P, M: Into<Intrinsic>>(
     {
         return Err(Error::InvalidValue);
     }
-    // A size that just changed is likely to change again next frame -- a
-    // window being dragged -- and a resize misses nearly every measurement,
-    // so it solves bare rather than pay to validate and store what the next
-    // size cannot use. The cache starts again once the size holds.
+    // A resize misses across frames, but not within its own solve: nested
+    // flex re-measures ask for the same subtree at the same offer many times
+    // over, so even a new size goes through the cache.
     let offered_bits = offered.map(|s| [s.width.to_bits(), s.height.to_bits()]);
-    if cache.sized.replace(offered_bits) != Some(offered_bits) {
-        if let Some(trace) = cache.trace.as_mut() {
-            trace.frame(true);
-        }
-        let layout = super::resolve_impl(root, offered, limits, scale, measurer, None, None)?;
-        cache.stats = LayoutStats {
-            arranged_nodes: layout.all().len(),
-            ..LayoutStats::default()
-        };
-        return Ok(layout);
-    }
     let (revision, placement) =
         cache.prepare_retained(root, limits, scale, &mut key, &mut retained)?;
     if let Some((r, p, o, layout)) = &cache.last
@@ -796,14 +788,14 @@ pub(crate) fn measure_cached<'a, P>(
         // A later CQ declaration changes the subtree revision before reuse.
         key.container = [None; 2];
     }
+    let now = cache.pass;
     let snapshot = cache.stamp(node).and_then(|s| {
-        let at = s.measured.iter().position(|(k, _)| *k == key)?;
-        let snapshot = s.measured[at].1.clone();
-        // Four entries stay in their existing allocation. Refreshing a
-        // hit prevents an older, frequently used constraint from being
-        // evicted merely because it was inserted before a colder one.
+        let at = s.measured.iter().position(|v| v.input == key)?;
+        // Refreshing a hit keeps the list least recently used first, so a
+        // frequently asked constraint is never evicted for a colder one.
+        s.measured[at].used = now;
         s.measured[at..].rotate_left(1);
-        Some(snapshot)
+        s.measured.last().map(|v| v.frozen.clone())
     });
     let traced = if let Some(trace) = &mut cache.trace {
         let stamp = cache
@@ -861,11 +853,21 @@ pub(crate) fn measure_cached<'a, P>(
                 LayoutCache::BRANCH_VARIANTS
             };
             let measured = &mut stamp.measured;
-            if measured.len() >= limit {
-                measured.remove(0);
-                evicted = true;
-            }
-            measured.push((key, frozen));
+            // What neither this solve nor the last asked for is a size the
+            // window has left: a dragged edge never offers it again, and
+            // scanning it costs every lookup. The live set stays.
+            let stale = measured
+                .iter()
+                .take_while(|v| v.used.wrapping_add(1) < now)
+                .count()
+                .max((measured.len() + 1).saturating_sub(limit));
+            evicted = stale > 0;
+            measured.drain(..stale);
+            measured.push(Variant {
+                input: key,
+                frozen,
+                used: now,
+            });
         }
         cache.stats.measure_variant_evictions += usize::from(evicted);
     }

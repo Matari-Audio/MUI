@@ -320,8 +320,9 @@ fn main() {
     run("hover10", &mut |ui, i| {
         frame(ui, 1800.0, over[(i / 10) % over.len()].into(), 0.016)
     });
+    // A dragged edge: every width is new, so nothing hits across frames.
     run("resize", &mut |ui, i| {
-        frame(ui, 1500.0 + (i % 50) as f64 * 6.0, away.into(), 0.016)
+        frame(ui, 1500.0 + i as f64 * 0.73, away.into(), 0.016)
     });
     // The wheel over the tracks, down for ten frames and back up.
     let mut scrolled: f64 = 0.0;

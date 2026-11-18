@@ -73,7 +73,7 @@ mod tests {
     #[test]
     fn bounded_history_reports_node_revision_and_key_coverage_overflow() {
         let mut recorder = Recorder::new();
-        recorder.frame(false);
+        recorder.frame();
         for address in 0..=NODES as u64 {
             let ticket = recorder.begin(Some((address, 1)), None, "root", 3, input(0), false);
             recorder.finish(ticket, 2, 1, false);
@@ -115,7 +115,7 @@ mod tests {
     #[test]
     fn recency_and_component_changes_use_exact_same_revision_inputs() {
         let mut recorder = Recorder::new();
-        recorder.frame(false);
+        recorder.frame();
         for key in [0, 1, 2, 3, 4, 0, 4] {
             let ticket = recorder.begin(Some((7, 1)), None, "owner", 2, input(key), key == 4);
             recorder.finish(ticket, 0, 1, false);
@@ -186,7 +186,6 @@ pub struct LayoutRequestTrace {
     pub key_limit: usize,
     pub contexts: u64,
     pub frames: u64,
-    pub bare_resolves: u64,
     pub whole_layout_reuses: u64,
     pub requests: u64,
     pub hits: u64,
@@ -260,12 +259,11 @@ impl Recorder {
         self.trace.contexts = self.trace.contexts.saturating_add(1);
     }
 
-    pub(crate) fn frame(&mut self, bare: bool) {
+    pub(crate) fn frame(&mut self) {
         if self.epoch == 0 {
             self.context_changed();
         }
         self.trace.frames = self.trace.frames.saturating_add(1);
-        self.trace.bare_resolves += u64::from(bare);
     }
 
     pub(crate) fn whole_layout_reused(&mut self) {

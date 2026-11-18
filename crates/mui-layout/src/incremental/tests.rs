@@ -124,9 +124,9 @@ fn hot_constraint_hits_survive_a_five_key_cycle_with_the_same_four_entries() {
         }
         let hot = &variants
             .iter()
-            .find(|(k, _)| k.definite[0] == Some(32_f64.to_bits()))
+            .find(|v| v.input.definite[0] == Some(32_f64.to_bits()))
             .unwrap()
-            .1;
+            .frozen;
         if let Some(original) = &hot_snapshot {
             assert!(
                 Arc::ptr_eq(original, hot),
@@ -136,7 +136,7 @@ fn hot_constraint_hits_survive_a_five_key_cycle_with_the_same_four_entries() {
             hot_snapshot = Some(hot.clone());
         }
         assert_eq!(
-            variants.last().unwrap().0.definite[0],
+            variants.last().unwrap().input.definite[0],
             Some(width.to_bits())
         );
     }
@@ -327,7 +327,6 @@ fn tracing_preserves_frames_stats_and_persistent_stamp_identity_across_rebuilt_t
     }
     let trace = traced.take_request_trace().unwrap();
     assert!(trace.whole_layout_reuses >= 3);
-    assert_eq!(trace.bare_resolves, 1);
     assert_eq!(trace.requests, trace.hits + trace.misses);
     assert_eq!(
         trace.requests,
@@ -453,12 +452,11 @@ fn a_retained_subtree_whose_record_no_longer_fits_is_scanned() {
     assert_eq!(retained(&n, 400., &mut c, true), oracle(&n, 400.));
     assert_eq!(c.stats().replayed_nodes, 2);
 }
-/// A new size solves bare; the cache takes over once it holds.
+/// The first solve at a size, then the warm one that must agree with it.
 fn prime(n: &Node<Text>, w: f64, c: &mut LayoutCache) -> Layout {
-    let bare = cached(n, w, c);
-    assert_eq!(c.stats().validated_nodes, 0);
-    assert_eq!(cached(n, w, c), bare);
-    bare
+    let first = cached(n, w, c);
+    assert_eq!(cached(n, w, c), first);
+    first
 }
 fn oracle(n: &Node<Text>, w: f64) -> Layout {
     resolve_with(
@@ -472,8 +470,7 @@ fn oracle(n: &Node<Text>, w: f64) -> Layout {
 }
 
 /// Exercise the measurement hook at changing offers, including offers
-/// inside one solve. The public cache deliberately solves live resizes
-/// bare, which would otherwise hide constraint-variant equivalence.
+/// inside one solve, against a solve with no cache at all.
 fn offer_oracle(n: &Node<Text>, offers: &[Size], boxed: Option<Insets>) -> LayoutStats {
     let mut cache = LayoutCache::default();
     let mut totals = LayoutStats::default();
@@ -509,28 +506,22 @@ fn offer_oracle(n: &Node<Text>, offers: &[Size], boxed: Option<Insets>) -> Layou
 }
 
 #[test]
-fn branch_working_set_survives_nested_flex_offers() {
+fn a_resize_keeps_only_the_offers_still_asked_for() {
     let n = Node::row([Node::block(24., 16.).shrink(0.).with(Text {
         value: String::new(),
         colour: 0,
     })])
     .id("branch");
     let widths: Vec<_> = (0..24).map(|i| Size::new(100. + i as f64, 80.)).collect();
-    let once = offer_oracle(&n, &widths, None);
-    let twice = offer_oracle(
-        &n,
-        &widths.iter().chain(&widths).copied().collect::<Vec<_>>(),
-        None,
-    );
-    assert_eq!(
-        twice.measured_nodes, once.measured_nodes,
-        "a repeated branch offer must not rebuild the measured subtree"
-    );
-    assert!(twice.measure_hits >= once.measure_hits + widths.len());
-    assert_eq!(
-        twice.measure_variant_evictions,
-        once.measure_variant_evictions
-    );
+    let stats = offer_oracle(&n, &widths, None);
+    assert!(stats.measure_variant_evictions > 0, "{stats:?}");
+    // A dragged edge leaves each width behind: the branch scans the offers
+    // of the last two solves, never all 24.
+    let mut cache = LayoutCache::default();
+    for size in &widths {
+        cached(&n, size.width, &mut cache);
+    }
+    assert!(cache.stamp(&n).unwrap().measured.len() <= 2);
 }
 
 #[test]
@@ -673,7 +664,7 @@ fn unused_inherited_containers_reuse_natural_controls_with_fresh_frames() {
             stamp
                 .measured
                 .iter()
-                .all(|(input, _)| input.container == [None; 2]),
+                .all(|v| v.input.container == [None; 2]),
             "neither the initial pass nor the flex remeasure consumes the inherited shutter height"
         );
     }
@@ -713,7 +704,7 @@ fn introducing_container_units_rebuilds_inherited_extent_dependencies() {
                         .unwrap()
                         .measured
                         .iter()
-                        .all(|(input, _)| input.container == [None; 2])
+                        .all(|v| v.input.container == [None; 2])
                 );
             }
         }
@@ -1438,6 +1429,6 @@ fn changing_measure_environment_requires_clear() {
     let mut c = LayoutCache::default();
     prime(&n, 400., &mut c);
     c.clear();
-    prime(&n, 400., &mut c);
+    cached(&n, 400., &mut c);
     assert!(c.stats().measured_nodes > 0);
 }
