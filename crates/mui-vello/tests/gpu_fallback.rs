@@ -1,6 +1,10 @@
-//! What the quad pass refuses still reaches the screen: `GpuRenderer`
-//! rasterises that frame on `vello_cpu`, presents it, counts it, keeps it
-//! while the list stands, and goes back to the GPU once the list changes.
+//! What the quad pass refuses still reaches the screen. An entry refused for
+//! what it paints (a vector, a bitmap glyph) is rasterised alone on
+//! `vello_cpu` and drawn as an image, the frame staying on the GPU; so is a
+//! third nested clip, with everything inside it. A list the pass cannot draw
+//! around (a backdrop inside such a clip) is rasterised whole:
+//! presented, counted, kept while the list stands, and back on the GPU once
+//! the list changes.
 #![cfg(feature = "gpu-quad")]
 
 use mui_scene::prelude::*;
@@ -49,8 +53,23 @@ fn star(s: Size) -> Path {
         .close()
 }
 
-/// One scene per kind the pass refuses, with the reason it gives.
-fn refused() -> Vec<(&'static str, ResolvedScene, Reason)> {
+/// Three path clips deep, around `inner`.
+fn nested(inner: El) -> El {
+    stack![
+        stack![stack![inner].size(60., 60.).outline(star).clip()]
+            .size(70., 70.)
+            .outline(star)
+            .clip()
+    ]
+    .size(80., 80.)
+    .outline(star)
+    .clip()
+    .at(20., 10.)
+}
+
+/// One scene per kind the pass refuses, the reason it gives, and whether
+/// the whole frame goes to the CPU.
+fn refused() -> Vec<(&'static str, ResolvedScene, Reason, bool)> {
     let vector = Arc::new(
         Vector::new(
             6.,
@@ -78,28 +97,32 @@ fn refused() -> Vec<(&'static str, ResolvedScene, Reason)> {
                 None,
             ),
             Reason::Vector,
+            false,
         ),
         (
             "bitmap glyph",
             scene(text("\u{E000}").text_size(32.).at(20., 20.), Some(bitmap)),
             Reason::Text,
+            false,
         ),
         (
             "nested path clip",
+            scene(nested(block(60., 60.).fill(Color::srgb(0., 1., 0.))), None),
+            Reason::ClipDepth,
+            false,
+        ),
+        (
+            "backdrop in a nested path clip",
             scene(
-                stack![
-                    stack![block(60., 60.).fill(Color::srgb(0., 1., 0.))]
-                        .size(60., 60.)
-                        .outline(star)
-                        .clip()
-                ]
-                .size(80., 80.)
-                .outline(star)
-                .clip()
-                .at(20., 10.),
+                nested(
+                    block(60., 60.)
+                        .backdrop_blur(4.)
+                        .fill(Color::srgba(0., 1., 0., 0.5)),
+                ),
                 None,
             ),
             Reason::ClipDepth,
+            true,
         ),
     ]
 }
@@ -154,6 +177,11 @@ fn cpu(scene: &ResolvedScene) -> Vec<u8> {
     cpu.pixels().to_vec()
 }
 
+/// The largest channel difference between two RGBA frames.
+fn worst(a: &[u8], b: &[u8]) -> Option<u8> {
+    a.iter().zip(b).map(|(a, b)| a.abs_diff(*b)).max()
+}
+
 #[test]
 fn each_refused_kind_is_drawn_on_the_cpu_counted_and_retried_on_the_gpu() {
     let Some((device, queue)) = device() else {
@@ -177,7 +205,8 @@ fn each_refused_kind_is_drawn_on_the_cpu_counted_and_retried_on_the_gpu() {
         Budget::default(),
     ))
     .expect("renderer");
-    for (i, (name, refused, reason)) in refused().into_iter().enumerate() {
+    let mut whole = 0;
+    for (name, refused, reason, whole_frame) in refused() {
         // The bitmap glyph is found only when drawn; the rest up front.
         if reason != Reason::Text {
             assert!(
@@ -188,8 +217,20 @@ fn each_refused_kind_is_drawn_on_the_cpu_counted_and_retried_on_the_gpu() {
         }
         let stats = r.render(&refused, Affine::IDENTITY, &view).expect(name);
         assert!(stats.renders > 0, "{name}: nothing drawn");
+        if !whole_frame {
+            // Patched: the entry alone from the CPU, the frame on the GPU.
+            assert_eq!(stats.cpu_patches, 1, "{name}");
+            assert!(!r.fallback().active, "{name}");
+            assert!(r.quad_frame().drawn, "{name}: the quad pass drew it");
+            let off = worst(&pixels(&device, &queue, &out), &cpu(&refused));
+            assert!(off <= Some(2), "{name}: off the CPU frame by {off:?}");
+            let again = r.render(&refused, Affine::IDENTITY, &view).expect(name);
+            assert_eq!(again.renders, 0, "{name}: the patched frame stands");
+            continue;
+        }
+        whole += 1;
         let fallback = r.fallback().clone();
-        assert_eq!(fallback.frames, i as u64 + 1, "{name}");
+        assert_eq!(fallback.frames, whole, "{name}");
         assert_eq!(fallback.last.map(|(_, r)| r), Some(reason), "{name}");
         assert!(fallback.active, "{name}");
         assert_eq!(
@@ -201,19 +242,15 @@ fn each_refused_kind_is_drawn_on_the_cpu_counted_and_retried_on_the_gpu() {
         let again = r.render(&refused, Affine::IDENTITY, &view).expect(name);
         assert_eq!(again.renders, 0, "{name}");
         assert!(r.is_current(&refused, Affine::IDENTITY), "{name}");
-        assert_eq!(r.fallback().frames, i as u64 + 1, "{name}");
+        assert_eq!(r.fallback().frames, whole, "{name}");
         // A list the pass draws: back on the GPU, the CPU frame replaced.
         r.render(&plain, Affine::IDENTITY, &view).expect(name);
         assert!(!r.fallback().active, "{name}");
         assert!(r.quad_frame().drawn, "{name}: the quad pass drew it");
-        let worst = pixels(&device, &queue, &out)
-            .iter()
-            .zip(cpu(&plain))
-            .map(|(a, b)| a.abs_diff(b))
-            .max();
+        let off = worst(&pixels(&device, &queue, &out), &cpu(&plain));
         assert!(
-            worst <= Some(2),
-            "{name}: the GPU frame after the CPU one is off by {worst:?}"
+            off <= Some(2),
+            "{name}: the GPU frame after the CPU one is off by {off:?}"
         );
     }
 }
@@ -235,15 +272,15 @@ fn consecutive_refused_frames_upload_their_damage() {
         Budget::default(),
     ))
     .expect("renderer");
-    let vector = refused().swap_remove(0).1;
-    assert_eq!(classify(&vector.paint).unsupported(Reason::Vector), 1);
+    let clipped = refused().swap_remove(3).1;
+    assert!(classify(&clipped.paint).unsupported(Reason::ClipDepth) > 0);
     let turned = |x: f64| {
         let mut s = scene(
             block(10., 10.).fill(Color::srgb(0., 0., 1.)).at(x, 90.),
             None,
         );
-        // The refused vector entry first, so both frames fall back.
-        s.paint.splice(0..0, vector.paint.iter().cloned());
+        // The nested clips first, so both frames fall back whole.
+        s.paint.splice(0..0, clipped.paint.iter().cloned());
         s
     };
     r.render(&turned(10.), Affine::IDENTITY, &view).unwrap();

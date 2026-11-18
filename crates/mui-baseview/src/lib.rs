@@ -38,6 +38,20 @@ pub const DRAG_PREVIEW_SIZE: (usize, usize) = (224, 90);
 mod drag;
 mod native_worker;
 mod policies;
+pub mod presenter;
+pub use presenter::{Presenter, PresenterStats, Transition};
+/// Window policies for hosts that create their own windows: the OS blur
+/// behind a frosted window, and keeping a window above others.
+#[cfg_attr(
+    any(target_os = "windows", target_os = "macos"),
+    expect(unsafe_code, reason = "Win32 DWM and AppKit view calls")
+)]
+pub mod frost;
+#[cfg_attr(
+    any(target_os = "windows", target_os = "macos"),
+    expect(unsafe_code, reason = "Win32 and AppKit window-level calls")
+)]
+pub mod sticky;
 mod timing;
 use baseview::dpi::{LogicalSize, PhysicalPosition};
 use baseview::{

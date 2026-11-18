@@ -579,3 +579,30 @@ fn a_kept_target_matches_a_whole_redraw_as_textures_change() {
     let damage = k.quad.frame().damage.expect("a partial frame");
     assert!(damage[0] >= 200, "{damage:?}");
 }
+
+/// Two changes in opposite corners repaint two small rects, not the box
+/// spanning the frame between them, and still match a whole redraw.
+#[test]
+fn far_apart_changes_repaint_their_own_rects() {
+    let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
+        return;
+    };
+    let corners = |tint: f32| {
+        let dot = |x: f64, y: f64| {
+            block(16., 16.)
+                .radius(0.)
+                .fill(Color::srgb(tint, 0.4, 0.3))
+                .at(x, y)
+        };
+        let spec = SceneSpec::new(ground(vec![dot(8., 8.), dot(W - 24., H - 24.)]))
+            .offered(Size::new(W, H));
+        mui_scene::resolve(&spec).expect("resolves")
+    };
+    let id = Affine::IDENTITY;
+    k.check("first", &corners(0.2).paint, id);
+    k.check("both corners", &corners(0.9).paint, id);
+    let frame = k.quad.frame();
+    assert_eq!(frame.rects.as_slice().len(), 2, "{frame:?}");
+    let drawn: u32 = frame.rects.as_slice().iter().map(|r| r[2] * r[3]).sum();
+    assert!(drawn < SIZE[0] * SIZE[1] / 20, "{frame:?}");
+}

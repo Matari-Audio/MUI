@@ -511,11 +511,17 @@ impl GpuRenderer {
         self.fallback.active = false;
         let frame = self.quad.frame();
         if frame.drawn {
-            let rect = frame.damage.unwrap_or([0, 0, self.size[0], self.size[1]]);
             stats.encoded_scenes += 1;
             stats.renders += 1;
-            stats.rendered_pixels += u64::from(rect[2]) * u64::from(rect[3]);
-            self.damage.push(rect);
+            let whole = [[0, 0, self.size[0], self.size[1]]];
+            let rects = match frame.damage {
+                Some(_) => frame.rects.as_slice(),
+                None => &whole,
+            };
+            for &rect in rects {
+                stats.rendered_pixels += u64::from(rect[2]) * u64::from(rect[3]);
+                self.damage.push(rect);
+            }
         }
         self.remember(resolved, xf);
         Ok(stats)

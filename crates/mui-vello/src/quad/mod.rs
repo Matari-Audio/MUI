@@ -11,8 +11,10 @@
 //! [`path`]). Group layers (opacity, blend modes, masks), backdrop blurs,
 //! weld materials and host textures go through offscreen targets only when
 //! they must (see [`layer`]). Anything else in a paint list is reported by
-//! [`classify`] and refused by [`QuadRenderer::render`]; it is never skipped
-//! or approximated.
+//! [`classify`]; it is never skipped or approximated. An entry refused for
+//! what it paints (a vector, a colour glyph) is rasterised alone on the CPU
+//! and drawn as an image (see [`patch`]); a list the pass cannot draw around
+//! is refused by [`QuadRenderer::render`].
 //!
 //! Bindings: group 0 is the view (a uniform slot at a dynamic offset: the
 //! target's size and device origin), the glyph atlas (an `R8Unorm` array,
@@ -29,6 +31,7 @@ mod gpu;
 mod layer;
 mod list;
 mod offscreen;
+mod patch;
 mod path;
 mod ramp;
 #[cfg(test)]
@@ -39,6 +42,7 @@ use crate::effects::WeldTextures;
 use crate::kurbo::Affine;
 use build::{Instance, SLOTS, Walk};
 use damage::Retained;
+pub use damage::{RECTS, Rects};
 use gpu::{atlas_texture, image_group, image_texture, instance_buffer, path_texture, view_group};
 use layer::Kind;
 use list::{Instances, Welds};
@@ -194,9 +198,12 @@ impl std::error::Error for Error {}
 pub struct Frame {
     /// Whether `render` encoded a render pass at all.
     pub drawn: bool,
-    /// The device rect (`x y w h`) a partial frame redrew; `None` for a
-    /// frame drawn whole or not at all.
+    /// The box (`x y w h`) around what a partial frame redrew; `None` for
+    /// a frame drawn whole or not at all.
     pub damage: Option<[u32; 4]>,
+    /// The rects a partial frame redrew, inside `damage`: far-apart changes
+    /// each repaint their own.
+    pub rects: Rects,
     /// Instances drawn.
     pub instances: usize,
     /// Draw calls, in every pass: one a pass, plus one each time an
@@ -262,6 +269,11 @@ pub struct QuadRenderer {
     redrawn: Vec<std::sync::Arc<str>>,
     frame: Frame,
     retained: Option<Retained>,
+    /// Entries drawn from a CPU raster in place of what the pass refused.
+    patches: patch::Patches,
+    /// The entry boxes of the frame on screen, while a frame that may be
+    /// refused rebuilds them.
+    boxes: Vec<[f32; 4]>,
     /// Where every pipeline is built through, offscreen ones included.
     cache: Option<wgpu::PipelineCache>,
     /// A profiling hook: when set, the frame's first render pass writes its
@@ -391,6 +403,8 @@ impl QuadRenderer {
             redrawn: Vec::new(),
             frame: Frame::default(),
             retained: None,
+            patches: patch::Patches::default(),
+            boxes: Vec::new(),
             cache: cache.cloned(),
             timestamps: None,
         }
@@ -513,9 +527,51 @@ impl QuadRenderer {
         welds.commit_submitted(&mut stats);
         let pool = &*welds;
         let welds = Some(Welds { scene, pool });
-        let done = self.draw(device, queue, &scene.paint, welds, transform, target, size);
+        let mut list = self.patches.begin(&scene.paint, transform, size);
+        let done = loop {
+            match self.draw(device, queue, &list, welds, transform, target, size) {
+                Err(Error::Unsupported { index, reason })
+                    if self
+                        .patches
+                        .patch(&mut list, index, reason, transform, size) => {}
+                done => break done,
+            }
+        };
+        self.patches.end();
         self.redrawn.clear();
+        stats.cpu_patches = self.patches.count();
         done.map(|()| stats)
+    }
+
+    /// Build a list with no layers: only what changed since `old`, the
+    /// list the target holds, when that is a small part of it.
+    fn flat(
+        &mut self,
+        paint: &[Painted],
+        old: Option<&[Painted]>,
+        transform: Affine,
+        size: [u32; 2],
+        touched: &[u64],
+    ) -> Result<Option<Rects>, Error> {
+        let damage = match old {
+            Some(old) => self.damage(old, paint, transform, size, touched)?,
+            None => None,
+        };
+        match &damage {
+            Some(rects) => {
+                let boxes: Vec<[f32; 4]> = rects
+                    .as_slice()
+                    .iter()
+                    .map(|&[x, y, w, h]| [x, y, x + w, y + h].map(|v| v as f32))
+                    .collect();
+                let keep = |_: usize, b: [f32; 4]| boxes.iter().any(|&r| build::overlaps(b, r));
+                self.cpu.build(paint, transform, &keep, None)?;
+            }
+            None => {
+                self.cpu.build(paint, transform, &|_, _| true, None)?;
+            }
+        }
+        Ok(damage)
     }
 
     #[expect(
@@ -554,6 +610,7 @@ impl QuadRenderer {
             return Ok(());
         }
         self.cpu.walk.size = size;
+        self.boxes.clone_from(&self.cpu.boxes);
         self.cpu.begin(paint.len());
         let old = kept.as_ref().map(|r| &r.paint[..]);
         let layered = paint.iter().any(|p| {
@@ -567,23 +624,26 @@ impl QuadRenderer {
                     | Layer::External
             )
         });
-        let damage = if layered {
-            self.layered(paint, old, transform, size, welds, &touched)?
+        let built = if layered {
+            self.layered(paint, old, transform, size, welds, &touched)
+                .map(|d| d.map(Rects::one))
         } else {
-            let damage = match old {
-                Some(old) => self.damage(old, paint, transform, size, &touched)?,
-                None => None,
-            };
-            let keep = |rect: [f32; 4]| move |_: usize, b: [f32; 4]| build::overlaps(b, rect);
-            match damage {
-                Some([x, y, w, h]) => {
-                    let [x, y, w, h] = [x, y, w, h].map(|v| v as f32);
-                    let rect = keep([x, y, x + w, y + h]);
-                    self.cpu.build(paint, transform, &rect, None)?
+            self.flat(paint, old, transform, size, &touched)
+        };
+        let damage = match built {
+            Ok(damage) => damage,
+            Err(error) => {
+                // A refused entry is patched and the list drawn again: a
+                // flat one still repaints only what changed since the frame
+                // on screen. A layered one, whose targets the walk has
+                // begun, is drawn whole.
+                if !layered {
+                    self.retained = kept;
+                    std::mem::swap(&mut self.cpu.boxes, &mut self.boxes);
                 }
-                None => self.cpu.build(paint, transform, &|_, _| true, None)?,
-            };
-            damage
+                self.touched = touched;
+                return Err(error);
+            }
         };
         let count = self.cpu.list.len();
         let mut retained = kept.map_or_default(|r| r.paint);
@@ -622,7 +682,8 @@ impl QuadRenderer {
             .iter()
             .skip(1)
             .any(|s| s.dirty && s.kind != Kind::Folded);
-        if damage.is_some_and(|d| d[2] == 0 || d[3] == 0) && !offscreen {
+        if damage.is_some_and(|d| d.as_slice().iter().all(|r| r[2] == 0 || r[3] == 0)) && !offscreen
+        {
             // Changed entries that cover no pixel.
             if let Some(off) = &mut self.offscreen {
                 off.finish(&self.cpu.layers);
@@ -674,7 +735,7 @@ impl QuadRenderer {
             ),
             None => (0, 0),
         };
-        if damage.is_none_or(|d| d[2] > 0 && d[3] > 0) {
+        if damage.is_none_or(|d| d.as_slice().iter().any(|r| r[2] > 0 && r[3] > 0)) {
             let first = draw.stamp.take().is_some();
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("mui quad"),
@@ -704,14 +765,23 @@ impl QuadRenderer {
             pass.set_bind_group(0, &self.bind, &[0]);
             pass.set_bind_group(1, &self.no_image, &[]);
             pass.set_vertex_buffer(0, draw.instances);
-            if let Some([x, y, w, h]) = damage {
-                pass.set_scissor_rect(x, y, w, h);
-                pass.set_pipeline(&self.clear);
-                pass.draw(0..4, count as u32..count as u32 + 1);
+            match &damage {
+                Some(rects) => {
+                    for &[x, y, w, h] in rects.as_slice() {
+                        pass.set_scissor_rect(x, y, w, h);
+                        pass.set_pipeline(&self.clear);
+                        pass.draw(0..4, count as u32..count as u32 + 1);
+                        draws += draw.runs(&mut pass, &self.pipeline, None, u32::MAX, |r| {
+                            r.surface == 0
+                        });
+                    }
+                }
+                None => {
+                    draws += draw.runs(&mut pass, &self.pipeline, None, u32::MAX, |r| {
+                        r.surface == 0
+                    });
+                }
             }
-            draws += draw.runs(&mut pass, &self.pipeline, None, u32::MAX, |r| {
-                r.surface == 0
-            });
             self.frame.passes = passes + 1;
         } else {
             self.frame.passes = passes;
@@ -723,7 +793,8 @@ impl QuadRenderer {
             self.frame.offscreen_bytes = off.bytes();
         }
         self.frame.drawn = true;
-        self.frame.damage = damage;
+        self.frame.damage = damage.map(|d| d.bounds());
+        self.frame.rects = damage.unwrap_or_default();
         self.frame.instances = count;
         self.frame.draws = draws;
         Ok(())

@@ -386,6 +386,24 @@ impl GpuInit {
         }
         self.retry.fail(Instant::now(), error.failure_class());
     }
+    /// The instance a surface for [`Self::poll`] must come from, once the
+    /// shared device is ready; `None` until then, or while backing off. A
+    /// render worker that may not touch the native view sends this to its
+    /// window thread, which makes the surface and sends it back: the worker
+    /// then presents straight to the window, nothing read back.
+    pub fn ready_instance(&mut self) -> Option<wgpu::Instance> {
+        if self.installed || !self.retry.ready(Instant::now()) {
+            return None;
+        }
+        match self.session.context() {
+            Ok(Some(context)) => Some(context.instance.clone()),
+            Ok(None) => None,
+            Err(error) => {
+                self.failure(&error);
+                None
+            }
+        }
+    }
     /// Poll without waiting. Only `create` and configure touch the native view,
     /// on the caller's window thread, after all pipelines are ready.
     /// The caller must hold its native callback/ownership lease across this call

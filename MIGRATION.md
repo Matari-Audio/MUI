@@ -4,6 +4,29 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+Multi-rect damage. A frame whose changes sit far apart repaints up to
+`mui_vello::quad::RECTS` (4) separate rects instead of their union.
+`quad::Frame` gains `rects: Rects` (each rect is `[x, y, w, h]` in device
+pixels; `Rects::as_slice`, `Rects::bounds`); `Frame::damage` stays the bounds
+of all of them. A presenter that copies or presents damage should walk
+`rects`, not `damage`.
+
+Per-entry CPU fallback. A vector, a bitmap or colour glyph run, an image
+the device cannot hold, or a third nested clip no longer sends the whole
+frame to `vello_cpu`: that entry (or the clip with everything inside it)
+alone is rasterised, cached, and drawn as an image by the quad pass.
+`EffectStats::cpu_patches` counts them; `cpu_fallback` and
+`GpuRenderer::fallback` now count only whole-frame fallbacks (a backdrop or
+weld inside a deep clip, a malformed layer list, an exhausted budget).
+
+Native editors present from the render worker. The window thread makes the
+wgpu surface and lends it to the worker, which presents to it: no readback,
+no blit. Closing waits (at most 500 ms) for the worker to drop the surface.
+macOS keeps the readback transport for now; `MUI_PRESENT=readback` asks for
+it anywhere. `mui_baseview::{Presenter, frost, sticky}` are new: a direct
+presenter for hosts whose model runs on the window thread, blur-behind and
+keep-above window policies (moved from BUFFR).
+
 GPU crash guard removed. Every editor or window open tries the GPU; a failed
 adapter, device or surface puts that window on the CPU and the next open tries
 again. Nothing on disk decides the renderer: `gpu_denials`,

@@ -555,6 +555,85 @@ pub(crate) fn paint_within(
     Ok(())
 }
 
+/// `span` alone -- one leaf, or a clip with everything up to its `Unclip`
+/// -- rasterised under `transform` and cropped to where it can paint inside
+/// a `size` device frame: straight RGBA and its device rect `[x, y, w, h]`.
+/// `None` when it reaches nothing on the frame or cannot be drawn apart from
+/// the list (an inset shadow, a backdrop, a weld, bookkeeping alone).
+#[cfg(feature = "cpu")]
+pub(crate) fn raster_alone(
+    span: &[Painted],
+    transform: Affine,
+    size: [u32; 2],
+    resources: &mut vello_cpu::Resources,
+    cache: &mut Cache,
+) -> Result<Option<(mui_scene::Image, [u32; 4])>, Error> {
+    let first = span.first().ok_or(Error::InvalidPath)?;
+    let leaf = matches!(
+        first.layer,
+        Layer::Fill | Layer::Shell(_) | Layer::Stroke | Layer::Text | Layer::Draw(_)
+    ) || path_shadow(first);
+    let clip = first.layer == Layer::Clip;
+    if !(leaf && span.len() == 1 || clip)
+        || span
+            .iter()
+            .any(|p| matches!(p.layer, Layer::Backdrop | Layer::External))
+    {
+        return Ok(None);
+    }
+    // A clip bounds everything inside it.
+    let Some(reach) = damage::reach(first).filter(|r| *r != damage::NOTHING) else {
+        return Ok(None);
+    };
+    let frame = Rect::new(0., 0., f64::from(size[0]), f64::from(size[1]));
+    let r = transform
+        .transform_rect_bbox(reach)
+        .inflate(2., 2.)
+        .intersect(frame)
+        .expand();
+    if r.width() < 1. || r.height() < 1. {
+        return Ok(None);
+    }
+    let (x, y, w, h) = (
+        r.x0 as u32,
+        r.y0 as u32,
+        r.width() as u16,
+        r.height() as u16,
+    );
+    let base = Affine::translate((-r.x0, -r.y0)) * transform;
+    let mut ctx = vello_cpu::RenderContext::new(w, h);
+    let mut canvas = Cpu {
+        ctx: &mut ctx,
+        resources,
+        cache,
+    };
+    canvas.begin_frame();
+    let mut bez = BezPath::new();
+    for p in span {
+        if layered(&mut canvas, p) {
+            continue;
+        }
+        bez_path_into(&p.path, ARC_TOLERANCE, &mut bez)?;
+        let at = placed(base, p);
+        canvas.set_transform(at);
+        if path_shadow(p) {
+            blurred_path(&mut canvas, p, &bez);
+        } else {
+            one(&mut canvas, p, &bez, at)?;
+        }
+    }
+    ctx.flush();
+    let mut pixels = vello_cpu::Pixmap::new(w, h);
+    ctx.render(&mut pixels, resources);
+    let image = mui_scene::Image {
+        width: u32::from(w),
+        height: u32::from(h),
+        rgba: pixels.take_rgba8(peniko::ImageAlphaType::Alpha).into(),
+        texture: None,
+    };
+    Ok(Some((image, [x, y, u32::from(w), u32::from(h)])))
+}
+
 /// Whether leaf `p` paints nothing inside device rect `view`. Only the
 /// CPU damage pass culls; without it nothing is skipped.
 #[cfg(not(feature = "cpu"))]

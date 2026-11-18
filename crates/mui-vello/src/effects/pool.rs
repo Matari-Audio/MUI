@@ -42,6 +42,9 @@ pub struct EffectStats {
     /// rasterised on the CPU instead: a whole-window CPU frame to count.
     /// [`GpuRenderer::fallback`](super::GpuRenderer::fallback) keeps the tally.
     pub cpu_fallback: Option<crate::quad::Reason>,
+    /// Entries the quad pass refused that were each rasterised alone on the
+    /// CPU and drawn as images, the rest of the frame staying on the GPU.
+    pub cpu_patches: usize,
 }
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct ContentState {

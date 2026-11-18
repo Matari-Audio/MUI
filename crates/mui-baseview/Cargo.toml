@@ -27,6 +27,9 @@ wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"
 # already pulls it in there.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc = "0.2"
+# Frosted windows (`frost`) and window levels (`sticky`).
+objc2 = { version = "0.6", default-features = false }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSColor", "NSGraphics", "NSResponder", "NSView", "NSVisualEffectView", "NSWindow"] }
 accesskit_macos = { path = "../../vendor/accesskit_macos" }
 
 # baseview does not own an X11 selection; arboard keeps one alive.
@@ -37,10 +40,15 @@ arboard = { version = "3.6", default-features = false }
 # AT-SPI; screen bounds borrow baseview's original X11 connection below.
 accesskit_unix = { path = "../../vendor/accesskit_unix" }
 x11-dl = "2.21"
+# Hyprland lists its clients as JSON (`frost`).
+serde_json = "1"
 x11rb = { version = "0.13.2", default-features = false, features = ["allow-unsafe-code", "dl-libxcb"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 accesskit_windows = "0.34"
+# Frosted windows (`frost`) and topmost (`sticky`).
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_Controls", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Wdk_System_SystemServices", "Win32_System_SystemInformation", "Win32_System_Threading"] }
 
 [lints]
 workspace = true

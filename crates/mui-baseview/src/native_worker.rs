@@ -1,6 +1,6 @@
 //! Input-only native window adapter. The worker owns no native handle or native context.
 use super::*;
-use mui::vello::host::{BitmapPatch as Patch, HostError, Offscreen};
+use mui::vello::host::{BitmapPatch as Patch, Frame, Host, HostError, Offscreen};
 use policies::{PointerState, WheelState};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
 
@@ -86,6 +86,7 @@ pub(super) fn build<V: View + Send + 'static>(
             mui::vello::software::BitmapWindow::new(cx.clone()).map_err(std::io::Error::other)?;
         let (send, receive) = mpsc::channel();
         let (publish, output) = mpsc::sync_channel(1);
+        let (release, released) = mpsc::channel::<()>();
         let stopped = Arc::new(AtomicBool::new(false));
         let tick_pending = Arc::new(AtomicBool::new(false));
         let stop = stopped.clone();
@@ -135,6 +136,7 @@ pub(super) fn build<V: View + Send + 'static>(
                             output: publish,
                             stopped: stop,
                             tick_pending: pending,
+                            release,
                         },
                     );
                 }));
@@ -211,6 +213,9 @@ pub(super) fn build<V: View + Send + 'static>(
             input_pending: Cell::new(true),
             flash_at: Cell::new(None),
             flash_rects: RefCell::new(Vec::new()),
+            direct: Cell::new(false),
+            lent: Cell::new(false),
+            released,
             #[cfg(not(target_os = "windows"))]
             presenter: RefCell::new(presenter),
         })
@@ -223,6 +228,9 @@ enum Command {
     Resize(WindowSize),
     Tick(Option<(u64, u64)>),
     Invalidate,
+    /// The window thread's surface for the worker to present to, made from
+    /// the instance the worker asked with; `None` if it could not be made.
+    Surface(Option<wgpu::Surface<'static>>),
     Stop,
 }
 struct Output {
@@ -238,6 +246,11 @@ struct Output {
     accessibility: Option<mui_access::accesskit::TreeUpdate>,
     demand: baseview::FrameDemand,
     drag: Option<(u64, u64)>,
+    /// Make a surface on the window from this instance and send it back.
+    surface: Option<wgpu::Instance>,
+    /// The worker presents to the window itself: no patches, no blit, and
+    /// an expose is a repaint there.
+    direct: bool,
 }
 struct Bitmap {
     size: (u32, u32),
@@ -272,6 +285,12 @@ pub(super) struct NativeAdapter {
     input_pending: Cell<bool>,
     flash_at: Cell<Option<Instant>>,
     flash_rects: RefCell<Vec<[u32; 4]>>,
+    /// The worker presents to the window: an expose asks it to repaint.
+    direct: Cell<bool>,
+    /// A surface on this window was lent to the worker: closing waits for
+    /// `released` so the window never goes while the worker presents to it.
+    lent: Cell<bool>,
+    released: Receiver<()>,
 }
 impl NativeAdapter {
     fn blit(&self, rect: [u32; 4], pixels: &[u32]) -> bool {
@@ -335,6 +354,31 @@ impl NativeAdapter {
             self.requests.bind_requester(None);
             #[cfg(target_os = "linux")]
             self.x11.cancel();
+            self.await_surface_release();
+        }
+    }
+    /// Wait, briefly, for the worker to drop the surface it presents to this
+    /// window, draining frames so a worker blocked handing one over can see
+    /// the stop.
+    fn await_surface_release(&self) {
+        if !self.lent.get() {
+            return;
+        }
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while let Err(mpsc::RecvTimeoutError::Timeout) =
+            self.released.recv_timeout(Duration::from_millis(1))
+        {
+            if let Ok(output) = self.output.try_borrow() {
+                while output.try_recv().is_ok() {}
+            }
+            if Instant::now() >= deadline {
+                mui::diagnostics::error(
+                    "mui-baseview",
+                    "native_surface",
+                    "render worker still held the window surface at close",
+                );
+                return;
+            }
         }
     }
     fn send(&self, command: Command) {
@@ -414,11 +458,31 @@ impl NativeAdapter {
         {
             native.publish(update);
         }
+        if let Some(instance) = output.surface {
+            // Made here, on the window's thread (AppKit allows nothing else),
+            // and presented from the worker.
+            let surface = instance
+                .create_surface(wgpu::SurfaceTarget::from(self.cx.platform_handle()))
+                .map_err(|error| {
+                    mui::diagnostics::error("mui-baseview", "native_surface", &error.to_string());
+                })
+                .ok();
+            self.lent.set(self.lent.get() || surface.is_some());
+            self.send(Command::Surface(surface));
+        }
+        self.direct.set(output.direct);
         let actual = self.cx.size();
         if output.size != (actual.physical.width, actual.physical.height) {
             self.send(Command::Invalidate);
             self.input_pending.set(true);
             self.requests.wake();
+            return;
+        }
+        if output.direct {
+            // On screen already: the worker presented it.
+            *self.bitmap.borrow_mut() = None;
+            requests_presented(&self.requests, output.size, output.reason);
+            self.requests.drag.rendered(output.drag);
             return;
         }
         #[cfg(not(target_os = "macos"))]
@@ -477,6 +541,17 @@ impl NativeAdapter {
             return;
         }
         self.requests.drag.rendered(output.drag);
+    }
+}
+fn requests_presented(requests: &Requests, size: (u32, u32), reason: &'static str) {
+    let first = requests.presentation().is_none_or(|old| old.software);
+    requests.presented(size, false, reason);
+    if first {
+        mui::diagnostics::breadcrumb(
+            "mui-baseview",
+            "gpu_frame_presented",
+            "native GPU surface presentation succeeded",
+        );
     }
 }
 fn submit_patches(
@@ -627,6 +702,12 @@ impl WindowHandler for NativeAdapter {
         Ok(())
     }
     fn damage(&self, area: baseview::DamageArea<'_>) {
+        if self.direct.get() {
+            // No bitmap here to show again: the worker repaints the surface.
+            self.send(Command::Invalidate);
+            self.input_pending.set(true);
+            return;
+        }
         let mut rects = self.expose.borrow_mut();
         let mut add = |r: baseview::DamageRect| {
             let position = r.position();
@@ -720,6 +801,8 @@ struct WorkerChannels {
     output: SyncSender<Output>,
     stopped: Arc<AtomicBool>,
     tick_pending: Arc<AtomicBool>,
+    /// Dropped once the worker no longer holds a window surface.
+    release: Sender<()>,
 }
 
 fn worker<V: View>(
@@ -734,6 +817,7 @@ fn worker<V: View>(
         output,
         stopped,
         tick_pending,
+        release,
     } = channels;
     let mut driver = Driver::new(
         (size.physical.width, size.physical.height),
@@ -748,6 +832,13 @@ fn worker<V: View>(
     let mut scale = size.scale_factor;
     let mut input_revision = 0;
     let mut key_routes = KeyRoutes::new();
+    // The window's own surface, presented from here: the default. Offscreen
+    // targets read back to the window thread only where a direct surface is
+    // unavailable or asked against (`MUI_PRESENT=readback`).
+    let mut direct = None::<Host>;
+    let mut surface = None::<wgpu::Surface<'static>>;
+    let mut asked = false;
+    let direct_wanted = presents_directly();
     let mut gpu = None::<Offscreen>;
     let software_only = std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
     let mut init = (!software_only).then(|| GpuInit::new(true));
@@ -783,8 +874,22 @@ fn worker<V: View>(
                 tick_pending.store(false, Ordering::Release);
                 drag
             }
+            Command::Surface(made) => {
+                surface = made;
+                if surface.is_none() {
+                    // The window could not make one: read back instead.
+                    asked = false;
+                    if let Some(init) = &mut init {
+                        init.recover(FailureClass::Transient);
+                    }
+                }
+                continue;
+            }
             Command::Invalidate => {
                 driver.redraw();
+                if let Some(direct) = &mut direct {
+                    direct.invalidate();
+                }
                 if let Some(gpu) = &mut gpu {
                     gpu.invalidate();
                 }
@@ -809,7 +914,46 @@ fn worker<V: View>(
         let size = driver.size();
         let valid =
             size.0 > 0 && size.1 > 0 && u64::from(size.0) * u64::from(size.1) <= 16 * 1024 * 1024;
+        let mut surface_request = None;
         if valid
+            && direct_wanted
+            && direct.is_none()
+            && gpu.is_none()
+            && let Some(init) = init.as_mut()
+        {
+            if surface.is_some() {
+                let made = init.poll(size, |_| {
+                    surface.take().ok_or_else(|| "no window surface".to_owned())
+                });
+                match made {
+                    Some(Ok(host)) => {
+                        direct = Some(host);
+                        reason = "GPU ready";
+                        lock(shared).ui.set_gpu_welding_available(true);
+                        driver.redraw();
+                    }
+                    Some(Err(error)) => {
+                        surface = None;
+                        asked = false;
+                        if reason != "CPU GPU initialization failed" {
+                            log(
+                                shared,
+                                &format!(
+                                    "mui-baseview: GPU unavailable ({error}); using CPU rendering"
+                                ),
+                            );
+                        }
+                        reason = "CPU GPU initialization failed";
+                    }
+                    None => {}
+                }
+            } else if !asked {
+                surface_request = init.ready_instance();
+                asked = surface_request.is_some();
+            }
+        }
+        if valid
+            && !direct_wanted
             && gpu.is_none()
             && let Some(result) = init.as_mut().and_then(|i| i.poll_offscreen(size))
         {
@@ -881,7 +1025,46 @@ fn worker<V: View>(
         let mut patches = Vec::new();
         if let Some(scene) = scene {
             let transform = Affine::scale(driver.ui_scale());
-            if let Some(result) = render_gpu(&mut gpu, |renderer| {
+            let drawn = render_gpu(&mut direct, |host| {
+                crate::timing::time("gpu render+present ms", || {
+                    host.resize(size.0, size.1)?;
+                    host.present(&scene, transform)
+                })
+            });
+            if let Some(result) = drawn {
+                match result {
+                    Ok(Frame::Presented(_) | Frame::Current) => unpainted = false,
+                    Ok(Frame::Skipped) => driver.redraw(),
+                    Ok(Frame::SurfaceLost) => {
+                        // A new surface from the window, then paint again.
+                        direct = None;
+                        asked = false;
+                        if let Some(init) = &mut init {
+                            init.recover(FailureClass::Transient);
+                        }
+                        unpainted = true;
+                        driver.redraw();
+                    }
+                    Err(error) => {
+                        mui::diagnostics::error(
+                            "mui-baseview",
+                            "worker_gpu_fault",
+                            &error.to_string(),
+                        );
+                        reason = "CPU GPU recovery";
+                        if let Some(cpu) = &mut cpu {
+                            cpu.invalidate();
+                        }
+                        unpainted = true;
+                        asked = false;
+                        if let Some(init) = &mut init {
+                            init.recover(error.failure_class());
+                        }
+                        lock(shared).ui.set_gpu_welding_available(false);
+                        driver.redraw();
+                    }
+                }
+            } else if let Some(result) = render_gpu(&mut gpu, |renderer| {
                 crate::timing::time("gpu render+readback ms", || {
                     renderer.render(&scene, transform, size)
                 })
@@ -991,7 +1174,7 @@ fn worker<V: View>(
             .send(Output {
                 patches,
                 size,
-                software: gpu.is_none(),
+                software: gpu.is_none() && direct.is_none(),
                 reason,
                 capture,
                 ime,
@@ -1001,6 +1184,8 @@ fn worker<V: View>(
                 accessibility: update,
                 demand: baseview::FrameDemand::At(at),
                 drag,
+                surface: surface_request,
+                direct: direct.is_some(),
             })
             .is_err()
         {
@@ -1009,7 +1194,18 @@ fn worker<V: View>(
         requests.wake();
     }
     // No HWND or host callbacks here. The owner revokes host delivery first.
+    // The window is about to go: give up its surface before anything slow.
+    drop((direct, surface));
+    drop(release);
     driver.close(&mut lock(shared));
+}
+
+/// Whether the worker presents to the window's own surface. macOS keeps the
+/// readback transport until its CPU layer hands over to Metal on the window
+/// thread; `MUI_PRESENT=readback` asks for it anywhere.
+fn presents_directly() -> bool {
+    !cfg!(target_os = "macos")
+        && !std::env::var("MUI_PRESENT").is_ok_and(|v| v.eq_ignore_ascii_case("readback"))
 }
 
 /// A renderer/readback unwind must take the same CPU/backoff path as an error,

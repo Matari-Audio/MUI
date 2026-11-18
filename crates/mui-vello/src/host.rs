@@ -921,6 +921,19 @@ impl Host {
         self.gpu.renderer.set_texture(key, texture);
     }
 
+    /// Frames the GPU pass refused and rasterised on the CPU, and why last;
+    /// see [`GpuRenderer::fallback`].
+    pub fn fallback(&self) -> &crate::effects::Fallback {
+        self.gpu.renderer.fallback()
+    }
+
+    /// Forget the frame on screen: the next [`Host::present`] submits even
+    /// an unchanged scene, on the GPU (a present pass of the retained frame
+    /// texture), not through [`Host::present_with_overlay`]'s CPU raster.
+    pub fn invalidate(&mut self) {
+        self.gpu.renderer.invalidate();
+    }
+
     /// The device was lost; the next [`Host::present`] rebuilds it. An idle
     /// window polls this so it does not wait for an event to find out: it
     /// polls the device, which is where wgpu runs its lost callback.
