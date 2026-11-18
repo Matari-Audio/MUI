@@ -17,3 +17,35 @@ mui = { path = "../../crates/mui", features = ["cpu"] }
 mui-vello = { path = "../../crates/mui-vello", features = ["cpu"] }
 serde_json = "1"
 smallvec = "1"
+
+# BEGIN tools/patches.py --manifests: blaze reads only manifest [patch] tables
+[patch."https://github.com/Matari-Audio/MUI"]
+moose-baseview = { path = "../../vendor/moose-baseview" }
+mui = { path = "../../crates/mui" }
+mui-baseview = { path = "../../crates/mui-baseview" }
+mui-headless = { path = "../../crates/mui-headless" }
+mui-native-dialog = { path = "../../crates/mui-native-dialog" }
+mui-text = { path = "../../crates/mui-text" }
+mui-vello = { path = "../../crates/mui-vello" }
+
+[patch."https://github.com/Matari-Audio/Matari-Access"]
+derpcat-access = { path = "../../../../licensing/matari-access" }
+
+[patch."https://github.com/Matari-Audio/matari-audio-drag-and-drop"]
+matari-audio-drag-and-drop = { path = "../../../drag-and-drop" }
+
+[patch."https://github.com/Matari-Audio/moose"]
+moose = { path = "../../../moose/crates/moose" }
+moose-au = { path = "../../../moose/crates/moose-au" }
+moose-clap = { path = "../../../moose/crates/moose-clap" }
+moose-core = { path = "../../../moose/crates/moose-core" }
+moose-derive = { path = "../../../moose/crates/moose-derive" }
+moose-dsp = { path = "../../../moose/crates/moose-dsp" }
+moose-egui = { path = "../../../moose/crates/moose-egui" }
+moose-font = { path = "../../../moose/crates/moose-font" }
+moose-params = { path = "../../../moose/crates/moose-params" }
+moose-standalone = { path = "../../../moose/crates/moose-standalone" }
+moose-test = { path = "../../../moose/crates/moose-test" }
+moose-utils = { path = "../../../moose/crates/moose-utils" }
+moose-vst3 = { path = "../../../moose/crates/moose-vst3" }
+# END tools/patches.py --manifests
