@@ -54,58 +54,6 @@ impl<T> ClosingHandler<T> {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test assertions")]
-mod close_tests {
-    use super::ClosingHandler;
-    use std::{
-        cell::RefCell,
-        rc::{Rc, Weak},
-    };
-
-    #[test]
-    fn callback_close_defers_cleanup_until_before_native_destroy() {
-        struct Handler {
-            events: Rc<RefCell<Vec<&'static str>>>,
-            owner: Weak<ClosingHandler<Handler>>,
-        }
-        impl Drop for Handler {
-            fn drop(&mut self) {
-                self.events.borrow_mut().push("drop renderer");
-                assert!(!self
-                    .owner
-                    .upgrade()
-                    .unwrap()
-                    .close(|_| panic!("recursive destructor close")));
-            }
-        }
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let handler = Rc::new(ClosingHandler::new());
-        handler.set(Handler { events: Rc::clone(&events), owner: Rc::downgrade(&handler) });
-        handler.with(|_| {
-            events.borrow_mut().push("callback");
-            assert_eq!(handler.with(|_| "nested event"), Some("nested event"));
-            handler.request_close();
-            assert!(!handler.ready_to_close());
-            assert!(!handler.close(|_| panic!("cleanup while callback active")));
-            assert!(handler.with(|_| ()).is_none());
-            events.borrow_mut().push("callback returns");
-        });
-        assert!(handler.is_closing());
-        assert!(handler.ready_to_close());
-        assert!(handler.close(|_| {
-            events.borrow_mut().push("WillClose");
-            assert!(!handler.close(|_| panic!("recursive cleanup")));
-        }));
-        events.borrow_mut().push("destroy HWND");
-        assert!(handler.close(|_| panic!("duplicate WillClose")));
-        assert_eq!(
-            *events.borrow(),
-            ["callback", "callback returns", "WillClose", "drop renderer", "destroy HWND"]
-        );
-    }
-}
-
 /// The work a handler needs after its current frame or event.
 ///
 /// X11 sleeps without a frame timer for `Idle`. Other platforms may continue
@@ -203,5 +151,57 @@ impl WindowHandlerBuilder {
             Ok(handle) => Ok(Box::new(crate::work::ScheduledHandler::new(handle, self.work))),
             Err(e) => Err(platform::PlatformError::Handler(e)),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test assertions")]
+mod close_tests {
+    use super::ClosingHandler;
+    use std::{
+        cell::RefCell,
+        rc::{Rc, Weak},
+    };
+
+    #[test]
+    fn callback_close_defers_cleanup_until_before_native_destroy() {
+        struct Handler {
+            events: Rc<RefCell<Vec<&'static str>>>,
+            owner: Weak<ClosingHandler<Handler>>,
+        }
+        impl Drop for Handler {
+            fn drop(&mut self) {
+                self.events.borrow_mut().push("drop renderer");
+                assert!(!self
+                    .owner
+                    .upgrade()
+                    .unwrap()
+                    .close(|_| panic!("recursive destructor close")));
+            }
+        }
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let handler = Rc::new(ClosingHandler::new());
+        handler.set(Handler { events: Rc::clone(&events), owner: Rc::downgrade(&handler) });
+        handler.with(|_| {
+            events.borrow_mut().push("callback");
+            assert_eq!(handler.with(|_| "nested event"), Some("nested event"));
+            handler.request_close();
+            assert!(!handler.ready_to_close());
+            assert!(!handler.close(|_| panic!("cleanup while callback active")));
+            assert!(handler.with(|_| ()).is_none());
+            events.borrow_mut().push("callback returns");
+        });
+        assert!(handler.is_closing());
+        assert!(handler.ready_to_close());
+        assert!(handler.close(|_| {
+            events.borrow_mut().push("WillClose");
+            assert!(!handler.close(|_| panic!("recursive cleanup")));
+        }));
+        events.borrow_mut().push("destroy HWND");
+        assert!(handler.close(|_| panic!("duplicate WillClose")));
+        assert_eq!(
+            *events.borrow(),
+            ["callback", "callback returns", "WillClose", "drop renderer", "destroy HWND"]
+        );
     }
 }

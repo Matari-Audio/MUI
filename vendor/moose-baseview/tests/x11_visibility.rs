@@ -92,7 +92,7 @@ fn exercise(reparent: bool) {
         move |cx| {
             let id = match cx.window_handle().unwrap().as_raw() {
                 RawWindowHandle::Xlib(h) => h.window,
-                RawWindowHandle::Xcb(h) => u64::from(h.window.get()),
+                RawWindowHandle::Xcb(h) => std::num::NonZeroU64::from(h.window).get(),
                 _ => panic!("expected X11 window"),
             };
             tx.send(id).unwrap();
@@ -118,7 +118,7 @@ fn exercise(reparent: bool) {
         }
         (host.lib.XSync)(host.display, 0);
     }
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now().checked_add(Duration::from_secs(2)).expect("a near deadline");
     while frames.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(5));
     }

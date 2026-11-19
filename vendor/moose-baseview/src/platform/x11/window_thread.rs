@@ -500,89 +500,6 @@ fn receive_response(
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "failed test setup/assertions must fail the regression")]
-mod close_tests {
-    use super::*;
-
-    #[test]
-    fn executable_worker_is_unload_safe_without_dlopen() {
-        assert!(image_is_unload_safe());
-    }
-
-    #[test]
-    fn stalled_pinned_thread_never_joins_unboundedly() {
-        let (release, waiting) = mpsc::channel();
-        let (done, finished) = mpsc::channel();
-        let thread = thread::spawn(move || {
-            assert!(waiting.recv().is_ok());
-            done.send(()).unwrap();
-        });
-        let started = Instant::now();
-        let revoked = AtomicBool::new(false);
-        assert!(!join_bounded(thread, Duration::from_millis(5), || revoked
-            .store(true, Ordering::Release)));
-        assert!(revoked.load(Ordering::Acquire));
-        assert!(started.elapsed() < Duration::from_millis(100));
-        release.send(()).unwrap();
-        finished.recv_timeout(Duration::from_secs(1)).unwrap();
-    }
-
-    #[test]
-    fn request_timeout_does_not_consume_a_later_reply() {
-        let (first, first_rx) = mpsc::channel();
-        let started = Instant::now();
-        assert!(receive_response(&first_rx, Duration::from_millis(5)).is_err());
-        assert!(started.elapsed() < Duration::from_millis(100));
-        drop(first_rx);
-        assert!(first.send(Ok(())).is_err());
-        let (second, second_rx) = mpsc::channel();
-        second.send(Err("second request failed".into())).unwrap();
-        assert!(receive_response(&second_rx, Duration::ZERO)
-            .unwrap_err()
-            .to_string()
-            .contains("second request failed"));
-    }
-
-    #[test]
-    fn host_request_times_out_when_window_thread_is_inside_a_callback() {
-        let loop_: calloop::EventLoop<'static, ()> = calloop::EventLoop::try_new().unwrap();
-        let (request_sender, _waiting) = calloop::channel::sync_channel(1);
-        let handle = WindowThreadControl {
-            shared: Arc::new(WindowThreadShared::new()),
-            loop_signal: loop_.get_signal(),
-            event_loop_handle: Cell::new(None),
-            request_sender,
-            can_detach: Cell::new(false),
-            close_timeout: Cell::new(None),
-        };
-        let start = Instant::now();
-        let error = handle.request(WindowThreadRequest::Show).unwrap_err().to_string();
-        assert!(error.contains("timed out"));
-        assert!(start.elapsed() >= REQUEST_TIMEOUT);
-        assert!(start.elapsed() < Duration::from_millis(150));
-        assert!(handle
-            .request(WindowThreadRequest::Hide)
-            .unwrap_err()
-            .to_string()
-            .contains("queue is full"));
-    }
-
-    #[test]
-    fn full_request_queue_fails_without_blocking() {
-        let (sender, _receiver) = calloop::channel::sync_channel(1);
-        let (response, _rx) = mpsc::channel();
-        sender
-            .try_send(WindowThreadMessage { request: WindowThreadRequest::Show, response })
-            .unwrap();
-        let (response, _rx) = mpsc::channel();
-        assert!(matches!(
-            sender.try_send(WindowThreadMessage { request: WindowThreadRequest::Hide, response }),
-            Err(mpsc::TrySendError::Full(_))
-        ));
-    }
-}
-
 enum WindowOpenResult {
     Success { loop_signal: LoopSignal },
     Error(String),
@@ -692,5 +609,88 @@ impl WindowResultReceiver {
             WindowOpenResult::Error(e) => Err(PlatformError::CreationFailed(e)),
             WindowOpenResult::Success { loop_signal } => Ok(loop_signal),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "failed test setup/assertions must fail the regression")]
+mod close_tests {
+    use super::*;
+
+    #[test]
+    fn executable_worker_is_unload_safe_without_dlopen() {
+        assert!(image_is_unload_safe());
+    }
+
+    #[test]
+    fn stalled_pinned_thread_never_joins_unboundedly() {
+        let (release, waiting) = mpsc::channel();
+        let (done, finished) = mpsc::channel();
+        let thread = thread::spawn(move || {
+            assert!(waiting.recv().is_ok());
+            done.send(()).unwrap();
+        });
+        let started = Instant::now();
+        let revoked = AtomicBool::new(false);
+        assert!(!join_bounded(thread, Duration::from_millis(5), || revoked
+            .store(true, Ordering::Release)));
+        assert!(revoked.load(Ordering::Acquire));
+        assert!(started.elapsed() < Duration::from_millis(100));
+        release.send(()).unwrap();
+        finished.recv_timeout(Duration::from_secs(1)).unwrap();
+    }
+
+    #[test]
+    fn request_timeout_does_not_consume_a_later_reply() {
+        let (first, first_rx) = mpsc::channel();
+        let started = Instant::now();
+        assert!(receive_response(&first_rx, Duration::from_millis(5)).is_err());
+        assert!(started.elapsed() < Duration::from_millis(100));
+        drop(first_rx);
+        assert!(first.send(Ok(())).is_err());
+        let (second, second_rx) = mpsc::channel();
+        second.send(Err("second request failed".into())).unwrap();
+        assert!(receive_response(&second_rx, Duration::ZERO)
+            .unwrap_err()
+            .to_string()
+            .contains("second request failed"));
+    }
+
+    #[test]
+    fn host_request_times_out_when_window_thread_is_inside_a_callback() {
+        let loop_: calloop::EventLoop<'static, ()> = calloop::EventLoop::try_new().unwrap();
+        let (request_sender, _waiting) = calloop::channel::sync_channel(1);
+        let handle = WindowThreadControl {
+            shared: Arc::new(WindowThreadShared::new()),
+            loop_signal: loop_.get_signal(),
+            event_loop_handle: Cell::new(None),
+            request_sender,
+            can_detach: Cell::new(false),
+            close_timeout: Cell::new(None),
+        };
+        let start = Instant::now();
+        let error = handle.request(WindowThreadRequest::Show).unwrap_err().to_string();
+        assert!(error.contains("timed out"));
+        assert!(start.elapsed() >= REQUEST_TIMEOUT);
+        assert!(start.elapsed() < Duration::from_millis(150));
+        assert!(handle
+            .request(WindowThreadRequest::Hide)
+            .unwrap_err()
+            .to_string()
+            .contains("queue is full"));
+    }
+
+    #[test]
+    fn full_request_queue_fails_without_blocking() {
+        let (sender, _receiver) = calloop::channel::sync_channel(1);
+        let (response, _rx) = mpsc::channel();
+        sender
+            .try_send(WindowThreadMessage { request: WindowThreadRequest::Show, response })
+            .unwrap();
+        let (response, _rx) = mpsc::channel();
+        assert!(matches!(
+            sender.try_send(WindowThreadMessage { request: WindowThreadRequest::Hide, response }),
+            Err(mpsc::TrySendError::Full(_))
+        ));
     }
 }

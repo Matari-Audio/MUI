@@ -33,6 +33,8 @@ use wayland_client::{
 
 const URI_LIST: &str = "text/uri-list";
 const MAX_TRANSFER: usize = 1024 * 1024;
+/// A data transfer the peer hasn't finished by then is dropped.
+const TRANSFER_TIMEOUT: Duration = Duration::from_secs(10);
 const PATH_ESCAPES: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
     .add(b' ')
     .add(b'%')
@@ -172,7 +174,7 @@ impl Data {
             match transfer.pipe.write(transfer.bytes.get(transfer.sent..).unwrap_or_default()) {
                 Ok(0) => false,
                 Ok(written) => {
-                    transfer.sent += written;
+                    transfer.sent = transfer.sent.saturating_add(written);
                     if transfer.sent == transfer.bytes.len() {
                         transfer.reporter.borrow_mut().data_requested();
                         false
@@ -193,7 +195,7 @@ impl Data {
                     inbound.pipe = None;
                 }
                 Ok(count) if inbound.bytes.len().saturating_add(count) <= MAX_TRANSFER => {
-                    inbound.bytes.extend_from_slice(&chunk[..count])
+                    inbound.bytes.extend_from_slice(chunk.get(..count).unwrap_or_default())
                 }
                 Ok(_) => failed = true,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
@@ -362,7 +364,7 @@ impl DataSourceHandler for Runtime {
                 bytes: Arc::clone(&source.bytes),
                 sent: 0,
                 reporter: Rc::clone(&source.reporter),
-                deadline: Instant::now() + Duration::from_secs(10),
+                deadline: Instant::now().checked_add(TRANSFER_TIMEOUT).unwrap_or_else(Instant::now),
             });
         }
     }
@@ -407,7 +409,7 @@ impl DataDeviceHandler for Runtime {
                 dropped: false,
                 announced: false,
                 position: PhysicalPosition::new(x * cx.scale_factor(), y * cx.scale_factor()),
-                deadline: Instant::now() + Duration::from_secs(10),
+                deadline: Instant::now().checked_add(TRANSFER_TIMEOUT).unwrap_or_else(Instant::now),
             });
         }
     }

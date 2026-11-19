@@ -105,8 +105,8 @@ fn display_interval(hwnd: HWND) -> Duration {
     use windows_sys::Win32::Graphics::Gdi::*;
     let mut monitor = MONITORINFOEXW::default();
     monitor.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
-    let mut mode = DEVMODEW::default();
-    mode.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+    let mut mode =
+        DEVMODEW { dmSize: std::mem::size_of::<DEVMODEW>() as u16, ..Default::default() };
     // SAFETY: these APIs only query a monitor/window identifier; both output
     // structs are writable and carry their required size fields.
     let refresh = unsafe {

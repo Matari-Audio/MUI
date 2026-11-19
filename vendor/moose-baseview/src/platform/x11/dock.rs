@@ -80,10 +80,10 @@ impl Dock {
                         .monitors
                         .iter()
                         .find(|m| {
-                            i32::from(pointer.root_x) >= i32::from(m.x)
-                                && i32::from(pointer.root_x) < i32::from(m.x) + i32::from(m.width)
-                                && i32::from(pointer.root_y) >= i32::from(m.y)
-                                && i32::from(pointer.root_y) < i32::from(m.y) + i32::from(m.height)
+                            let (x, y) = (i32::from(pointer.root_x), i32::from(pointer.root_y));
+                            let (left, top) = (i32::from(m.x), i32::from(m.y));
+                            (left..left.saturating_add(i32::from(m.width))).contains(&x)
+                                && (top..top.saturating_add(i32::from(m.height))).contains(&y)
                         })
                         .or_else(|| monitors.monitors.iter().find(|m| m.primary))
                         .or_else(|| monitors.monitors.first())
@@ -103,15 +103,18 @@ impl Dock {
         };
         let vertical = self.options.edge.is_vertical();
         let span = if vertical { width } else { height };
-        let thickness =
-            ((f64::from(self.options.height) * self.scale).round() as u32).min(span / 2).max(1);
+        let thickness = ((f64::from(self.options.height) * self.scale).round() as u32)
+            .min(span.div_euclid(2))
+            .max(1);
         if x < 0
             || y < 0
             || match self.options.edge {
                 DockEdge::Top => y != 0,
-                DockEdge::Bottom => y + height as i32 != i32::from(root_rect.height),
+                DockEdge::Bottom => {
+                    y.saturating_add_unsigned(height) != i32::from(root_rect.height)
+                }
                 DockEdge::Left => x != 0,
-                DockEdge::Right => x + width as i32 != i32::from(root_rect.width),
+                DockEdge::Right => x.saturating_add_unsigned(width) != i32::from(root_rect.width),
             }
         {
             return Err(PlatformError::CreationFailed(
@@ -121,9 +124,13 @@ impl Dock {
         let thick = thickness as i32;
         let (panel_x, panel_y, panel_width, panel_height) = match self.options.edge {
             DockEdge::Top => (x, y, width, thickness),
-            DockEdge::Bottom => (x, y + height as i32 - thick, width, thickness),
+            DockEdge::Bottom => {
+                (x, y.saturating_add_unsigned(height).saturating_sub(thick), width, thickness)
+            }
             DockEdge::Left => (x, y, thickness, height),
-            DockEdge::Right => (x + width as i32 - thick, y, thickness, height),
+            DockEdge::Right => {
+                (x.saturating_add_unsigned(width).saturating_sub(thick), y, thickness, height)
+            }
         };
         conn.configure_window(
             self.window,
@@ -134,21 +141,21 @@ impl Dock {
                 .height(panel_height),
         )?
         .check()?;
-        let mut strut = [0u32; 12];
-        if visible {
-            // _NET_WM_STRUT_PARTIAL: left, right, top, bottom, then the start/end
-            // pair of each edge's span (left/right span y, top/bottom span x).
-            let (side, span_start) = match self.options.edge {
-                DockEdge::Left => (0, 4),
-                DockEdge::Right => (1, 6),
-                DockEdge::Top => (2, 8),
-                DockEdge::Bottom => (3, 10),
-            };
+        // _NET_WM_STRUT_PARTIAL: left, right, top, bottom, then the start/end
+        // pair of each edge's span (left/right span y, top/bottom span x).
+        let strut = if visible {
             let (start, length) = if vertical { (y, height) } else { (x, width) };
-            strut[side] = thickness;
-            strut[span_start] = start as u32;
-            strut[span_start + 1] = (start as u32).saturating_add(length).saturating_sub(1);
-        }
+            let (t, s) = (thickness, start as u32);
+            let e = s.saturating_add(length).saturating_sub(1);
+            match self.options.edge {
+                DockEdge::Left => [t, 0, 0, 0, s, e, 0, 0, 0, 0, 0, 0],
+                DockEdge::Right => [0, t, 0, 0, 0, 0, s, e, 0, 0, 0, 0],
+                DockEdge::Top => [0, 0, t, 0, 0, 0, 0, 0, s, e, 0, 0],
+                DockEdge::Bottom => [0, 0, 0, t, 0, 0, 0, 0, 0, 0, s, e],
+            }
+        } else {
+            [0u32; 12]
+        };
         let partial = atom(connection, b"_NET_WM_STRUT_PARTIAL")?;
         conn.change_property32(
             PropMode::REPLACE,

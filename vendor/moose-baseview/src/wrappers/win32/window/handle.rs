@@ -19,8 +19,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, GetWindowLongPtrW, GetWindowLongW, SetParent, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-    SW_HIDE, WINDOW_LONG_PTR_INDEX,
+    ShowWindow, GWLP_USERDATA, GWL_EXSTYLE, GWL_STYLE, SWP_NOACTIVATE, SWP_NOZORDER, SW_HIDE,
+    WINDOW_LONG_PTR_INDEX,
 };
 
 /// A simple wrapper around a HWND.

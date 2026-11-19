@@ -14,6 +14,9 @@ use objc::runtime::Object;
 use objc::{class, msg_send, sel, sel_impl};
 use std::ffi::c_void;
 
+/// `MUI_DEBUG_DAMAGE=1`: flash each repainted piece.
+static FLASH_DAMAGE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Rect {
@@ -221,8 +224,8 @@ impl Presenter {
                     false
                 }
             });
-            static FLASH: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-            if *FLASH.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1")) {
+            if *FLASH_DAMAGE.get_or_init(|| std::env::var("MUI_DEBUG_DAMAGE").as_deref() == Ok("1"))
+            {
                 let layer: *mut Object = msg_send![class!(CALayer), new];
                 let frame = Rect {
                     x: f64::from(rect[0]) / scale,

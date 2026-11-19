@@ -70,6 +70,7 @@ impl PlatformHandle {
             WindowHandle::borrow_raw(RawWindowHandle::Wayland(WaylandWindowHandle::new(pointer)))
         })
     }
+    #[expect(clippy::expect_used, reason = "a system-backend connection always has a display")]
     pub fn display_handle(&self) -> DisplayHandle<'_> {
         let pointer = NonNull::new(self.connection.backend().display_ptr())
             .expect("a connected Wayland display is non-null")
@@ -112,6 +113,7 @@ pub struct Context {
     pub(super) drag_active: Cell<bool>,
 }
 impl Context {
+    #[expect(clippy::too_many_arguments, reason = "one private constructor, called once")]
     pub(super) fn new(
         conn: Connection, role: Role, options: Option<DockOptions>, logical: (u32, u32),
         qh: QueueHandle<Runtime>, shared: Arc<Shared>, signal: LoopSignal, globals: &GlobalList,
@@ -257,6 +259,7 @@ impl Context {
         // SAFETY: this owner keeps the layer and system connection live.
         Some(unsafe { WindowHandle::borrow_raw(WaylandWindowHandle::new(pointer).into()) })
     }
+    #[expect(clippy::expect_used, reason = "a system-backend connection always has a display")]
     pub fn display_handle(&self) -> DisplayHandle<'_> {
         let pointer = NonNull::new(self.conn.backend().display_ptr())
             .expect("a connected Wayland display is non-null")

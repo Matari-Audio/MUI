@@ -165,7 +165,7 @@ fn transparent_window_preserves_overlay_input() {
     let id = receive.recv_timeout(Duration::from_secs(2)).unwrap();
     let (conn, screen) = x11rb::connect(None).unwrap();
     assert_eq!(conn.get_geometry(id).unwrap().reply().unwrap().depth, 32);
-    let root = conn.setup().roots.get(screen).unwrap().root;
+    let root = conn.setup().roots.get(screen).expect("the screen x11rb connected to").root;
     let overlay = conn.generate_id().unwrap();
     conn.create_window(
         0,

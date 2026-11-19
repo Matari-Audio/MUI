@@ -28,12 +28,12 @@ impl WindowHandler for Probe {
             let mut surface = self.surface.borrow_mut();
             surface.resize(w, h)?;
             let mut buffer = surface.buffer_mut()?;
-            for (i, pixel) in buffer.iter_mut().enumerate() {
-                *pixel = if i % (size.width as usize) < size.width as usize / 2 {
-                    0x00234d5d
-                } else {
-                    0x00493668
-                };
+            // Left half one colour, right half the other.
+            let width = size.width as usize;
+            for row in buffer.chunks_mut(width) {
+                let (left, right) = row.split_at_mut(width.div_euclid(2).min(row.len()));
+                left.fill(0x00234d5d);
+                right.fill(0x00493668);
             }
             buffer.present()?;
             self.frames.fetch_add(1, Ordering::Relaxed);
@@ -67,7 +67,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok(Probe {
                 surface: RefCell::new(surface),
                 cx,
-                deadline: Instant::now() + Duration::from_secs(2),
+                deadline: Instant::now()
+                    .checked_add(Duration::from_secs(2))
+                    .unwrap_or_else(Instant::now),
                 frames: counter,
             })
         },

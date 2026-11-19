@@ -1,2 +1,4 @@
-msrv = '1.82'
-check-private-items = true
+# Tests state their preconditions with expect; product code must not.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+allow-indexing-slicing-in-tests = true

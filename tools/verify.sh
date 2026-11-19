@@ -32,6 +32,10 @@ if ! git diff --quiet "$base"...HEAD -- media; then
 cargo fmt --manifest-path media/Cargo.toml --all -- --check
 cargo clippy --manifest-path media/Cargo.toml --workspace --all-features --all-targets --locked --offline -- -D warnings
 fi
+# The baseview fork is its own package, outside the root workspace's scope.
+if ! git diff --quiet "$base"...HEAD -- vendor/moose-baseview; then
+cargo clippy --manifest-path vendor/moose-baseview/Cargo.toml --all-features --all-targets --locked --offline -- -D warnings
+fi
 exit 0
 fi
 
@@ -52,6 +56,7 @@ fi
 fi
 if on root-lint; then
 cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
+cargo clippy --manifest-path vendor/moose-baseview/Cargo.toml --all-features --all-targets --locked --offline -- -D warnings
 # --all-features hides a cfg that only breaks with a feature off: mui-vello's
 # backends each compile alone and with none.
 cargo clippy -p mui-vello --no-default-features --all-targets --locked --offline -- -D warnings

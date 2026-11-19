@@ -560,7 +560,7 @@ pub(crate) fn paint_within(
 /// a `size` device frame: straight RGBA and its device rect `[x, y, w, h]`.
 /// `None` when it reaches nothing on the frame or cannot be drawn apart from
 /// the list (an inset shadow, a backdrop, a weld, bookkeeping alone).
-#[cfg(feature = "cpu")]
+#[cfg(all(feature = "cpu", feature = "gpu-quad"))]
 pub(crate) fn raster_alone(
     span: &[Painted],
     transform: Affine,

@@ -5,6 +5,8 @@ use raw_window_handle::{DisplayHandle, WindowHandle as RawWindowHandle};
 use std::rc::Rc;
 
 pub(crate) use layer::Embedded as EmbeddedWayland;
+#[cfg(feature = "opengl")]
+pub use x11::gl;
 pub use x11::{ParentWindowHandle, PlatformError};
 pub(crate) type Result<T> = std::result::Result<T, PlatformError>;
 pub(crate) use x11::X11Connection;

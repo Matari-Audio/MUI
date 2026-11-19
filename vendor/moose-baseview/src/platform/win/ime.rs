@@ -33,14 +33,14 @@ impl Context {
         if len < 0 || len % 2 != 0 {
             return None;
         }
-        let mut units = vec![0u16; len as usize / 2];
+        let mut units = vec![0u16; (len as usize).div_euclid(2)];
         let copied = unsafe {
             ImmGetCompositionStringW(self.himc, kind, units.as_mut_ptr().cast(), len as u32)
         };
         if copied < 0 || copied > len {
             return None;
         }
-        units.truncate(copied as usize / 2);
+        units.truncate((copied as usize).div_euclid(2));
         Some(String::from_utf16_lossy(&units))
     }
 }
@@ -182,7 +182,11 @@ impl NativeIme {
         }
         let config = self.configuration.borrow().clone()?;
         let utf16: Vec<_> = config.text.encode_utf16().collect();
-        let bytes = std::mem::size_of::<RECONVERTSTRING>() + (utf16.len() + 1) * 2;
+        let bytes = utf16
+            .len()
+            .saturating_add(1)
+            .saturating_mul(2)
+            .saturating_add(std::mem::size_of::<RECONVERTSTRING>());
         if lparam == 0 {
             return Some(bytes as isize);
         }
@@ -202,9 +206,9 @@ impl NativeIme {
                 dwStrLen: utf16.len() as u32,
                 dwStrOffset: std::mem::size_of::<RECONVERTSTRING>() as u32,
                 dwCompStrLen: comp_length,
-                dwCompStrOffset: comp_start * 2,
+                dwCompStrOffset: comp_start.saturating_mul(2),
                 dwTargetStrLen: length,
-                dwTargetStrOffset: start * 2,
+                dwTargetStrOffset: start.saturating_mul(2),
             };
             let text_ptr =
                 ptr.cast::<u8>().add(std::mem::size_of::<RECONVERTSTRING>()).cast::<u16>();

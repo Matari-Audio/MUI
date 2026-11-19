@@ -23,8 +23,8 @@ fn monitors() -> Vec<(HMONITOR, String)> {
         info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
         // SAFETY: correctly sized writable structure and live monitor handle.
         if unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) } != 0 {
-            let end = info.szDevice.iter().position(|c| *c == 0).unwrap_or(info.szDevice.len());
-            monitors.push((monitor, String::from_utf16_lossy(&info.szDevice[..end])));
+            let name = info.szDevice.split(|c| *c == 0).next().unwrap_or_default();
+            monitors.push((monitor, String::from_utf16_lossy(name)));
         }
         1
     }
@@ -143,13 +143,14 @@ impl Dock {
             }
             let monitor = info.rcMonitor;
             let span = if self.options.edge.is_vertical() {
-                monitor.right - monitor.left
+                monitor.right.saturating_sub(monitor.left)
             } else {
-                monitor.bottom - monitor.top
+                monitor.bottom.saturating_sub(monitor.top)
             };
-            let thickness =
-                (u64::from(self.height.get()) * u64::from(GetDpiForWindow(self.hwnd).max(96)) / 96)
-                    .min(span.max(2) as u64 / 2) as i32;
+            let thickness = (u64::from(self.height.get())
+                .saturating_mul(u64::from(GetDpiForWindow(self.hwnd).max(96)))
+                .div_euclid(96))
+            .min((span.max(2) as u64).div_euclid(2)) as i32;
             data.uEdge = match self.options.edge {
                 DockEdge::Top => ABE_TOP,
                 DockEdge::Bottom => ABE_BOTTOM,
@@ -159,10 +160,10 @@ impl Dock {
             data.rc = monitor;
             SHAppBarMessage(ABM_QUERYPOS, &mut data);
             match self.options.edge {
-                DockEdge::Top => data.rc.bottom = data.rc.top + thickness,
-                DockEdge::Bottom => data.rc.top = data.rc.bottom - thickness,
-                DockEdge::Left => data.rc.right = data.rc.left + thickness,
-                DockEdge::Right => data.rc.left = data.rc.right - thickness,
+                DockEdge::Top => data.rc.bottom = data.rc.top.saturating_add(thickness),
+                DockEdge::Bottom => data.rc.top = data.rc.bottom.saturating_sub(thickness),
+                DockEdge::Left => data.rc.right = data.rc.left.saturating_add(thickness),
+                DockEdge::Right => data.rc.left = data.rc.right.saturating_sub(thickness),
             }
             if SHAppBarMessage(ABM_SETPOS, &mut data) == 0 {
                 self.remove();
@@ -181,8 +182,8 @@ impl Dock {
                     HWND_TOPMOST,
                     data.rc.left,
                     data.rc.top,
-                    data.rc.right - data.rc.left,
-                    data.rc.bottom - data.rc.top,
+                    data.rc.right.saturating_sub(data.rc.left),
+                    data.rc.bottom.saturating_sub(data.rc.top),
                     SWP_NOACTIVATE | SWP_NOOWNERZORDER,
                 );
             }
