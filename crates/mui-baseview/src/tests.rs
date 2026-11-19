@@ -1642,3 +1642,36 @@ fn native_policies_keep_ui_on_worker_and_x11_lifecycle_on_native_thread() {
         );
     }
 }
+
+#[test]
+fn an_os_rescale_tells_the_view_its_logical_size_once() {
+    struct Rescales(Vec<(f64, (u32, u32))>);
+    impl View for Rescales {
+        fn build(&mut self, _: &mut Ui, _: &Input) -> El {
+            mui::prelude::block(64., 64.)
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+        fn rescaled(&mut self, scale: f64, logical: (u32, u32)) {
+            self.0.push((scale, logical));
+        }
+    }
+    let shared = Arc::new(Mutex::new(Shared {
+        ui: Ui::default(),
+        view: Rescales(Vec::new()),
+    }));
+    let mut handler = Handler::new(Arc::clone(&shared), Arc::default(), (200, 100), 1.0);
+    let size = |scale| WindowSize::from_logical(baseview::dpi::LogicalSize::new(200., 100.), scale);
+    // A host's resize at the same scale, or a pinned scale, is not a rescale.
+    handler.resized(size(1.0));
+    handler.on_event_inner(&Event::Window(WindowEvent::ScaleFactorChanged(1.0)));
+    handler.resized(size(1.0));
+    handler.on_event_inner(&Event::Window(WindowEvent::ScaleFactorChanged(1.5)));
+    handler.resized(size(1.5));
+    handler.resized(size(1.5));
+    assert_eq!(lock(&shared).view.0, [(1.5, (200, 100))]);
+}

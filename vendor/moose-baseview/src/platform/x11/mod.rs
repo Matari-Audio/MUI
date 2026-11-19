@@ -27,6 +27,7 @@ mod tests;
 mod visibility_tree;
 mod window_shared;
 mod window_thread;
+mod xembed;
 pub(crate) use window_thread::WindowThreadControl;
 
 pub use error::{CookieExt as _, PlatformError};

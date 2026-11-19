@@ -26,6 +26,8 @@ x11rb::atom_manager! {
         _NET_WM_MOVERESIZE,
         WM_PROTOCOLS,
         WM_DELETE_WINDOW,
+        _XEMBED,
+        _XEMBED_INFO,
 
         // Drag-N-Drop Atoms
         XdndAware,
@@ -76,6 +78,13 @@ impl X11Connection {
             cursor_handle,
             cursor_cache: RefCell::new(HashMap::new()),
         })
+    }
+
+    /// `Xft.dpi` as the server has it now; `get_scaling` reads the copy
+    /// taken at connect.
+    pub fn current_scaling(&self) -> Option<f64> {
+        let resources = resource_manager::new_from_default(self.conn.xcb_connection()).ok()?;
+        resources.get_value::<u32>("Xft.dpi", "").ok().flatten().map(xft_dpi_to_scale)
     }
 
     pub fn get_scaling(&self) -> Option<f64> {
@@ -159,14 +168,16 @@ impl X11Connection {
         get_property::get_property(window, property, property_type, &self.conn)
     }
 
-    pub fn register_tree_structure_events(
-        &self,
+    /// Root events: `Xft.dpi` changes (`RESOURCE_MANAGER`), and for an
+    /// embedded window the tree's structure.
+    pub fn register_root_events(
+        &self, embedded: bool,
     ) -> core::result::Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
         let root = self.default_screen().root;
-
+        let tree = if embedded { EventMask::SUBSTRUCTURE_NOTIFY } else { EventMask::NO_EVENT };
         self.conn.change_window_attributes(
             root,
-            &ChangeWindowAttributesAux::new().event_mask(EventMask::SUBSTRUCTURE_NOTIFY),
+            &ChangeWindowAttributesAux::new().event_mask(tree | EventMask::PROPERTY_CHANGE),
         )
     }
 

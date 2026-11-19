@@ -26,7 +26,8 @@ use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::randr::{ConnectionExt as _, ModeFlag, ModeInfo};
 use x11rb::protocol::xproto::{
-    ConnectionExt as _, EventMask, InputFocus, KeyPressEvent, KeyReleaseEvent, NotifyDetail,
+    AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, InputFocus, KeyPressEvent,
+    KeyReleaseEvent, NotifyDetail,
 };
 use x11rb::protocol::Event as XEvent;
 use x11rb::CURRENT_TIME;
@@ -102,6 +103,8 @@ pub(crate) struct EventLoop {
     /// Key-downs the handler ignored and that were forwarded to the embed
     /// parent, so the matching key-up can be synthesized on focus loss/close.
     forwarded_keys: [Option<KeyPressEvent>; 256],
+    /// The XEmbed embedder, once it said so: it owns the X focus.
+    embedder: Option<u32>,
 }
 
 impl EventLoop {
@@ -160,6 +163,7 @@ impl EventLoop {
             owns_focus: false,
             taking_focus: false,
             forwarded_keys: [None; 256],
+            embedder: None,
 
             window,
         })
@@ -721,6 +725,17 @@ impl EventLoop {
                 if event.format != 32 {
                     return Ok(());
                 }
+                if event.type_ == self.window.connection.atoms._XEMBED {
+                    match xembed::parse(event.data.as_data32()) {
+                        xembed::Message::EmbeddedNotify { embedder } => {
+                            self.embedder = Some(embedder);
+                        }
+                        xembed::Message::FocusIn => self.focus_in(true),
+                        xembed::Message::FocusOut => self.focus_out(),
+                        xembed::Message::Other => {}
+                    }
+                    return Ok(());
+                }
 
                 if event.data.as_data32()[0] == self.window.connection.atoms.WM_DELETE_WINDOW {
                     if self.window.defer_user_close {
@@ -757,6 +772,13 @@ impl EventLoop {
 
             XEvent::Error(e) => {
                 warn!("Received leftover X11 error: {:?}", e);
+            }
+
+            XEvent::PropertyNotify(e)
+                if e.window == self.window.connection.default_screen().root
+                    && e.atom == u32::from(AtomEnum::RESOURCE_MANAGER) =>
+            {
+                self.rescale_from_xft();
             }
 
             XEvent::ConfigureNotify(event) => {
@@ -836,14 +858,7 @@ impl EventLoop {
                         // keyboard: a click inside takes it, with the click's
                         // own time, and it goes back to the parent after.
                         if takes_focus(self.window.parented, self.owns_focus, detail) {
-                            let conn = &self.window.connection.conn;
-                            let _ = conn.set_input_focus(
-                                InputFocus::PARENT,
-                                self.window.raw_id(),
-                                event.time,
-                            );
-                            let _ = conn.flush();
-                            self.taking_focus = true;
+                            self.take_focus(event.time);
                         }
                         self.handle_event(Event::Mouse(MouseEvent::ButtonPressed {
                             button: mouse_id(detail),
@@ -886,28 +901,19 @@ impl EventLoop {
                 }
             }
 
-            XEvent::FocusIn(event) if event.event == self.window.raw_id() => {
-                self.taking_focus = false;
-                self.owns_focus = event.detail != NotifyDetail::POINTER;
-                self.window.is_focused.set(true);
-                let config = self.window.ime_configuration.borrow().clone();
-                self.window.set_ime_configuration(config);
-                self.drain_ime();
-                self.handle_event(Event::Window(WindowEvent::Focused));
+            // Under XEmbed the embedder keeps the X focus; `_XEMBED` says ours.
+            XEvent::FocusIn(event)
+                if event.event == self.window.raw_id() && self.embedder.is_none() =>
+            {
+                self.focus_in(event.detail != NotifyDetail::POINTER);
             }
 
             XEvent::FocusOut(e)
                 if e.event == self.window.raw_id()
+                    && self.embedder.is_none()
                     && !(self.taking_focus && e.detail == NotifyDetail::POINTER) =>
             {
-                self.owns_focus = false;
-                self.window.is_focused.set(false);
-                let config = self.window.ime_configuration.borrow().clone();
-                self.window.set_ime_configuration(config);
-                self.drain_ime();
-                self.pressed_keys.fill(false);
-                self.release_forwarded_keys();
-                self.handle_event(Event::Window(WindowEvent::Unfocused));
+                self.focus_out();
             }
 
             XEvent::MapNotify(e) => {
@@ -965,6 +971,59 @@ impl EventLoop {
         }
 
         Ok(())
+    }
+
+    /// Asks for the keyboard after a click: from the XEmbed embedder, which
+    /// keeps the X focus, or from the server.
+    fn take_focus(&mut self, time: u32) {
+        let conn = &self.window.connection.conn;
+        if let Some(embedder) = self.embedder {
+            let atom = self.window.connection.atoms._XEMBED;
+            let message = ClientMessageEvent::new(32, embedder, atom, xembed::request_focus(time));
+            let _ = conn.send_event(false, embedder, EventMask::NO_EVENT, message);
+        } else {
+            let _ = conn.set_input_focus(InputFocus::PARENT, self.window.raw_id(), time);
+            self.taking_focus = true;
+        }
+        let _ = conn.flush();
+    }
+
+    fn focus_in(&mut self, owned: bool) {
+        self.taking_focus = false;
+        self.owns_focus = owned;
+        self.window.is_focused.set(true);
+        let config = self.window.ime_configuration.borrow().clone();
+        self.window.set_ime_configuration(config);
+        self.drain_ime();
+        self.handle_event(Event::Window(WindowEvent::Focused));
+    }
+
+    fn focus_out(&mut self) {
+        self.owns_focus = false;
+        self.window.is_focused.set(false);
+        let config = self.window.ime_configuration.borrow().clone();
+        self.window.set_ime_configuration(config);
+        self.drain_ime();
+        self.pressed_keys.fill(false);
+        self.release_forwarded_keys();
+        self.handle_event(Event::Window(WindowEvent::Unfocused));
+    }
+
+    /// `Xft.dpi` changed: a window that follows it keeps its logical size at
+    /// the new scale. A host's or override scale still wins.
+    fn rescale_from_xft(&mut self) {
+        let old = self.window.scaling_factor.get();
+        self.window.scaling_factor.set_system(self.window.connection.current_scaling());
+        let new = self.window.scaling_factor.get();
+        if new.to_bits() == old.to_bits() {
+            return;
+        }
+        self.window.main_thread_shared.set_scaling_factor(new);
+        self.handle_event(Event::Window(WindowEvent::ScaleFactorChanged(new)));
+        let size = self.window.get_size().to_logical::<f64>(old).to_physical(new);
+        if let Err(e) = self.window.resize_immediately(size, &*self.handler) {
+            warn!("Failed to resize after an Xft.dpi change: {}", e);
+        }
     }
 
     fn handle_event(&mut self, event: Event) -> EventStatus {

@@ -678,6 +678,8 @@ pub struct Handler<V> {
     a11y: Option<A11y>,
     /// The window's scale factor: baseview's pointer is in pixels.
     scale: f64,
+    /// The OS announced a new scale; the resize that applies it is next.
+    os_rescale: bool,
     /// The keyboard capture last asked of baseview.
     captured: Option<bool>,
     /// Last successful native text input configuration; changes preserve composition.
@@ -746,6 +748,7 @@ impl<V: View> Handler<V> {
             unpainted: true,
             a11y: None,
             scale,
+            os_rescale: false,
             captured: None,
             applied_ime: None,
             driver,
@@ -1118,6 +1121,16 @@ impl<V: View> Handler<V> {
 
     /// The window's new size, as baseview reports it.
     pub fn resized(&mut self, size: WindowSize) {
+        // A host-pinned scale leaves the scale as it was: nothing to report.
+        let rescaled = std::mem::take(&mut self.os_rescale)
+            && self.scale.to_bits() != size.scale_factor.to_bits();
+        if rescaled {
+            let logical = (
+                size.logical.width.round() as u32,
+                size.logical.height.round() as u32,
+            );
+            lock(&self.shared).view.rescaled(size.scale_factor, logical);
+        }
         self.scale = size.scale_factor;
         let physical = (size.physical.width, size.physical.height);
         self.driver.resized(physical, size.scale_factor);
@@ -1125,6 +1138,9 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        if let Event::Window(WindowEvent::ScaleFactorChanged(_)) = event {
+            self.os_rescale = true;
+        }
         if matches!(
             event,
             Event::Window(WindowEvent::Unfocused | WindowEvent::WillClose)

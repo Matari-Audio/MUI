@@ -48,6 +48,10 @@ pub trait View {
     /// Ask the host for a new window size in logical points. A host may
     /// refuse, and the window clips rather than overflowing.
     fn request_resize(&mut self, width: u32, height: u32) -> bool;
+    /// The window moved to another OS scale (a monitor's DPI, `Xft.dpi`)
+    /// and kept its `logical` size. A plugin view tells a host that sizes it
+    /// in pixels.
+    fn rescaled(&mut self, _scale: f64, _logical: (u32, u32)) {}
     /// After each frame that laid out: read what it dispatched.
     fn after_frame(&mut self, ui: &mut Ui) {
         let _ = ui;

@@ -173,6 +173,18 @@ impl XcbWindow {
         )
     }
 
+    pub fn set_xembed_info(&self) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
+        let atom = self.connection.atoms._XEMBED_INFO;
+        let info = super::xembed::INFO;
+        self.connection.conn.change_property32(
+            PropMode::REPLACE,
+            self.window_id.get(),
+            atom,
+            atom,
+            &info,
+        )
+    }
+
     pub fn set_size_hints(
         &self, size_hints: WmSizeHints,
     ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {

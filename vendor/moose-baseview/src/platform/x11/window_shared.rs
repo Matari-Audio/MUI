@@ -52,6 +52,11 @@ impl ScalingFactor {
         self.system.get().is_none() && self.overridden.get().is_none()
     }
 
+    /// A new desktop scale (`Xft.dpi` changed).
+    pub fn set_system(&self, value: Option<f64>) {
+        self.system.set(value);
+    }
+
     pub fn set_override(&self, value: Option<f64>) {
         self.overridden.set(value);
     }
@@ -154,9 +159,7 @@ impl WindowInner {
             options.parent.map(|p| p.inner.window_id),
         )?;
 
-        if will_have_parent {
-            connection.register_tree_structure_events()?.check()?;
-        }
+        connection.register_root_events(will_have_parent)?.check()?;
 
         let visibility_state =
             AncestorVisibilityState::discover(&connection, xcb_window.id(), will_have_parent)?;
@@ -167,6 +170,9 @@ impl WindowInner {
             xcb_window.enable_dnd_protocols()?,
             xcb_window.set_size_hints(size_hints)?,
         ];
+        if will_have_parent {
+            cookies.push(xcb_window.set_xembed_info()?);
+        }
 
         if let Some(owner) = owner {
             cookies.push(xcb_window.set_transient_for(owner)?);
