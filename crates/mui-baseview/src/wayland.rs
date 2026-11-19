@@ -2,7 +2,8 @@
 //! queue as X11 windows. CLAP floats them as an xdg toplevel ([`open`]): hide
 //! destroys the toplevel, and the plugin keeps its model and opens a new one on
 //! show. VST3 embeds them as a subsurface of the host's surface ([`embed`]),
-//! pumped by the host's run loop.
+//! and CLAP's draft nested compositor places them by token ([`embed_nested`]);
+//! the host's run loop pumps both.
 use super::*;
 
 /// An editor embedded in a host's Wayland surface. `!Send`: the host's UI
@@ -58,6 +59,28 @@ pub unsafe fn embed<V: View + Send + 'static>(
             build(shared, requests, true),
         )
     }
+    .map(EmbeddedWindow)
+    .map_err(|e| e.to_string())
+}
+
+/// Embeds an editor of `size` logical points through a host's nested
+/// compositor: our own connection on `socket`, placed by `token`.
+///
+/// # Errors
+/// The compositor lacks the embedding protocol, or the editor failed to build.
+pub fn embed_nested<V: View + Send + 'static>(
+    socket: std::os::fd::OwnedFd,
+    token: &str,
+    size: (u32, u32),
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) -> Result<EmbeddedWindow, String> {
+    baseview::EmbeddedWaylandWindow::open_nested(
+        settings("MUI", size),
+        socket,
+        token,
+        build(shared, requests, true),
+    )
     .map(EmbeddedWindow)
     .map_err(|e| e.to_string())
 }

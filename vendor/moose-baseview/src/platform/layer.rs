@@ -1,9 +1,11 @@
 //! Native Wayland surfaces on a toolkit-owned queue: a dock (wlr layer shell) or
 //! a floating window (xdg toplevel, with client-side decorations when the
 //! compositor draws none) on their own owner thread, or a subsurface of a
-//! host's surface that the host's run loop drives ([`Embedded`]).
+//! host's surface, or a surface a host's nested compositor embeds, that the
+//! host's run loop drives ([`Embedded`]).
 mod context;
 mod drag;
+mod embedding;
 mod input;
 mod outputs;
 pub(super) use outputs::names as output_names;
@@ -33,7 +35,7 @@ use smithay_client_toolkit::{
 use std::{
     cell::{Cell, RefCell},
     ffi::c_void,
-    os::fd::{AsFd, BorrowedFd},
+    os::fd::{AsFd, BorrowedFd, OwnedFd},
     ptr::NonNull,
     rc::Rc,
     sync::{
@@ -315,7 +317,23 @@ impl Embedded {
     ) -> linux::Result<Self> {
         let mut event_loop = EventLoop::try_new().map_err(failure)?;
         let shared = Shared::new(&settings, true);
-        let host = Foreign { display, surface };
+        let host = Host::Foreign { display, surface };
+        let runtime = Runtime::new(settings, builder, shared, &mut event_loop, Some(host))?;
+        Ok(Self { runtime, event_loop })
+    }
+    /// Opens a surface that a host's nested compositor embeds in its window
+    /// (CLAP `wayland-surface-embedding-v1`): our own connection on `socket`,
+    /// which must lead to that compositor, placed by the host's `token`.
+    pub fn open_nested(
+        settings: WindowSettings, builder: crate::handler::WindowHandlerBuilder, socket: OwnedFd,
+        token: &str,
+    ) -> linux::Result<Self> {
+        if token.contains('\0') {
+            return Err(failure("embedding token contains a NUL"));
+        }
+        let mut event_loop = EventLoop::try_new().map_err(failure)?;
+        let shared = Shared::new(&settings, true);
+        let host = Host::Nested { socket, token: token.to_owned() };
         let runtime = Runtime::new(settings, builder, shared, &mut event_loop, Some(host))?;
         Ok(Self { runtime, event_loop })
     }
@@ -342,10 +360,12 @@ impl Embedded {
     }
 }
 
-/// The host objects an [`Embedded`] window attaches to; see [`Embedded::open`].
-struct Foreign {
-    display: NonNull<c_void>,
-    surface: NonNull<c_void>,
+/// What an [`Embedded`] window attaches to.
+enum Host {
+    /// A host's surface on its own display; see [`Embedded::open`].
+    Foreign { display: NonNull<c_void>, surface: NonNull<c_void> },
+    /// A host's nested compositor; see [`Embedded::open_nested`].
+    Nested { socket: OwnedFd, token: String },
 }
 
 struct Runtime {
@@ -377,14 +397,19 @@ struct Runtime {
 impl Runtime {
     fn new(
         settings: WindowSettings, builder: crate::handler::WindowHandlerBuilder,
-        shared: Arc<Shared>, event_loop: &mut EventLoop<Self>, host: Option<Foreign>,
+        shared: Arc<Shared>, event_loop: &mut EventLoop<Self>, host: Option<Host>,
     ) -> linux::Result<Self> {
         let conn = match &host {
             // SAFETY: `Embedded::open`'s contract: a live display that outlives us.
             // A foreign backend never disconnects it.
-            Some(host) => Connection::from_backend(unsafe {
-                wayland_client::backend::Backend::from_foreign_display(host.display.as_ptr().cast())
+            Some(Host::Foreign { display, .. }) => Connection::from_backend(unsafe {
+                wayland_client::backend::Backend::from_foreign_display(display.as_ptr().cast())
             }),
+            Some(Host::Nested { socket, .. }) => {
+                let socket =
+                    std::os::unix::net::UnixStream::from(socket.try_clone().map_err(failure)?);
+                Connection::from_socket(socket).map_err(failure)?
+            }
             None => Connection::connect_to_env().map_err(failure)?,
         };
         let (globals, mut queue) = registry_queue_init(&conn).map_err(failure)?;
@@ -415,8 +440,17 @@ impl Runtime {
         let logical =
             ((logical.width.round() as u32).max(1), (logical.height.round() as u32).max(1));
         let (role, options) = match (host, settings.dock.clone()) {
-            (Some(host), _) => {
-                (runtime.subsurface(&globals, &qh, &compositor, &conn, host.surface)?, None)
+            (Some(Host::Foreign { surface, .. }), _) => {
+                (runtime.subsurface(&globals, &qh, &compositor, &conn, surface)?, None)
+            }
+            (Some(Host::Nested { token, .. }), _) => {
+                let embedding: embedding::protocol::clap_surface_embedding_v1::ClapSurfaceEmbeddingV1 =
+                    globals.bind(&qh, 1..=1, context::Noop).map_err(failure)?;
+                let surface = compositor.create_surface(&qh);
+                let embedded =
+                    embedding.get_embedded_surface(&surface, token, &qh, embedding::Embedding);
+                embedding.destroy();
+                (Role::Nested(embedded, surface), None)
             }
             (None, Some(options)) => {
                 let surface = compositor.create_surface(&qh);
@@ -448,9 +482,9 @@ impl Runtime {
         runtime.context = Some(Rc::clone(&context));
         runtime.refresh_outputs();
         // Configure without a buffer, and acknowledge before any presenter can attach.
-        // A subsurface has no configure: the host sized and maps its parent.
+        // An embedded surface has no configure: the host sized and maps its parent.
         context.configure();
-        runtime.configured = matches!(context.role, Role::Subsurface(..));
+        runtime.configured = matches!(context.role, Role::Subsurface(..) | Role::Nested(..));
         if runtime.configured {
             context.set_size(logical);
         }

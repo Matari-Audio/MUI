@@ -27,19 +27,24 @@ use wayland_protocols::wp::{
 };
 
 /// What the one `wl_surface` is: a dock (layer shell), a floating window (xdg
-/// toplevel) or a subsurface of a host's surface on the host's connection.
+/// toplevel), a subsurface of a host's surface on the host's connection, or a
+/// surface a host's nested compositor embeds.
 #[derive(Clone, Debug)]
 pub(super) enum Role {
     Layer(LayerSurface),
     Toplevel(Toplevel),
     Subsurface(WlSubsurface, wl_surface::WlSurface),
+    Nested(
+        super::embedding::protocol::clap_embedded_surface_v1::ClapEmbeddedSurfaceV1,
+        wl_surface::WlSurface,
+    ),
 }
 impl Role {
     pub(super) fn wl_surface(&self) -> &wl_surface::WlSurface {
         match self {
             Self::Layer(layer) => layer.wl_surface(),
             Self::Toplevel(window) => window.wl_surface(),
-            Self::Subsurface(_, surface) => surface,
+            Self::Subsurface(_, surface) | Self::Nested(_, surface) => surface,
         }
     }
     /// Unmaps without destroying: a later bufferless commit restarts configure.
@@ -174,7 +179,7 @@ impl Context {
             // The first bufferless commit maps; the compositor answers with a configure.
             Role::Toplevel(window) => return window.commit(),
             // Mapped by its first buffer; the host's surface places it.
-            Role::Subsurface(..) => return,
+            Role::Subsurface(..) | Role::Nested(..) => return,
         };
         let options = self.options.borrow();
         let Some(options) = options.as_ref() else { return };
@@ -296,7 +301,7 @@ impl Context {
                 }
             }
             // The host sized its surface; ours follows on the next frame.
-            Role::Subsurface(..) => self.set_size((w, h)),
+            Role::Subsurface(..) | Role::Nested(..) => self.set_size((w, h)),
         }
         self.resize_pending.set(true);
         self.signal.wakeup();
@@ -442,10 +447,15 @@ impl Drop for Context {
             surface.destroy();
             let _ = self.conn.flush();
         }
+        if let Role::Nested(embedded, surface) = &self.role {
+            embedded.destroy();
+            surface.destroy();
+            let _ = self.conn.flush();
+        }
     }
 }
 #[derive(Debug)]
-struct Noop;
+pub(super) struct Noop;
 impl<I: Proxy> Dispatch2<I, Runtime> for Noop {
     fn event(&self, _: &mut Runtime, _: &I, _: I::Event, _: &Connection, _: &QueueHandle<Runtime>) {
     }

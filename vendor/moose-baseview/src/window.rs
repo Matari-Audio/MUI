@@ -530,8 +530,8 @@ impl ThreadedWindow {
     }
 }
 
-/// A window embedded in a host's Wayland surface (VST3 `WaylandSurfaceID`) and
-/// driven by the host's run loop: it has no thread. Watch [`Self::fd`] and call
+/// A window embedded in a host's Wayland surface (VST3 `WaylandSurfaceID`, CLAP
+/// `wayland-surface-embedding-v1`) and driven by the host's run loop: it has no thread. Watch [`Self::fd`] and call
 /// [`Self::dispatch`] when it is readable and on a ~16 ms timer, all on the
 /// thread that opened it; the type is `!Send`. Dropping it destroys the surface.
 #[cfg(target_os = "linux")]
@@ -562,6 +562,24 @@ impl EmbeddedWaylandWindow {
         // SAFETY: forwarded from this function's contract.
         let inner =
             unsafe { platform::EmbeddedWayland::open(settings, builder, display, surface) }?;
+        work.bind_wake(inner.frame_requester());
+        Ok(Self { _work: crate::work::WindowWorkOwner(work), inner })
+    }
+
+    /// Opens a surface that a host's nested compositor embeds in its window
+    /// (CLAP `wayland-surface-embedding-v1`, a draft): a connection of our own
+    /// on `socket`, which leads to that compositor, and the slot `token` names.
+    ///
+    /// # Errors
+    /// The compositor lacks `clap_surface_embedding_v1`, or `handler` fails.
+    /// A token the compositor refuses closes the window afterwards instead.
+    pub fn open_nested<H: WindowHandler>(
+        settings: WindowSettings, socket: std::os::fd::OwnedFd, token: &str,
+        handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
+    ) -> Result<Self, Error> {
+        let builder = WindowHandlerBuilder::new(handler);
+        let work = std::sync::Arc::clone(&builder.work);
+        let inner = platform::EmbeddedWayland::open_nested(settings, builder, socket, token)?;
         work.bind_wake(inner.frame_requester());
         Ok(Self { _work: crate::work::WindowWorkOwner(work), inner })
     }
