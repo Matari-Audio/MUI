@@ -4,6 +4,7 @@ use crate::{dpi::Size, window::WindowInitializer, *};
 use raw_window_handle::{DisplayHandle, WindowHandle as RawWindowHandle};
 use std::rc::Rc;
 
+pub(crate) use layer::Embedded as EmbeddedWayland;
 pub use x11::{ParentWindowHandle, PlatformError};
 pub(crate) type Result<T> = std::result::Result<T, PlatformError>;
 pub(crate) use x11::X11Connection;

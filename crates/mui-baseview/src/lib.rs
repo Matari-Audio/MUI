@@ -1686,6 +1686,6 @@ mod gpu_policy_tests {
     }
 }
 
-/// Native floating Wayland editors; embedded X11 windows still use `open`.
+/// Native Wayland editors: floating (CLAP) and embedded in a host surface (VST3).
 #[cfg(target_os = "linux")]
 pub mod wayland;

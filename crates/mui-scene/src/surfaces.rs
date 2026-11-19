@@ -154,7 +154,7 @@ impl Cache {
                 let anchor = ramp
                     .anchor
                     .as_ref()
-                    .map(&named)
+                    .map(named)
                     .transpose()?
                     .unwrap_or(frames[at]);
                 let left = frame.x + frame.size.width * 0.5 < body.x + body.size.width * 0.5;
@@ -171,7 +171,7 @@ impl Cache {
             let anchor = ramp
                 .anchor
                 .as_ref()
-                .map(&named)
+                .map(named)
                 .transpose()?
                 .unwrap_or(frames[at]);
             let mut inward = ramp.clone();

@@ -10,7 +10,10 @@ use smithay_client_toolkit::shell::xdg::{
     fallback_frame::FallbackFrame, window::Window as Toplevel, XdgSurface,
 };
 use std::{num::NonZeroU32, ptr::NonNull};
-use wayland_client::{globals::GlobalList, protocol::wl_data_device::WlDataDevice};
+use wayland_client::{
+    globals::GlobalList,
+    protocol::{wl_data_device::WlDataDevice, wl_subsurface::WlSubsurface},
+};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
     wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
@@ -23,17 +26,20 @@ use wayland_protocols::wp::{
     viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
 };
 
-/// What the one `wl_surface` is: a dock (layer shell) or a floating window (xdg toplevel).
+/// What the one `wl_surface` is: a dock (layer shell), a floating window (xdg
+/// toplevel) or a subsurface of a host's surface on the host's connection.
 #[derive(Clone, Debug)]
 pub(super) enum Role {
     Layer(LayerSurface),
     Toplevel(Toplevel),
+    Subsurface(WlSubsurface, wl_surface::WlSurface),
 }
 impl Role {
     pub(super) fn wl_surface(&self) -> &wl_surface::WlSurface {
         match self {
             Self::Layer(layer) => layer.wl_surface(),
             Self::Toplevel(window) => window.wl_surface(),
+            Self::Subsurface(_, surface) => surface,
         }
     }
     /// Unmaps without destroying: a later bufferless commit restarts configure.
@@ -165,6 +171,8 @@ impl Context {
             Role::Layer(layer) => layer,
             // The first bufferless commit maps; the compositor answers with a configure.
             Role::Toplevel(window) => return window.commit(),
+            // Mapped by its first buffer; the host's surface places it.
+            Role::Subsurface(..) => return,
         };
         let options = self.options.borrow();
         let Some(options) = options.as_ref() else { return };
@@ -264,25 +272,31 @@ impl Context {
     }
     pub fn resize(&self, size: Size) -> linux::Result<()> {
         let size: LogicalSize<f64> = size.to_logical(self.scale_factor());
-        if let Role::Toplevel(window) = &self.role {
-            let w = (size.width.round() as u32).max(1);
-            let h = (size.height.round() as u32).max(1);
-            if self.shared.fixed.load(Ordering::Acquire) {
-                window.set_min_size(Some((w, h)));
-                window.set_max_size(Some((w, h)));
+        let w = (size.width.round() as u32).max(1);
+        let h = (size.height.round() as u32).max(1);
+        match &self.role {
+            Role::Layer(_) => {
+                if let Some(options) = self.options.borrow_mut().as_mut() {
+                    options.height = options.thickness(size);
+                }
+                self.configure();
+                return Ok(());
             }
-            // A floating toplevel picks its own size; the next frame commits it.
-            if !self.imposed.get() {
-                self.set_size((w, h));
+            Role::Toplevel(window) => {
+                if self.shared.fixed.load(Ordering::Acquire) {
+                    window.set_min_size(Some((w, h)));
+                    window.set_max_size(Some((w, h)));
+                }
+                // A floating toplevel picks its own size; the next frame commits it.
+                if !self.imposed.get() {
+                    self.set_size((w, h));
+                }
             }
-            self.resize_pending.set(true);
-            self.signal.wakeup();
-            return Ok(());
+            // The host sized its surface; ours follows on the next frame.
+            Role::Subsurface(..) => self.set_size((w, h)),
         }
-        if let Some(options) = self.options.borrow_mut().as_mut() {
-            options.height = options.thickness(size);
-        }
-        self.configure();
+        self.resize_pending.set(true);
+        self.signal.wakeup();
         Ok(())
     }
     pub fn request_close(&self) {
@@ -418,6 +432,12 @@ impl Drop for Context {
         }
         if let Some(v) = self.viewport.take() {
             v.destroy();
+        }
+        // The host's connection outlives us: destroy our objects on the server too.
+        if let Role::Subsurface(subsurface, surface) = &self.role {
+            subsurface.destroy();
+            surface.destroy();
+            let _ = self.conn.flush();
         }
     }
 }

@@ -613,6 +613,31 @@ impl Style {
     }
 }
 
+/// How a blended layer's colour combines with what is under it.
+///
+/// Mirrors `peniko::Mix` variant for variant: `mui-scene` has no renderer
+/// dependency, and `mui-vello` maps the two with an exhaustive match.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mix {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,29 +664,4 @@ mod tests {
         assert_eq!(s.backdrop_blur, Some(0.));
         assert_eq!(set.clone().over(Style::default()), set, "unset keeps");
     }
-}
-
-/// How a blended layer's colour combines with what is under it.
-///
-/// Mirrors `peniko::Mix` variant for variant: `mui-scene` has no renderer
-/// dependency, and `mui-vello` maps the two with an exhaustive match.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum Mix {
-    #[default]
-    Normal,
-    Multiply,
-    Screen,
-    Overlay,
-    Darken,
-    Lighten,
-    ColorDodge,
-    ColorBurn,
-    HardLight,
-    SoftLight,
-    Difference,
-    Exclusion,
-    Hue,
-    Saturation,
-    Color,
-    Luminosity,
 }

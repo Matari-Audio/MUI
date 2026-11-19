@@ -57,98 +57,6 @@ pub struct LayoutRequestRevision {
     pub keys: Vec<LayoutRequestVariant>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn input(width: u64) -> LayoutRequestInput {
-        LayoutRequestInput {
-            redo: false,
-            definite: [Some(width), None],
-            room: Some(width),
-            container: [None; 2],
-        }
-    }
-
-    #[test]
-    fn bounded_history_reports_node_revision_and_key_coverage_overflow() {
-        let mut recorder = Recorder::new();
-        recorder.frame();
-        for address in 0..=NODES as u64 {
-            let ticket = recorder.begin(Some((address, 1)), None, "root", 3, input(0), false);
-            recorder.finish(ticket, 2, 1, false);
-        }
-        for revision in 2..=REVISIONS as u64 + 1 {
-            let ticket = recorder.begin(Some((0, revision)), None, "root", 3, input(0), false);
-            recorder.finish(ticket, 0, 0, false);
-        }
-        for key in 1..=KEYS as u64 {
-            let ticket = recorder.begin(Some((0, 1)), None, "root", 3, input(key), false);
-            recorder.finish(ticket, 0, 0, false);
-        }
-        let ticket = recorder.begin(Some((0, 1)), None, "root", 3, input(0), true);
-        recorder.finish(ticket, 0, 1, false);
-        let trace = recorder.export();
-        assert_eq!(trace.nodes.len(), NODES);
-        assert_eq!(trace.node_overflow_requests, 1);
-        assert_eq!(trace.revision_overflow_requests, 1);
-        assert_eq!(trace.key_overflow_requests, 1);
-        assert_eq!(trace.requests, trace.hits + trace.misses);
-        assert_eq!(trace.depths[0].requests, trace.requests);
-        assert_eq!(trace.depths[0].child_misses, (NODES as u64 + 1) * 2);
-        let revision = &trace.nodes[0].revisions[0];
-        assert_eq!(trace.nodes[0].revisions.len(), REVISIONS);
-        assert_eq!(revision.keys.len(), KEYS);
-        assert_eq!(revision.key_overflow_requests, 1);
-        assert_eq!(revision.lru_unknown_requests, 2);
-        assert_eq!(
-            revision.lru_reuse_distances.iter().sum::<u64>(),
-            KEYS as u64
-        );
-        assert_eq!(
-            revision.keys[0].hits, 1,
-            "known-key counts remain captured after overflow"
-        );
-        assert_eq!(trace.failed_requests, 0);
-    }
-
-    #[test]
-    fn recency_and_component_changes_use_exact_same_revision_inputs() {
-        let mut recorder = Recorder::new();
-        recorder.frame();
-        for key in [0, 1, 2, 3, 4, 0, 4] {
-            let ticket = recorder.begin(Some((7, 1)), None, "owner", 2, input(key), key == 4);
-            recorder.finish(ticket, 0, 1, false);
-        }
-        recorder.context_changed();
-        let ticket = recorder.begin(
-            Some((7, 1)),
-            Some(&Id::of("new")),
-            "new-owner",
-            2,
-            input(0),
-            false,
-        );
-        recorder.finish(ticket, 0, 0, false);
-        let trace = recorder.export();
-        assert_eq!(
-            trace.nodes.len(),
-            2,
-            "a reset cache epoch cannot alias an old stamp"
-        );
-        assert_ne!(trace.nodes[0].epoch, trace.nodes[1].epoch);
-        let revision = &trace.nodes[0].revisions[0];
-        assert_eq!(revision.keys.len(), 5);
-        assert_eq!(revision.lru_reuse_distances[KEYS], 5);
-        assert_eq!(revision.miss_reuse_distances[4], 1);
-        assert_eq!(revision.lru_reuse_distances[1], 1);
-        assert_eq!(revision.repeated_misses, 1);
-        assert_eq!(revision.changed_components, [0, 6, 0, 6, 0, 0]);
-        assert_eq!(revision.ancestor, Id::of("owner"));
-        assert_eq!(trace.nodes[1].revisions[0].ancestor, Id::of("new-owner"));
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct LayoutRequestNode {
     /// Cache context epoch plus resolved stamp address identifies the slot.
@@ -461,5 +369,97 @@ impl Recorder {
     pub(crate) fn export(mut self) -> LayoutRequestTrace {
         self.trace.depths.retain(|d| d.requests != 0);
         self.trace
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn input(width: u64) -> LayoutRequestInput {
+        LayoutRequestInput {
+            redo: false,
+            definite: [Some(width), None],
+            room: Some(width),
+            container: [None; 2],
+        }
+    }
+
+    #[test]
+    fn bounded_history_reports_node_revision_and_key_coverage_overflow() {
+        let mut recorder = Recorder::new();
+        recorder.frame();
+        for address in 0..=NODES as u64 {
+            let ticket = recorder.begin(Some((address, 1)), None, "root", 3, input(0), false);
+            recorder.finish(ticket, 2, 1, false);
+        }
+        for revision in 2..=REVISIONS as u64 + 1 {
+            let ticket = recorder.begin(Some((0, revision)), None, "root", 3, input(0), false);
+            recorder.finish(ticket, 0, 0, false);
+        }
+        for key in 1..=KEYS as u64 {
+            let ticket = recorder.begin(Some((0, 1)), None, "root", 3, input(key), false);
+            recorder.finish(ticket, 0, 0, false);
+        }
+        let ticket = recorder.begin(Some((0, 1)), None, "root", 3, input(0), true);
+        recorder.finish(ticket, 0, 1, false);
+        let trace = recorder.export();
+        assert_eq!(trace.nodes.len(), NODES);
+        assert_eq!(trace.node_overflow_requests, 1);
+        assert_eq!(trace.revision_overflow_requests, 1);
+        assert_eq!(trace.key_overflow_requests, 1);
+        assert_eq!(trace.requests, trace.hits + trace.misses);
+        assert_eq!(trace.depths[0].requests, trace.requests);
+        assert_eq!(trace.depths[0].child_misses, (NODES as u64 + 1) * 2);
+        let revision = &trace.nodes[0].revisions[0];
+        assert_eq!(trace.nodes[0].revisions.len(), REVISIONS);
+        assert_eq!(revision.keys.len(), KEYS);
+        assert_eq!(revision.key_overflow_requests, 1);
+        assert_eq!(revision.lru_unknown_requests, 2);
+        assert_eq!(
+            revision.lru_reuse_distances.iter().sum::<u64>(),
+            KEYS as u64
+        );
+        assert_eq!(
+            revision.keys[0].hits, 1,
+            "known-key counts remain captured after overflow"
+        );
+        assert_eq!(trace.failed_requests, 0);
+    }
+
+    #[test]
+    fn recency_and_component_changes_use_exact_same_revision_inputs() {
+        let mut recorder = Recorder::new();
+        recorder.frame();
+        for key in [0, 1, 2, 3, 4, 0, 4] {
+            let ticket = recorder.begin(Some((7, 1)), None, "owner", 2, input(key), key == 4);
+            recorder.finish(ticket, 0, 1, false);
+        }
+        recorder.context_changed();
+        let ticket = recorder.begin(
+            Some((7, 1)),
+            Some(&Id::of("new")),
+            "new-owner",
+            2,
+            input(0),
+            false,
+        );
+        recorder.finish(ticket, 0, 0, false);
+        let trace = recorder.export();
+        assert_eq!(
+            trace.nodes.len(),
+            2,
+            "a reset cache epoch cannot alias an old stamp"
+        );
+        assert_ne!(trace.nodes[0].epoch, trace.nodes[1].epoch);
+        let revision = &trace.nodes[0].revisions[0];
+        assert_eq!(revision.keys.len(), 5);
+        assert_eq!(revision.lru_reuse_distances[KEYS], 5);
+        assert_eq!(revision.miss_reuse_distances[4], 1);
+        assert_eq!(revision.lru_reuse_distances[1], 1);
+        assert_eq!(revision.repeated_misses, 1);
+        assert_eq!(revision.changed_components, [0, 6, 0, 6, 0, 0]);
+        assert_eq!(revision.ancestor, Id::of("owner"));
+        assert_eq!(trace.nodes[1].revisions[0].ancestor, Id::of("new-owner"));
     }
 }

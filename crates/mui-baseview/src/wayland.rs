@@ -1,8 +1,66 @@
-//! Floating Wayland editors: a native xdg toplevel from baseview, driven by the
-//! same handler, presenters and request queue as X11 windows. A surface cannot be
-//! embedded through CLAP's Wayland API. Hide destroys the toplevel; the plugin
-//! retains its model and opens a new toplevel on show.
+//! Native Wayland editors, driven by the same handler, presenters and request
+//! queue as X11 windows. CLAP floats them as an xdg toplevel ([`open`]): hide
+//! destroys the toplevel, and the plugin keeps its model and opens a new one on
+//! show. VST3 embeds them as a subsurface of the host's surface ([`embed`]),
+//! pumped by the host's run loop.
 use super::*;
+
+/// An editor embedded in a host's Wayland surface. `!Send`: the host's UI
+/// thread opens it, pumps it and drops it. Dropping it destroys the surface.
+pub struct EmbeddedWindow(baseview::EmbeddedWaylandWindow);
+
+impl EmbeddedWindow {
+    /// Readable when [`Self::dispatch`] has work.
+    pub fn fd(&self) -> std::os::fd::RawFd {
+        use std::os::fd::AsRawFd;
+        self.0.fd().as_raw_fd()
+    }
+    /// Handles Wayland events and draws a due frame, without blocking.
+    pub fn dispatch(&mut self) -> Result<(), String> {
+        self.0.dispatch().map_err(|e| e.to_string())
+    }
+    /// Physical size and scale.
+    pub fn size(&self) -> ((u32, u32), f64) {
+        let size = self.0.size();
+        (
+            (size.physical.width, size.physical.height),
+            size.scale_factor,
+        )
+    }
+}
+
+/// Embeds an editor of `size` logical points in the host's `surface`.
+///
+/// # Safety
+/// `display` is the host's live `wl_display*` and `surface` a live
+/// `wl_surface*` proxy on it. Both outlive the returned window, which stays
+/// on the calling thread.
+///
+/// # Errors
+/// The compositor has no subsurfaces, or the editor failed to build.
+#[expect(
+    unsafe_code,
+    reason = "the host's Wayland objects arrive as raw pointers"
+)]
+pub unsafe fn embed<V: View + Send + 'static>(
+    display: std::ptr::NonNull<std::ffi::c_void>,
+    surface: std::ptr::NonNull<std::ffi::c_void>,
+    size: (u32, u32),
+    shared: Arc<Mutex<Shared<V>>>,
+    requests: Arc<Requests>,
+) -> Result<EmbeddedWindow, String> {
+    // SAFETY: forwarded from this function's contract.
+    unsafe {
+        baseview::EmbeddedWaylandWindow::open(
+            settings("MUI", size),
+            display,
+            surface,
+            build(shared, requests, true),
+        )
+    }
+    .map(EmbeddedWindow)
+    .map_err(|e| e.to_string())
+}
 
 /// An open floating Wayland editor. Dropping it closes the window.
 pub struct FloatingWindow(Option<baseview::ThreadedWindow>);

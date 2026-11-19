@@ -530,6 +530,68 @@ impl ThreadedWindow {
     }
 }
 
+/// A window embedded in a host's Wayland surface (VST3 `WaylandSurfaceID`) and
+/// driven by the host's run loop: it has no thread. Watch [`Self::fd`] and call
+/// [`Self::dispatch`] when it is readable and on a ~16 ms timer, all on the
+/// thread that opened it; the type is `!Send`. Dropping it destroys the surface.
+#[cfg(target_os = "linux")]
+pub struct EmbeddedWaylandWindow {
+    // Same drop order as `ThreadedWindow`: scheduled work closes first.
+    _work: crate::work::WindowWorkOwner,
+    inner: platform::EmbeddedWayland,
+}
+
+#[cfg(target_os = "linux")]
+impl EmbeddedWaylandWindow {
+    /// Opens a visible subsurface at the origin of the host's `surface`.
+    ///
+    /// # Safety
+    /// `display` is the host's live `wl_display*` and `surface` a live
+    /// `wl_surface*` proxy on it; both outlive the returned window.
+    ///
+    /// # Errors
+    /// The compositor lacks `wl_subcompositor`, `surface` is not a
+    /// `wl_surface`, or `handler` fails.
+    pub unsafe fn open<H: WindowHandler>(
+        settings: WindowSettings, display: std::ptr::NonNull<std::ffi::c_void>,
+        surface: std::ptr::NonNull<std::ffi::c_void>,
+        handler: impl FnOnce(WindowContext) -> Result<H, HandlerError> + Send + 'static,
+    ) -> Result<Self, Error> {
+        let builder = WindowHandlerBuilder::new(handler);
+        let work = std::sync::Arc::clone(&builder.work);
+        // SAFETY: forwarded from this function's contract.
+        let inner =
+            unsafe { platform::EmbeddedWayland::open(settings, builder, display, surface) }?;
+        work.bind_wake(inner.frame_requester());
+        Ok(Self { _work: crate::work::WindowWorkOwner(work), inner })
+    }
+
+    /// The fd to watch: readable when [`Self::dispatch`] has work.
+    pub fn fd(&self) -> std::os::fd::BorrowedFd<'_> {
+        self.inner.fd()
+    }
+
+    /// Handles pending Wayland events and draws a due frame, without blocking.
+    pub fn dispatch(&mut self) -> Result<(), Error> {
+        self.inner.dispatch()?;
+        Ok(())
+    }
+
+    /// False once the editor asked to close.
+    pub fn is_open(&self) -> bool {
+        self.inner.is_open()
+    }
+
+    pub fn size(&self) -> WindowSize {
+        self.inner.size()
+    }
+
+    /// A thread-safe frame wake; it makes [`Self::fd`] readable.
+    pub fn frame_requester(&self) -> FrameRequester {
+        self.inner.frame_requester()
+    }
+}
+
 pub(crate) struct WindowInitializer {
     pub settings: WindowSettings,
     pub builder: WindowHandlerBuilder,

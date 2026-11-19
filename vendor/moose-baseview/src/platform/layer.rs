@@ -1,6 +1,7 @@
-//! Native Wayland surfaces on a toolkit-owned queue and owner thread: a dock
-//! (wlr layer shell) or a floating window (xdg toplevel, with client-side
-//! decorations when the compositor draws none).
+//! Native Wayland surfaces on a toolkit-owned queue: a dock (wlr layer shell) or
+//! a floating window (xdg toplevel, with client-side decorations when the
+//! compositor draws none) on their own owner thread, or a subsurface of a
+//! host's surface that the host's run loop drives ([`Embedded`]).
 mod context;
 mod drag;
 mod input;
@@ -31,6 +32,9 @@ use smithay_client_toolkit::{
 };
 use std::{
     cell::{Cell, RefCell},
+    ffi::c_void,
+    os::fd::{AsFd, BorrowedFd},
+    ptr::NonNull,
     rc::Rc,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -62,6 +66,29 @@ struct Shared {
     surface: Mutex<Option<(Role, Connection)>>,
 }
 impl Shared {
+    fn new(settings: &WindowSettings, visible: bool) -> Arc<Self> {
+        Arc::new(Self {
+            open: AtomicBool::new(true),
+            visible: AtomicBool::new(visible),
+            desired_visible: AtomicBool::new(visible),
+            redraw: AtomicBool::new(true),
+            fixed: AtomicBool::new(!settings.resizable),
+            size: AtomicU64::new((800_u64 << 32) | 160),
+            scale: AtomicU64::new(1_f64.to_bits()),
+            error: Mutex::new(None),
+            surface: Mutex::new(None),
+        })
+    }
+    /// Wakes the runtime's loop for a frame; holds neither the window nor the loop alive.
+    fn frame_requester(self: &Arc<Self>, signal: LoopSignal) -> FrameRequester {
+        let shared = Arc::downgrade(self);
+        FrameRequester::new(move || {
+            if let Some(s) = shared.upgrade() {
+                s.redraw.store(true, Ordering::Release);
+                signal.wakeup();
+            }
+        })
+    }
     fn size(&self) -> WindowSize {
         let packed = self.size.load(Ordering::Acquire);
         WindowSize::from_physical(
@@ -102,17 +129,7 @@ impl WindowHandle {
         if !crate::pin_current_image_for_detached_work() {
             return Err(failure("could not pin the window's executable image"));
         }
-        let shared = Arc::new(Shared {
-            open: AtomicBool::new(true),
-            visible: AtomicBool::new(false),
-            desired_visible: AtomicBool::new(false),
-            redraw: AtomicBool::new(true),
-            fixed: AtomicBool::new(!settings.resizable),
-            size: AtomicU64::new((800_u64 << 32) | 160),
-            scale: AtomicU64::new(1_f64.to_bits()),
-            error: Mutex::new(None),
-            surface: Mutex::new(None),
-        });
+        let shared = Shared::new(&settings, false);
         let (send, recv) = mpsc::sync_channel(1);
         let (sender, receiver) = channel::sync_channel(8);
         let state = Arc::clone(&shared);
@@ -124,7 +141,7 @@ impl WindowHandle {
                     let mut event_loop = EventLoop::<Runtime>::try_new().map_err(failure)?;
                     let signal = event_loop.get_signal();
                     let mut runtime =
-                        Runtime::new(settings, builder, Arc::clone(&state), &mut event_loop)?;
+                        Runtime::new(settings, builder, Arc::clone(&state), &mut event_loop, None)?;
                     event_loop
                         .handle()
                         .insert_source(receiver, |event, _, runtime| match event {
@@ -237,14 +254,7 @@ impl WindowHandle {
         })
     }
     pub fn frame_requester(&self) -> FrameRequester {
-        let shared = Arc::downgrade(&self.shared);
-        let signal = self.signal.clone();
-        FrameRequester::new(move || {
-            if let Some(s) = shared.upgrade() {
-                s.redraw.store(true, Ordering::Release);
-                signal.wakeup();
-            }
-        })
+        self.shared.frame_requester(self.signal.clone())
     }
     pub fn run_until_closed(&self) -> linux::Result<()> {
         self.show()?;
@@ -285,6 +295,59 @@ impl Drop for WindowHandle {
     }
 }
 
+/// A subsurface of a host's `wl_surface` on the host's `wl_display`, with no
+/// thread: the host watches [`Self::fd`] and calls [`Self::dispatch`] on the
+/// thread that opened it. `!Send`, because the runtime is single-threaded.
+pub struct Embedded {
+    runtime: Runtime,
+    event_loop: EventLoop<'static, Runtime>,
+}
+impl Embedded {
+    /// Opens a visible subsurface of `surface` at its origin.
+    ///
+    /// # Safety
+    /// `display` is a live `wl_display*` and `surface` a live `wl_surface*`
+    /// proxy on it. Both outlive the returned value, which is used only on
+    /// the thread that called this.
+    pub unsafe fn open(
+        settings: WindowSettings, builder: crate::handler::WindowHandlerBuilder,
+        display: NonNull<c_void>, surface: NonNull<c_void>,
+    ) -> linux::Result<Self> {
+        let mut event_loop = EventLoop::try_new().map_err(failure)?;
+        let shared = Shared::new(&settings, true);
+        let host = Foreign { display, surface };
+        let runtime = Runtime::new(settings, builder, shared, &mut event_loop, Some(host))?;
+        Ok(Self { runtime, event_loop })
+    }
+    /// Readable when [`Self::dispatch`] has work: Wayland events, a frame request.
+    pub fn fd(&self) -> BorrowedFd<'_> {
+        self.event_loop.as_fd()
+    }
+    /// Handles pending events and draws a due frame, without blocking.
+    pub fn dispatch(&mut self) -> linux::Result<()> {
+        if !self.is_open() {
+            return Ok(());
+        }
+        self.event_loop.dispatch(Some(Duration::ZERO), &mut self.runtime).map_err(failure)?;
+        self.runtime.tick()
+    }
+    pub fn is_open(&self) -> bool {
+        !self.runtime.exit && self.runtime.shared.open.load(Ordering::Acquire)
+    }
+    pub fn size(&self) -> WindowSize {
+        self.runtime.shared.size()
+    }
+    pub fn frame_requester(&self) -> FrameRequester {
+        self.runtime.shared.frame_requester(self.event_loop.get_signal())
+    }
+}
+
+/// The host objects an [`Embedded`] window attaches to; see [`Embedded::open`].
+struct Foreign {
+    display: NonNull<c_void>,
+    surface: NonNull<c_void>,
+}
+
 struct Runtime {
     registry: RegistryState,
     outputs: OutputState,
@@ -314,9 +377,16 @@ struct Runtime {
 impl Runtime {
     fn new(
         settings: WindowSettings, builder: crate::handler::WindowHandlerBuilder,
-        shared: Arc<Shared>, event_loop: &mut EventLoop<Self>,
+        shared: Arc<Shared>, event_loop: &mut EventLoop<Self>, host: Option<Foreign>,
     ) -> linux::Result<Self> {
-        let conn = Connection::connect_to_env().map_err(failure)?;
+        let conn = match &host {
+            // SAFETY: `Embedded::open`'s contract: a live display that outlives us.
+            // A foreign backend never disconnects it.
+            Some(host) => Connection::from_backend(unsafe {
+                wayland_client::backend::Backend::from_foreign_display(host.display.as_ptr().cast())
+            }),
+            None => Connection::connect_to_env().map_err(failure)?,
+        };
         let (globals, mut queue) = registry_queue_init(&conn).map_err(failure)?;
         let qh = queue.handle();
         let compositor = CompositorState::bind(&globals, &qh).map_err(failure)?;
@@ -341,16 +411,20 @@ impl Runtime {
             exit: false,
         };
         queue.roundtrip(&mut runtime).map_err(failure)?;
-        let surface = compositor.create_surface(&qh);
         let logical = settings.size.to_logical::<f64>(1.0);
         let logical =
             ((logical.width.round() as u32).max(1), (logical.height.round() as u32).max(1));
-        let (role, options) = match settings.dock.clone() {
-            Some(options) => {
+        let (role, options) = match (host, settings.dock.clone()) {
+            (Some(host), _) => {
+                (runtime.subsurface(&globals, &qh, &compositor, &conn, host.surface)?, None)
+            }
+            (None, Some(options)) => {
+                let surface = compositor.create_surface(&qh);
                 let layer = runtime.dock(&globals, &qh, surface, &options)?;
                 (Role::Layer(layer), Some(options))
             }
-            None => {
+            (None, None) => {
+                let surface = compositor.create_surface(&qh);
                 let window =
                     runtime.toplevel(&globals, &qh, &compositor, surface, &settings, logical)?;
                 (Role::Toplevel(window), None)
@@ -374,7 +448,12 @@ impl Runtime {
         runtime.context = Some(Rc::clone(&context));
         runtime.refresh_outputs();
         // Configure without a buffer, and acknowledge before any presenter can attach.
+        // A subsurface has no configure: the host sized and maps its parent.
         context.configure();
+        runtime.configured = matches!(context.role, Role::Subsurface(..));
+        if runtime.configured {
+            context.set_size(logical);
+        }
         let start = Instant::now();
         while !runtime.configured
             && runtime.shared.open.load(Ordering::Acquire)
@@ -394,6 +473,28 @@ impl Runtime {
         runtime.handler = Some(handler);
         WaylandSource::new(conn, queue).insert(event_loop.handle()).map_err(failure)?;
         Ok(runtime)
+    }
+    /// A desynchronized subsurface of the host's `parent`, at its origin.
+    fn subsurface(
+        &mut self, globals: &wayland_client::globals::GlobalList, qh: &QueueHandle<Self>,
+        compositor: &CompositorState, conn: &Connection, parent: NonNull<c_void>,
+    ) -> linux::Result<Role> {
+        use wayland_client::{backend::ObjectId, Proxy};
+        let subcompositor =
+            SubcompositorState::bind(compositor.wl_compositor().clone(), globals, qh)
+                .map_err(failure)?;
+        // SAFETY: `Embedded::open`'s contract: a live `wl_surface` proxy on this display.
+        // The id checks the interface and keeps no claim on the host's object.
+        let id = unsafe {
+            ObjectId::from_ptr(wl_surface::WlSurface::interface(), parent.as_ptr().cast())
+        }
+        .map_err(failure)?;
+        let parent = wl_surface::WlSurface::from_id(conn, id).map_err(failure)?;
+        let (subsurface, surface) = subcompositor.create_subsurface(parent, qh);
+        // Frames commit on our own clock, not the host's parent commits.
+        subsurface.set_desync();
+        self.subcompositor = Some(Arc::new(subcompositor));
+        Ok(Role::Subsurface(subsurface, surface))
     }
     fn dock(
         &self, globals: &wayland_client::globals::GlobalList, qh: &QueueHandle<Self>,
@@ -684,5 +785,83 @@ mod tests {
         finished
             .recv_timeout(Duration::from_secs(3))
             .expect("owner retires after callback returns");
+    }
+    struct Counting(Arc<AtomicU64>);
+    impl WindowHandler for Counting {
+        fn resized(&self, _: WindowSize) -> std::result::Result<(), HandlerError> {
+            Ok(())
+        }
+        fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+            self.0.fetch_add(1, Ordering::AcqRel);
+            Ok(())
+        }
+        fn on_event(&self, _: Event) -> EventStatus {
+            EventStatus::Ignored
+        }
+    }
+
+    fn readable(fd: BorrowedFd<'_>, timeout: Duration) -> bool {
+        use std::os::fd::AsRawFd;
+        let mut poll = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        // SAFETY: one valid pollfd for the duration of the call.
+        unsafe { libc::poll(&mut poll, 1, timeout.as_millis() as i32) == 1 }
+    }
+
+    /// A floating toplevel stands in for the VST3 host: its surface and display
+    /// are what `IWaylandFrame` would hand the plugin.
+    #[test]
+    #[ignore = "requires a running Wayland compositor"]
+    fn an_embedded_subsurface_runs_on_the_host_loop() {
+        use raw_window_handle::{
+            HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+        };
+        let (send, handle) = mpsc::channel();
+        let host = crate::ThreadedWindow::create(
+            WindowSettings::new().with_size(LogicalSize::new(300., 200.)).with_wayland(true),
+            move |cx| {
+                let _ = send.send(cx.platform_handle());
+                Ok(Counting(Arc::default()))
+            },
+        )
+        .expect("host toplevel");
+        host.show().expect("show host");
+        let handle = handle.recv_timeout(Duration::from_secs(3)).expect("host surface");
+        let RawDisplayHandle::Wayland(display) = handle.display_handle().expect("display").as_raw()
+        else {
+            panic!("host is not on Wayland")
+        };
+        let RawWindowHandle::Wayland(surface) = handle.window_handle().expect("surface").as_raw()
+        else {
+            panic!("host is not on Wayland")
+        };
+        let frames = Arc::new(AtomicU64::new(0));
+        let count = Arc::clone(&frames);
+        // SAFETY: `host` keeps its connection and surface alive past `embedded`.
+        let mut embedded = unsafe {
+            crate::EmbeddedWaylandWindow::open(
+                WindowSettings::new().with_size(LogicalSize::new(120., 80.)),
+                display.display.cast(),
+                surface.surface.cast(),
+                move |_| Ok(Counting(count)),
+            )
+        }
+        .expect("embedded subsurface");
+        assert_eq!(embedded.size().logical.width.round(), 120.);
+        embedded.dispatch().expect("first dispatch");
+        assert_eq!(frames.load(Ordering::Acquire), 1, "the first dispatch draws");
+
+        embedded.frame_requester().request_frame();
+        assert!(readable(embedded.fd(), Duration::from_secs(1)), "a frame request wakes the fd");
+        // The host's timer covers a frame whose callback a bufferless commit never earns.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while frames.load(Ordering::Acquire) < 2 {
+            assert!(Instant::now() < deadline, "the requested frame never drew");
+            embedded.dispatch().expect("dispatch");
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        assert!(embedded.is_open());
+        drop(embedded);
+        assert!(host.is_open(), "closing the embedded editor leaves the host alone");
+        host.close();
     }
 }
