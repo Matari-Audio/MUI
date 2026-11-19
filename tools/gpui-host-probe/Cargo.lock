@@ -1842,8 +1842,6 @@ dependencies = [
 [[package]]
 name = "glifo"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9f1218dedd5348c1b166ec3b8b3cbca49d2f527bd43b3fa072ea5123c523ed3f"
 dependencies = [
  "bytemuck",
  "foldhash 0.2.0",
@@ -7088,75 +7086,3 @@ dependencies = [
  "syn 3.0.6",
  "winnow 1.0.4",
 ]
-
-[[patch.unused]]
-name = "derpcat-access"
-version = "0.1.0"
-
-[[patch.unused]]
-name = "moose-baseview"
-version = "0.4.1-moose.1"
-
-[[patch.unused]]
-name = "mui-baseview"
-version = "0.4.2"
-
-[[patch.unused]]
-name = "mui-headless"
-version = "0.4.2"
-
-[[patch.unused]]
-name = "mui-native-dialog"
-version = "0.4.2"
-
-[[patch.unused]]
-name = "matari-audio-drag-and-drop"
-version = "0.1.6"
-
-[[patch.unused]]
-name = "moose"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-au"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-clap"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-core"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-derive"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-egui"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-font"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-params"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-standalone"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-test"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-utils"
-version = "7.0.0"
-
-[[patch.unused]]
-name = "moose-vst3"
-version = "7.0.0"
