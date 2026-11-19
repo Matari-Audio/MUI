@@ -1022,6 +1022,29 @@ fn a_key_hook_hears_downs_and_ups_first_and_can_take_them() {
 }
 
 #[test]
+fn keys_the_ui_leaves_reach_the_unhandled_key_hook_only() {
+    let mut h = handler((400, 300), 1.0);
+    let offered = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&offered);
+    h.requests
+        .on_unhandled_key(Arc::new(move |e: &KeyboardEvent| {
+            log.lock().unwrap().push(e.code);
+            // Takes Space only, as the standalone's transport would.
+            e.code == Code::Space
+        }));
+    h.step();
+    let press = |k, code| key(k, code, KeyState::Down, Modifiers::default());
+    let space = press(HostKey::Character(" ".into()), Code::Space);
+    assert_eq!(h.on_event_inner(&space), EventStatus::Captured);
+    let z = press(HostKey::Character("z".into()), Code::KeyZ);
+    assert_eq!(h.on_event_inner(&z), EventStatus::Ignored);
+    // The knob claims Escape, so the hook never hears it.
+    let escape = press(HostKey::Named(NamedKey::Escape), Code::Escape);
+    assert_eq!(h.on_event_inner(&escape), EventStatus::Captured);
+    assert_eq!(*offered.lock().unwrap(), [Code::Space, Code::KeyZ]);
+}
+
+#[test]
 fn ime_configuration_converts_geometry_and_keeps_native_text_ranges() {
     let source = mui::host::ImeConfiguration {
         id: "field".into(),

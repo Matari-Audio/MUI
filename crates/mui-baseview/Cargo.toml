@@ -52,4 +52,5 @@ windows-sys = { version = "0.61", features = ["Wdk_System_SystemServices", "Win3
 workspace = true
 
 [dev-dependencies]
+png.workspace = true
 epaint_default_fonts.workspace = true

@@ -91,6 +91,9 @@ pub type KeyHook = Arc<Mutex<dyn FnMut(&mui::Ui, &KeyEvent) -> bool + Send>>;
 /// May run on the window or model thread; keep it short and independent of UI state.
 pub type KeyFilter = Arc<dyn Fn(&KeyEvent) -> bool + Send + Sync>;
 
+/// Takes a key the UI didn't keep; returns true when it used it.
+pub type UnhandledKey = Arc<dyn Fn(&KeyboardEvent) -> bool + Send + Sync>;
+
 type KeyRoutes = HashMap<u64, Option<KeyHook>>;
 
 /// A native-close signal. Runs before borrowing the model or handler; it must
@@ -132,6 +135,7 @@ pub struct Requests {
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
     key_filter: Mutex<Option<KeyFilter>>,
+    unhandled_key: Mutex<Option<UnhandledKey>>,
     pointer: Mutex<Option<PointerHook>>,
     wheel: Mutex<WheelPolicy>,
     #[cfg(target_os = "linux")]
@@ -416,6 +420,24 @@ impl Requests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(filter);
         self.redraw();
+    }
+
+    /// Offer every key the UI didn't keep to `hook`, for a window with no
+    /// host behind it to fall through to (a standalone's own toplevel).
+    pub fn on_unhandled_key(&self, hook: UnhandledKey) {
+        *self
+            .unhandled_key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+    }
+
+    fn unhandled(&self, key: &KeyboardEvent) -> bool {
+        let hook = self
+            .unhandled_key
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        hook.is_some_and(|hook| hook(key))
     }
 
     fn offers_keys(&self) -> bool {
@@ -1189,6 +1211,9 @@ impl<V: View> Handler<V> {
                     }
                 }
                 let kept = d.key(&lock(&self.shared), &event);
+                // After the `shared` guard drops: the fallback may call into
+                // the plugin, which may take it.
+                let kept = kept || self.requests.unhandled(key);
                 return if kept {
                     EventStatus::Captured
                 } else {
