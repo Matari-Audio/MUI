@@ -47,7 +47,7 @@ use std::{
 };
 use wayland_client::{
     globals::registry_queue_init,
-    protocol::{wl_output, wl_surface},
+    protocol::{wl_callback, wl_output, wl_surface},
     Connection, QueueHandle,
 };
 
@@ -349,6 +349,16 @@ impl Embedded {
         self.event_loop.dispatch(Some(Duration::ZERO), &mut self.runtime).map_err(failure)?;
         self.runtime.tick()
     }
+    /// Cache the next resized frame until the host applies its parent commit.
+    /// Nested surfaces have their own compositor-managed synchronization.
+    pub fn synchronize_next_resize(&mut self) {
+        if self.runtime.context.as_ref().is_some_and(|cx| matches!(cx.role, Role::Subsurface(..))) {
+            self.runtime.resize_sync = ResizeSync::Armed;
+            self.runtime.ready = true;
+            self.runtime.shared.redraw.store(true, Ordering::Release);
+            self.event_loop.get_signal().wakeup();
+        }
+    }
     pub fn is_open(&self) -> bool {
         !self.runtime.exit && self.runtime.shared.open.load(Ordering::Acquire)
     }
@@ -366,6 +376,31 @@ enum Host {
     Foreign { display: NonNull<c_void>, surface: NonNull<c_void> },
     /// A host's nested compositor; see [`Embedded::open_nested`].
     Nested { socket: OwnedFd, token: String },
+}
+
+#[derive(PartialEq, Eq)]
+enum ResizeSync {
+    Idle,
+    Armed,
+    Awaiting(wayland_client::backend::ObjectId),
+}
+
+struct ResizeFrame;
+impl wayland_client::Dispatch<wl_callback::WlCallback, ResizeFrame> for Runtime {
+    fn event(
+        runtime: &mut Self, callback: &wl_callback::WlCallback, _: wl_callback::Event,
+        _: &ResizeFrame, _: &Connection, _: &QueueHandle<Self>,
+    ) {
+        if runtime.resize_sync != ResizeSync::Awaiting(callback.id()) {
+            return;
+        }
+        if let Some(Role::Subsurface(subsurface, _)) = runtime.context.as_ref().map(|cx| &cx.role) {
+            // Only this frame's callback proves the parent applied our cached
+            // state. Switching modes earlier can apply it without the parent.
+            subsurface.set_desync();
+            runtime.resize_sync = ResizeSync::Idle;
+        }
+    }
 }
 
 struct Runtime {
@@ -389,6 +424,7 @@ struct Runtime {
     /// Before that a callback may never come (nothing attached yet), so frames
     /// are not gated on it.
     mapped: bool,
+    resize_sync: ResizeSync,
     /// When the last frame was committed while waiting for its callback.
     committed: Instant,
     configured: bool,
@@ -431,6 +467,7 @@ impl Runtime {
             modifiers: keyboard_types::Modifiers::empty(),
             ready: true,
             mapped: false,
+            resize_sync: ResizeSync::Idle,
             committed: Instant::now(),
             configured: false,
             exit: false,
@@ -614,6 +651,15 @@ impl Runtime {
         if requested || due {
             self.ready = !self.mapped;
             self.committed = now;
+            if let (ResizeSync::Armed, Role::Subsurface(subsurface, _)) =
+                (&self.resize_sync, &cx.role)
+            {
+                subsurface.set_sync();
+                // Present may commit and flush the child itself. Include this
+                // callback in that commit so one parent commit applies both.
+                let callback = cx.surface().frame(&cx.qh, ResizeFrame);
+                self.resize_sync = ResizeSync::Awaiting(callback.id());
+            }
             cx.surface().frame(&cx.qh, FrameCallbackData(cx.surface().clone()));
             handler.on_frame().map_err(failure)?;
             if let Some(frame) = cx.frame.borrow_mut().as_mut() {
@@ -832,6 +878,106 @@ mod tests {
         fn on_event(&self, _: Event) -> EventStatus {
             EventStatus::Ignored
         }
+    }
+
+    struct BufferPainter {
+        surface: RefCell<softbuffer::Surface<crate::PlatformHandle, crate::PlatformHandle>>,
+        cx: WindowContext,
+    }
+    impl BufferPainter {
+        fn new(cx: WindowContext) -> Result<Self, HandlerError> {
+            let context = softbuffer::Context::new(cx.platform_handle())?;
+            let surface = softbuffer::Surface::new(&context, cx.platform_handle())?;
+            Ok(Self { surface: RefCell::new(surface), cx })
+        }
+    }
+    impl WindowHandler for BufferPainter {
+        fn frame_demand(&self) -> FrameDemand {
+            FrameDemand::Idle
+        }
+        fn resized(&self, _: WindowSize) -> Result<(), HandlerError> {
+            Ok(())
+        }
+        fn on_frame(&self) -> Result<(), HandlerError> {
+            let size = self.cx.size().physical;
+            let mut surface = self.surface.borrow_mut();
+            surface.resize(size.width.try_into()?, size.height.try_into()?)?;
+            let mut buffer = surface.buffer_mut()?;
+            buffer.fill(0x0055_6677);
+            buffer.present()?;
+            Ok(())
+        }
+        fn on_event(&self, _: Event) -> EventStatus {
+            EventStatus::Ignored
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a running Wayland compositor"]
+    fn resized_subsurface_waits_for_parent_before_desynchronizing() {
+        use raw_window_handle::{
+            HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle,
+        };
+
+        let (send, recv) = mpsc::channel();
+        let host = crate::ThreadedWindow::create(
+            WindowSettings::new().with_size(LogicalSize::new(300., 200.)).with_wayland(true),
+            move |cx| {
+                let _ = send.send(cx.platform_handle());
+                BufferPainter::new(cx)
+            },
+        )
+        .expect("host toplevel");
+        host.show().expect("show host");
+        let handle = recv.recv_timeout(Duration::from_secs(3)).expect("host surface");
+        let RawDisplayHandle::Wayland(display) = handle.display_handle().unwrap().as_raw() else {
+            panic!("not Wayland");
+        };
+        let RawWindowHandle::Wayland(surface) = handle.window_handle().unwrap().as_raw() else {
+            panic!("not Wayland");
+        };
+        // SAFETY: the host owns both proxies until after the child is dropped.
+        let mut child = unsafe {
+            Embedded::open(
+                WindowSettings::new().with_size(LogicalSize::new(120., 80.)),
+                crate::handler::WindowHandlerBuilder::new(BufferPainter::new),
+                display.display.cast(),
+                surface.surface.cast(),
+            )
+        }
+        .expect("child subsurface");
+        host.frame_requester().unwrap().request_frame();
+        let wait = |child: &mut Embedded, done: fn(&Runtime) -> bool| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                child.dispatch().expect("pump child");
+                if done(&child.runtime) {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "missing frame callback");
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        wait(&mut child, |runtime| runtime.mapped);
+
+        child.synchronize_next_resize();
+        child
+            .runtime
+            .context
+            .as_ref()
+            .unwrap()
+            .resize(LogicalSize::new(240., 160.).into())
+            .unwrap();
+        child.dispatch().expect("commit resized child");
+        assert_eq!(child.size().logical.width.round(), 240.);
+        let deadline = Instant::now() + Duration::from_millis(150);
+        while Instant::now() < deadline {
+            child.dispatch().expect("pump without parent commit");
+            assert!(matches!(child.runtime.resize_sync, ResizeSync::Awaiting(_)));
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        host.frame_requester().unwrap().request_frame();
+        wait(&mut child, |runtime| runtime.resize_sync == ResizeSync::Idle);
     }
 
     fn readable(fd: BorrowedFd<'_>, timeout: Duration) -> bool {
