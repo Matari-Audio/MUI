@@ -595,6 +595,11 @@ impl EmbeddedWaylandWindow {
         Ok(())
     }
 
+    /// Keep the next frame synchronized with the host parent while resizing.
+    pub fn synchronize_next_resize(&mut self) {
+        self.inner.synchronize_next_resize();
+    }
+
     /// False once the editor asked to close.
     pub fn is_open(&self) -> bool {
         self.inner.is_open()

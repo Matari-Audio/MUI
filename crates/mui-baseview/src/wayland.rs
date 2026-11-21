@@ -8,21 +8,35 @@ use super::*;
 
 /// An editor embedded in a host's Wayland surface. `!Send`: the host's UI
 /// thread opens it, pumps it and drops it. Dropping it destroys the surface.
-pub struct EmbeddedWindow(baseview::EmbeddedWaylandWindow);
+pub struct EmbeddedWindow {
+    window: baseview::EmbeddedWaylandWindow,
+    /// Only foreign subsurfaces need to coordinate with a host parent commit.
+    resize_requests: Option<Arc<Requests>>,
+}
 
 impl EmbeddedWindow {
     /// Readable when [`Self::dispatch`] has work.
     pub fn fd(&self) -> std::os::fd::RawFd {
         use std::os::fd::AsRawFd;
-        self.0.fd().as_raw_fd()
+        self.window.fd().as_raw_fd()
     }
     /// Handles Wayland events and draws a due frame, without blocking.
     pub fn dispatch(&mut self) -> Result<(), String> {
-        self.0.dispatch().map_err(|e| e.to_string())
+        if self
+            .resize_requests
+            .as_ref()
+            .is_some_and(|r| r.size.load(Ordering::Acquire) != 0)
+        {
+            // The pending size is consumed by the paint handler on this same
+            // thread. Arm sync before painting it, even if pacing is waiting
+            // for a callback from the previous frame.
+            self.window.synchronize_next_resize();
+        }
+        self.window.dispatch().map_err(|e| e.to_string())
     }
     /// Physical size and scale.
     pub fn size(&self) -> ((u32, u32), f64) {
-        let size = self.0.size();
+        let size = self.window.size();
         (
             (size.physical.width, size.physical.height),
             size.scale_factor,
@@ -56,10 +70,13 @@ pub unsafe fn embed<V: View + Send + 'static>(
             settings("MUI", size),
             display,
             surface,
-            build(shared, requests, true),
+            build(shared, Arc::clone(&requests), true),
         )
     }
-    .map(EmbeddedWindow)
+    .map(|window| EmbeddedWindow {
+        window,
+        resize_requests: Some(requests),
+    })
     .map_err(|e| e.to_string())
 }
 
@@ -81,7 +98,10 @@ pub fn embed_nested<V: View + Send + 'static>(
         token,
         build(shared, requests, true),
     )
-    .map(EmbeddedWindow)
+    .map(|window| EmbeddedWindow {
+        window,
+        resize_requests: None,
+    })
     .map_err(|e| e.to_string())
 }
 
