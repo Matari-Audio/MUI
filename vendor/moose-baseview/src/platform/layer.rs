@@ -382,7 +382,14 @@ enum Host {
 enum ResizeSync {
     Idle,
     Armed,
-    Awaiting(wayland_client::backend::ObjectId),
+    /// Waiting for the callback of the frame committed at the `Instant`.
+    Awaiting(wayland_client::backend::ObjectId, Instant),
+}
+
+impl ResizeSync {
+    fn awaits(&self, id: &wayland_client::backend::ObjectId) -> bool {
+        matches!(self, Self::Awaiting(awaited, _) if awaited == id)
+    }
 }
 
 struct ResizeFrame;
@@ -391,7 +398,7 @@ impl wayland_client::Dispatch<wl_callback::WlCallback, ResizeFrame> for Runtime 
         runtime: &mut Self, callback: &wl_callback::WlCallback, _: wl_callback::Event,
         _: &ResizeFrame, _: &Connection, _: &QueueHandle<Self>,
     ) {
-        if runtime.resize_sync != ResizeSync::Awaiting(callback.id()) {
+        if !runtime.resize_sync.awaits(&callback.id()) {
             return;
         }
         if let Some(Role::Subsurface(subsurface, _)) = runtime.context.as_ref().map(|cx| &cx.role) {
@@ -634,6 +641,7 @@ impl Runtime {
         if self.context.as_ref().is_some_and(|cx| cx.resize_pending.replace(false)) {
             self.resized();
         }
+        self.expire_resize_sync();
         let (Some(cx), Some(handler)) = (&self.context, &self.handler) else { return Ok(()) };
         if !self.ready && self.explicit_overdue() {
             self.ready = true;
@@ -658,7 +666,7 @@ impl Runtime {
                 // Present may commit and flush the child itself. Include this
                 // callback in that commit so one parent commit applies both.
                 let callback = cx.surface().frame(&cx.qh, ResizeFrame);
-                self.resize_sync = ResizeSync::Awaiting(callback.id());
+                self.resize_sync = ResizeSync::Awaiting(callback.id(), now);
             }
             cx.surface().frame(&cx.qh, FrameCallbackData(cx.surface().clone()));
             handler.on_frame().map_err(failure)?;
@@ -677,11 +685,40 @@ impl Runtime {
     /// most this long for one; continuous animation stays callback-paced, so a
     /// hidden window stays throttled.
     const CALLBACK_GRACE: Duration = Duration::from_millis(50);
+    /// A host that never commits its parent, or a compositor that throttles
+    /// callbacks for a hidden surface, would leave the child synchronized and
+    /// its frames cached forever. After this long, desynchronize anyway.
+    const RESIZE_SYNC_TIMEOUT: Duration = Duration::from_millis(500);
+    fn expire_resize_sync(&mut self) {
+        let ResizeSync::Awaiting(_, since) = self.resize_sync else { return };
+        if since.elapsed() < Self::RESIZE_SYNC_TIMEOUT {
+            return;
+        }
+        if let Some(Role::Subsurface(subsurface, _)) = self.context.as_ref().map(|cx| &cx.role) {
+            subsurface.set_desync();
+        }
+        self.resize_sync = ResizeSync::Idle;
+    }
+    fn resize_sync_deadline(&self) -> Option<Duration> {
+        match self.resize_sync {
+            ResizeSync::Awaiting(_, since) => {
+                Some(Self::RESIZE_SYNC_TIMEOUT.saturating_sub(since.elapsed()))
+            }
+            _ => None,
+        }
+    }
     fn explicit_overdue(&self) -> bool {
         self.shared.redraw.load(Ordering::Acquire)
             && self.committed.elapsed() >= Self::CALLBACK_GRACE
     }
     fn deadline(&self) -> Option<Duration> {
+        let frame = self.frame_deadline();
+        match (frame, self.resize_sync_deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+    fn frame_deadline(&self) -> Option<Duration> {
         if self.data.has_transfers() {
             return Some(Duration::from_millis(2));
         }
@@ -973,7 +1010,7 @@ mod tests {
         let deadline = Instant::now() + Duration::from_millis(150);
         while Instant::now() < deadline {
             child.dispatch().expect("pump without parent commit");
-            assert!(matches!(child.runtime.resize_sync, ResizeSync::Awaiting(_)));
+            assert!(matches!(child.runtime.resize_sync, ResizeSync::Awaiting(..)));
             std::thread::sleep(Duration::from_millis(10));
         }
         host.frame_requester().unwrap().request_frame();
