@@ -47,6 +47,22 @@ fn number(e: &Expr) -> syn::Result<f64> {
         ))
     }
 }
+fn turn(e: &Expr) -> syn::Result<Turn> {
+    if let Expr::Path(p) = e {
+        match p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .as_deref()
+        {
+            Some("Cw") => return Ok(Turn::Cw),
+            Some("Ccw") => return Ok(Turn::Ccw),
+            _ => {}
+        }
+    }
+    Err(error(e, "expected Turn::Cw or Turn::Ccw"))
+}
 fn string(e: &Expr) -> syn::Result<String> {
     if let Expr::Lit(l) = e
         && let Lit::Str(s) = &l.lit
@@ -54,6 +70,27 @@ fn string(e: &Expr) -> syn::Result<String> {
         return Ok(s.value());
     }
     Err(error(e, "expected a quoted string"))
+}
+/// `Center` or `TextAlign::Center`.
+fn text_align(e: &Expr) -> syn::Result<TextAlign> {
+    if let Expr::Path(p) = e
+        && (p.path.segments.len() == 1
+            || (p.path.segments.len() == 2 && p.path.segments[0].ident == "TextAlign"))
+    {
+        match p
+            .path
+            .segments
+            .last()
+            .map(|s| s.ident.to_string())
+            .as_deref()
+        {
+            Some("Start") => return Ok(TextAlign::Start),
+            Some("Center") => return Ok(TextAlign::Center),
+            Some("End") => return Ok(TextAlign::End),
+            _ => {}
+        }
+    }
+    Err(error(e, "expected TextAlign::Start, Center or End"))
 }
 fn paint(e: &Expr) -> syn::Result<Fill> {
     if let Expr::Path(p) = e {
@@ -180,7 +217,7 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
             let arity = match name.as_str() {
                 "pill" | "center" | "start" | "end" | "between" | "clip" | "wrap" | "full"
                 | "segmented" | "no_fill" | "no_stroke" => 0,
-                "offset" | "shell" => 2,
+                "offset" | "shell" | "at_pct" => 2,
                 "pad" if args.len() == 2 => 2,
                 _ => 1,
             };
@@ -205,8 +242,11 @@ fn element(e: &Expr, depth: usize, nodes: &mut usize) -> syn::Result<El> {
                 "shell" => el.shell(number(&args[0])?, paint(&args[1])?),
                 "opacity" => el.opacity(number(&args[0])? as f32),
                 "offset" => el.offset(number(&args[0])?, number(&args[1])?),
+                "at_pct" => el.at_pct(number(&args[0])?, number(&args[1])?),
+                "turn" => el.turn(turn(&args[0])?),
                 "id" => el.id(string(&args[0])?),
                 "text_size" => el.text_size(number(&args[0])?),
+                "text_align" => el.text_align(text_align(&args[0])?),
                 "icon_fill" => el.icon_fill(number(&args[0])? as f32),
                 "grade" => el.grade(number(&args[0])? as f32),
                 "weight" => el.text_axis("wght", number(&args[0])? as f32),
@@ -347,6 +387,18 @@ mod tests {
         assert!(parse("icon(\"no_such_icon\")").is_err());
     }
     #[test]
+    fn turns_and_pct_placement_parse_and_paint() {
+        let upright = render("block(60., 12.).fill(Primary)", 160, 160).unwrap();
+        let turned = render("block(60., 12.).fill(Primary).turn(Turn::Ccw)", 160, 160).unwrap();
+        assert_ne!(upright.pixels, turned.pixels);
+        let a = "stack![block(200., 100.), block(8., 8.).fill(Ink).at_pct(37., 100.)]";
+        let b = "stack![block(200., 100.), block(8., 8.).fill(Ink).at_pct(80., 100.)]";
+        assert_ne!(
+            render(a, 320, 240).unwrap().pixels,
+            render(b, 320, 240).unwrap().pixels
+        );
+    }
+    #[test]
     fn malformed_and_unbounded_programs_are_rejected() {
         for source in [
             "loop {}",
@@ -356,8 +408,15 @@ mod tests {
             "block(1e99, 20.)",
             "block(2., 3.).fill(Unknown)",
             "block(2., 3.).fill(Primary).offset(0.)",
+            "text(\"a\").text_align(Middle)",
+            "block(2., 3.).turn(Turn::Half)",
+            "block(2., 3.).at_pct(50.)",
         ] {
             assert!(parse(source).is_err(), "accepted {source}");
+        }
+        for align in ["Start", "Center", "TextAlign::End"] {
+            let source = format!("text(\"a\").w(80.).text_align({align})");
+            assert!(parse(&source).is_ok(), "rejected {source}");
         }
         assert!(parse(&"(".repeat(100)).is_err());
         assert!(parse(&"x".repeat(17_000)).is_err());

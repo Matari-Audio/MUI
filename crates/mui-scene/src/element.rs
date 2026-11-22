@@ -12,13 +12,15 @@
 //! ```
 use crate::{Cursor, Elevation, Fill, Fit, Image, Mix, Radius, Shadow, Stroke, Style};
 use mui_geometry::CornerStyle;
-use mui_geometry::{Path, Point};
+use mui_geometry::kurbo::{Cap, Join};
+use mui_geometry::{Path, Point, Vec2};
 use mui_layout::{Id, Node, Px, Size, Spacing};
 use mui_motion::Spring;
 use mui_text::{Axes, Weight};
 use std::sync::{Arc, Mutex};
 
-/// One stroke or fill a canvas hands back, in the canvas's own pixels.
+/// One stroke, fill or soft shadow a canvas hands back, in the canvas's
+/// own pixels.
 ///
 /// A draw with a [`tag`](Draw::tag) is also the canvas node's hit shape:
 /// see [`Draw::hit`].
@@ -30,6 +32,12 @@ pub struct Draw {
     pub fill: Fill,
     /// Stroke width; `0` fills.
     pub width: f64,
+    /// A stroke's open ends. [`Cap::Round`] unless [`Draw::cap`] says.
+    pub cap: Cap,
+    /// A stroke's corners. [`Join::Round`] unless [`Draw::join`] says.
+    pub join: Join,
+    /// Gaussian standard deviation of a [`Draw::shadow`]; `0` is sharp.
+    pub blur: f64,
     /// Names this shape as a hit target of the canvas node. The runtime
     /// reports it as the node's own gesture, tagged with this name.
     pub tag: Option<Arc<str>>,
@@ -38,22 +46,96 @@ pub struct Draw {
     pub at: Point,
 }
 impl Draw {
+    /// `path` filled with `fill`, non-zero.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let dot = Draw::fill(Path::circle(Point::new(8., 8.), 6.).unwrap(), Role::Primary);
+    /// assert_eq!(dot.width, 0.);
+    /// ```
     pub fn fill(path: impl Into<Arc<Path>>, fill: impl Into<Fill>) -> Self {
         Self {
             path: path.into(),
             fill: fill.into(),
             width: 0.0,
+            cap: Cap::Round,
+            join: Join::Round,
+            blur: 0.0,
             tag: None,
             at: Point::ZERO,
         }
     }
+    /// `path` stroked `width` wide, round-capped and round-joined; change
+    /// either with [`Draw::cap`] and [`Draw::join`].
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let tick = Draw::stroke(Path::polyline([Point::ZERO, Point::new(0., 6.)], false), Role::Ink, 2.);
+    /// assert_eq!((tick.cap, tick.join), (Cap::Round, Join::Round));
+    /// ```
     pub fn stroke(path: impl Into<Arc<Path>>, fill: impl Into<Fill>, width: f64) -> Self {
         Self {
-            path: path.into(),
-            fill: fill.into(),
             width,
-            tag: None,
-            at: Point::ZERO,
+            ..Self::fill(path, fill)
+        }
+    }
+    /// How a stroke's open ends finish: [`Cap::Butt`] stops flat at the
+    /// end point, [`Cap::Square`] half the width past it, [`Cap::Round`]
+    /// (the default) in a half disc. A value arc that must end square is a
+    /// butt-capped stroke.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let arc = Path::polyline([Point::ZERO, Point::new(20., 0.)], false);
+    /// let value = Draw::stroke(arc, Role::Primary, 4.).cap(Cap::Butt);
+    /// assert_eq!(value.cap, Cap::Butt);
+    /// ```
+    pub fn cap(mut self, cap: Cap) -> Self {
+        self.cap = cap;
+        self
+    }
+    /// How a stroke turns its corners: [`Join::Miter`] (cut to a bevel past
+    /// four widths), [`Join::Bevel`], or [`Join::Round`], the default.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let tri = [(0., 0.), (20., 0.), (10., 16.)].map(|(x, y)| Point::new(x, y));
+    /// let edge = Draw::stroke(Path::polyline(tri, true), Role::Ink, 2.).join(Join::Miter);
+    /// assert_eq!(edge.join, Join::Miter);
+    /// ```
+    pub fn join(mut self, join: Join) -> Self {
+        self.join = join;
+        self
+    }
+    /// `path` filled with `fill`, blurred by a Gaussian of standard
+    /// deviation `blur` and moved by `offset`: a soft shadow, drawn first
+    /// so the shapes after it sit on it. `(0, 0)` centres it, a halo.
+    ///
+    /// A rectangle, rounded rectangle or circle built by [`Path::rect`],
+    /// [`RoundedRect::path`](mui_geometry::RoundedRect::path) or
+    /// [`Path::circle`] blurs analytically on every renderer; any other
+    /// path is blurred as a path (`GpuRenderer`'s path blur, `vello_cpu`'s
+    /// Gaussian filter layer). A gradient blurs as its solid stand-in.
+    /// `offset` is the draw's [`at`](Draw::at): a later `.at(p)` replaces
+    /// it, so pass `p + offset` there.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let face = Path::circle(Point::new(40., 40.), 24.).unwrap();
+    /// let halo = Draw::shadow(face.clone(), 8., (0., 0.), Color::oklcha(0., 0., 0., 0.4));
+    /// let drop = Draw::shadow(face, 6., (0., 3.), Color::oklcha(0., 0., 0., 0.3));
+    /// assert_eq!((halo.blur, drop.at), (8., Point::new(0., 3.)));
+    /// ```
+    pub fn shadow(
+        path: impl Into<Arc<Path>>,
+        blur: f64,
+        offset: impl Into<Vec2>,
+        fill: impl Into<Fill>,
+    ) -> Self {
+        Self {
+            blur,
+            at: offset.into().to_point(),
+            ..Self::fill(path, fill)
         }
     }
     /// `image` stretched over the rectangle at `(x, y)`, `w` by `h`: a logo,
@@ -79,13 +161,7 @@ impl Draw {
     /// assert!(grab.fill.is_none());
     /// ```
     pub fn hit(path: impl Into<Arc<Path>>, tag: impl Into<Arc<str>>) -> Self {
-        Self {
-            path: path.into(),
-            fill: Fill::None,
-            width: 0.0,
-            tag: Some(tag.into()),
-            at: Point::ZERO,
-        }
+        Self::fill(path, Fill::None).tag(tag)
     }
     /// Name this drawn shape, so the pointer inside it -- and nowhere else
     /// in the node's frame -- is a gesture on the canvas. Read the name back
@@ -397,6 +473,9 @@ pub struct Extras {
     pub reserve: Option<String>,
     /// Additional strings measured in the same font. See [`Styled::reserve_all`].
     pub reserve_all: Option<Arc<[String]>>,
+    /// Where each line sits across the box when the box is wider than the
+    /// line. See [`Styled::text_align`].
+    pub text_align: TextAlign,
     /// Supplemental accessible help, separate from the control's name.
     pub description: Option<Arc<str>>,
     /// Human-readable value with units, alongside a numeric slider value.
@@ -473,6 +552,7 @@ impl Extras {
             rotation,
             reserve,
             reserve_all,
+            text_align,
             description,
             value_description,
             numeric_step,
@@ -499,6 +579,7 @@ impl Extras {
             && *rotation == o.rotation
             && *reserve == o.reserve
             && *reserve_all == o.reserve_all
+            && *text_align == o.text_align
             && *description == o.description
             && *value_description == o.value_description
             && *numeric_step == o.numeric_step
@@ -524,6 +605,7 @@ impl Extras {
         rotation: None,
         reserve: None,
         reserve_all: None,
+        text_align: TextAlign::Start,
         description: None,
         value_description: None,
         numeric_step: None,
@@ -617,7 +699,8 @@ impl Element {
     /// [`Styled::no_scrollbar`].
     pub const SCROLL_BAR_OFF: u16 = 1 << 7;
     /// An [`icon`]: with no `.font(f)` of its own it draws in
-    /// [`Theme::icon_font`](crate::Theme::icon_font).
+    /// [`Theme::icon_font`](crate::Theme::icon_font), else the bundled
+    /// Material Symbols face when a `symbols-*` feature embeds one.
     pub const ICON: u16 = 1 << 8;
 
     /// The face this node shapes with, before the scene's fonts: its own, or
@@ -625,7 +708,7 @@ impl Element {
     pub(crate) fn face_font<'a>(&'a self, theme: &'a crate::Theme) -> Option<&'a mui_text::Font> {
         self.font.as_ref().or_else(|| {
             if self.has(Self::ICON) {
-                theme.icon_font.as_ref()
+                theme.icon_font.as_ref().or_else(|| bundled_icon_font())
             } else {
                 None
             }
@@ -674,6 +757,27 @@ pub enum Appear {
     Slide(f64, f64),
 }
 
+/// Where a line of text sits across its box when the box is wider than the
+/// line: a [`Styled::reserve`]d readout, a label stretched by its row, or the
+/// shorter lines of a wrapped paragraph. See [`Styled::text_align`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum TextAlign {
+    #[default]
+    Start,
+    Center,
+    End,
+}
+impl TextAlign {
+    /// The share of the spare width that goes before the line.
+    pub(crate) fn share(self) -> f64 {
+        match self {
+            Self::Start => 0.0,
+            Self::Center => 0.5,
+            Self::End => 1.0,
+        }
+    }
+}
+
 /// Which [`TypeScale`](crate::TypeScale) size a text node takes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextRole {
@@ -697,6 +801,17 @@ impl Element {
 
 /// A styled layout node: the type every constructor here returns.
 pub type El = Node<Element>;
+
+/// The scene rotation a node paints and hits at: its [`Styled::rotation`]
+/// plus a quarter for [`Node::turn`], clockwise radians about its frame's
+/// centre. `None` when neither is set.
+pub(crate) fn rotation_of(n: &El) -> Option<f64> {
+    let quarter = n.turned().map(mui_layout::Turn::radians);
+    match (n.payload().extras().rotation, quarter) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, b) => a.or(b),
+    }
+}
 
 /// A box of a known size: an icon cell, a swatch, a spacer.
 pub fn block(width: impl Into<mui_layout::Len>, height: impl Into<mui_layout::Len>) -> El {
@@ -749,11 +864,27 @@ pub fn text(s: impl Into<Arc<str>>) -> El {
         ..Element::default()
     })
 }
+/// The Material Symbols face a `symbols-*` feature embeds, parsed on first
+/// use and borrowed from the binary, not copied.
+fn bundled_icon_font() -> Option<&'static mui_text::Font> {
+    #[cfg(feature = "symbols-rounded")]
+    const BYTES: Option<&[u8]> = Some(mui_symbols::font::ROUNDED);
+    #[cfg(all(feature = "symbols-outlined", not(feature = "symbols-rounded")))]
+    const BYTES: Option<&[u8]> = Some(mui_symbols::font::OUTLINED);
+    #[cfg(not(any(feature = "symbols-rounded", feature = "symbols-outlined")))]
+    const BYTES: Option<&[u8]> = None;
+    static FONT: std::sync::OnceLock<Option<mui_text::Font>> = std::sync::OnceLock::new();
+    FONT.get_or_init(|| BYTES.and_then(|b| mui_text::Font::from_static(b).ok()))
+        .as_ref()
+}
+
 /// One symbol from an icon font, drawn as text at the text size so `opsz`
 /// tracks it. `symbol` is the font's codepoint for it -- for Material
 /// Symbols, `mui_symbols::sym::HOME` is one, and `mui_symbols::codepoint`
 /// looks up a name that arrives at run time. The face is the theme's
-/// [`icon_font`](crate::Theme::icon_font); `.font(f)` overrides it. Style it
+/// [`icon_font`](crate::Theme::icon_font), or with the `symbols-rounded` /
+/// `symbols-outlined` feature and no theme face, the bundled Material
+/// Symbols; `.font(f)` overrides both. Style it
 /// like a label: `.text_size(24)`, `.icon_fill(1.)`, `.text_weight(..)`,
 /// `.grade(..)`, `.fill(..)` for ink.
 ///
@@ -765,6 +896,24 @@ pub fn text(s: impl Into<Arc<str>>) -> El {
 /// assert_eq!(home.payload().axes.get("FILL"), Some(1.));
 /// let scene = resolve(&SceneSpec::new(home).theme(theme)).unwrap();
 /// assert!(scene.paint.iter().any(|p| p.text.is_some()), "shaped in the theme's icon font");
+/// ```
+///
+/// With a `symbols-*` feature, no theme face is needed:
+///
+#[cfg_attr(
+    any(feature = "symbols-rounded", feature = "symbols-outlined"),
+    doc = "```"
+)]
+#[cfg_attr(
+    not(any(feature = "symbols-rounded", feature = "symbols-outlined")),
+    doc = "```ignore"
+)]
+/// use mui_scene::prelude::*;
+/// let home = icon(mui_symbols::sym::HOME).text_size(24).id("home");
+/// let scene = resolve(&SceneSpec::new(home)).unwrap();
+/// let run = scene.paint.iter().find_map(|p| p.text.as_ref()).expect("shaped");
+/// assert_ne!(run.glyphs[0].id, 0, "a real glyph, not .notdef");
+/// assert!(scene.surface("home").unwrap().frame.size.width > 0.);
 /// ```
 pub fn icon(symbol: char) -> El {
     let mut el = text(symbol.encode_utf8(&mut [0; 4]) as &str);
@@ -1192,6 +1341,32 @@ pub trait Styled: Paints {
     /// This supplements [`Styled::reserve`]; it does not replace it.
     fn reserve_all(mut self, samples: impl Into<Arc<[String]>>) -> Self {
         self.element_mut().extras_mut().reserve_all = Some(samples.into());
+        self
+    }
+    /// Where each line sits across this text node's box when the box is
+    /// wider than the line: the room a [`Styled::reserve`] or
+    /// [`Styled::reserve_all`] kept, a width a row stretched it to, and the
+    /// shorter lines of a wrapped paragraph, each placed on its own.
+    /// [`ResolvedScene::set_text`](crate::ResolvedScene::set_text) places
+    /// the swapped run the same way. Start by default; an editable field
+    /// stays at the start.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// # use mui_scene::Layer;
+    /// let font = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+    /// let x = |align| {
+    ///     let root = row![text("5.0").reserve("10.0").text_align(align).id("v")];
+    ///     let scene = resolve(&SceneSpec::new(root).font(font.clone())).unwrap();
+    ///     let run = scene.paint.iter().find(|p| p.layer == Layer::Text).unwrap();
+    ///     run.text.as_ref().unwrap().origin.x
+    /// };
+    /// // Hack is monospaced: "10.0" is one glyph wider than "5.0".
+    /// assert!(x(TextAlign::Start) < x(TextAlign::Center));
+    /// assert!(x(TextAlign::Center) < x(TextAlign::End));
+    /// ```
+    fn text_align(mut self, align: TextAlign) -> Self {
+        self.element_mut().extras_mut().text_align = align;
         self
     }
     /// Supplemental accessible help. Unlike a tooltip this is available

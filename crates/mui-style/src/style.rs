@@ -465,6 +465,21 @@ impl Shadow {
             fill: Fill::Color(Color::oklcha(0.0, 0.0, 0.0, 0.25)),
         }
     }
+    /// [`Shadow::soft`] straight under the shape, offset by nothing: an
+    /// even halo all the way round, as a dial or a floating disc casts
+    /// under light from the front.
+    ///
+    /// ```
+    /// use mui_style::{Role::*, *};
+    /// let halo = Shadow::halo(12.);
+    /// assert_eq!((halo.dx, halo.dy, halo.blur), (0., 0., 12.));
+    /// ```
+    pub fn halo(blur: f64) -> Self {
+        Self {
+            dy: 0.0,
+            ..Self::soft(blur)
+        }
+    }
     /// The same shadow cast inward from the box's own edge: a recess, a
     /// floor under a translucent panel.
     ///
@@ -501,6 +516,17 @@ pub enum Elevation {
     Raised,
     /// A menu, a dialog, a drag ghost: off the panel entirely.
     Floating,
+    /// Lifted toward the viewer rather than up the screen: [`Raised`]'s
+    /// contact and ambient pair, centred, so the shadow rings the shape
+    /// evenly -- a dial's face, a puck.
+    ///
+    /// ```
+    /// use mui_style::{Role::*, *};
+    /// assert!(Elevation::Halo.shadows().iter().all(|s| (s.dx, s.dy) == (0., 0.)));
+    /// ```
+    ///
+    /// [`Raised`]: Elevation::Raised
+    Halo,
 }
 impl Elevation {
     /// The contact and ambient pair this step is made of.
@@ -526,10 +552,12 @@ impl Elevation {
         }
         static RAISED: [Shadow; 2] = [cast(2.0, 1.0, 0.30), cast(8.0, 4.0, 0.18)];
         static FLOATING: [Shadow; 2] = [cast(4.0, 2.0, 0.34), cast(24.0, 12.0, 0.26)];
+        static HALO: [Shadow; 2] = [cast(2.0, 0.0, 0.30), cast(8.0, 0.0, 0.18)];
         match self {
             Self::Flat => &[],
             Self::Raised => &RAISED,
             Self::Floating => &FLOATING,
+            Self::Halo => &HALO,
         }
     }
 }

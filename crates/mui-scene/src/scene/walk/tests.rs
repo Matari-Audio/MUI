@@ -948,3 +948,36 @@ fn a_copied_memo_keeps_its_cache_entries() {
     }
     assert_eq!(count(&d), 2, "walked once when first built, once to renew");
 }
+
+#[test]
+fn a_turn_rotates_paint_a_quarter_and_composes_with_rotation() {
+    let spec = |e: El| SceneSpec::new(row([e.fill(Role::Primary).id("t")]).id("r"));
+    let fill = |s: &ResolvedScene| {
+        s.paint
+            .iter()
+            .find(|p| p.key.as_str() == "t" && p.layer == Layer::Fill)
+            .unwrap()
+            .transform
+    };
+    let turned = resolve(&spec(block(60., 12.).turn(Turn::Ccw))).unwrap();
+    let f = turned.surface("t").unwrap().frame;
+    assert_eq!((f.x, f.y, f.size), (-24., 24., Size::new(60., 12.)));
+    let centre = Point::new(6., 30.);
+    let want = mui_geometry::kurbo::Affine::rotate_about(-std::f64::consts::FRAC_PI_2, centre);
+    assert_eq!(fill(&turned), want);
+    // The painted outline covers exactly the 12 x 60 slot.
+    let bounds = turned.surface("t").unwrap().bounds.unwrap();
+    assert!(
+        (bounds.x0 - 0.).abs() < 1e-9 && (bounds.y1 - 60.).abs() < 1e-9,
+        "{bounds:?}"
+    );
+    // An explicit rotation adds to the turn: a Ccw quarter undone.
+    let undone = resolve(&spec(
+        block(60., 12.)
+            .turn(Turn::Ccw)
+            .rotation(std::f64::consts::FRAC_PI_2),
+    ))
+    .unwrap();
+    let t = fill(&undone);
+    assert!((t.as_coeffs()[0] - 1.).abs() < 1e-12 && t.as_coeffs()[1].abs() < 1e-12);
+}

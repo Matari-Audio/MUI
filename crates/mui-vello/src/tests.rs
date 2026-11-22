@@ -64,3 +64,49 @@ fn a_malformed_arc_is_caught_at_the_seam() {
     arc.radius *= 2.;
     assert!(bez_path(&path, ARC_TOLERANCE).is_err());
 }
+
+#[cfg(feature = "cpu-threads")]
+#[test]
+fn threaded_cpu_reports_unsupported_path_blur() {
+    use mui_scene::prelude::*;
+    let scene = mui_scene::resolve(&SceneSpec::new(
+        canvas(|_| {
+            vec![Draw::shadow(
+                Path::polyline(
+                    [
+                        Point::new(0., 0.),
+                        Point::new(32., 0.),
+                        Point::new(16., 32.),
+                    ],
+                    true,
+                ),
+                4.,
+                (0., 0.),
+                Role::Primary,
+            )]
+        })
+        .size(64., 64.),
+    ))
+    .unwrap();
+    let mut ctx = vello_cpu::RenderContext::new_with(
+        64,
+        64,
+        vello_cpu::RenderSettings {
+            num_threads: 1,
+            ..Default::default()
+        },
+    );
+    let mut resources = vello_cpu::Resources::default();
+    let mut cache = Cache::default();
+    let mut cpu = Cpu {
+        ctx: &mut ctx,
+        resources: &mut resources,
+        cache: &mut cache,
+    };
+    assert!(matches!(
+        paint(&mut cpu, &scene, Affine::IDENTITY),
+        Err(Error::InvalidOptions(
+            "canvas does not support blurred path shadows"
+        ))
+    ));
+}

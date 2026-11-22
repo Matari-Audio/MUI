@@ -547,7 +547,7 @@ pub(crate) fn paint_within(
         if p.layer == Layer::Backdrop {
             backdrop(canvas, &scene.paint[..i], p, &bez, transform)?;
         } else if path_shadow(p) {
-            blurred_path(canvas, p, &bez);
+            blurred_path(canvas, p, &bez)?;
         } else {
             one(canvas, p, &bez, placed(transform, p))?;
         }
@@ -617,7 +617,7 @@ pub(crate) fn raster_alone(
         let at = placed(base, p);
         canvas.set_transform(at);
         if path_shadow(p) {
-            blurred_path(&mut canvas, p, &bez);
+            blurred_path(&mut canvas, p, &bez)?;
         } else {
             one(&mut canvas, p, &bez, at)?;
         }
@@ -671,9 +671,12 @@ pub(crate) fn scene_box(p: &Painted, path: &BezPath) -> Rect {
 }
 
 /// A drop shadow with no rounded rect to blur analytically: a custom
-/// outline's, which the walk hands over as the path itself.
+/// outline's, which the walk hands over as the path itself, or a canvas's
+/// `Draw::shadow` of any other path.
 pub(crate) fn path_shadow(p: &Painted) -> bool {
-    p.layer == Layer::Shadow(ShadowKind::Drop) && p.rect.is_none() && p.blur > 0.0
+    matches!(p.layer, Layer::Shadow(ShadowKind::Drop) | Layer::Draw(_))
+        && p.rect.is_none()
+        && p.blur > 0.0
 }
 
 /// How far past its path a blur of `p` reaches: three standard deviations,
@@ -684,14 +687,18 @@ pub(crate) fn blur_reach(p: &Painted, path: &BezPath) -> Rect {
 }
 
 /// A [`path_shadow`]: the path filled sharp inside a blur layer. On a canvas
-/// without filter layers it is left out, as the sharp shape would read as a
-/// second, misaligned panel.
-fn blurred_path(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) {
+/// without filter layers this returns an explicit unsupported-options error.
+fn blurred_path(canvas: &mut impl Canvas, p: &Painted, path: &BezPath) -> Result<(), Error> {
     if canvas.push_blur(&blur_reach(p, path).to_path(0.1), p.blur as f32) {
         canvas.set_paint(PaintType::Solid(srgb(p.paint.solid())));
         canvas.fill_path(path);
         canvas.pop_layer();
         canvas.pop_layer();
+        Ok(())
+    } else {
+        Err(Error::InvalidOptions(
+            "canvas does not support blurred path shadows",
+        ))
     }
 }
 
@@ -763,17 +770,18 @@ pub(crate) fn replay(
         let plain = matches!(
             q.layer,
             Layer::Fill | Layer::Shell(_) | Layer::Stroke | Layer::Text | Layer::Draw(_)
-        );
+        ) && q.blur == 0.0;
         let em = q.text.as_ref().map_or(0., |t| f64::from(t.size));
+        // Twice the width: a miter join reaches four half widths out.
         let reaches = || {
             scene_box(q, &bez)
-                .inflate(q.width + em, q.width + em)
+                .inflate(2. * q.width + em, 2. * q.width + em)
                 .overlaps(reach)
         };
         if !plain || reaches() {
             canvas.set_transform(placed(base, q));
             if path_shadow(q) {
-                blurred_path(canvas, q, &bez);
+                blurred_path(canvas, q, &bez)?;
             } else {
                 one(canvas, q, &bez, placed(base, q))?;
             }
@@ -1092,7 +1100,7 @@ fn paint_one(
         (true, None, _) => {}
         (_, _, false) => canvas.fill_path(path),
         (_, _, true) => {
-            canvas.set_stroke(Stroke::new(p.width));
+            canvas.set_stroke(Stroke::new(p.width).with_caps(p.cap).with_join(p.join));
             canvas.stroke_path(path);
         }
     }

@@ -1432,3 +1432,94 @@ fn changing_measure_environment_requires_clear() {
     cached(&n, 400., &mut c);
     assert!(c.stats().measured_nodes > 0);
 }
+#[test]
+fn token_pad_pairs_pct_placement_and_turns_invalidate_like_fresh_layouts() {
+    use crate::{Pad, SpacingToken::*, Turn};
+    let tree = |pad: Pad, pct: f64, turn: Option<Turn>| {
+        let mut word = label("word", "stereo");
+        if let Some(t) = turn {
+            word = word.turn(t);
+        }
+        Node::row([
+            Node::col([word]).id("rail"),
+            Node::stack([
+                Node::block(200., 80.),
+                label("tick", "37%").at_pct(pct, 100.),
+            ])
+            .pad(pad)
+            .id("plot"),
+        ])
+        .id("root")
+    };
+    let steps = [
+        tree((S, Xs).into(), 37., None),
+        tree((M, Xs).into(), 37., None),
+        tree((M, 4).into(), 37., None),
+        tree((12, 4).into(), 37., None),
+        tree((12, 4).into(), 50., None),
+        tree((12, 4).into(), 50., Some(Turn::Ccw)),
+        tree((12, 4).into(), 50., Some(Turn::Cw)),
+        tree((S, Xs).into(), 50., None),
+    ];
+    let mut c = LayoutCache::default();
+    for n in &steps {
+        assert_eq!(cached(n, 400., &mut c), oracle(n, 400.));
+        assert_eq!(cached(n, 400., &mut c), oracle(n, 400.));
+    }
+    // The changes were seen, not reused: the plot's padding, the tick's
+    // share and the turned rail all moved.
+    let at = |n: &Node<Text>, k: &str| oracle(n, 400.).frame(k).unwrap();
+    assert_ne!(at(&steps[0], "plot").size, at(&steps[1], "plot").size);
+    assert_ne!(at(&steps[3], "tick").x, at(&steps[4], "tick").x);
+    assert_ne!(at(&steps[4], "rail").size, at(&steps[5], "rail").size);
+}
+
+#[test]
+fn a_content_sized_pinned_menu_matches_the_oracle_warm_and_after_its_bar_changes() {
+    let mut n = Node::stack([
+        Node::row([label("title", "Title")])
+            .w(Len::Pct(100.))
+            .h(24.)
+            .id("bar"),
+        Node::col([label("a", "Open"), label("b", "Save")])
+            .pin(Pin::to("bar").area(Area::Bottom).match_width())
+            .id("menu"),
+    ]);
+    let mut c = LayoutCache::default();
+    let bare = prime(&n, 400., &mut c);
+    assert_eq!(bare, oracle(&n, 400.));
+    let (bar, menu) = (bare.frame("bar").unwrap(), bare.frame("menu").unwrap());
+    assert_eq!(menu.y, bar.bottom());
+    assert!(menu.size.height < 100.);
+    n.children_mut()[0] = Node::row([label("title", "Title")])
+        .w(Len::Pct(100.))
+        .h(30.)
+        .id("bar");
+    assert_eq!(cached(&n, 400., &mut c), oracle(&n, 400.));
+}
+
+#[test]
+fn turned_descendants_preserve_inherited_container_keys() {
+    let mut cache = LayoutCache::default();
+    for height in [160., 80., 40., 160.] {
+        let root = Node::col([Node::col([label(
+            "turned",
+            "A deliberately long musical parameter caption",
+        )
+        .turn(Turn::Cw)])
+        .w(180.)
+        .shrink(0.)
+        .id("natural")])
+        .size(320., height)
+        .scroll()
+        .id("root");
+        assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
+        assert_eq!(cached(&root, 400., &mut cache), oracle(&root, 400.));
+        assert!(
+            cache
+                .stamp(&root.children()[0])
+                .unwrap()
+                .container_dependent
+        );
+    }
+}

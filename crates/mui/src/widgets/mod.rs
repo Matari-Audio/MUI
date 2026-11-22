@@ -16,7 +16,8 @@
 //! and nothing here rasterizes.
 
 use mui_scene::{
-    Align, Appear, El, Fill, IntoEl, Len, Pad, Paints, Px, Role, SpacingToken, Styled,
+    Align, Appear, El, Fill, IntoEl, Len, Pad, Paints, Px, Radius, Role, SpacingToken, Styled,
+    TextAlign,
 };
 use std::sync::Arc;
 
@@ -104,7 +105,21 @@ impl<C> Response<C, Control> {
         value_reserve(s: impl Into<String>);
         value_reserve_all(samples: impl Into<Arc<[String]>>);
         px(px: impl Px);
+        look(k: Knob);
         modulation(m: Modulation);
+        fill_cell();
+        icon(symbol: char);
+        icon_end(symbol: char);
+        value_align(a: TextAlign);
+    }
+}
+/// A select's trigger look, as a button's: `select(..).variant(Variant::Soft)`.
+impl<C> Response<C, Select> {
+    forward! { Select, std::convert::identity:
+        size(s: SpacingToken);
+        variant(v: Variant);
+        role(r: Role);
+        px(px: impl Px);
     }
 }
 impl<C> Response<C, El> {
@@ -122,6 +137,8 @@ impl<C, E: IntoEl> Response<C, E> {
         disabled();
         when(cond: bool, f: impl FnOnce(El) -> El);
         fill(f: impl Into<Fill>);
+        radius(r: impl Into<Radius>);
+        stroke(f: impl Into<Fill>);
         opacity(o: f32);
         animate();
         appear(a: Appear);
@@ -172,13 +189,16 @@ pub use color_picker::{ColorFormat, OklchPicker, PickerShape, oklch_picker};
 pub use composition::{Setting, group, setting};
 pub(crate) use controls::step;
 pub use controls::{
-    Control, Domain, Modulation, Variant, button, drag_value, knob, slider, stepped, toggle,
+    Control, Domain, Knob, Modulation, Pointer, Variant, button, drag_value, icon_button, knob,
+    slider, stepped, toggle,
 };
 pub use curve::{CurveEdit, curve};
 pub use entry::{Entered, ExactEntry};
 pub use kit::{Column, TOAST_SECS, Tab, Tabs, segmented, table, tabs, toast, toasts, tree_row};
 pub use meter::{Levels, Meter, meter, meter_position};
-pub use overlay::{MenuRow, Overlay, SelectHead, chooser, dialog, dropdown, menu, popover, select};
+pub use overlay::{
+    MenuRow, Overlay, Select, SelectHead, chooser, dialog, dropdown, menu, popover, select,
+};
 pub use pick::{ColorOpts, color_picker};
 pub use presets::{card, chip, glass, panel, tile};
 pub use text::{Newline, TextEdit, TextOpts, text_edit, text_input};

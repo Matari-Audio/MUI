@@ -80,6 +80,8 @@ fn a_text_layer_takes_its_brush_box_from_the_run() {
         offset: mui_geometry::Point::default(),
         transform: Affine::IDENTITY,
         width: 0.,
+        cap: crate::kurbo::Cap::Round,
+        join: crate::kurbo::Join::Round,
         blur: 0.,
         text: Some(Text {
             fonts: Arc::from([mui_scene::Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()]),

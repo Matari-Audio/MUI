@@ -46,11 +46,12 @@ impl Ui {
             return None;
         }
         let tip = self.hover.as_ref().and_then(|(key, elapsed)| {
-            if !elapsed.is_finite() || *elapsed >= crate::ui::TIP_DELAY {
+            let delay = self.tip_delay()?;
+            if !elapsed.is_finite() || *elapsed >= delay {
                 return None;
             }
             self.scene.as_ref()?.surface(key)?.tip.as_ref()?;
-            Some((crate::ui::TIP_DELAY - elapsed).max(0.001))
+            Some((delay - elapsed).max(0.001))
         });
         let caret = self
             .focus

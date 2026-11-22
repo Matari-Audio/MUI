@@ -99,10 +99,13 @@ impl From<SpacingToken> for Spacing {
 }
 
 /// What `.pad(..)` takes: one spacing on all four sides (`12`, `M`), an
-/// `(x, y)` pair of pixels, or whole [`Insets`](crate::Insets).
+/// `(x, y)` pair of pixels or tokens in any mix (`(16, 8)`, `(S, Xs)`,
+/// `(M, 4)`), or whole [`Insets`](crate::Insets).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pad {
     All(Spacing),
+    /// Left and right, then top and bottom.
+    Axes(Spacing, Spacing),
     Insets(crate::Insets),
 }
 impl<T: crate::Px> From<T> for Pad {
@@ -125,8 +128,8 @@ impl From<crate::Insets> for Pad {
         Self::Insets(i)
     }
 }
-impl<X: crate::Px, Y: crate::Px> From<(X, Y)> for Pad {
+impl<X: Into<Spacing>, Y: Into<Spacing>> From<(X, Y)> for Pad {
     fn from((x, y): (X, Y)) -> Self {
-        Self::Insets(crate::Insets::symmetric(x.px(), y.px()))
+        Self::Axes(x.into(), y.into())
     }
 }

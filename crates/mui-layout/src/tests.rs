@@ -1030,6 +1030,43 @@ fn a_matched_pin_takes_the_anchor_width() {
 }
 
 #[test]
+fn a_pinned_container_takes_its_content_height_not_the_parents_stretch() {
+    // A stack stretches its children by default; a pinned `col` with no
+    // height of its own used to take that, overflow under the bar and be
+    // pulled back to y = 0 over its own anchor.
+    let tree = stack([
+        row([block(40., 24.)]).w(Len::Pct(100.)).h(24.).id("bar"),
+        col([block(30., 20.), block(30., 20.)])
+            .pin(Pin::to("bar").area(Area::Bottom).match_width())
+            .id("menu"),
+    ]);
+    let l = resolve(&tree, Some(Size::new(200., 300.)), Limits::default()).unwrap();
+    let (bar, menu) = (l.frame("bar").unwrap(), l.frame("menu").unwrap());
+    assert_eq!((menu.x, menu.y), (bar.x, bar.bottom()));
+    assert_eq!(menu.size.width, 200.);
+    // Two rows and the column's default gap: intrinsic, not 300.
+    let intrinsic = resolve(
+        &col([block(30., 20.), block(30., 20.)]),
+        None,
+        Limits::default(),
+    )
+    .unwrap()
+    .size
+    .height;
+    assert_eq!(menu.size.height, intrinsic);
+    // An explicit stretch still opts in, against the root.
+    let tree = stack([
+        row([block(40., 24.)]).w(Len::Pct(100.)).h(24.).id("bar"),
+        col([block(30., 20.)])
+            .anchor(Align::Start, Align::Stretch)
+            .pin(Pin::to("bar").area(Area::Bottom))
+            .id("menu"),
+    ]);
+    let l = resolve(&tree, Some(Size::new(200., 300.)), Limits::default()).unwrap();
+    assert_eq!(l.frame("menu").unwrap().size.height, 300.);
+}
+
+#[test]
 fn a_pin_uses_an_anchor_inside_another_pin_in_either_declaration_order() {
     for picker_first in [false, true] {
         let trigger = block(20., 20.).at(300., 20.).id("trigger");
@@ -1778,6 +1815,181 @@ fn a_leaf_no_room_changes_is_not_measured_again_at_its_share() {
     };
     assert_eq!(calls(false), 2);
     assert_eq!(calls(true), 4);
+}
+
+#[test]
+fn token_pad_pairs_resolve_per_axis_and_the_last_pad_wins() {
+    use SpacingToken::*;
+    let scale = SpacingScale::DEFAULT;
+    let p = |n: Node| n.padding(scale);
+    assert_eq!(p(block(1, 1).pad((S, Xs))), Insets::symmetric(8., 4.));
+    assert_eq!(p(block(1, 1).pad((M, 3))), Insets::symmetric(12., 3.));
+    assert_eq!(
+        p(block(1, 1).pad((2, Spacing::step(2.)))),
+        Insets::symmetric(2., 8.)
+    );
+    // A pixel pair boxes nothing, and a later pad clears a token pair.
+    let px = block(1, 1).pad((16, 8));
+    assert!(px.rare.is_none());
+    assert_eq!(p(px), Insets::symmetric(16., 8.));
+    assert_eq!(p(block(1, 1).pad((S, Xs)).pad(M)), Insets::all(12.));
+    assert_eq!(p(block(1, 1).pad((S, Xs)).pad(5)), Insets::all(5.));
+    assert_eq!(
+        p(block(1, 1).pad((S, Xs)).pad((6, 2))),
+        Insets::symmetric(6., 2.)
+    );
+    // Measured under another scale, the pair rescales.
+    let big = SpacingScale {
+        s: 20.,
+        xs: 10.,
+        ..scale
+    };
+    let l = resolve_with(
+        &block(10, 10).pad((S, Xs)).id("b"),
+        None,
+        Limits::default(),
+        big,
+        |_: &(), _: Option<f64>| Size::ZERO,
+    )
+    .unwrap();
+    assert_eq!(l.frame("b").unwrap().size, Size::new(10., 10.));
+    let l = resolve_with(
+        &col([block(10, 10)]).pad((S, Xs)).id("c"),
+        None,
+        Limits::default(),
+        big,
+        |_: &(), _: Option<f64>| Size::ZERO,
+    )
+    .unwrap();
+    assert_eq!(l.frame("c").unwrap().size, Size::new(50., 30.));
+}
+
+#[test]
+fn at_pct_places_the_anchor_point_at_a_share_of_the_parent() {
+    let plot = || block(200, 100);
+    let solve = |t: Node| resolve(&t, None, Limits::default()).unwrap();
+    // Default anchor is the centre.
+    let l = solve(stack([plot(), block(20, 10).at_pct(37, 50).id("t")]));
+    let f = l.frame("t").unwrap();
+    assert_eq!((f.x, f.y), (64., 45.));
+    // Start / End pick the leading / trailing edge, either call order.
+    let l = solve(stack([
+        plot(),
+        block(20, 10)
+            .at_pct(50, 0)
+            .anchor(Align::End, Align::Start)
+            .id("t"),
+    ]));
+    assert_eq!(
+        (l.frame("t").unwrap().x, l.frame("t").unwrap().y),
+        (80., 0.)
+    );
+    // An offset nudges; 100% overhangs, unclamped.
+    let l = solve(stack([
+        plot(),
+        block(20, 10).at_pct(100, 100).offset(2, -1).id("t"),
+    ]));
+    assert_eq!(
+        (l.frame("t").unwrap().x, l.frame("t").unwrap().y),
+        (192., 94.)
+    );
+    // Shares are of the box inside the padding.
+    let l = solve(stack([plot(), block(20, 10).at_pct(0, 0).id("t")]).pad(10));
+    assert_eq!((l.frame("t").unwrap().x, l.frame("t").unwrap().y), (0., 5.));
+    // A float is placed the same way, and not pulled back inside.
+    let l = solve(
+        col([plot()])
+            .push(block(20, 10).float().at_pct(100, 50).id("t"))
+            .id("c"),
+    );
+    let f = l.frame("t").unwrap();
+    assert_eq!((f.x, f.y, f.right()), (190., 45., 210.));
+    // The float still takes no room.
+    assert_eq!(l.frame("c").unwrap().size, Size::new(200., 100.));
+    // Later placement verbs replace it.
+    let l = solve(stack([
+        plot(),
+        block(20, 10).at_pct(100, 100).at(3, 4).id("t"),
+    ]));
+    assert_eq!((l.frame("t").unwrap().x, l.frame("t").unwrap().y), (3., 4.));
+    let l = solve(stack([
+        plot(),
+        block(20, 10).at_pct(100, 100).centered().id("t"),
+    ]));
+    assert_eq!(
+        (l.frame("t").unwrap().x, l.frame("t").unwrap().y),
+        (90., 45.)
+    );
+}
+
+#[test]
+fn a_turned_node_swaps_its_axes_for_its_parent() {
+    let text = |w: f64, h: f64| block(w, h);
+    // A 60x12 word turned in a row: the row sees 12x60.
+    let t = row([
+        block(10, 10).id("a"),
+        text(60., 12.).min_size((60, 12)).turn(Turn::Ccw).id("w"),
+        block(10, 10).id("b"),
+    ])
+    .align(Align::Start)
+    .id("r");
+    let l = resolve(&t, None, Limits::default()).unwrap();
+    assert_eq!(l.frame("r").unwrap().size, Size::new(32., 60.));
+    let w = l.frame("w").unwrap();
+    // Upright 60x12, centred on the slot (10, 0, 12x60).
+    assert_eq!((w.x, w.y, w.size), (-14., 24., Size::new(60., 12.)));
+    assert_eq!(l.frame("b").unwrap().x, 22.);
+    // Its floor is reported upright, like its frame, and the row's is
+    // the turned one.
+    assert_eq!(l.min_size_of("w"), Some(Size::new(60., 12.)));
+    assert_eq!(l.min_size_of("r"), Some(Size::new(12., 60.)));
+    // A turned container offered a stretched cross axis takes it as its
+    // own width: a rail 30 wide makes a turned column 30 tall.
+    let t = col([col([block(5, 5)]).turn(Turn::Cw).id("w")])
+        .w(30)
+        .h(100)
+        .id("rail");
+    let l = resolve(&t, None, Limits::default()).unwrap();
+    let w = l.frame("w").unwrap();
+    assert_eq!(w.size.height, 30.);
+    // Children lay out upright inside it.
+    let inner = l.all().iter().last().copied().unwrap();
+    assert_eq!(inner.size, Size::new(5., 5.));
+    // A declared width on the turned node is its parent's height.
+    let t = row([block(40, 8).turn(Turn::Cw).id("w")]).id("r");
+    let l = resolve(&t, None, Limits::default()).unwrap();
+    assert_eq!(l.frame("r").unwrap().size, Size::new(8., 40.));
+}
+
+#[test]
+fn turned_text_wraps_against_its_own_width_not_the_parent_room() {
+    // Eight px a char, wrapped to the room; 16 a line.
+    let words = |t: &&str, room: Option<f64>| {
+        let full = t.len() as f64 * 8.;
+        let w = room.unwrap_or(full).max(1.).min(full);
+        Size::new(w, (full / w).ceil() * 16.)
+    };
+    let t = Node::row([Node::content().with("stereo").turn(Turn::Ccw).id("w")])
+        .w(20)
+        .id("r");
+    let l = resolve_with(&t, None, Limits::default(), SpacingScale::DEFAULT, words).unwrap();
+    // One upright line, 48 long; the narrow row's room did not wrap it.
+    assert_eq!(l.frame("w").unwrap().size, Size::new(48., 16.));
+    assert_eq!(l.frame("r").unwrap().size.height, 48.);
+}
+
+#[test]
+fn turned_text_wraps_to_available_parent_height() {
+    let words = |_: &&str, room: Option<f64>| {
+        let w = room.unwrap_or(80.).clamp(1., 80.);
+        Size::new(w, (80. / w).ceil() * 16.)
+    };
+    let t = Node::row([Node::content().with("abcdefghij").turn(Turn::Ccw).id("w")])
+        .w(40)
+        .h(64)
+        .id("r");
+    let l = resolve_with(&t, None, Limits::default(), SpacingScale::DEFAULT, words).unwrap();
+    assert_eq!(l.frame("w").unwrap().size, Size::new(64., 32.));
 }
 
 fn xs(l: &Layout, ids: &[&str]) -> Vec<f64> {

@@ -68,6 +68,25 @@ pub enum Match {
 /// // No room above at the top of the window, so it flips under the knob.
 /// assert_eq!(l.frame("tip").unwrap().y, 44.);
 /// ```
+///
+/// A pinned node takes its content size on both axes, never its parent's
+/// stretch: a `col` menu with no height of its own drops under its bar at
+/// its intrinsic height. An axis opts back in with [`Pin::match_width`] /
+/// [`Pin::match_height`], a definite length (`.h(Len::Pct(100.))`, of the
+/// root) or `.anchor(_, Align::Stretch)`; `align_self` does not apply, since
+/// a float is in no flow.
+///
+/// ```
+/// use mui_layout::{block, col, row, stack, resolve, Area, Len, Pin, Size};
+/// let bar = row([block(40., 24.)]).w(Len::Pct(100.)).h(24.).id("bar");
+/// let menu = col([block(30., 20.), block(30., 20.)])
+///     .pin(Pin::to("bar").area(Area::Bottom).match_width())
+///     .id("menu");
+/// let l = resolve(&stack([bar, menu]), Some(Size::new(200., 300.)), Default::default()).unwrap();
+/// let (bar, menu) = (l.frame("bar").unwrap(), l.frame("menu").unwrap());
+/// assert_eq!((menu.y, menu.size.width), (bar.bottom(), 200.));
+/// assert!(menu.size.height < 60.);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pin {
     pub(crate) anchor: String,

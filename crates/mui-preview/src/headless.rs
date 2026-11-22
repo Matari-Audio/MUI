@@ -12,7 +12,11 @@ pub fn all() -> Vec<Scene> {
         .into_iter()
         .map(|mut scene| {
             let font = Font::new(epaint_default_fonts::HACK_REGULAR).expect("bundled Hack parses");
-            let ui = Ui::new(skin::SKIN).font(font);
+            let theme = Theme {
+                icon_font: Some(crate::ICONS.clone()),
+                ..skin::SKIN
+            };
+            let ui = Ui::new(theme).font(font);
             Scene::new(scene.name(), (760, 560), ui, move |ui| {
                 stack([scene.specimen(ui).centered()]).fill(Role::Background)
             })

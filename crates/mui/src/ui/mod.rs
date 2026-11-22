@@ -45,6 +45,32 @@ const TIP_KEY: &str = "/tip";
 
 /// How long the pointer must rest on a surface before its tip is due.
 pub const TIP_DELAY: f64 = 0.5;
+
+/// Whether a hovered [`.tip()`](mui_scene::Styled::tip) shows, and after
+/// how long: a plug-in's "show tooltips" preference. See [`Ui::set_tips`].
+///
+/// A tip is a hover hint only. It is not reported to a screen reader, on or
+/// off: accessible help is [`.described(..)`](mui_scene::Styled::described),
+/// which no tip policy touches.
+///
+/// ```
+/// use mui::prelude::*;
+/// assert_eq!(TipPolicy::default(), TipPolicy::After(0.5));
+/// let mut ui = Ui::default();
+/// ui.set_tips(TipPolicy::Off);
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TipPolicy {
+    /// No tip is floated, painted or woken for.
+    Off,
+    /// A tip comes due once the pointer has rested this many seconds.
+    After(f64),
+}
+impl Default for TipPolicy {
+    fn default() -> Self {
+        Self::After(TIP_DELAY)
+    }
+}
 /// Two presses on one target within this are a double click.
 pub const DOUBLE_CLICK: f64 = 0.4;
 
@@ -136,6 +162,8 @@ pub struct Ui {
     gpu_welding_available: bool,
     /// See [`Ui::set_double_click`].
     double_click: f64,
+    /// See [`Ui::set_tips`].
+    tips: TipPolicy,
     interaction: Pointer,
     capture_pose: Option<mui_scene::LocalPose>,
     actions: Vec<SemanticAction>,
@@ -332,6 +360,7 @@ impl Ui {
             drag: None,
             double: None,
             double_click: DOUBLE_CLICK,
+            tips: TipPolicy::default(),
             wheel: Vec2::ZERO,
             wheel_turned: None,
             wheel_capture: None,

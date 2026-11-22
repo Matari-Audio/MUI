@@ -70,6 +70,8 @@ impl Walk<'_> {
                     offset: Point::ZERO,
                     transform: self.transform,
                     width: 0.0,
+                    cap: crate::Cap::Round,
+                    join: crate::Join::Round,
                     blur: 0.0,
                     text: None,
                 });
@@ -219,7 +221,16 @@ impl Walk<'_> {
         // filleted corners, rather than its original square participants.
         // ponytail: inset and spread shadows still use participant rects;
         // inverse-path blur and path offsets are their upgrade.
-        let rects = match &contour.rect {
+        // A custom outline that is exactly a rounded rect or a circle
+        // (`Path::circle`) blurs analytically, spread and all.
+        let own = contour.rect.or_else(|| {
+            contour
+                .shadow_rects
+                .is_empty()
+                .then(|| RoundedRect::of(&contour.path))
+                .flatten()
+        });
+        let rects = match &own {
             Some(r) => std::slice::from_ref(r),
             None if !contour.shadow_rects.is_empty()
                 && (sh.kind != ShadowKind::Drop || grow != 0.0) =>
@@ -238,7 +249,26 @@ impl Walk<'_> {
             }
         };
         for &r in rects {
-            let r = moved(r)?;
+            let r = match moved(r) {
+                Ok(r) => r,
+                Err(mui_geometry::Error::DegenerateRing) => {
+                    if sh.kind == ShadowKind::Inset {
+                        // No exclusion remains: cover the whole clipped outline.
+                        if let Some(p) = self.push(
+                            Layer::Shadow(sh.kind),
+                            contour.path.clone(),
+                            contour.rect,
+                            &sh.fill,
+                            under,
+                        ) {
+                            p.offset = contour.offset;
+                        }
+                        break;
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e.into()),
+            };
             let path = self.rect_path(r, mui_geometry::CornerStyle::Round);
             if let Some(p) = self.push(Layer::Shadow(sh.kind), path, Some(r), &sh.fill, under) {
                 p.blur = sh.blur;
@@ -488,6 +518,8 @@ impl Walk<'_> {
             offset,
             transform: self.transform,
             width: 0.0,
+            cap: crate::Cap::Round,
+            join: crate::Join::Round,
             blur: 0.0,
             text: None,
         });
@@ -536,6 +568,8 @@ impl Walk<'_> {
             offset: Point::ZERO,
             transform: self.transform,
             width: 0.0,
+            cap: crate::Cap::Round,
+            join: crate::Join::Round,
             blur: 0.0,
             text: None,
         });
@@ -822,5 +856,65 @@ mod tests {
         // that band is exactly the frame.
         assert!((b.x0 - w - f.x).abs() < 1e-9, "{b:?} {f:?} {w}");
         assert!((b.y1 + w - f.bottom()).abs() < 1e-9, "{b:?} {f:?} {w}");
+    }
+
+    /// A canvas's caps, joins and shadows reach the paint list; a circle's
+    /// shadow keeps its analytic form, any other shape's travels as a path.
+    #[test]
+    fn canvas_draws_carry_caps_joins_and_shadows() {
+        let root = canvas(|_| {
+            let line = Path::polyline([Point::new(4., 10.), Point::new(36., 10.)], false);
+            let tri = [(0., 0.), (9., 0.), (4., 7.)].map(|(x, y)| Point::new(x, y));
+            vec![
+                Draw::stroke(line, Role::Ink, 4.)
+                    .cap(crate::Cap::Butt)
+                    .join(crate::Join::Miter),
+                Draw::shadow(
+                    Path::circle(Point::new(20., 20.), 8.).unwrap(),
+                    6.,
+                    (0., 2.),
+                    Role::Ink,
+                ),
+                Draw::shadow(Path::polyline(tri, true), 3., (0., 0.), Role::Ink),
+            ]
+        })
+        .size(40., 40.);
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let draw = |k| s.paint.iter().find(|p| p.layer == Layer::Draw(k)).unwrap();
+        let (line, disc, tri) = (draw(0), draw(1), draw(2));
+        assert_eq!(
+            (line.cap, line.join, line.width),
+            (crate::Cap::Butt, crate::Join::Miter, 4.)
+        );
+        assert_eq!((disc.blur, disc.offset), (6., Point::new(0., 2.)));
+        let r = disc.rect.expect("a circle blurs analytically");
+        assert_eq!(
+            (r.bounds(), r.radius()),
+            (Rect::new(12., 12., 28., 28.), 8.)
+        );
+        assert_eq!((tri.blur, tri.rect), (3., None));
+        assert_eq!((tri.cap, tri.join), (crate::Cap::Round, crate::Join::Round));
+    }
+
+    /// `Elevation::Halo` on a node outlined as a circle: centred, and
+    /// analytic, since the outline is exactly one.
+    #[test]
+    fn a_halo_follows_a_circular_outline() {
+        let root = block(40., 40.)
+            .outline(|s| Path::circle(Point::new(s.width / 2., s.height / 2.), 16.).unwrap())
+            .fill(Role::Raised)
+            .elevation(Elevation::Halo)
+            .id("dial");
+        let s = resolve(&SceneSpec::new(root).offered(Size::new(40., 40.))).unwrap();
+        let shadows: Vec<_> = s
+            .paint
+            .iter()
+            .filter(|p| p.layer == Layer::Shadow(ShadowKind::Drop))
+            .collect();
+        assert_eq!(shadows.len(), 2);
+        for p in shadows {
+            let r = p.rect.expect("the circle outline is analytic").bounds() + p.offset.to_vec2();
+            assert_eq!(r, Rect::new(4., 4., 36., 36.), "centred on the disc");
+        }
     }
 }

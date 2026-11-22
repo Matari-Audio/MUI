@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use mui::layout::Id;
 use mui::scene::{El, IntoEl};
-use mui::widgets::{self, Control};
+use mui::widgets::{self, Control, Domain};
 use mui::{Edit, Ui};
 use truce_core::editor::PluginContext;
-use truce_params::{ParamFlags, ParamInfo, ParamRange, Params};
+use truce_params::{ParamFlags, ParamInfo, ParamRange, ParamUnit, Params};
 
 use crate::HostPump;
 use crate::boundary::guard;
@@ -32,6 +32,9 @@ pub struct Bridge<P: ?Sized = dyn Params> {
     /// Formatted domain samples, shaped by MUI in the active font. Shared
     /// across builds so a parameter view does not allocate its reserve again.
     readouts: Box<[Arc<[String]>]>,
+    /// Each parameter's normalised 0..1 domain, reading and typed in the
+    /// plugin's own units. Built once: a clone per build shares the closures.
+    domains: Box<[Domain]>,
     meters: Box<[u32]>,
     /// Open gestures: the id, the value the control holds, and the value
     /// last sent. The control reads its own value back, not the store, so a
@@ -54,6 +57,7 @@ impl<P: Params + ?Sized> Bridge<P> {
             .iter()
             .map(|info| readout_samples(&*params, info))
             .collect();
+        let domains = infos.iter().map(|info| domain(&params, info)).collect();
         let meters = params.meter_ids().into_boxed_slice();
         let seen = vec![u64::MAX; infos.len() + meters.len()].into_boxed_slice();
         Self {
@@ -62,6 +66,7 @@ impl<P: Params + ?Sized> Bridge<P> {
             pump: None,
             infos,
             readouts,
+            domains,
             meters,
             open: Vec::new(),
             bound: Vec::new(),
@@ -205,6 +210,9 @@ impl<P: Params + ?Sized> Bridge<P> {
     /// Host gestures follow the same protocol as [`Bridge::bind`].
     /// Unknown/read-only parameters draw disabled. Numeric accessibility
     /// actions use normalized 0..1, with the formatted plain value as text.
+    /// The reading comes from the parameter's `format_value`; Enter (or a
+    /// double click) on the focused control opens a field that reads typed
+    /// text through its `parse_value`, in the plugin's own units.
     pub fn knob(&mut self, ui: &mut Ui, param: impl Into<u32>) -> Control {
         self.number(ui, param.into(), true)
     }
@@ -260,25 +268,20 @@ impl<P: Params + ?Sized> Bridge<P> {
         let name = info.map_or("Unknown parameter", |info| info.name);
         let range = info.map(|info| info.range);
         let disabled = info.is_none_or(|info| info.flags.contains(ParamFlags::READONLY));
-        let samples = self
-            .infos
-            .iter()
-            .position(|info| info.id == id)
-            .map(|index| self.readouts[index].clone());
-        let params = self.params.clone();
+        let index = self.infos.iter().position(|info| info.id == id);
+        let samples = index.map(|index| self.readouts[index].clone());
+        let domain = index.map_or_else(
+            || Domain::new(0.0..=1.0),
+            |index| self.domains[index].clone(),
+        );
         self.edit(ui, id, widget_id(id), |ui, widget, value| {
             let mut control = if knob {
-                widgets::knob(ui, widget, name, value, 0.0..=1.0).el
+                widgets::knob(ui, widget, name, value, domain).el
             } else {
-                widgets::slider(ui, widget, name, value, 0.0..=1.0).el
+                widgets::slider(ui, widget, name, value, domain).el
             };
-            if let Some(range) = range {
-                if let Some(steps) = range.step_count() {
-                    control = control.step(1.0 / f64::from(steps.get()));
-                }
-                if let Some(text) = params.format_value(id, range.denormalize(*value)) {
-                    control = control.value_text(text);
-                }
+            if let Some(steps) = range.and_then(|range| range.step_count()) {
+                control = control.step(1.0 / f64::from(steps.get()));
             }
             if let Some(samples) = samples {
                 control = control.value_reserve_all(samples);
@@ -519,6 +522,71 @@ impl<P: Params + ?Sized> Bridge<P> {
 /// Truce's declared range quantizes: a discrete parameter snaps.
 fn quantize(range: ParamRange, normalized: f64) -> f64 {
     range.normalize(range.denormalize(normalized.clamp(0.0, 1.0)))
+}
+
+/// A parameter's normalised domain: it reads through `format_value` and
+/// types through `parse_value`, both in plain units, mapped by its range.
+/// truce's derive answers `parse_value` only for a field declaring
+/// `parse = ".."`, so text it does not read goes through [`plain`], the
+/// inverse of truce's default unit formatting. Read-only parameters get no
+/// parser, so they never open a field.
+fn domain<P: Params + ?Sized>(params: &Arc<P>, info: &ParamInfo) -> Domain {
+    let (id, range, unit) = (info.id, info.range, info.unit);
+    let reader = Arc::clone(params);
+    let domain = Domain::new(0.0..=1.0).format(move |n| {
+        reader
+            .format_value(id, range.denormalize(n))
+            .unwrap_or_else(|| format!("{n:.2}"))
+    });
+    if info.flags.contains(ParamFlags::READONLY) {
+        return domain;
+    }
+    let parser = Arc::clone(params);
+    domain.parse(move |text| {
+        let plain = parser
+            .parse_value(id, text.trim())
+            .or_else(|| plain(unit, text))?;
+        plain.is_finite().then(|| range.normalize(plain))
+    })
+}
+
+/// Text in truce's default unit formatting back to a plain value: a number
+/// and an optional unit, `k` scaling by 1000 (`1.2 kHz`, `1.2k`), `ms` on a
+/// seconds parameter and `s` on a milliseconds one converting, percent
+/// dividing by 100, pan reading `C`, `12L`, `12R`.
+fn plain(unit: ParamUnit, text: &str) -> Option<f64> {
+    let text = text.trim();
+    if unit == ParamUnit::Pan && text.eq_ignore_ascii_case("c") {
+        return Some(0.0);
+    }
+    // Longest prefix that Rust accepts as a complete number (including an
+    // exponent). The remainder must be an exact supported unit.
+    let (number, suffix) = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .chain(std::iter::once(text.len()))
+        .rev()
+        .find_map(|end| {
+            text[..end]
+                .parse::<f64>()
+                .ok()
+                .map(|n| (n, text[end..].trim()))
+        })?;
+    if !number.is_finite() {
+        return None;
+    }
+    let scale = match (unit, suffix) {
+        (ParamUnit::Pan, s) if s.eq_ignore_ascii_case("l") => -0.01,
+        (ParamUnit::Pan, s) if s.eq_ignore_ascii_case("r") => 0.01,
+        (ParamUnit::Percent | ParamUnit::Pan, "" | "%") => 0.01,
+        (ParamUnit::Seconds, "ms") => 0.001,
+        (ParamUnit::Milliseconds, "s") | (ParamUnit::Hz, "k" | "K" | "kHz" | "KHz") => 1000.0,
+        (_, "") => 1.0,
+        (_, s) if s == unit.as_str() => 1.0,
+        _ => return None,
+    };
+    let value = number * scale;
+    value.is_finite().then_some(value)
 }
 
 /// Bounded setup work, never an unbounded walk of an integer parameter range.

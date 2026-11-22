@@ -259,9 +259,39 @@ public function and a test behind it.
       lens and grain, and subframe motion blur averaged in linear light
       (`gain_reel --stage`). Layers are mipmapped, premultiplied linear
       light, so distant fine detail averages instead of shimmering.
+- [x] Intrinsic gaps a plug-in editor (SMOOTH) hit: per-axis token
+      padding `.pad((S, Xs))`; `.at_pct(x, y)` placement at a share of the
+      parent; `.turn(Turn::Ccw)` quarter turns that keep layout intrinsic
+      (gallery "Rails and ticks"); pinned floats measured at their content
+      size; `.text_align(..)` inside reserved, stretched and wrapped widths;
+      `Draw` stroke caps/joins and `Draw::shadow` (exact for rects and
+      circles, path blur otherwise, GPU within 2 of vello_cpu);
+      `Shadow::halo` / `Elevation::Halo`; `Corners::TIGHT`; the bundled
+      Material Symbols face behind `icons*` with `tools/subset_symbols.py`;
+      `select` returning a restylable `Select`; `Ui::set_tips(TipPolicy)`.
+- [x] Controls from the same pass: knobs that fill their cell
+      (`fill_cell`), shared knob looks (`Knob::smooth`/`k`/`drama`/`buffr`,
+      `Control::look`, `Pointer`), icon buttons
+      (`.icon`, `.icon_end`, `icon_button`), typed entry in units
+      (`Domain::format`/`parse`, filled by mui-truce from truce metadata) and
+      readout alignment (`value_align`).
 
 ## Missing
 
+- [ ] Follow-ups from the SMOOTH gaps: `aspect` read through a turn by
+      its parent and a tested turned root; `at_pct`/`turn` forwarded on widget
+      `Response`s; an element shadow cast from a canvas's tagged draws (today
+      `.outline(f)` or `Draw::shadow`); round caps on the GPU pass differ from
+      vello_cpu by up to ~70/255 at cap tips; a welded select list's head copy
+      ignores the trigger's look; whether a float should report its anchor's
+      parent to accessibility; Git LFS (or fetch-at-build) for the ~26 MB of
+      bundled symbol fonts; drop the now-redundant Start/Start anchors in the
+      overlay popover and tooltip; scale a filling knob's reading with its
+      diameter (needs a second pass or container-relative text); a theme-level
+      default `Knob`; KURV, BUFFR and DRAMA painting `Knob` presets instead of
+      their own knobs (KURV can, with `Control::modulation`; BUFFR needs a dot
+      outline and hover glow, DRAMA an arc wider than its track); upstream a default truce `parse_value` so the bridge's
+      unit-text fallback can go.
 - [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
       run rather than breaking again, because the swap deliberately does no
       layout. Re-breaking needs the measure pass it is avoiding.

@@ -69,9 +69,11 @@ El tree  (row! / col! / stack! / grid! / fits!, Paints fills, presets merged
    |               wrapped to the room its parent has, one Painted a line,
    |               keyed on (string, size, weight) and carrying the face's
    |               normalized coords so the renderer draws the instance that
-   |               was measured; .reserve(s) widens the box to hold s, and
-   |               ResolvedScene::set_text then swaps one run's glyphs
-   |               against the frame already solved -- no second walk
+   |               was measured; .reserve(s) widens the box to hold s,
+   |               .text_align places each line across the box's spare
+   |               width, and ResolvedScene::set_text then swaps one run's
+   |               glyphs against the frame already solved, re-placed by
+   |               that alignment -- no second walk
    |     canvas -> the closure's own paths, in the node's space; a Draw
    |               with a .tag becomes the surface's hit geometry instead of
    |               its outline, and Draw::hit is that geometry unpainted

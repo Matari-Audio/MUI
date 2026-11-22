@@ -8,3 +8,10 @@ description = "Material Symbols codepoints: generated char consts and a name loo
 
 [lints]
 workspace = true
+
+[features]
+# The full upstream Material Symbols variable fonts, as `font::ROUNDED` /
+# `font::OUTLINED` (about 15 and 11 MB). `font` is Rounded, SMOOTH's look.
+font = ["font-rounded"]
+font-rounded = []
+font-outlined = []

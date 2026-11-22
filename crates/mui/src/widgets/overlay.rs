@@ -15,9 +15,12 @@
 use mui_input::Key;
 use mui_scene::prelude::*;
 
+use mui_scene::{Palette, Px, SpacingToken};
+
 use crate::Ui;
-use crate::widgets::Response;
+use crate::widgets::controls::button_paint;
 use crate::widgets::presets::card;
+use crate::widgets::{Response, Variant};
 
 /// A look: what wraps an element.
 type Look<'a> = &'a dyn Fn(El) -> El;
@@ -251,9 +254,9 @@ impl<'a> Overlay<'a> {
 
     /// A head showing `options[*selected]` that opens the options under it
     /// while `*open`; picking one sets `*selected` and closes the list.
-    /// Returns the head, with the list floated from it while open, and
-    /// whether `*selected` moved. The list is `"{id}/list"`, its rows
-    /// `"{id}/list/{i}"`.
+    /// Returns the head as a [`Select`], with the list floated from it
+    /// while open, and whether `*selected` moved. The list is
+    /// `"{id}/list"`, its rows `"{id}/list/{i}"`.
     pub fn select(
         &self,
         ui: &mut Ui,
@@ -261,7 +264,7 @@ impl<'a> Overlay<'a> {
         options: &[&str],
         selected: &mut usize,
         open: &mut bool,
-    ) -> Response<bool, El> {
+    ) -> Response<bool, Select> {
         let id: Id = id.into();
         let list_id = id.field("list");
         let head_id = list_id.field("head");
@@ -303,9 +306,16 @@ impl<'a> Overlay<'a> {
         } else {
             self.popover(ui, list_id, id.as_str(), open, list)
         };
-        let el = match pop {
-            Some(pop) => stack([field, pop]),
-            None => field,
+        let theme = ui.theme();
+        let el = Select {
+            trigger: field,
+            list: pop,
+            variant: None,
+            role: None,
+            size: None,
+            px: None,
+            palette: theme.palette,
+            unit: theme.control,
         };
         Response { el, changed }
     }
@@ -444,6 +454,106 @@ impl<'a> Overlay<'a> {
     }
 }
 
+/// A select's trigger, still taking its look: the same `variant`, `role`,
+/// `size` and `px` as a [`button`](crate::widgets::button). Finished, it
+/// *is* the trigger, with the open list floated from inside it, so every
+/// paint verb after it (`.fill`, `.radius`, `.stroke`, `.pad`, ..) lands on
+/// the trigger whether the list is open or not.
+///
+/// With no look set the trigger wears [`Overlay::head`]'s face as it
+/// is. A variant or role replaces that face's box paint and hover with the
+/// button's, and its leaf children (the label and arrow) take the
+/// variant's ink. A [`weld`](Overlay::weld)ed list's own copy of the head
+/// is the head face, untouched: dress it through [`Overlay::head`].
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let mut wave = 0;
+/// let plate = select(&mut ui, "wave", &["Saw", "Square"], &mut wave)
+///     .variant(Variant::Outline)
+///     .size(S)
+///     .fill(Role::Surface)
+///     .radius(3);
+/// let el: El = plate.el;
+/// assert_eq!(el.payload().style.fill, Some(Fill::Role(Role::Surface)));
+/// assert_eq!(el.payload().style.radius, Some(Radius::Px(3.0)));
+/// ```
+pub struct Select {
+    trigger: El,
+    list: Option<El>,
+    variant: Option<Variant>,
+    role: Option<Role>,
+    size: Option<SpacingToken>,
+    px: Option<f64>,
+    palette: Palette,
+    unit: f64,
+}
+impl Select {
+    /// How solid the trigger looks, as a button's [`Variant`].
+    pub fn variant(mut self, v: Variant) -> Self {
+        self.variant = Some(v);
+        self
+    }
+    /// The role the trigger speaks with (`Primary` once a variant is set).
+    /// A role alone paints it `Solid`, like a button.
+    pub fn role(mut self, r: Role) -> Self {
+        self.role = Some(r);
+        self
+    }
+    /// One of the five control sizes: the trigger's height off the theme's
+    /// [`control`](mui_scene::Theme::control) unit, as a button's.
+    pub fn size(mut self, s: SpacingToken) -> Self {
+        self.size = Some(s);
+        self
+    }
+    /// The trigger's height in pixels. Overrides [`Select::size`].
+    pub fn px(mut self, px: impl Px) -> Self {
+        self.px = Some(px.px());
+        self
+    }
+    /// The trigger, finished, its list floated from it while open.
+    pub fn el(self) -> El {
+        let mut t = self.trigger;
+        if let Some(variant) = self.variant.or(self.role.map(|_| Variant::Solid)) {
+            let role = self.role.unwrap_or(Role::Primary);
+            let (style, ink, hover) = button_paint(self.palette, variant, role);
+            for c in t.children_mut().iter_mut().filter(|c| !c.is_container()) {
+                c.style_mut().fill = Some(ink.clone());
+            }
+            t.style_mut().fill = None;
+            t = t.preset(style).on(State::Hover, hover);
+        }
+        let steps = self.size.map(|s| match s {
+            SpacingToken::Xs => 6.0,
+            SpacingToken::S => 8.0,
+            SpacingToken::M => 10.0,
+            SpacingToken::L => 12.0,
+            SpacingToken::Xl => 14.0,
+        });
+        if let Some(px) = self.px.or(steps.map(|n| n * self.unit)) {
+            t = t.h(px).pad((px * 0.3, 0.0));
+        }
+        match self.list {
+            // A float is placed against its anchor and painted after
+            // everything, so inside the trigger it neither sizes nor
+            // covers it; the trigger stays the outermost node.
+            Some(list) => t.push(list),
+            None => t,
+        }
+    }
+}
+impl IntoEl for Select {
+    fn into_el(self) -> El {
+        self.el()
+    }
+}
+impl From<Select> for El {
+    fn from(s: Select) -> Self {
+        s.el()
+    }
+}
+
 /// The arrow keys on a focused row move the focus a row (Up, Down) or a
 /// cell (Left, Right, in a grid), stopping at the ends.
 fn walk(ui: &mut Ui, id: &Id, len: usize, columns: usize) {
@@ -483,14 +593,15 @@ fn row_face(r: MenuRow<'_>) -> El {
         .on(State::FocusVisible, |s| s.fill(Role::Field))
 }
 
-/// MUI's select head: a [`chooser`] on a field.
+/// MUI's select head: a [`chooser`] on a field. No hover look of its
+/// own: the runtime lifts whatever fill it ends up with, a caller's
+/// included.
 fn head_face(h: SelectHead<'_>) -> El {
     chooser(text(h.label), h.open)
         .h(32.0)
         .pad((10.0, 0.0))
         .radius(6.0)
         .fill(Role::Field)
-        .on(State::Hover, |s| s.fill(Role::Raised))
 }
 
 /// What says "this opens a list": `face` (the current pick, an icon and a
@@ -609,13 +720,14 @@ pub fn menu(
 /// let mut wave = 0;
 /// let s = select(&mut ui, "wave", &["Saw", "Square"], &mut wave);
 /// assert!(!s.changed);
+/// let s = s.variant(Variant::Soft).size(S);
 /// ```
 pub fn select(
     ui: &mut Ui,
     id: impl Into<Id>,
     options: &[&str],
     selected: &mut usize,
-) -> Response<bool, El> {
+) -> Response<bool, Select> {
     let id: Id = id.into();
     let mut open = ui.stash::<bool>(id.as_str()).copied().unwrap_or(false);
     let r = Overlay::default().select(ui, id.clone(), options, selected, &mut open);

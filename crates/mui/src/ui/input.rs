@@ -1070,8 +1070,11 @@ impl Ui {
         // until the tooltip deadline, and while a focused text field's caret
         // is blinking; both are time-driven visual changes rather than paint
         // springs. The previous scene is the one that measured this hover.
+        let Some(delay) = self.tip_delay() else {
+            return (None, false);
+        };
         let pending = self.hover.as_ref().is_some_and(|(id, t)| {
-            *t < TIP_DELAY
+            *t < delay
                 && self
                     .scene
                     .as_ref()
@@ -1084,7 +1087,7 @@ impl Ui {
         let tip = self
             .hover
             .as_ref()
-            .filter(|(_, t)| *t >= TIP_DELAY)
+            .filter(|(_, t)| *t >= delay)
             .and_then(|(id, _)| {
                 let s = self.scene.as_ref()?.surface(id)?;
                 Some((s.tip.clone()?, id.clone()))

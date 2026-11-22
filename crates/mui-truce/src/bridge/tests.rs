@@ -276,3 +276,74 @@ fn metadata_pointer_gestures_end_on_cancel_unbind_and_repeated_close() {
         frame(&mut bridge, &mut ui, Input::default());
     }
 }
+
+#[test]
+fn metadata_controls_type_in_plain_units_and_land_normalised() {
+    let (mut bridge, params, log) = bridge();
+    let mut ui = Ui::default();
+    frame(&mut bridge, &mut ui, Input::default());
+    let id = widget_id(2u32);
+    // "1.0 kHz": truce's own text, which its derive does not parse back.
+    let typed = params.format_value(2, 1000.0).unwrap();
+    assert_eq!(params.parse_value(2, &typed), None);
+    ui.focus(id.clone());
+    log.lock().unwrap().clear();
+    for input in [
+        key(Key::Enter),
+        Input::default(),
+        Input {
+            text: typed,
+            ..Input::default()
+        },
+        key(Key::Enter),
+        Input::default(),
+    ] {
+        frame(&mut bridge, &mut ui, input);
+    }
+    let expected = bridge.infos[1].range.normalize(1000.0);
+    assert!((params.get_normalized(2).unwrap() - expected).abs() < 1e-9);
+    assert!((params.get_plain(2).unwrap() - 1000.0).abs() < 1e-6);
+    assert!(matches!(
+        log.lock().unwrap().as_slice(),
+        [Call::Begin(2), Call::Set(2, _), Call::End(2)]
+    ));
+
+    // Read-only parameters never open a field.
+    let readonly = widget_id(4u32);
+    ui.focus(readonly.clone());
+    frame(&mut bridge, &mut ui, key(Key::Enter));
+    frame(&mut bridge, &mut ui, Input::default());
+    assert!(
+        ui.scene()
+            .unwrap()
+            .surface(&readonly.field("edit"))
+            .is_none()
+    );
+}
+
+#[test]
+fn default_unit_text_reads_back_as_plain_values() {
+    for (unit, text, expected) in [
+        (ParamUnit::Hz, "1.0 kHz", 1000.0),
+        (ParamUnit::Hz, "1e3 Hz", 1000.0),
+        (ParamUnit::Hz, "1.2e+3", 1200.0),
+        (ParamUnit::Hz, "1.2k", 1200.0),
+        (ParamUnit::Hz, "440 Hz", 440.0),
+        (ParamUnit::Db, "-3 dB", -3.0),
+        (ParamUnit::Db, "-3.5", -3.5),
+        (ParamUnit::Seconds, "250 ms", 0.25),
+        (ParamUnit::Seconds, "1.50 s", 1.5),
+        (ParamUnit::Milliseconds, "2 s", 2000.0),
+        (ParamUnit::Percent, "50%", 0.5),
+        (ParamUnit::Pan, "C", 0.0),
+        (ParamUnit::Pan, "12L", -0.12),
+        (ParamUnit::Pan, "30R", 0.3),
+        (ParamUnit::None, " 7 ", 7.0),
+    ] {
+        assert_eq!(plain(unit, text), Some(expected), "{text}");
+    }
+    for text in ["440 ms", "1e Hz", "1e999 Hz", "NaN", "1kgarbage"] {
+        assert_eq!(plain(ParamUnit::Hz, text), None, "{text}");
+    }
+    assert_eq!(plain(ParamUnit::Db, "loud"), None);
+}

@@ -350,6 +350,8 @@ pub fn with_cursor(
             offset: Point::ZERO,
             transform: mui::geometry::kurbo::Affine::IDENTITY,
             width,
+            cap: mui::geometry::kurbo::Cap::Round,
+            join: mui::geometry::kurbo::Join::Round,
             blur: 0.0,
             text: None,
         });

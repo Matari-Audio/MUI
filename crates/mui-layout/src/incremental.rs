@@ -100,7 +100,8 @@ impl MeasureInput {
                 // A definite inner axis shadows the inherited container for
                 // every descendant. This node still reads it for CQ units;
                 // all other lengths use its own size or its parent's share.
-                if definite[axis].is_some() && !matches!(node.len(axis == 1), Len::Container(_)) {
+                let own = if axis == 1 { node.height } else { node.width };
+                if definite[axis].is_some() && !matches!(own, Len::Container(_)) {
                     container[axis] = None;
                 }
             }
@@ -547,8 +548,9 @@ impl LayoutCache {
         s.placement.push(n.scrolled.map(f64::to_bits));
         self.pinned |= n.rare().pin.is_some();
         let base = s.revisions.len();
-        let mut container_dependent =
-            matches!(n.width, Len::Container(_)) || matches!(n.height, Len::Container(_));
+        let mut container_dependent = n.rare().turn.is_some()
+            || matches!(n.width, Len::Container(_))
+            || matches!(n.height, Len::Container(_));
         for (i, c) in n.children().iter().enumerate() {
             let (revision, child_container) = self.scan(c, fx((path, i)), depth + 1, s)?;
             container_dependent |= child_container;
@@ -767,6 +769,15 @@ pub(crate) fn measure_cached<'a, P>(
     depth: usize,
     pass: &mut Pass<'a, '_, P>,
 ) -> Result<Measured<'a, P>, Error> {
+    // A turned node is offered its parent's axes swapped and measures
+    // upright; only the parent's height provides upright wrapping room.
+    let (definite, room, container) = if node.rare().turn.is_some() {
+        let [w, h] = definite;
+        let [cw, ch] = container;
+        ([h, w], h.or(ch), [ch, cw])
+    } else {
+        (definite, room, container)
+    };
     let Some(cache) = pass.cache.as_deref_mut() else {
         return measure::measure_uncached(node, ancestor, definite, room, container, depth, pass);
     };
@@ -783,11 +794,11 @@ pub(crate) fn measure_cached<'a, P>(
         .stamp(node)
         .is_some_and(|stamp| !stamp.container_dependent)
     {
-        // Only Len::Container reads these inherited extents. A subtree without
-        // any CQ length is measured and arranged identically at different
+        // Container lengths and turned nodes read these inherited extents.
+        // A subtree without either measures identically at different
         // inherited containers: its own offers, room, padding and aspect still
         // remain exact in the key. Frozen::container is then unconsumed data.
-        // A later CQ declaration changes the subtree revision before reuse.
+        // A later CQ declaration or turn changes the revision before reuse.
         key.container = [None; 2];
     }
     let now = cache.pass;

@@ -105,6 +105,45 @@ This preserves nonlinear mapping and does not pretend a logarithmic parameter is
 a linear plain-value control. `Bridge::toggle` has the same 0/1 contract as
 `bind_bool` and is intended for boolean parameters.
 
+## Knobs, icon buttons and typed units
+
+```rust
+use mui::prelude::*;
+let mut ui = Ui::default();
+let (mut depth, mut mix, mut hz) = (0.5, 0.5, 440.0);
+// Knobs sized by their cells: 2:1, in DRAMA's look.
+let dials = col![
+    knob(&mut ui, "depth", "Depth", &mut depth, 0.0..=1.0).look(Knob::drama()).fill_cell().grow(2),
+    knob(&mut ui, "mix", "Mix", &mut mix, 0.0..=1.0).look(Knob::drama()).fill_cell().grow(1),
+]
+.h(320);
+// Icon buttons: the label is the accessible name and the tooltip.
+let lock = icon_button(&mut ui, "lock", "Keep on preset load", sym::LOCK).variant(Variant::Ghost);
+let save = button(&mut ui, "save", "Save").icon(sym::SAVE);
+// A value typed in its own units ("1.2k").
+let freq = Domain::new(20.0..=20_000.0)
+    .format(|v| format!("{v:.0} Hz"))
+    .parse(|s| {
+        let s = s.trim().trim_end_matches("Hz").trim();
+        match s.strip_suffix('k') {
+            Some(k) => k.trim().parse::<f64>().ok().map(|k| k * 1000.0),
+            None => s.parse().ok(),
+        }
+    });
+let entry = drag_value(&mut ui, "freq", "Frequency", &mut hz, freq.clone()).value_align(TextAlign::Center);
+```
+
+`fill_cell` makes a knob's face the largest square its cell leaves under the
+caption; reading and caption keep the size token's text size. `Knob` styles the
+track, arc, face and pointer as shares of the radius in semantic roles. A `Domain` with a
+formatter drives the readout, its reserve and the typing field; with a parser a
+knob or slider opens a field on Enter (or on a double click when the domain has
+no default to reset to), and Escape cancels. `Bridge::knob`/`slider` fill both
+from the parameter: truce's `format_value`, and `parse_value` falling back to
+the inverse of truce's default unit formatting (`1.0 kHz`, `250 ms`, `50%`,
+`12L`), because the derive answers `parse_value` only for fields declaring
+`parse = ".."`. Typed values land normalised, inside one begin/set/end.
+
 ## Settings and groups
 
 ```rust

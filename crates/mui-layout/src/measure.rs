@@ -136,8 +136,7 @@ impl<'a, P> Measured<'a, P> {
     pub(crate) fn base(&self, vertical: bool, inner: Option<Size>) -> f64 {
         let value = self.flex_basis(vertical, inner);
         self.node
-            .rare()
-            .maximum
+            .outer_max()
             .map_or(value, |m| value.min(m.main(vertical)))
             .max(self.floor.main(vertical))
     }
@@ -173,7 +172,9 @@ impl<'a, P> Measured<'a, P> {
     /// width -- and the height follows.
     pub(crate) fn aspect_width(&self, inner: Size) -> Option<(f64, f64)> {
         let n = self.node;
-        let a = n.rare().aspect?;
+        // A turned node keeps its aspect to itself: it settles it in its own
+        // measure, and its parent takes the swapped result as measured.
+        let a = n.rare().aspect.filter(|_| n.rare().turn.is_none())?;
         if n.rare().aspect_fit {
             let offered = Size::new(
                 n.width
@@ -208,8 +209,7 @@ impl<'a, P> Measured<'a, P> {
         // A share of the parent is still never less than this subtree's floor:
         // `height: 50%` on a padded node is a squeeze, not an error.
         let cap = |v: f64| {
-            n.rare()
-                .maximum
+            n.outer_max()
                 .map_or(v, |m| v.min(m.cross(!vertical)))
                 .max(self.floor.main(vertical))
         };
@@ -234,6 +234,20 @@ pub(crate) fn cell_default<P>(n: &Node<P>) -> (Align, Align) {
         n.justify.as_align()
     };
     (n.align, y)
+}
+
+/// Where a float sits in its box before its own `anchor`: a pinned one at
+/// the root's start, sized to its content -- a parent's stretch has no flow
+/// for it to fill, and a menu as tall as the window under its bar is pulled
+/// back over that bar. `anchor(_, Align::Stretch)`, a definite length or
+/// [`Pin::match_width`]/[`Pin::match_height`] opt an axis back in. Any other
+/// float keeps the parent's cell default.
+pub(crate) fn float_default<P>(c: &Node<P>, parent: &Node<P>) -> (Align, Align) {
+    if c.rare().pin.is_some() {
+        (Align::Start, Align::Start)
+    } else {
+        cell_default(parent)
+    }
 }
 
 pub(crate) fn place(avail: f64, extent: f64, align: Align) -> f64 {
@@ -746,10 +760,7 @@ pub(crate) fn measure_uncached<'a, P>(
             let mut moved = false;
             for (index, main) in shares {
                 let c = &node.children()[index];
-                let main = c
-                    .rare()
-                    .maximum
-                    .map_or(main, |m| main.min(m.main(vertical)));
+                let main = c.outer_max().map_or(main, |m| main.min(m.main(vertical)));
                 // Width reflow keeps its half-pixel growth tolerance. Explicit
                 // row tracks depend on every change of the final height.
                 let basis = children[index].size.main(vertical);
@@ -1143,18 +1154,34 @@ pub(crate) fn measure_uncached<'a, P>(
         || matches!(node.kind, Kind::Fits(_))
         || matches!(node.kind, Kind::Branch { vertical: true, .. }) && node.wrap
         || children.iter().any(|c| c.fluid[1] && !c.node.float);
+    // A turned node was measured upright; its parent gets the turned box.
+    // `content` and `padding` stay upright: only its own arrange reads them.
+    let turned = node.rare().turn.is_some();
+    let swap = |s: Size| {
+        if turned {
+            Size::new(s.height, s.width)
+        } else {
+            s
+        }
+    };
+    let mut fluid = [fluid, height_fluid];
+    let mut container = container;
+    if turned {
+        fluid.reverse();
+        container.reverse();
+    }
     Ok(Measured {
         node,
         frozen: None,
         index: 0,
-        fluid: [fluid, height_fluid],
-        definite_height: definite[1].is_some(),
+        fluid,
+        definite_height: definite[turned as usize ^ 1].is_some(),
         gap,
         line_gap,
         padding,
-        size,
+        size: swap(size),
         extent_limit: l.extent,
-        floor,
+        floor: swap(floor),
         content,
         cols,
         columns: columns.into(),

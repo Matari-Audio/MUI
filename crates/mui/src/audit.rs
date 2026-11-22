@@ -203,8 +203,13 @@ fn layout_faults(scene: &ResolvedScene) -> Vec<Fault> {
         let Some(outer) = layout.frame(parent) else {
             continue;
         };
-        // What shows of it: a clip between it and the parent hides the rest.
-        let mut shown = rect(s.frame);
+        // What shows of it, in its parent's space: a turned or rotated node
+        // covers its frame turned about its centre, not the frame itself.
+        // A clip between it and the parent hides the rest.
+        let turn = scene
+            .surface(parent.as_str())
+            .map_or(s.transform, |p| p.transform.inverse() * s.transform);
+        let mut shown = turn.transform_rect_bbox(rect(s.frame));
         if let Some(clip) = s.clip {
             shown = shown.intersect(clip);
         }
@@ -311,6 +316,16 @@ mod tests {
         assert!(
             faults.iter().any(|f| matches!(f,
                 Fault::Escapes { id, parent, by } if id == "wide" && parent == "narrow" && *by > 50.)),
+            "{faults:?}"
+        );
+    }
+
+    #[test]
+    fn a_turned_word_stands_in_its_slot_not_its_upright_frame() {
+        let faults =
+            audit_one(|_| row([col([block(60., 12.).turn(Turn::Ccw).id("word")]).id("rail")]));
+        assert!(
+            !faults.iter().any(|f| matches!(f, Fault::Escapes { .. })),
             "{faults:?}"
         );
     }

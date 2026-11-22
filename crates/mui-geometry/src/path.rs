@@ -364,6 +364,23 @@ impl Path {
             true,
         )
     }
+    /// The exact circle of radius `r` about `center`: a
+    /// [`RoundedRect`](crate::RoundedRect) whose corners meet, so a shadow of
+    /// it blurs analytically.
+    ///
+    /// ```
+    /// use mui_geometry::{Path, Point};
+    /// let dot = Path::circle(Point::new(10., 10.), 4.).unwrap();
+    /// assert!(dot.commands.len() > 1);
+    /// assert!(Path::circle(Point::ZERO, 0.).is_err());
+    /// ```
+    pub fn circle(center: Point, r: f64) -> Result<Self, Error> {
+        if r.is_nan() || r <= 0. {
+            return Err(Error::InvalidOptions("circle radius must be > 0"));
+        }
+        let side = crate::Rect::from_center_size(center, (2. * r, 2. * r));
+        Ok(crate::RoundedRect::new(side, r)?.path())
+    }
     /// A centered, exact vertical capsule. This is a widget shape, not an
     /// automatically merged tab; its radius is exactly width/2.
     pub fn capsule(width: f64, height: f64) -> Result<Self, Error> {

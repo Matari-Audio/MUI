@@ -85,6 +85,40 @@ impl Ui {
     pub fn set_double_click(&mut self, seconds: f64) {
         self.double_click = seconds;
     }
+    /// The tip policy: `TipPolicy::After(0.5)` unless set.
+    pub fn tips(&self) -> TipPolicy {
+        self.tips
+    }
+    /// Show hovered tips after another rest, or not at all: the user's
+    /// "show tooltips" preference. Off, no tip is floated, painted or
+    /// reported on [`Frame::tip`], and no wake-up is scheduled for one. A
+    /// tip already up goes on the next frame; a hover already resting is
+    /// measured against the new delay. Accessible descriptions are
+    /// unaffected (a tip never was one; see [`TipPolicy`]).
+    /// Non-finite delays are ignored, preserving the current policy.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// ui.set_tips(TipPolicy::Off);
+    /// assert_eq!(ui.tips(), TipPolicy::Off);
+    /// ui.set_tips(TipPolicy::After(1.0));
+    /// ```
+    pub fn set_tips(&mut self, tips: TipPolicy) {
+        if let TipPolicy::After(seconds) = tips
+            && !seconds.is_finite()
+        {
+            return;
+        }
+        self.tips = tips;
+    }
+    /// Seconds a hover must rest for a tip, or `None` with tips off.
+    pub(super) fn tip_delay(&self) -> Option<f64> {
+        match self.tips {
+            TipPolicy::Off => None,
+            TipPolicy::After(seconds) => Some(seconds),
+        }
+    }
     /// Read and write the host's clipboard through `board`: copy, cut and
     /// paste in a text field then need nothing from the host. See
     /// [`Clipboard`].

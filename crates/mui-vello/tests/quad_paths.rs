@@ -14,7 +14,7 @@ use quad_support::*;
 
 use mui_material::Material;
 use mui_scene::prelude::*;
-use mui_scene::{Font, ResolvedScene, ShadowKind};
+use mui_scene::{Cap, Font, Join, ResolvedScene, ShadowKind};
 use mui_vello::kurbo::Affine;
 use mui_vello::quad::QuadRenderer;
 use std::f64::consts::PI;
@@ -289,6 +289,76 @@ fn turned(scale: f64) -> ResolvedScene {
     scene
 }
 
+/// Every cap on a straight line and a 270-degree value arc, and every join
+/// on a zigzag: round, as everything else draws, and the ones the quad pass
+/// expands to an outline.
+fn caps(scale: f64) -> ResolvedScene {
+    let ends = [
+        (Cap::Butt, Join::Miter),
+        (Cap::Round, Join::Round),
+        (Cap::Square, Join::Bevel),
+    ];
+    let kids = ends
+        .into_iter()
+        .enumerate()
+        .map(|(i, (cap, join))| {
+            canvas(move |s: Size| {
+                let c = Point::new(s.width / 2., 60.);
+                let zig = [(10., 150.), (40., 115.), (60., 165.), (90., 125.)]
+                    .map(|(x, y)| Point::new(x, y));
+                vec![
+                    Draw::stroke(
+                        Path::polyline([Point::new(15., 12.), Point::new(85., 12.)], false),
+                        rgba(1., 1., 1., 0.9),
+                        7.,
+                    )
+                    .cap(cap),
+                    Draw::stroke(arc(c, 30., 0.75 * PI, 1.5 * PI), rgba(1., 1., 1., 0.15), 6.)
+                        .cap(cap),
+                    Draw::stroke(
+                        arc(c, 30., 0.75 * PI, 0.9 * PI),
+                        rgba(0.3, 0.8, 1., 0.85),
+                        6.,
+                    )
+                    .cap(cap),
+                    Draw::stroke(Path::polyline(zig, false), rgba(1., 0.7, 0.3, 0.8), 6.)
+                        .cap(cap)
+                        .join(join),
+                ]
+            })
+            .size(100., 190.)
+            .at(5. + 105. * i as f64, 5.)
+        })
+        .collect();
+    scene_at(ground(kids), scale)
+}
+
+/// A dial's soft canvas shadows: a centred halo of an exact circle
+/// (analytic) and a dropped one of a polygon (a path blur), each under its
+/// own sharp shape.
+fn canvas_shadows(scale: f64) -> ResolvedScene {
+    let dial = canvas(|s: Size| {
+        let c = Point::new(s.width / 2., s.height / 2.);
+        let face = Path::circle(c, 40.).expect("circle");
+        vec![
+            Draw::shadow(face.clone(), 10., (0., 0.), rgba(0., 0., 0., 0.8)),
+            Draw::fill(face, Color::srgb(0.6, 0.62, 0.66)),
+        ]
+    })
+    .size(140., 140.)
+    .at(10., 30.);
+    let gem = canvas(|s: Size| {
+        let star = star(s);
+        vec![
+            Draw::shadow(star.clone(), 6., (5., 7.), rgba(0., 0., 0., 0.7)),
+            Draw::fill(star, Color::srgb(0.85, 0.87, 0.9)),
+        ]
+    })
+    .size(110., 110.)
+    .at(180., 40.);
+    scene_at(ground(vec![dial, gem]), scale)
+}
+
 fn gpu() -> Option<Gpu> {
     let (device, queue) = device()?;
     let quad = QuadRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
@@ -342,9 +412,76 @@ fn paths_match_vello_cpu() {
     // fractional non-uniform scale: the arc's and stroke's joins as above.
     // Measured 73.
     compare(g, f, "path-turned", corners(74, 0.01), turned);
+    // Butt and square caps, miter and bevel joins: both renderers fill
+    // kurbo's own stroke outline, and those columns measured 2. The round
+    // column differs as path-knobs and path-polylines do, at its caps:
+    // measured 70.
+    compare(g, f, "path-caps", corners(72, 0.05), caps);
+    // A canvas's soft shadows: the circle's halo (analytic on both) and
+    // the star's path blur measured 2. The worst pixels are the circle's
+    // sharp fill edge, its arcs flattened at 0.1 px against 0.25 px, as in
+    // path-union: measured 31.
+    compare(
+        g,
+        f,
+        "path-canvas-shadows",
+        corners(32, 0.08),
+        canvas_shadows,
+    );
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     if let Some(error) = pollster::block_on(scope.pop()) {
         panic!("wgpu validation: {error}");
+    }
+}
+
+/// A butt cap stops at the end point; a round one covers the half disc
+/// past it. Checked on `vello_cpu` always, and on the quad pass when there
+/// is a GPU.
+#[test]
+fn butt_and_round_caps_differ_at_the_end_pixels() {
+    let line = |cap| {
+        canvas(move |_| {
+            vec![
+                Draw::stroke(
+                    Path::polyline([Point::new(40., 50.), Point::new(120., 50.)], false),
+                    Color::srgb(1., 1., 1.),
+                    10.,
+                )
+                .cap(cap),
+            ]
+        })
+        .size(W, H)
+    };
+    let mut gpu = gpu();
+    for scale in SCALES {
+        let size = sized(scale);
+        let transform = Affine::scale(scale);
+        let alpha = |px: &[u8], x: f64, y: f64| {
+            let (x, y) = ((x * scale) as usize, (y * scale) as usize);
+            px[(y * size[0] as usize + x) * 4 + 3]
+        };
+        for (cap, past_the_end) in [(Cap::Butt, 0), (Cap::Round, 255)] {
+            let scene = scene_at(stack(vec![line(cap)]).size(W, H), scale);
+            let mut renders = vec![("vello_cpu", cpu_pixels(&scene, transform, size))];
+            if let Some(gpu) = &mut gpu {
+                renders.push(("quad", gpu_pixels(gpu, &scene.paint, transform, size)));
+            }
+            for (who, px) in renders {
+                // Inside the round cap's half disc, past both ends.
+                assert_eq!(
+                    alpha(&px, 36., 50.),
+                    past_the_end,
+                    "{who} {cap:?} at {scale}x, start"
+                );
+                assert_eq!(
+                    alpha(&px, 123.5, 50.),
+                    past_the_end,
+                    "{who} {cap:?} at {scale}x, end"
+                );
+                // The body is the same either way.
+                assert_eq!(alpha(&px, 80., 50.), 255, "{who} {cap:?} at {scale}x, body");
+            }
+        }
     }
 }
 

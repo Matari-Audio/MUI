@@ -65,10 +65,12 @@ pub(super) type Coords = Arc<[Arc<[i16]>]>;
 pub(super) type RunKey = (u64, u64, Coords);
 /// A run's key plus the width it broke at and its line cap.
 pub(super) type BreakKey = (RunKey, u64, Option<usize>);
-/// A paragraph's line byte ranges, whether the cap cut lines off, and each
-/// line's glyphs sliced from the paragraph's run (empty when they must be
-/// shaped line by line).
-pub(super) type Breaks = (Vec<std::ops::Range<usize>>, bool, Arc<[Arc<[TextGlyph]>]>);
+/// A paragraph's line byte ranges, whether the cap cut lines off, each
+/// line's advance without its trailing spaces, and each line's glyphs sliced
+/// from the paragraph's run (empty when they must be shaped line by line).
+pub(super) type Breaks = (Vec<std::ops::Range<usize>>, bool, Arc<[f64]>, LineGlyphs);
+/// Each line's glyphs, sliced from a paragraph's one run.
+pub(super) type LineGlyphs = Arc<[Arc<[TextGlyph]>]>;
 /// Per string, per variant: the value and the resolve that last used it.
 pub(super) type PerText<K, V> = HashMap<String, HashMap<K, (V, u64)>>;
 /// Normalized coordinates per axes, then per (size bits, primary face id).
@@ -418,6 +420,7 @@ impl<'a> Runs<'a> {
             let n = cap.unwrap_or(usize::MAX).max(1);
             let ranges: Vec<_> = lines.iter().take(n).map(|l| l.text_range.clone()).collect();
             let cut = lines.len() > n;
+            let widths: Arc<[f64]> = lines.iter().take(n).map(|l| l.advance).collect();
             // An ellipsised last line has bytes the paragraph never shaped.
             let whole = ranges.len() - usize::from(cut);
             let sliced = run
@@ -439,9 +442,9 @@ impl<'a> Runs<'a> {
             self.breaks
                 .entry(text.to_owned())
                 .or_default()
-                .insert(key.clone(), ((ranges, cut, sliced), generation));
+                .insert(key.clone(), ((ranges, cut, widths, sliced), generation));
         }
-        let Some(((ranges, cut, _), seen)) =
+        let Some(((ranges, cut, ..), seen)) =
             self.breaks.get_mut(text).and_then(|m| m.get_mut(&key))
         else {
             return one();
@@ -466,17 +469,18 @@ impl<'a> Runs<'a> {
     }
     /// The glyphs of each line [`Self::lines`] broke `text` into at `max`,
     /// sliced from its one shaped run, so a new width re-breaks without
-    /// shaping a line. Empty when the lines must be shaped one by one.
+    /// shaping a line, and each line's advance. Empty when the lines must be
+    /// shaped one by one.
     pub(super) fn line_glyphs(
         &mut self,
         text: &str,
         face: Face<'_>,
         max: f64,
         cap: Option<usize>,
-    ) -> Arc<[Arc<[TextGlyph]>]> {
+    ) -> (Arc<[f64]>, LineGlyphs) {
         let fonts = self.fonts_for(face);
         let Some(font) = fonts.first() else {
-            return Arc::default();
+            return Default::default();
         };
         let key: BreakKey = (
             (face.size.to_bits(), font.id(), self.coords(&fonts, face)),
@@ -486,7 +490,9 @@ impl<'a> Runs<'a> {
         self.breaks
             .get(text)
             .and_then(|m| m.get(&key))
-            .map_or_else(Arc::default, |((.., sliced), _)| sliced.clone())
+            .map_or_else(Default::default, |((.., widths, sliced), _)| {
+                (widths.clone(), sliced.clone())
+            })
     }
     /// A wrapped label's height. Every line has the one pitch its face sets,
     /// whatever its text, so no line is shaped to find it.
@@ -812,6 +818,68 @@ mod tests {
             *ranges = std::iter::once(0..para.len()).collect();
         }
         assert_eq!(lines(&text.resolve(&spec).unwrap()), 1);
+    }
+
+    #[test]
+    fn a_stretched_label_is_centred_in_the_room_its_row_gave_it() {
+        let hack = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+        let root = row![
+            text("ab").grow(1.).text_align(TextAlign::Center).id("t"),
+            block(20., 10.)
+        ]
+        .w(200.);
+        let s = resolve(&SceneSpec::new(root).font(hack.clone())).unwrap();
+        let f = s.layout.frame("t").unwrap();
+        assert!(f.size.width > 150., "the row stretched it: {f:?}");
+        let advance = mui_text::shape_run(&[hack], "ab", 14.0, &[])
+            .unwrap()
+            .advance;
+        let x = s
+            .paint
+            .iter()
+            .find_map(|p| p.text.as_ref())
+            .unwrap()
+            .origin
+            .x;
+        assert!((x - (f.x + (f.size.width - advance) / 2.)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn each_wrapped_line_is_aligned_on_its_own() {
+        let hack = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+        let em = mui_text::shape_run(std::slice::from_ref(&hack), "a", 14.0, &[])
+            .unwrap()
+            .advance;
+        let para = "one two three four five six seven eight nine ten";
+        let paint = |align| {
+            let root = col![text(para).text_align(align).id("p")].w(120.);
+            let s = resolve(&SceneSpec::new(root).font(hack.clone())).unwrap();
+            let f = s.layout.frame("p").unwrap();
+            let lines: Vec<(f64, f64)> = s
+                .paint
+                .iter()
+                .filter_map(|p| p.text.as_ref())
+                .map(|t| {
+                    // Monospaced: a line ends one advance past its last glyph.
+                    let last = t.glyphs.last().map_or(0., |g| f64::from(g.x) + em);
+                    (t.origin.x - f.x, t.origin.x + last - f.right())
+                })
+                .collect();
+            assert!(lines.len() > 2, "{align:?} wrapped");
+            lines
+        };
+        assert!(paint(TextAlign::Start).iter().all(|&(l, _)| l.abs() < 1e-9));
+        let end = paint(TextAlign::End);
+        assert!(end.iter().all(|&(_, r)| r.abs() < 1e-3), "{end:?}");
+        assert!(
+            end.iter().any(|&(l, _)| l > em / 2.),
+            "a short line moved right: {end:?}"
+        );
+        let centre = paint(TextAlign::Center);
+        assert!(
+            centre.iter().all(|&(l, r)| (l + r).abs() < 1e-3),
+            "{centre:?}"
+        );
     }
 
     #[test]

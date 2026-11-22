@@ -412,7 +412,7 @@ fn a_still_knob_keeps_its_painted_dial_across_frames() {
         drawn.map(|p| Arc::clone(&p.path)).collect::<Vec<_>>()
     };
     let (a, b) = (paths(&mut ui, 0.5), paths(&mut ui, 0.5));
-    assert_eq!((a.len(), b.len()), (3, 3), "the dial lost a stroke");
+    assert_eq!((a.len(), b.len()), (4, 4), "track, arc, shadow, face");
     assert!(
         a.iter().zip(&b).all(|(a, b)| Arc::ptr_eq(a, b)),
         "redrawn while still"
@@ -627,4 +627,431 @@ fn supplied_value_text_retains_its_existing_width_floor() {
         readout.reserve_all.as_deref(),
         Some(&[String::from("20.0 kHz")][..])
     );
+}
+
+#[test]
+fn filling_knobs_take_square_shares_of_their_cells() {
+    let mut ui = Ui::default();
+    let (mut a, mut b) = (0.5, 0.5);
+    let hero = knob(&mut ui, "hero", "Depth", &mut a, 0.0..=1.0).fill_cell();
+    let small = knob(&mut ui, "small", "Mix", &mut b, 0.0..=1.0).fill_cell();
+    let panel = col![stack![hero].grow(2), stack![small].grow(1)];
+    ui.frame(
+        panel.into_el(),
+        Some(Size::new(400., 400.)),
+        Input::default(),
+        0.016,
+    )
+    .unwrap();
+    let cells = ui.scene().unwrap().surface("hero").unwrap().frame;
+    // The same, with the flex on the knobs themselves.
+    let hero = knob(&mut ui, "hero", "Depth", &mut a, 0.0..=1.0)
+        .fill_cell()
+        .grow(2);
+    let small = knob(&mut ui, "small", "Mix", &mut b, 0.0..=1.0)
+        .fill_cell()
+        .grow(1);
+    ui.frame(
+        col![hero, small].into_el(),
+        Some(Size::new(400., 400.)),
+        Input::default(),
+        0.016,
+    )
+    .unwrap();
+    assert_eq!(
+        ui.scene().unwrap().surface("hero").unwrap().frame.size,
+        cells.size
+    );
+    let scene = ui.scene().unwrap();
+    let (hero, small) = (
+        scene.surface("hero").unwrap().frame,
+        scene.surface("small").unwrap().frame,
+    );
+    for f in [hero, small] {
+        assert!((f.size.width - f.size.height).abs() < 0.5, "square: {f:?}");
+    }
+    assert!(
+        (hero.size.width / small.size.width - 2.0).abs() < 0.01,
+        "2:1 dials: {hero:?} {small:?}"
+    );
+    assert!(
+        hero.size.width > 100.,
+        "the dial grew past its token: {hero:?}"
+    );
+    // Across a row the face's height offer would be every knob's basis, so
+    // the weights are `flex` (basis 0): the widths, and the dials, go 2:1.
+    let hero = knob(&mut ui, "hero", "Depth", &mut a, 0.0..=1.0)
+        .fill_cell()
+        .flex(2);
+    let small = knob(&mut ui, "small", "Mix", &mut b, 0.0..=1.0)
+        .fill_cell()
+        .flex(1);
+    ui.frame(
+        row![hero, small].into_el(),
+        Some(Size::new(300., 400.)),
+        Input::default(),
+        0.016,
+    )
+    .unwrap();
+    let scene = ui.scene().unwrap();
+    let (hero, small) = (
+        scene.surface("hero").unwrap().frame,
+        scene.surface("small").unwrap().frame,
+    );
+    assert!(
+        (hero.size.width / small.size.width - 2.0).abs() < 0.01,
+        "2:1 across a row: {hero:?} {small:?}"
+    );
+}
+
+#[test]
+fn a_knob_look_change_repaints_a_still_knob() {
+    let mut ui = Ui::default();
+    let paths = |ui: &mut Ui, look: Knob| {
+        let mut value = 0.5;
+        let control = knob(ui, "dial", "Mix", &mut value, 0.0..=1.0).look(look);
+        ui.frame(control.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+        let scene = ui.scene().unwrap();
+        scene
+            .paint
+            .iter()
+            .filter(|p| matches!(p.layer, Layer::Draw(_)))
+            .map(|p| Arc::clone(&p.path))
+            .collect::<Vec<_>>()
+    };
+    let a = paths(&mut ui, Knob::smooth());
+    let b = paths(&mut ui, Knob::k());
+    let c = paths(&mut ui, Knob::k());
+    assert!(
+        !Arc::ptr_eq(&a[0], &b[0]),
+        "a new style must not reuse the old paths"
+    );
+    assert!(
+        b.iter().zip(&c).all(|(b, c)| Arc::ptr_eq(b, c)),
+        "redrawn while still"
+    );
+}
+
+#[test]
+fn each_knob_preset_paints_its_parts() {
+    let mut ui = Ui::default();
+    let draws = |ui: &mut Ui, look: Knob| {
+        let mut value = 0.5;
+        let control = knob(ui, "dial", "Mix", &mut value, 0.0..=1.0).look(look);
+        ui.frame(control.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+        let scene = ui.scene().unwrap();
+        scene
+            .paint
+            .iter()
+            .filter(|p| matches!(p.layer, Layer::Draw(_)))
+            .map(|p| p.cap)
+            .collect::<Vec<_>>()
+    };
+    let smooth = draws(&mut ui, Knob::default());
+    assert_eq!(smooth.len(), 4, "track, arc, face shadow, face: {smooth:?}");
+    assert!(smooth[..2].iter().all(|c| *c == Cap::Butt), "square-cut");
+    let k = draws(&mut ui, Knob::k());
+    assert_eq!(k.len(), 4, "track, arc, face, pointer line: {k:?}");
+    assert!(k.iter().all(|c| *c == Cap::Round));
+    assert_eq!(draws(&mut ui, Knob::buffr()).len(), 4, "the dot");
+    assert!(
+        draws(&mut ui, Knob::drama()).len() <= 3,
+        "no shadow, no pointer"
+    );
+}
+
+#[test]
+fn icon_buttons_are_named_and_tipped_and_text_buttons_take_icons() {
+    let mut ui = Ui::default();
+    for _ in 0..2 {
+        let el = row![
+            icon_button(&mut ui, "lock", "Keep on preset load", sym::LOCK).size(S),
+            button(&mut ui, "save", "Save")
+                .icon(sym::SAVE)
+                .icon_end(sym::ARROW_FORWARD),
+        ];
+        ui.frame(el.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+    }
+    let scene = ui.scene().unwrap();
+    let lock = scene.surface("lock").unwrap();
+    assert_eq!(
+        lock.semantics.as_ref().unwrap().label.as_deref(),
+        Some("Keep on preset load")
+    );
+    assert!(matches!(
+        lock.semantics.as_ref().unwrap().role,
+        A11y::Button
+    ));
+    assert!((lock.frame.size.width - lock.frame.size.height).abs() < 0.5);
+    let save = scene.surface("save").unwrap();
+    assert_eq!(
+        save.semantics.as_ref().unwrap().label.as_deref(),
+        Some("Save")
+    );
+    let plain = {
+        let mut ui = Ui::default();
+        let el = button(&mut ui, "save", "Save");
+        ui.frame(el.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+        ui.scene().unwrap().surface("save").unwrap().frame
+    };
+    assert!(
+        save.frame.size.width > plain.size.width + 20.,
+        "two icons beside the label"
+    );
+}
+
+/// "1.2k", "-3 dB": a parser in the domain's own units.
+fn units(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let s = s
+        .strip_suffix("dB")
+        .or_else(|| s.strip_suffix("Hz"))
+        .unwrap_or(s)
+        .trim();
+    match s.strip_suffix('k') {
+        Some(k) => k.trim().parse::<f64>().ok().map(|k| k * 1000.0),
+        None => s.parse().ok(),
+    }
+}
+
+#[test]
+fn domains_round_trip_typed_units() {
+    let hz = Domain::new(20.0..=20_000.0)
+        .format(|v| {
+            if v >= 1000.0 {
+                format!("{:.1}k", v / 1000.0)
+            } else {
+                format!("{v:.0}")
+            }
+        })
+        .parse(units);
+    for v in [20.0, 440.0, 1200.0, 20_000.0] {
+        assert_eq!(hz.parsed(&hz.formatted(v)), Some(v));
+    }
+    assert_eq!(hz.parsed("1.2k"), Some(1200.0));
+    let db = Domain::new(-24.0..=24.0).parse(units);
+    assert_eq!(db.parsed("-3 dB"), Some(-3.0));
+    assert_eq!(db.parsed("-30 dB"), Some(-24.0));
+    assert_eq!(db.parsed("quiet"), None);
+}
+
+fn text_input(s: &str) -> Input {
+    Input {
+        text: s.into(),
+        ..Input::default()
+    }
+}
+
+#[test]
+fn typing_into_a_knob_lands_normalised_and_escape_cancels() {
+    // A normalised 0..1 knob over -24..24 dB, typed in dB.
+    let domain = Domain::new(0.0..=1.0)
+        .format(|n| format!("{:.1} dB", n * 48.0 - 24.0))
+        .parse(|s| units(s).map(|db| (db + 24.0) / 48.0));
+    let mut ui = Ui::default();
+    let mut value = 0.5;
+    let frame = |ui: &mut Ui, value: &mut f64, input: Input| {
+        let el = knob(ui, "gain", "Gain", value, domain.clone());
+        let changed = el.changed;
+        ui.frame(el.into_el(), None, input, 0.016).unwrap();
+        changed
+    };
+    frame(&mut ui, &mut value, Input::default());
+    assert_eq!(
+        ui.scene()
+            .unwrap()
+            .surface("gain")
+            .unwrap()
+            .value_description
+            .as_deref(),
+        Some("0.0 dB"),
+        "the formatter speaks for the reading"
+    );
+    ui.focus("gain");
+    frame(&mut ui, &mut value, key(Key::Enter));
+    frame(&mut ui, &mut value, Input::default());
+    assert!(
+        ui.scene().unwrap().surface("gain/edit").is_some(),
+        "Enter opens a field"
+    );
+    frame(&mut ui, &mut value, text_input("12 dB"));
+    frame(&mut ui, &mut value, Input::default());
+    frame(&mut ui, &mut value, key(Key::Escape));
+    frame(&mut ui, &mut value, Input::default());
+    assert_eq!(value, 0.5, "Escape leaves the value alone");
+    assert!(ui.scene().unwrap().surface("gain/edit").is_none());
+
+    ui.focus("gain");
+    frame(&mut ui, &mut value, key(Key::Enter));
+    frame(&mut ui, &mut value, text_input("12 dB"));
+    frame(&mut ui, &mut value, key(Key::Enter));
+    // A widget reads last frame's input: the next build takes the Enter.
+    assert!(
+        frame(&mut ui, &mut value, Input::default()),
+        "a typed value is an edit"
+    );
+    assert!(
+        (value - 0.75).abs() < 1e-12,
+        "12 dB is 0.75 of -24..24: {value}"
+    );
+}
+
+#[test]
+fn a_knob_without_a_parser_never_opens_a_field() {
+    let mut ui = Ui::default();
+    let mut value = 0.5;
+    let frame = |ui: &mut Ui, value: &mut f64, input: Input| {
+        let el = knob(ui, "k", "Mix", value, 0.0..=1.0);
+        ui.frame(el.into_el(), None, input, 0.016).unwrap();
+    };
+    frame(&mut ui, &mut value, Input::default());
+    ui.focus("k");
+    frame(&mut ui, &mut value, key(Key::Enter));
+    frame(&mut ui, &mut value, Input::default());
+    assert!(ui.scene().unwrap().surface("k/edit").is_none());
+}
+
+#[test]
+fn drag_value_types_in_its_domain_units() {
+    // Strict: only "<n> bpm" reads, so a field that opened with a plain
+    // number would not round-trip.
+    let domain = Domain::new(20.0..=300.0)
+        .format(|v| format!("{v:.0} bpm"))
+        .parse(|s| s.trim().strip_suffix(" bpm")?.parse().ok());
+    let mut ui = Ui::default();
+    let mut value = 120.4;
+    let frame = |ui: &mut Ui, value: &mut f64, input: Input| {
+        let el = drag_value(ui, "tempo", "Tempo", value, domain.clone());
+        ui.frame(el.into_el(), None, input, 0.016).unwrap();
+    };
+    frame(&mut ui, &mut value, Input::default());
+    ui.focus("tempo");
+    for input in [
+        key(Key::Enter),
+        Input::default(),
+        key(Key::Enter),
+        Input::default(),
+    ] {
+        frame(&mut ui, &mut value, input);
+    }
+    assert_eq!(
+        value, 120.4,
+        "an untouched formatted draft preserves the precise value"
+    );
+    ui.focus("tempo");
+    for input in [
+        key(Key::Enter),
+        Input::default(),
+        text_input("140 bpm"),
+        key(Key::Enter),
+        Input::default(),
+    ] {
+        frame(&mut ui, &mut value, input);
+    }
+    assert_eq!(value, 140.0);
+}
+
+#[test]
+fn value_align_centres_a_reading_in_its_reserve() {
+    let painted = |align: TextAlign| {
+        let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        let mut v = 0.5;
+        let el = slider(&mut ui, "s", "Mix", &mut v, 0.0..=1.0)
+            .value_text("1")
+            .value_reserve("100.00 %")
+            .value_align(align);
+        ui.frame(el.into_el(), None, Input::default(), 0.016)
+            .unwrap();
+        let scene = ui.scene().unwrap();
+        let frame = scene.surface("s/reading").unwrap().frame;
+        let x = scene
+            .paint
+            .iter()
+            .filter(|p| p.key.as_str() == "s/reading")
+            .find_map(|p| p.text.as_ref().map(|t| t.origin.x));
+        (frame, x.expect("the reading painted"))
+    };
+    let (start, centre) = (painted(TextAlign::Start), painted(TextAlign::Center));
+    assert_eq!(start.0, centre.0, "the reserve keeps the frame");
+    assert!(centre.1 > start.1 + 1.0, "the reading moved inside it");
+}
+
+#[test]
+fn nonfinite_tip_delays_preserve_the_policy() {
+    let mut ui = Ui::default();
+    for policy in [TipPolicy::Off, TipPolicy::After(0.25)] {
+        ui.set_tips(policy);
+        for delay in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            ui.set_tips(TipPolicy::After(delay));
+            assert_eq!(ui.tips(), policy);
+        }
+    }
+}
+
+#[test]
+fn removing_a_knob_parser_cancels_its_draft() {
+    let mut ui = Ui::default();
+    let mut value = 0.5;
+    let domain = Domain::new(0.0..=1.0).parse(|s| s.parse().ok());
+    let frame = |ui: &mut Ui, value: &mut f64, domain: Domain, input| {
+        let el = knob(ui, "k", "Knob", value, domain);
+        ui.frame(el.into_el(), None, input, 0.016).unwrap();
+    };
+    frame(&mut ui, &mut value, domain.clone(), Input::default());
+    ui.focus("k");
+    for input in [
+        key(Key::Enter),
+        Input::default(),
+        text_input("0.8"),
+        Input::default(),
+    ] {
+        frame(&mut ui, &mut value, domain.clone(), input);
+    }
+    assert!(ui.scene().unwrap().surface("k/edit").is_some());
+    frame(&mut ui, &mut value, Domain::new(0.0..=1.0), key(Key::Enter));
+    frame(
+        &mut ui,
+        &mut value,
+        Domain::new(0.0..=1.0),
+        Input::default(),
+    );
+    assert_eq!(value, 0.5);
+    assert!(!ui.focused("k/edit"));
+    assert!(ui.scene().unwrap().surface("k/edit").is_none());
+}
+
+#[test]
+fn knob_readouts_honor_reserve_and_alignment() {
+    for shown in ["0", "0 dB"] {
+        let painted = |align| {
+            let mut ui = Ui::default().font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+            let mut value = 0.5;
+            let el = knob(&mut ui, "k", "Gain", &mut value, 0.0..=1.0)
+                .el
+                .hide_label()
+                .value_text(shown)
+                .value_reserve("-100.00 dB")
+                .value_align(align);
+            ui.frame(el.into_el(), None, Input::default(), 0.016)
+                .unwrap();
+            let scene = ui.scene().unwrap();
+            let frame = scene.surface("k/reading").unwrap().frame;
+            let x = scene
+                .paint
+                .iter()
+                .find_map(|p| p.text.as_ref().map(|t| t.origin.x))
+                .unwrap();
+            (frame, x)
+        };
+        let (start, end) = (painted(TextAlign::Start), painted(TextAlign::End));
+        assert_eq!(start.0, end.0);
+        assert!(
+            end.1 > start.1 + 1.,
+            "alignment moves {shown} within the reserve"
+        );
+    }
 }

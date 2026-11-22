@@ -56,7 +56,7 @@ fn a_select_opens_picks_and_closes() {
         let s = select(ui, "wave", &["Saw", "Square", "Sine"], &mut w);
         wave.set(w);
         moved.set(moved.get() + usize::from(s.changed));
-        col([s.el]).pad(M)
+        col([s.into_el()]).pad(M)
     };
     idle(&mut ui, &mut view, Input::default());
     assert!(ui.scene().unwrap().surface("wave/list").is_none());
@@ -145,7 +145,7 @@ fn a_long_select_scrolls_inside_the_window_to_its_last_option() {
         let mut i = picked.get();
         let s = select(ui, "long", &names, &mut i);
         picked.set(i);
-        col([s.el]).pad(M)
+        col([s.into_el()]).pad(M)
     };
     idle(&mut ui, &mut view, Input::default());
     let button = centre(&ui, "long");
@@ -243,7 +243,7 @@ fn tab_through_a_long_select_keeps_the_focused_row_in_view() {
         let mut i = picked.get();
         let s = select(ui, "long", &names, &mut i);
         picked.set(i);
-        col([s.el]).pad(M)
+        col([s.into_el()]).pad(M)
     };
     idle(&mut ui, &mut view, Input::default());
     let button = centre(&ui, "long");
@@ -350,4 +350,120 @@ fn a_memoised_field_rebuilds_when_a_dialog_gives_focus_back() {
     let before = builds.get();
     idle(&mut ui, &mut view, Input::default());
     assert!(builds.get() > before, "the field kept its unfocused build");
+}
+
+/// What a key's fill layer paints, in the resolved scene.
+fn painted(ui: &Ui, key: &str) -> Option<mui_scene::Paint> {
+    let scene = ui.scene().unwrap();
+    let p = scene
+        .paint
+        .iter()
+        .find(|p| p.key.as_str() == key && p.layer == mui_scene::Layer::Fill)?;
+    Some(p.paint.clone())
+}
+
+/// A caller's plate chrome lands on the trigger, closed and open: the
+/// list floats from inside it instead of a wrapper taking the paint.
+#[test]
+fn a_select_trigger_wears_the_callers_fill_and_radius() {
+    let mut ui = Ui::default();
+    let wave = Cell::new(0);
+    let mut view = |ui: &mut Ui| {
+        let mut w = wave.get();
+        let s = select(ui, "wave", &["Saw", "Square"], &mut w)
+            .fill(Role::Danger)
+            .radius(3);
+        wave.set(w);
+        col![s, block(10., 10.).fill(Role::Danger).id("ref")].pad(M)
+    };
+    let check = |ui: &mut Ui, view: &mut dyn FnMut(&mut Ui) -> El, when: &str| {
+        // Off the trigger, long enough for the hover and press tints to settle.
+        for _ in 0..2 {
+            let tree = view(ui);
+            ui.frame(tree, Some(SIZE), at(Point::new(390., 290.), false), 1.0)
+                .unwrap();
+        }
+        let r = ui.scene().unwrap().surface("wave").unwrap().rect.unwrap();
+        assert_eq!(r.radius(), 3., "{when}");
+        assert_eq!(painted(ui, "wave"), painted(ui, "ref"), "{when}");
+        assert!(painted(ui, "ref").is_some());
+    };
+    idle(&mut ui, &mut view, Input::default());
+    check(&mut ui, &mut view, "closed");
+    let button = centre(&ui, "wave");
+    click(&mut ui, &mut view, button);
+    assert!(ui.scene().unwrap().surface("wave/list").is_some(), "open");
+    check(&mut ui, &mut view, "open");
+    let list = ui.scene().unwrap().surface("wave/list").unwrap();
+    assert_eq!(
+        list.parent.as_ref().map(Id::as_str),
+        Some("wave"),
+        "the open list is owned by its trigger"
+    );
+    let pick = centre(&ui, "wave/list/1");
+    click(&mut ui, &mut view, pick);
+    assert_eq!(wave.get(), 1, "a row inside the trigger still picks");
+    assert!(ui.scene().unwrap().surface("wave/list").is_none(), "closed");
+}
+
+/// The button's variants, sizes and roles, on the trigger.
+#[test]
+fn a_select_trigger_takes_the_button_look() {
+    let style = |f: &dyn Fn(Response<bool, Select>) -> Response<bool, Select>| {
+        let mut ui = Ui::default();
+        let mut w = 0;
+        f(select(&mut ui, "w", &["Saw"], &mut w))
+            .el
+            .el()
+            .payload()
+            .style
+            .clone()
+    };
+    assert_eq!(
+        style(&|s| s).fill,
+        Some(Fill::Role(Role::Field)),
+        "the default face"
+    );
+    assert_eq!(
+        style(&|s| s.variant(Variant::Solid)).fill,
+        Some(Fill::Role(Role::Primary))
+    );
+    assert_eq!(
+        style(&|s| s.role(Role::Danger)).fill,
+        Some(Fill::Role(Role::Danger))
+    );
+    assert_eq!(
+        style(&|s| s.variant(Variant::Soft)).fill,
+        Some(Fill::Faded(Role::Primary, 0.18))
+    );
+    let outline = style(&|s| s.variant(Variant::Outline).role(Role::Danger));
+    assert_eq!(outline.fill, None);
+    assert_eq!(
+        outline.stroke.and_then(|s| s.fill),
+        Some(Fill::Role(Role::Danger))
+    );
+    // A caller's paint after the look still wins.
+    let mut ui = Ui::default();
+    let mut w = 0;
+    let ghost = select(&mut ui, "w", &["Saw"], &mut w)
+        .variant(Variant::Ghost)
+        .fill(Role::Surface);
+    assert_eq!(
+        ghost.el.payload().style.fill,
+        Some(Fill::Role(Role::Surface))
+    );
+    let tall = |s: SpacingToken| {
+        let mut ui = Ui::default();
+        let mut w = 0;
+        let el = select(&mut ui, "w", &["Saw"], &mut w).size(s).el.el();
+        resolve(&SceneSpec::new(el))
+            .unwrap()
+            .surface("w")
+            .unwrap()
+            .frame
+            .size
+            .height
+    };
+    assert!(tall(Xs) < tall(M) && tall(M) < tall(Xl));
+    assert!((tall(M) - Ui::default().theme().control * 10.).abs() < 0.01);
 }

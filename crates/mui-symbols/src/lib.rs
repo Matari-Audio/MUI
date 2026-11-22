@@ -5,7 +5,45 @@
 //! file that ships next to the font in google/material-design-icons. Regenerate
 //! with `python3 tools/material_symbols_table.py <that file>`, which rewrites
 //! everything below this header.
+//!
+//! # The font
+//!
+//! The `font-rounded` and `font-outlined` features (`font` is Rounded) embed
+//! the full upstream variable fonts (FILL, GRAD, opsz, wght) as [`font`]
+//! bytes; `mui-scene`'s matching features make them the default icon face.
+//! They add about 15 MB (Rounded) or 11 MB (Outlined) to the binary.
+//!
+//! For a small binary, leave the features off and ship a subset with only the
+//! symbols you draw. From `frameworks/mui`, with fontTools installed:
+//!
+//! ```sh
+//! python3 tools/subset_symbols.py \
+//!     crates/mui-symbols/fonts/MaterialSymbolsRounded.ttf \
+//!     my-app/fonts/symbols.ttf my-app/src
+//! ```
+//!
+//! The last arguments are symbol names (`home`, `settings`) or directories
+//! scanned for `sym::NAME` uses. The subset keeps every axis and the FILL
+//! glyph swap. Then hand it to the theme:
+//!
+//! ```ignore
+//! let mut theme = Theme::DEFAULT;
+//! theme.icon_font = Font::new(include_bytes!("../fonts/symbols.ttf")).ok();
+//! ```
 #![forbid(unsafe_code)]
+
+/// The embedded Material Symbols variable fonts: Apache-2.0, from
+/// google/material-design-icons (`fonts/README.md` has the commit and
+/// hashes). Open one with `mui_text::Font::from_static` to skip the copy.
+#[cfg(any(feature = "font-rounded", feature = "font-outlined"))]
+pub mod font {
+    /// Material Symbols Rounded, the full variable font.
+    #[cfg(feature = "font-rounded")]
+    pub const ROUNDED: &[u8] = include_bytes!("../fonts/MaterialSymbolsRounded.ttf");
+    /// Material Symbols Outlined, the full variable font.
+    #[cfg(feature = "font-outlined")]
+    pub const OUTLINED: &[u8] = include_bytes!("../fonts/MaterialSymbolsOutlined.ttf");
+}
 
 /// The codepoint Material Symbols draws `name` at: `codepoint("home")` is
 /// `Some(sym::HOME)`. `None` for a name the font does not have.
@@ -293,6 +331,7 @@ pub mod sym {
     pub const APPROVAL_DELEGATION_OFF: char = '\u{F2C5}';
     pub const APPS: char = '\u{E5C3}';
     pub const APPS_OUTAGE: char = '\u{E7CC}';
+    pub const APPS_PLUS: char = '\u{FFEA7}';
     pub const AQ: char = '\u{F55A}';
     pub const AQ_INDOOR: char = '\u{F55B}';
     pub const AR_ON_YOU: char = '\u{EF7C}';
@@ -805,6 +844,7 @@ pub mod sym {
     pub const CHAT_BUBBLE_OFF: char = '\u{FFFBB}';
     pub const CHAT_BUBBLE_OUTLINE: char = '\u{E0CB}';
     pub const CHAT_DASHED: char = '\u{EEED}';
+    pub const CHAT_DISPLAY: char = '\u{FFEAC}';
     pub const CHAT_ERROR: char = '\u{F7AC}';
     pub const CHAT_INFO: char = '\u{F52B}';
     pub const CHAT_PASTE_GO: char = '\u{F6BD}';
@@ -885,6 +925,7 @@ pub mod sym {
     pub const CLOSED_CAPTION: char = '\u{E996}';
     pub const CLOSED_CAPTION_ADD: char = '\u{F4AE}';
     pub const CLOSED_CAPTION_DISABLED: char = '\u{F1DC}';
+    pub const CLOSED_CAPTION_DISPLAY: char = '\u{FFEAB}';
     pub const CLOSED_CAPTION_OFF: char = '\u{E996}';
     pub const CLOUD: char = '\u{F15C}';
     pub const CLOUD_ALERT: char = '\u{F3CC}';
@@ -1187,6 +1228,7 @@ pub mod sym {
     pub const DISHWASHER_GEN: char = '\u{E832}';
     pub const DISPLAY_ADD: char = '\u{FFED2}';
     pub const DISPLAY_EXTERNAL_INPUT: char = '\u{F7E7}';
+    pub const DISPLAY_GROUP: char = '\u{FFEAA}';
     pub const DISPLAY_SETTINGS: char = '\u{EB97}';
     pub const DISTANCE: char = '\u{F6EA}';
     pub const DIVERSITY_1: char = '\u{F8D7}';
@@ -1214,6 +1256,8 @@ pub mod sym {
     pub const DOCS_APPS_SCRIPT: char = '\u{F0C3}';
     pub const DOCUMENT_SCANNER: char = '\u{E5FA}';
     pub const DOCUMENT_SEARCH: char = '\u{F385}';
+    pub const DOCUMENT_SHARE: char = '\u{FFEA6}';
+    pub const DOCUMENT_SHARE_STACK: char = '\u{FFE93}';
     pub const DOMAIN: char = '\u{E7EE}';
     pub const DOMAIN_ADD: char = '\u{EB62}';
     pub const DOMAIN_DISABLED: char = '\u{E0EF}';
@@ -1300,6 +1344,7 @@ pub mod sym {
     pub const EDIT_AUDIO: char = '\u{F42D}';
     pub const EDIT_CALENDAR: char = '\u{E742}';
     pub const EDIT_DOCUMENT: char = '\u{F88C}';
+    pub const EDIT_LINE: char = '\u{FFEA5}';
     pub const EDIT_LOCATION: char = '\u{E568}';
     pub const EDIT_LOCATION_ALT: char = '\u{E1C5}';
     pub const EDIT_NOTE: char = '\u{E745}';
@@ -1506,6 +1551,7 @@ pub mod sym {
     pub const FILTER_ALT_OFF: char = '\u{EB32}';
     pub const FILTER_ARROW_RIGHT: char = '\u{F3D1}';
     pub const FILTER_B_AND_W: char = '\u{E3DB}';
+    pub const FILTER_CANCEL: char = '\u{FFEA4}';
     pub const FILTER_CENTER_FOCUS: char = '\u{E3DC}';
     pub const FILTER_DRAMA: char = '\u{E3DD}';
     pub const FILTER_FRAMES: char = '\u{E3DE}';
@@ -1514,6 +1560,7 @@ pub mod sym {
     pub const FILTER_LIST_ALT: char = '\u{E94E}';
     pub const FILTER_LIST_OFF: char = '\u{EB57}';
     pub const FILTER_NONE: char = '\u{E3E0}';
+    pub const FILTER_PLUS: char = '\u{FFEA3}';
     pub const FILTER_RETROLUX: char = '\u{E3E1}';
     pub const FILTER_TILT_SHIFT: char = '\u{E3E2}';
     pub const FILTER_VINTAGE: char = '\u{E3E3}';
@@ -1701,6 +1748,7 @@ pub mod sym {
     pub const FULLSCREEN_EXIT: char = '\u{E5D1}';
     pub const FULLSCREEN_PORTRAIT: char = '\u{F45A}';
     pub const FUNCTION: char = '\u{F866}';
+    pub const FUNCTION_SEARCH: char = '\u{FFEA2}';
     pub const FUNCTIONS: char = '\u{E24A}';
     pub const FUNICULAR: char = '\u{F477}';
     pub const G_MOBILEDATA: char = '\u{F010}';
@@ -1807,6 +1855,7 @@ pub mod sym {
     pub const GROCERY: char = '\u{EF97}';
     pub const GROUP: char = '\u{EA21}';
     pub const GROUP_ADD: char = '\u{E7F0}';
+    pub const GROUP_EYE: char = '\u{FFEA1}';
     pub const GROUP_OFF: char = '\u{E747}';
     pub const GROUP_REMOVE: char = '\u{E7AD}';
     pub const GROUP_SEARCH: char = '\u{F3CE}';
@@ -2266,10 +2315,14 @@ pub mod sym {
     pub const LOGO_DEV: char = '\u{EAD6}';
     pub const LOGOUT: char = '\u{E9BA}';
     pub const LOOKS: char = '\u{E3FC}';
+    pub const LOOKS_0: char = '\u{FFE97}';
     pub const LOOKS_3: char = '\u{E3FB}';
     pub const LOOKS_4: char = '\u{E3FD}';
     pub const LOOKS_5: char = '\u{E3FE}';
     pub const LOOKS_6: char = '\u{E3FF}';
+    pub const LOOKS_7: char = '\u{FFE9A}';
+    pub const LOOKS_8: char = '\u{FFE99}';
+    pub const LOOKS_9: char = '\u{FFE98}';
     pub const LOOKS_ONE: char = '\u{E400}';
     pub const LOOKS_TWO: char = '\u{E401}';
     pub const LOOP: char = '\u{E863}';
@@ -2324,7 +2377,9 @@ pub mod sym {
     pub const MARK_EMAIL_UNREAD: char = '\u{F18A}';
     pub const MARK_UNREAD_CHAT_ALT: char = '\u{EB9D}';
     pub const MARKDOWN: char = '\u{F552}';
+    pub const MARKDOWN_CONVERT: char = '\u{FFEA0}';
     pub const MARKDOWN_COPY: char = '\u{F553}';
+    pub const MARKDOWN_DOCUMENT: char = '\u{FFE9F}';
     pub const MARKDOWN_PASTE: char = '\u{F554}';
     pub const MARKUNREAD: char = '\u{E159}';
     pub const MARKUNREAD_MAILBOX: char = '\u{E89B}';
@@ -2851,6 +2906,7 @@ pub mod sym {
     pub const PERSON_CELEBRATE: char = '\u{F7FE}';
     pub const PERSON_CHECK: char = '\u{F565}';
     pub const PERSON_EDIT: char = '\u{F4FA}';
+    pub const PERSON_EYE: char = '\u{FFE9E}';
     pub const PERSON_FILLED: char = '\u{F0D3}';
     pub const PERSON_HEART: char = '\u{F290}';
     pub const PERSON_OFF: char = '\u{E510}';
@@ -3379,6 +3435,7 @@ pub mod sym {
     pub const SHARE_REVIEWS: char = '\u{F8A4}';
     pub const SHARE_WINDOWS: char = '\u{F613}';
     pub const SHAVED_ICE: char = '\u{F225}';
+    pub const SHEETS_COLUMN_SWAP: char = '\u{FFE9D}';
     pub const SHEETS_RTL: char = '\u{F823}';
     pub const SHELF_AUTO_HIDE: char = '\u{F703}';
     pub const SHELF_POSITION: char = '\u{F702}';
@@ -3564,6 +3621,7 @@ pub mod sym {
     pub const SPEED_2X: char = '\u{F4EB}';
     pub const SPEED_3: char = '\u{FFF37}';
     pub const SPEED_4: char = '\u{FFF36}';
+    pub const SPEED_4_PROGRESS: char = '\u{FFE94}';
     pub const SPEED_CAMERA: char = '\u{F470}';
     pub const SPELLCHECK: char = '\u{E8CE}';
     pub const SPLIT_SCENE: char = '\u{F3BF}';
@@ -4581,6 +4639,7 @@ static TABLE: &[(&str, char)] = &[
     ("approval_delegation_off", sym::APPROVAL_DELEGATION_OFF),
     ("apps", sym::APPS),
     ("apps_outage", sym::APPS_OUTAGE),
+    ("apps_plus", sym::APPS_PLUS),
     ("aq", sym::AQ),
     ("aq_indoor", sym::AQ_INDOOR),
     ("ar_on_you", sym::AR_ON_YOU),
@@ -5093,6 +5152,7 @@ static TABLE: &[(&str, char)] = &[
     ("chat_bubble_off", sym::CHAT_BUBBLE_OFF),
     ("chat_bubble_outline", sym::CHAT_BUBBLE_OUTLINE),
     ("chat_dashed", sym::CHAT_DASHED),
+    ("chat_display", sym::CHAT_DISPLAY),
     ("chat_error", sym::CHAT_ERROR),
     ("chat_info", sym::CHAT_INFO),
     ("chat_paste_go", sym::CHAT_PASTE_GO),
@@ -5173,6 +5233,7 @@ static TABLE: &[(&str, char)] = &[
     ("closed_caption", sym::CLOSED_CAPTION),
     ("closed_caption_add", sym::CLOSED_CAPTION_ADD),
     ("closed_caption_disabled", sym::CLOSED_CAPTION_DISABLED),
+    ("closed_caption_display", sym::CLOSED_CAPTION_DISPLAY),
     ("closed_caption_off", sym::CLOSED_CAPTION_OFF),
     ("cloud", sym::CLOUD),
     ("cloud_alert", sym::CLOUD_ALERT),
@@ -5475,6 +5536,7 @@ static TABLE: &[(&str, char)] = &[
     ("dishwasher_gen", sym::DISHWASHER_GEN),
     ("display_add", sym::DISPLAY_ADD),
     ("display_external_input", sym::DISPLAY_EXTERNAL_INPUT),
+    ("display_group", sym::DISPLAY_GROUP),
     ("display_settings", sym::DISPLAY_SETTINGS),
     ("distance", sym::DISTANCE),
     ("diversity_1", sym::DIVERSITY_1),
@@ -5502,6 +5564,8 @@ static TABLE: &[(&str, char)] = &[
     ("docs_apps_script", sym::DOCS_APPS_SCRIPT),
     ("document_scanner", sym::DOCUMENT_SCANNER),
     ("document_search", sym::DOCUMENT_SEARCH),
+    ("document_share", sym::DOCUMENT_SHARE),
+    ("document_share_stack", sym::DOCUMENT_SHARE_STACK),
     ("domain", sym::DOMAIN),
     ("domain_add", sym::DOMAIN_ADD),
     ("domain_disabled", sym::DOMAIN_DISABLED),
@@ -5588,6 +5652,7 @@ static TABLE: &[(&str, char)] = &[
     ("edit_audio", sym::EDIT_AUDIO),
     ("edit_calendar", sym::EDIT_CALENDAR),
     ("edit_document", sym::EDIT_DOCUMENT),
+    ("edit_line", sym::EDIT_LINE),
     ("edit_location", sym::EDIT_LOCATION),
     ("edit_location_alt", sym::EDIT_LOCATION_ALT),
     ("edit_note", sym::EDIT_NOTE),
@@ -5794,6 +5859,7 @@ static TABLE: &[(&str, char)] = &[
     ("filter_alt_off", sym::FILTER_ALT_OFF),
     ("filter_arrow_right", sym::FILTER_ARROW_RIGHT),
     ("filter_b_and_w", sym::FILTER_B_AND_W),
+    ("filter_cancel", sym::FILTER_CANCEL),
     ("filter_center_focus", sym::FILTER_CENTER_FOCUS),
     ("filter_drama", sym::FILTER_DRAMA),
     ("filter_frames", sym::FILTER_FRAMES),
@@ -5802,6 +5868,7 @@ static TABLE: &[(&str, char)] = &[
     ("filter_list_alt", sym::FILTER_LIST_ALT),
     ("filter_list_off", sym::FILTER_LIST_OFF),
     ("filter_none", sym::FILTER_NONE),
+    ("filter_plus", sym::FILTER_PLUS),
     ("filter_retrolux", sym::FILTER_RETROLUX),
     ("filter_tilt_shift", sym::FILTER_TILT_SHIFT),
     ("filter_vintage", sym::FILTER_VINTAGE),
@@ -5989,6 +6056,7 @@ static TABLE: &[(&str, char)] = &[
     ("fullscreen_exit", sym::FULLSCREEN_EXIT),
     ("fullscreen_portrait", sym::FULLSCREEN_PORTRAIT),
     ("function", sym::FUNCTION),
+    ("function_search", sym::FUNCTION_SEARCH),
     ("functions", sym::FUNCTIONS),
     ("funicular", sym::FUNICULAR),
     ("g_mobiledata", sym::G_MOBILEDATA),
@@ -6095,6 +6163,7 @@ static TABLE: &[(&str, char)] = &[
     ("grocery", sym::GROCERY),
     ("group", sym::GROUP),
     ("group_add", sym::GROUP_ADD),
+    ("group_eye", sym::GROUP_EYE),
     ("group_off", sym::GROUP_OFF),
     ("group_remove", sym::GROUP_REMOVE),
     ("group_search", sym::GROUP_SEARCH),
@@ -6554,10 +6623,14 @@ static TABLE: &[(&str, char)] = &[
     ("logo_dev", sym::LOGO_DEV),
     ("logout", sym::LOGOUT),
     ("looks", sym::LOOKS),
+    ("looks_0", sym::LOOKS_0),
     ("looks_3", sym::LOOKS_3),
     ("looks_4", sym::LOOKS_4),
     ("looks_5", sym::LOOKS_5),
     ("looks_6", sym::LOOKS_6),
+    ("looks_7", sym::LOOKS_7),
+    ("looks_8", sym::LOOKS_8),
+    ("looks_9", sym::LOOKS_9),
     ("looks_one", sym::LOOKS_ONE),
     ("looks_two", sym::LOOKS_TWO),
     ("loop", sym::LOOP),
@@ -6612,7 +6685,9 @@ static TABLE: &[(&str, char)] = &[
     ("mark_email_unread", sym::MARK_EMAIL_UNREAD),
     ("mark_unread_chat_alt", sym::MARK_UNREAD_CHAT_ALT),
     ("markdown", sym::MARKDOWN),
+    ("markdown_convert", sym::MARKDOWN_CONVERT),
     ("markdown_copy", sym::MARKDOWN_COPY),
+    ("markdown_document", sym::MARKDOWN_DOCUMENT),
     ("markdown_paste", sym::MARKDOWN_PASTE),
     ("markunread", sym::MARKUNREAD),
     ("markunread_mailbox", sym::MARKUNREAD_MAILBOX),
@@ -7139,6 +7214,7 @@ static TABLE: &[(&str, char)] = &[
     ("person_celebrate", sym::PERSON_CELEBRATE),
     ("person_check", sym::PERSON_CHECK),
     ("person_edit", sym::PERSON_EDIT),
+    ("person_eye", sym::PERSON_EYE),
     ("person_filled", sym::PERSON_FILLED),
     ("person_heart", sym::PERSON_HEART),
     ("person_off", sym::PERSON_OFF),
@@ -7667,6 +7743,7 @@ static TABLE: &[(&str, char)] = &[
     ("share_reviews", sym::SHARE_REVIEWS),
     ("share_windows", sym::SHARE_WINDOWS),
     ("shaved_ice", sym::SHAVED_ICE),
+    ("sheets_column_swap", sym::SHEETS_COLUMN_SWAP),
     ("sheets_rtl", sym::SHEETS_RTL),
     ("shelf_auto_hide", sym::SHELF_AUTO_HIDE),
     ("shelf_position", sym::SHELF_POSITION),
@@ -7852,6 +7929,7 @@ static TABLE: &[(&str, char)] = &[
     ("speed_2x", sym::SPEED_2X),
     ("speed_3", sym::SPEED_3),
     ("speed_4", sym::SPEED_4),
+    ("speed_4_progress", sym::SPEED_4_PROGRESS),
     ("speed_camera", sym::SPEED_CAMERA),
     ("spellcheck", sym::SPELLCHECK),
     ("split_scene", sym::SPLIT_SCENE),

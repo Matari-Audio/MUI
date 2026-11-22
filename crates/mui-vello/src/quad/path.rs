@@ -22,9 +22,13 @@
 //!   stored in local space and its distance measured there, the pen being a
 //!   local circle; its cells are squares, since a distance only needs the
 //!   segments near the pixel.
+//! - a stroke with any other cap or join is expanded to its outline by
+//!   `kurbo::stroke` -- what `vello_cpu` does before it fills -- once, when
+//!   its record is built, and that outline's record is a fill's.
 //!
 //! Records are keyed by the path's `Arc` (held, so its address stays its
-//! own), the linear part of the transform and the stroke width: a node that
+//! own), the linear part of the transform, the stroke width and its caps
+//! and join: a node that
 //! moves or scrolls keeps its record, and a steady frame builds and uploads
 //! nothing. A record no entry used this frame is free for reuse the moment
 //! space runs short: what is on a kept target was drawn already, and every
@@ -40,7 +44,9 @@
 //! | 2.. | per cell, row-major: first segment texel, segment count |
 //! | then | segments, `x0 y0 x1 y1`, each repeated in every cell it reaches |
 
-use crate::kurbo::{Affine, BezPath, PathEl, Point, Rect, Shape as _};
+use crate::kurbo::{
+    Affine, BezPath, Cap, Join, PathEl, Point, Rect, Shape as _, Stroke, StrokeOpts,
+};
 use mui_geometry::Path;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -81,17 +87,26 @@ struct Key {
     path: usize,
     linear: [u64; 4],
     width: u64,
+    /// The stroke's cap and join, packed.
+    ends: u8,
 }
 
 impl Key {
-    fn new(path: usize, xf: Affine, width: f64) -> Self {
+    fn new(path: usize, xf: Affine, width: f64, (cap, join): (Cap, Join)) -> Self {
         let [a, b, c, d, ..] = xf.as_coeffs();
         Self {
             path,
             linear: [a, b, c, d].map(f64::to_bits),
             width: width.to_bits(),
+            ends: 3 * cap as u8 + join as u8,
         }
     }
+}
+
+/// Whether a stroke `width` wide with `ends` is drawn from an expanded
+/// outline's fill record, not as the union of round capsules.
+pub fn expanded(width: f64, ends: (Cap, Join)) -> bool {
+    width > 0. && ends != (Cap::Round, Join::Round)
 }
 
 /// What a record was built from, held so its key stays its own: a path's
@@ -174,14 +189,29 @@ impl Store {
     }
 
     /// The record of `path` under the linear part of `xf`, stroked `width`
-    /// wide (`0` fills), built if this frame is the first to ask.
-    pub fn find(&mut self, path: &Arc<Path>, xf: Affine, width: f64) -> Result<Found, Fail> {
-        let key = Key::new(Arc::as_ptr(path) as usize, xf, width);
+    /// wide (`0` fills) with `ends`, built if this frame is the first to
+    /// ask. An [`expanded`] stroke's record is its outline's fill.
+    pub fn find(
+        &mut self,
+        path: &Arc<Path>,
+        xf: Affine,
+        width: f64,
+        ends: (Cap, Join),
+    ) -> Result<Found, Fail> {
+        let key = Key::new(Arc::as_ptr(path) as usize, xf, width, ends);
         if let Some(found) = self.hit(&key) {
             return Ok(found);
         }
         crate::bez_path_into(path, crate::ARC_TOLERANCE, &mut self.bez)
             .map_err(|_| Fail::Invalid)?;
+        let mut width = width;
+        if expanded(width, ends) {
+            let pen = Stroke::new(width).with_caps(ends.0).with_join(ends.1);
+            let tolerance = FLATTEN / smax(xf);
+            self.bez =
+                crate::kurbo::stroke(self.bez.iter(), &pen, &StrokeOpts::default(), tolerance);
+            width = 0.;
+        }
         self.insert(key, xf, width, Held::Path(path.clone()))
     }
 
@@ -206,7 +236,7 @@ impl Store {
             }
         }
         // An `Arc` address is aligned, so an odd key never names one.
-        let key = Key::new((h.finish() as usize) | 1, xf, width);
+        let key = Key::new((h.finish() as usize) | 1, xf, width, ROUND);
         if let Some(e) = self.map.get_mut(&key) {
             // Another outline under the same hash: refuse rather than draw
             // the wrong glyph (the frame falls back to the CPU).
@@ -262,9 +292,7 @@ impl Store {
     /// The record of `self.bez` under `linear`, with cell entries relative
     /// to the record's start; `None` when it covers nothing.
     fn record(&mut self, linear: Affine, width: f64) -> Option<Vec<[f32; 4]>> {
-        let [a, b, c, d, ..] = linear.as_coeffs();
-        let e = 0.5 * (a * a + b * b + c * c + d * d);
-        let smax = (e + (e * e - (a * d - b * c).powi(2)).max(0.).sqrt()).sqrt();
+        let smax = smax(linear);
         let stroke = width > 0.;
         segments(&self.bez, FLATTEN / smax, !stroke, &mut self.local);
         if self.local.is_empty() {
@@ -409,6 +437,18 @@ impl Store {
             self.free.remove(i);
         }
     }
+}
+
+/// Round caps and joins: what every entry but a canvas's
+/// [`Draw::cap`](mui_scene::Draw::cap)/[`Draw::join`](mui_scene::Draw::join)
+/// asks for.
+pub const ROUND: (Cap, Join) = (Cap::Round, Join::Round);
+
+/// The largest scale the linear part of `xf` applies in any direction.
+fn smax(xf: Affine) -> f64 {
+    let [a, b, c, d, ..] = xf.as_coeffs();
+    let e = 0.5 * (a * a + b * b + c * c + d * d);
+    (e + (e * e - (a * d - b * c).powi(2)).max(0.).sqrt()).sqrt()
 }
 
 /// The x extent of segment `s` between rows `y0` and `y1`.

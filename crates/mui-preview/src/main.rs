@@ -25,6 +25,12 @@ use mui::prelude::*;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
 use mui_access::accesskit::{Action as AccessAction, NodeId};
 use scenes::PreviewScene;
+
+/// Material Symbols, the playground's 52-icon subset (`save`, `lock`, ...).
+static ICONS: std::sync::LazyLock<Font> = std::sync::LazyLock::new(|| {
+    Font::new(&include_bytes!("../../mui-playground/fonts/MaterialSymbolsOutlined-ui.ttf")[..])
+        .expect("the bundled icon font parses")
+});
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, Ime as WinitIme, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
@@ -336,7 +342,10 @@ impl App {
         let ui = &mut self.ui;
         // A theme file, once one has parsed, replaces the compiled-in skin
         // wholesale; the mode is still the sidebar's to say.
-        let theme = self.theme.clone().unwrap_or(skin::SKIN);
+        let mut theme = self.theme.clone().unwrap_or(skin::SKIN);
+        // The playground's Material Symbols subset, so `icon(sym::..)` in a
+        // scene draws its glyph, unless a theme file brings its own face.
+        theme.icon_font.get_or_insert_with(|| ICONS.clone());
         ui.set_theme(Theme {
             palette: match &self.theme {
                 Some(t) => t
@@ -351,6 +360,7 @@ impl App {
         }
         for i in 0..self.scenes.len() {
             if ui.get(format!("scene-{i}")).clicked {
+                ui.set_tips(mui::TipPolicy::default());
                 self.selected = i;
                 self.pan = Point::new(0.0, 0.0);
             }
@@ -970,6 +980,15 @@ mod tests {
         for down in [false, true, false, false] {
             app.tick(SIZE, 1.0, at(c.x, c.y, down));
         }
+    }
+
+    #[test]
+    fn changing_scenes_restores_default_tips() {
+        let mut app = App::new();
+        app.tick(SIZE, 1.0, PointerInput::default());
+        app.ui.set_tips(mui::TipPolicy::Off);
+        click(&mut app, "scene-1");
+        assert_eq!(app.ui.tips(), mui::TipPolicy::default());
     }
 
     /// The widgets describe themselves, so the tree a screen reader gets has

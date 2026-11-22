@@ -4,7 +4,7 @@
 //! the `Cpu` canvas, and whatever it cannot is reported, never approximated.
 
 use super::Reason;
-use super::path::{Fail, Store};
+use super::path::{Fail, ROUND, Store};
 use super::ramp::{paint, premul};
 use crate::kurbo::{Affine, BezPath, Rect};
 use mui_scene::{Fit, Layer, Paint, Painted, ShadowKind};
@@ -341,7 +341,7 @@ impl Walk {
                 let general = p.rect.and_then(|rr| top.push(rr.bounds(), rr.radius(), xf));
                 let next = match general {
                     Some(next) => Some(next),
-                    None => match self.paths.find(&p.path, xf, 0.) {
+                    None => match self.paths.find(&p.path, xf, 0., ROUND) {
                         Ok(found) => top.push_path(found.record, xf),
                         Err(f) => {
                             self.clips.push(top);
@@ -441,9 +441,16 @@ impl Walk {
         if p.blur > 0.0 && !shadow {
             return Ok(Drawn::Nothing);
         }
+        let ends = (p.cap, p.join);
         let stroke = !shadow && p.width > 0.0;
         let width = if stroke { p.width } else { 0. };
-        let found = self.paths.find(&p.path, xf, width).map_err(refuse)?;
+        let found = self.paths.find(&p.path, xf, width, ends).map_err(refuse)?;
+        // A butt or square cap, a miter or bevel join: its outline, filled.
+        let (stroke, width) = if super::path::expanded(width, ends) {
+            (false, 0.)
+        } else {
+            (stroke, width)
+        };
         let Some(record) = found.record else {
             return Ok(Drawn::Nothing);
         };
@@ -463,12 +470,22 @@ impl Walk {
             out[5] = [p.blur as f32, 0., 0., 0.];
             return Ok(Drawn::One);
         }
-        let image = self.image(p, bounds, xf, &mut clip, out)?;
+        // Expanded stroke bounds cover the instance, while brush coordinates
+        // stay attached to the original path for every join and cap.
+        let brush_bounds = if matches!(p.paint, Paint::Solid(_)) {
+            bounds
+        } else {
+            crate::paint_box(
+                p,
+                &crate::bez_path(&p.path, mui_geometry::ARC_TOLERANCE).map_err(|_| Reason::Path)?,
+            )
+        };
+        let image = self.image(p, brush_bounds, xf, &mut clip, out)?;
         clip.write(out);
         out[2] = rect4(bounds);
         let (kind, scale) = match image {
             Some(_) => (PAINT_IMAGE, 0.),
-            None => paint(out, &p.paint, bounds)?,
+            None => paint(out, &p.paint, brush_bounds)?,
         };
         let shape = if stroke {
             SHAPE_PATH_STROKE
@@ -563,7 +580,7 @@ impl Walk {
             out[3] = [code(SHAPE_FILL, PAINT_SCREEN), 0., rr.radius() as f32, 0.];
             rr.bounds()
         } else {
-            let found = self.paths.find(&p.path, xf, 0.).map_err(refuse)?;
+            let found = self.paths.find(&p.path, xf, 0., ROUND).map_err(refuse)?;
             let Some(record) = found.record else {
                 return Ok(Drawn::Nothing);
             };
@@ -667,4 +684,45 @@ fn erf7(x: f32) -> f32 {
     let xx = x * x;
     let x = x + (0.24295 + (0.03395 + 0.0104 * xx) * xx) * (x * xx);
     x / (1.0 + x * x).sqrt()
+}
+
+#[cfg(test)]
+mod repair_tests {
+    use super::*;
+    use mui_scene::prelude::*;
+
+    #[test]
+    fn stroke_join_changes_coverage_without_moving_the_gradient() {
+        let scene = mui_scene::resolve(&SceneSpec::new(
+            canvas(|_| {
+                vec![Draw::stroke(
+                    Path::polyline(
+                        [
+                            Point::new(40., 40.),
+                            Point::new(120., 40.),
+                            Point::new(120., 120.),
+                            Point::new(40., 120.),
+                        ],
+                        true,
+                    ),
+                    Gradient::linear(
+                        90.,
+                        [(0., Color::srgb(1., 0., 0.)), (1., Color::srgb(0., 0., 1.))],
+                    ),
+                    20.,
+                )]
+            })
+            .size(160., 160.),
+        ))
+        .unwrap();
+        let mut p = scene.paint.iter().find(|p| p.width > 0.).unwrap().clone();
+        let mut walk = Walk::default();
+        let mut round = [[0.; 4]; SLOTS];
+        walk.entry(&p, Affine::IDENTITY, &mut round).unwrap();
+        p.join = mui_scene::Join::Miter;
+        let mut miter = [[0.; 4]; SLOTS];
+        walk.entry(&p, Affine::IDENTITY, &mut miter).unwrap();
+        assert_eq!(round[9], miter[9], "gradient stays fitted to the path");
+        assert!(miter[2][0] < round[2][0], "instance covers expanded stroke");
+    }
 }

@@ -57,13 +57,15 @@ pub use mui_weld::{Channel as WeldChannel, Quality as WeldQuality, Weld, WeldCac
 pub use dsl::{body, caption, title};
 pub use element::{
     A11y, Appear, Canvas, CanvasCache, Carve, Content, Draw, El, Element, Extras, IntoEl, Memo,
-    Outline, Paints, Semantics, State, StateStyle, Styled, TextRole, bar, block, canvas,
+    Outline, Paints, Semantics, State, StateStyle, Styled, TextAlign, TextRole, bar, block, canvas,
     canvas_keyed, col, fits, grid, icon, row, spacer, stack, text,
 };
 pub use mui_geometry::CornerStyle;
+/// A [`Draw::stroke`]'s ends and corners, kurbo's own.
+pub use mui_geometry::kurbo::{Cap, Join};
 pub use mui_layout::{
     Align, Area, Frame, GridTrack, Id, Insets, Justify, Layout, Len, Limits, Match, Node, Pad, Pin,
-    Px, Size, Spacing, SpacingScale, SpacingToken,
+    Px, Size, Spacing, SpacingScale, SpacingToken, Turn,
 };
 pub use mui_motion::{Ease, Keys, Spring, curve};
 pub use mui_style::{
@@ -84,12 +86,12 @@ pub mod prelude {
     #[cfg(test)]
     pub use crate::material::Material;
     pub use crate::{
-        A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Color, Corner,
+        A11y, Align, Appear, Area, Axes, BorderAlign, BorderRamp, CanvasCache, Cap, Color, Corner,
         Cursor, Draw, Ease, El, Elevation, Fill, Fit, Font, Gradient, GridTrack, Id, Image, IntoEl,
-        Justify, Keys, Len, Match, Mix, Paints, Pin, Radius, Resolver, Role, SceneSpec, Shadow,
-        ShapeLayout, Size, State, Style, Styled, Theme, Weight, Weld, WeldBackend, WeldChannel,
-        WeldQuality, bar, block, body, canvas, canvas_keyed, caption, col, fits, grid, icon,
-        resolve, row, spacer, stack, text, title, weld,
+        Join, Justify, Keys, Len, Match, Mix, Paints, Pin, Radius, Resolver, Role, SceneSpec,
+        Shadow, ShapeLayout, Size, State, Style, Styled, TextAlign, Theme, Turn, Weight, Weld,
+        WeldBackend, WeldChannel, WeldQuality, bar, block, body, canvas, canvas_keyed, caption,
+        col, fits, grid, icon, resolve, row, spacer, stack, text, title, weld,
     };
     pub use mui_geometry::{CornerStyle, Path, Point};
     pub use mui_layout::Spacing;

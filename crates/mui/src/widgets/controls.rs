@@ -11,8 +11,9 @@ use crate::Ui;
 use crate::widgets::{Response, TextOpts, text_edit};
 
 /// What a ranged control edits: its range, the value a double click puts
-/// back, and where its fill grows from. A bare `lo..=hi` converts, so a
-/// plain range still works everywhere a `Domain` is asked for.
+/// back, where its fill grows from, and how its value reads and is typed
+/// in units. A bare `lo..=hi` converts, so a plain range still works
+/// everywhere a `Domain` is asked for.
 ///
 /// ```
 /// use mui::prelude::*;
@@ -22,11 +23,29 @@ use crate::widgets::{Response, TextOpts, text_edit};
 /// // a double click puts it back to 0.
 /// let p = knob(&mut ui, "pan", "Pan", &mut pan, Domain::new(-1.0..=1.0).default(0.0));
 /// ```
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Domain {
     range: RangeInclusive<f64>,
     default: Option<f64>,
     origin: Option<f64>,
+    format: Option<Format>,
+    parse: Option<Parse>,
+}
+/// A value in the domain's units, as text.
+type Format = Arc<dyn Fn(f64) -> String + Send + Sync>;
+/// Typed text back to a value in the domain's units, `None` if it does not read.
+type Parse = Arc<dyn Fn(&str) -> Option<f64> + Send + Sync>;
+
+impl std::fmt::Debug for Domain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Domain")
+            .field("range", &self.range)
+            .field("default", &self.default)
+            .field("origin", &self.origin)
+            .field("format", &self.format.is_some())
+            .field("parse", &self.parse.is_some())
+            .finish()
+    }
 }
 impl Domain {
     pub fn new(range: RangeInclusive<f64>) -> Self {
@@ -34,6 +53,8 @@ impl Domain {
             range,
             default: None,
             origin: None,
+            format: None,
+            parse: None,
         }
     }
     /// The value a double click restores.
@@ -46,6 +67,77 @@ impl Domain {
     pub fn origin(mut self, value: f64) -> Self {
         self.origin = Some(value);
         self
+    }
+    /// How a value reads, in units. A [`knob`], [`slider`] or
+    /// [`drag_value`] shows it when no `.value_text(..)` is given, reserves
+    /// the formatted ends of the range, and opens its typing field with it.
+    ///
+    /// Build the domain once and clone it each frame: a clone shares the
+    /// closure instead of allocating a new one.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let hz = Domain::new(20.0..=20_000.0).format(|v| format!("{v:.0} Hz"));
+    /// let mut cutoff = 440.0;
+    /// let dial = knob(&mut ui, "cut", "Cutoff", &mut cutoff, hz.clone());
+    /// assert_eq!(hz.formatted(440.0), "440 Hz");
+    /// ```
+    pub fn format(mut self, f: impl Fn(f64) -> String + Send + Sync + 'static) -> Self {
+        self.format = Some(Arc::new(f));
+        self
+    }
+    /// How typed text reads back as a value of this domain (`"1.2k"`,
+    /// `"-3 dB"`); `None` leaves the value alone. Without one, typing reads a
+    /// plain number. A [`knob`] or [`slider`] opens a typing field only when
+    /// its domain has a parser; [`drag_value`] always does.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let hz = Domain::new(20.0..=20_000.0).parse(|s| {
+    ///     let s = s.trim().trim_end_matches("Hz").trim();
+    ///     match s.strip_suffix('k') {
+    ///         Some(k) => k.trim().parse::<f64>().ok().map(|k| k * 1000.0),
+    ///         None => s.parse().ok(),
+    ///     }
+    /// });
+    /// assert_eq!(hz.parsed("1.2k"), Some(1200.0));
+    /// assert_eq!(hz.parsed("99999 Hz"), Some(20_000.0), "clamped to the range");
+    /// assert_eq!(hz.parsed("loud"), None);
+    /// ```
+    pub fn parse(mut self, f: impl Fn(&str) -> Option<f64> + Send + Sync + 'static) -> Self {
+        self.parse = Some(Arc::new(f));
+        self
+    }
+    /// `value` as this domain formats it: the [`Domain::format`] callback,
+    /// or two decimals.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// assert_eq!(Domain::new(0.0..=1.0).formatted(0.5), "0.50");
+    /// ```
+    pub fn formatted(&self, value: f64) -> String {
+        match &self.format {
+            Some(f) => f(value),
+            None => format!("{value:.2}"),
+        }
+    }
+    /// Typed text as a value of this domain, clamped to its range: the
+    /// [`Domain::parse`] callback, or a plain number. `None` for text that
+    /// does not read or a value that is not finite.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// assert_eq!(Domain::new(0.0..=1.0).parsed(" 2 "), Some(1.0));
+    /// assert_eq!(Domain::new(0.0..=1.0).parsed("NaN"), None);
+    /// ```
+    pub fn parsed(&self, text: &str) -> Option<f64> {
+        let v = match &self.parse {
+            Some(f) => f(text),
+            None => text.trim().parse().ok(),
+        }?;
+        let (lo, hi) = (*self.range.start(), *self.range.end());
+        v.is_finite().then(|| v.clamp(lo.min(hi), lo.max(hi)))
     }
     fn origin_t(&self) -> f64 {
         let (lo, hi) = (*self.range.start(), *self.range.end());
@@ -122,13 +214,175 @@ struct Look {
     px: f64,
     variant: Variant,
     role: Role,
-    dial_color: Option<Fill>,
+    accent: Option<Fill>,
     modulation: Option<Modulation>,
     palette: Palette,
     text: Option<String>,
     reserve: Option<Arc<[String]>>,
     description: Option<Arc<str>>,
     step: Option<f64>,
+    /// The domain's formatter, for a reading no `.value_text` replaced.
+    format: Option<Format>,
+    knob: Knob,
+    /// A knob face that takes a square share of its cell.
+    fill_cell: bool,
+    /// A button's leading and trailing icons.
+    icons: [Option<char>; 2],
+    /// Where a reading sits in its reserved width.
+    value_align: TextAlign,
+    value_align_explicit: bool,
+}
+
+/// How a [`knob`] is painted: a 270-degree track, the value arc on it, a
+/// disc inside and, optionally, a pointer. Lengths are shares of the knob's
+/// radius (half the face), so one look fits every size; colours are fills,
+/// roles by default, so it follows the theme. Set it per control with
+/// [`Control::look`]; a bipolar arc comes from the domain's `origin`.
+///
+/// The presets are the Matari plugins' knobs, so they can share them:
+/// [`Knob::smooth`] (the default), [`Knob::k`] (KURV and KONTRA),
+/// [`Knob::drama`] and [`Knob::buffr`].
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let mut v = 0.5;
+/// let k = knob(&mut ui, "depth", "Depth", &mut v, 0.0..=1.0).look(Knob::k());
+/// // Or any part of a preset.
+/// let thin = Knob { width: 0.08, ..Knob::smooth() };
+/// assert_eq!(Knob::default(), Knob::smooth());
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Knob {
+    /// The track's centreline.
+    pub ring: f64,
+    /// The track's and the arc's stroke width.
+    pub width: f64,
+    /// The gap between the track's inner edge and the face disc.
+    pub inset: f64,
+    /// The track, the whole 270 degrees.
+    pub track: Fill,
+    /// The value arc. `None` takes the control's role (or its
+    /// [`Control::accent`]) and brightens it under the pointer; a fill
+    /// here is painted as given, but `accent` still wins.
+    pub arc: Option<Fill>,
+    /// The disc inside the ring.
+    pub face: Fill,
+    /// How the track and the arc end: [`Cap::Butt`] for a square-cut
+    /// instrument arc, [`Cap::Round`] for a soft one.
+    pub cap: Cap,
+    /// A centred shadow the face casts over the ring: its blur as a share of
+    /// the radius, and its paint. `None` paints no shadow.
+    pub shadow: Option<(f64, Fill)>,
+    /// A mark at the value's angle, painted over the face. `None` paints
+    /// none.
+    pub pointer: Option<Pointer>,
+}
+
+/// A knob's value mark: a radial line from `from` to `to` (shares of the
+/// radius, round-ended) and a dot of radius `dot` at `to`. A zero `width`
+/// leaves only the dot; a zero `dot` only the line.
+///
+/// ```
+/// use mui::prelude::*;
+/// // BUFFR's dot riding the ring.
+/// let dot = Pointer { from: 0.86, to: 0.86, width: 0.0, dot: 0.13, fill: None };
+/// let k = Knob { pointer: Some(dot), ..Knob::smooth() };
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pointer {
+    pub from: f64,
+    pub to: f64,
+    pub width: f64,
+    pub dot: f64,
+    /// `None` paints it in the arc's colour.
+    pub fill: Option<Fill>,
+}
+
+impl Knob {
+    /// SMOOTH's knob, MUI's default: a thick square-cut track at the edge,
+    /// an ink arc, and a raised face sitting on the ring with a soft shadow.
+    pub fn smooth() -> Self {
+        Self {
+            ring: 0.92,
+            width: 0.14,
+            inset: 0.0,
+            track: Role::Level(4).into(),
+            arc: Some(Role::Ink.into()),
+            face: Role::Level(5).into(),
+            cap: Cap::Butt,
+            shadow: Some((0.12, Fill::Faded(Role::Level(-12), 0.55))),
+            pointer: None,
+        }
+    }
+    /// The K knob (KURV, KONTRA): a solid track, the role's arc, a domed
+    /// face lit from above, and an ink pointer line.
+    pub fn k() -> Self {
+        Self {
+            ring: 0.755,
+            width: 0.105,
+            inset: 0.157,
+            track: Role::Level(3).into(),
+            arc: None,
+            face: Gradient::linear(180., [(0., Role::Level(6)), (1., Role::Level(5))]).into(),
+            cap: Cap::Round,
+            shadow: None,
+            pointer: Some(Pointer {
+                from: 0.16,
+                to: 0.46,
+                width: 0.112,
+                dot: 0.0,
+                fill: Some(Role::Ink.into()),
+            }),
+        }
+    }
+    /// DRAMA's knob: a faint hairline track and an ink arc that brightens
+    /// along its sweep, with no face, so an icon or reading sits bare.
+    pub fn drama() -> Self {
+        Self {
+            ring: 0.885,
+            width: 0.16,
+            inset: 0.0,
+            track: Fill::Faded(Role::Ink, 0.10),
+            arc: Some(
+                Gradient::linear(
+                    90.,
+                    [(0., Fill::Faded(Role::Ink, 0.55)), (1., Role::Ink.into())],
+                )
+                .into(),
+            ),
+            face: Fill::None,
+            cap: Cap::Round,
+            shadow: None,
+            pointer: None,
+        }
+    }
+    /// BUFFR's knob: a sunken face, a soft track, the role's arc and a dot
+    /// riding the ring at the value.
+    pub fn buffr() -> Self {
+        Self {
+            ring: 0.86,
+            width: 0.13,
+            inset: 0.107,
+            track: Fill::Faded(Role::Ink, 0.12),
+            arc: None,
+            face: Role::Level(-1).into(),
+            cap: Cap::Round,
+            shadow: None,
+            pointer: Some(Pointer {
+                from: 0.86,
+                to: 0.86,
+                width: 0.0,
+                dot: 0.13,
+                fill: None,
+            }),
+        }
+    }
+}
+impl Default for Knob {
+    fn default() -> Self {
+        Self::smooth()
+    }
 }
 
 /// A keyboard activation is the same primary action as a click. `Ui::keys`
@@ -138,6 +392,27 @@ fn activated(ui: &Ui, id: &str) -> bool {
     ui.get(id).activated()
 }
 impl Look {
+    /// The resting look: a solid primary control with nothing said yet.
+    fn new(palette: Palette, px: f64) -> Self {
+        Self {
+            px,
+            variant: Variant::Solid,
+            role: Role::Primary,
+            accent: None,
+            modulation: None,
+            palette,
+            text: None,
+            reserve: None,
+            description: None,
+            step: None,
+            format: None,
+            knob: Knob::smooth(),
+            fill_cell: false,
+            icons: [None; 2],
+            value_align: TextAlign::Start,
+            value_align_explicit: false,
+        }
+    }
     fn describe(&self, mut el: El, numeric: bool) -> El {
         if let Some(description) = &self.description {
             el = el.described(description.clone());
@@ -208,6 +483,23 @@ impl Look {
     }
 }
 
+/// A button's paint for a face another widget builds (`select`'s
+/// trigger): the resting box style, the ink that reads on it, and the
+/// hover, from one variant and role. Kept apart so the two looks cannot
+/// drift.
+pub(crate) fn button_paint(
+    palette: Palette,
+    variant: Variant,
+    role: Role,
+) -> (Style, Fill, impl Fn(Style) -> Style + use<>) {
+    let look = Look {
+        variant,
+        role,
+        ..Look::new(palette, 0.0)
+    };
+    (look.style(), look.ink(), look.hover())
+}
+
 /// A control the widget has taken its value from, with what is left to say
 /// about how it looks: the variant, the size, and the pixels as an escape
 /// hatch. Finish it with [`Control::el`], or drop it straight into a
@@ -235,11 +527,13 @@ pub struct Control {
 /// the look, which the caller can still change. One label allocation,
 /// shared by the text and the accessible name.
 enum Kind {
-    Slider(Id, Arc<str>, Dial),
-    Knob(Id, Arc<str>, Dial, DialCache),
-    Button(Id, Arc<str>),
+    /// A ranged control, with its typing field while one is open.
+    Slider(Id, Arc<str>, Reading, Option<Box<El>>),
+    Knob(Id, Arc<str>, Reading, DialCache, Option<Box<El>>),
+    /// A button; the symbol makes it an icon button.
+    Button(Id, Arc<str>, Option<char>),
     Toggle(Id, Arc<str>, bool),
-    Drag(Id, Arc<str>, Dial),
+    Drag(Id, Arc<str>, Reading),
     /// A [`drag_value`] being typed into: its field, at the width it had.
     Field(Box<El>, f64),
 }
@@ -247,7 +541,7 @@ enum Kind {
 /// A ranged control's reading: the value and its range, where the drawn
 /// thumb or pointer sits (`t`, 0..1, tweened) and how hovered it is.
 #[derive(Clone, Copy)]
-struct Dial {
+struct Reading {
     value: f64,
     min: f64,
     max: f64,
@@ -256,7 +550,7 @@ struct Dial {
     origin: f64,
     hover: f64,
 }
-impl Dial {
+impl Reading {
     /// Drag `value` over `travel` (vertically for a dial), step it by the
     /// focused keys, and read it back with its thumb tweened toward it.
     fn read(
@@ -284,7 +578,7 @@ impl Dial {
     }
     fn of(value: f64, range: &RangeInclusive<f64>, t: f64, hover: f64) -> Self {
         let (min, max) = (*range.start(), *range.end());
-        Dial {
+        Reading {
             value,
             min,
             max,
@@ -305,7 +599,8 @@ impl Dial {
         }
     }
     fn readout(&self, look: &Look) -> El {
-        let el = readout(look.text.clone(), self.value, self.min, self.max);
+        let el =
+            readout(look.text.clone(), self.value, self.min, self.max).text_align(look.value_align);
         match &look.reserve {
             Some(samples) => el.reserve_all(samples.clone()),
             None => el,
@@ -316,18 +611,7 @@ impl Dial {
 impl Control {
     fn new(ui: &Ui, kind: Kind) -> Self {
         Self {
-            look: Look {
-                px: ui.theme().control,
-                variant: Variant::Solid,
-                role: Role::Primary,
-                dial_color: None,
-                modulation: None,
-                palette: ui.theme().palette,
-                text: None,
-                reserve: None,
-                description: None,
-                step: None,
-            },
+            look: Look::new(ui.theme().palette, ui.theme().control),
             size: SpacingToken::M,
             px: None,
             kind,
@@ -338,10 +622,16 @@ impl Control {
         }
     }
 
+    /// Read with the domain's formatter when no `.value_text` is given.
+    fn format(mut self, domain: &Domain) -> Self {
+        self.look.format = domain.format.clone();
+        self
+    }
+
     pub(crate) fn hide_matching_adjustment_label(mut self, setting_label: &str) -> Self {
         if matches!(
             &self.kind,
-            Kind::Slider(_, label, _) | Kind::Knob(_, label, _, _) if label.as_ref() == setting_label
+            Kind::Slider(_, label, ..) | Kind::Knob(_, label, ..) if label.as_ref() == setting_label
         ) {
             self.label_visible = false;
         }
@@ -404,6 +694,25 @@ impl Control {
         self.look.text = Some(s.into());
         self
     }
+    /// Where the reading sits inside the width its reserve keeps:
+    /// [`TextAlign::Start`] by default, `Center` so a short value does not
+    /// hug one edge of a long reserve. Applies to the readouts of a
+    /// [`knob`], [`slider`] and [`drag_value`]. A knob with a split value
+    /// and unit stays centered until this is explicitly set.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let mut v = 0.5;
+    /// let fader = slider(&mut ui, "mix", "Mix", &mut v, 0.0..=1.0)
+    ///     .value_reserve("100.00")
+    ///     .value_align(TextAlign::Center);
+    /// ```
+    pub fn value_align(mut self, align: TextAlign) -> Self {
+        self.look.value_align = align;
+        self.look.value_align_explicit = true;
+        self
+    }
     /// Hide the visible caption while retaining the input's accessible name.
     pub fn hide_label(mut self) -> Self {
         self.label_visible = false;
@@ -424,8 +733,71 @@ impl Control {
     }
     /// Override a knob's arc and centered value with a custom instrument accent.
     /// Other controls retain their palette role.
-    pub fn dial_color(mut self, fill: impl Into<Fill>) -> Self {
-        self.look.dial_color = Some(fill.into());
+    pub fn accent(mut self, fill: impl Into<Fill>) -> Self {
+        self.look.accent = Some(fill.into());
+        self
+    }
+    /// How a knob is painted: [`Knob::smooth`] unless told, or another
+    /// preset such as [`Knob::drama`]. Other controls ignore it.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let mut v = 0.5;
+    /// let k = knob(&mut ui, "mix", "Mix", &mut v, 0.0..=1.0).look(Knob::drama());
+    /// ```
+    pub fn look(mut self, knob: Knob) -> Self {
+        self.look.knob = knob;
+        self
+    }
+    /// A knob whose face takes a square share of whatever its cell gives
+    /// it -- the smaller of the cell's width and the height left under the
+    /// caption -- instead of a diameter from [`Control::size`]. The knob
+    /// stretches across its parent and grows along it (`.grow(1)`, which a
+    /// later `.grow(n)` replaces): give sibling knobs, or the cells holding
+    /// them, `.grow(2)` and `.grow(1)` and their dials can come out 2:1,
+    /// provided the other axis has enough room: `aspect_fit(1)` limits each
+    /// face to a square, so a narrow width can make both dials equal. The face
+    /// has no size of its own, so a parent that only hugs its content
+    /// leaves it a dot: give the panel a size. The reading and caption
+    /// keep the size token's text size: scaling them by the diameter would
+    /// need the layout twice. Other controls ignore it.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let (mut a, mut b) = (0.5, 0.5);
+    /// let hero = knob(&mut ui, "depth", "Depth", &mut a, 0.0..=1.0).fill_cell();
+    /// let small = knob(&mut ui, "mix", "Mix", &mut b, 0.0..=1.0).fill_cell();
+    /// // Enough width lets the dial sizes follow the available cell heights.
+    /// let panel = col![hero.grow(2), small.grow(1)].w(300).h(300);
+    /// ```
+    pub fn fill_cell(mut self) -> Self {
+        self.look.fill_cell = true;
+        self
+    }
+    /// A leading icon on a [`button`], in the theme's
+    /// [`icon_font`](mui_scene::Theme::icon_font) and the label's ink. Other
+    /// controls ignore it.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let save = button(&mut ui, "save", "Save").icon(sym::SAVE);
+    /// ```
+    pub fn icon(mut self, symbol: char) -> Self {
+        self.look.icons[0] = Some(symbol);
+        self
+    }
+    /// A trailing icon on a [`button`], as [`Control::icon`].
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let next = button(&mut ui, "next", "Next").icon_end(sym::ARROW_FORWARD);
+    /// ```
+    pub fn icon_end(mut self, symbol: char) -> Self {
+        self.look.icons[1] = Some(symbol);
         self
     }
     /// The modulation on this control, drawn on a ring outside a knob's
@@ -501,10 +873,22 @@ impl Control {
             SpacingToken::Xl => 14.0,
         };
         self.look.px = self.px.unwrap_or(self.look.px * steps);
+        // The domain's formatter speaks for a reading nobody set, and
+        // reserves the formatted ends (a knob's face does not move with it).
+        if self.look.text.is_none()
+            && let Some(f) = &self.look.format
+            && let Kind::Slider(_, _, d, _) | Kind::Knob(_, _, d, ..) | Kind::Drag(_, _, d) =
+                &self.kind
+        {
+            self.look.text = Some(f(d.value));
+            if self.look.reserve.is_none() && !matches!(self.kind, Kind::Knob(..)) {
+                self.look.reserve = Some(Arc::from([f(d.min), f(d.max)]));
+            }
+        }
         let look = &self.look;
         let label_visible = self.label_visible;
         let tip = match &self.kind {
-            Kind::Slider(_, label, d) | Kind::Knob(_, label, d, _) if self.quiet => {
+            Kind::Slider(_, label, d, _) | Kind::Knob(_, label, d, ..) if self.quiet => {
                 let reading = look
                     .text
                     .clone()
@@ -514,18 +898,22 @@ impl Control {
             _ => None,
         };
         let el = match self.kind {
-            Kind::Slider(id, label, d) if self.vertical => {
-                fader_el(look, id, label, d, label_visible && !self.quiet)
+            Kind::Slider(id, label, d, field) if self.vertical => {
+                fader_el(look, id, label, d, field, label_visible && !self.quiet)
             }
-            Kind::Slider(id, label, d) if self.quiet => fader_el(look, id, label, d, false),
-            Kind::Slider(id, label, d) => slider_el(look, id, label, d, label_visible),
-            Kind::Knob(id, label, d, cache) if self.quiet => {
-                knob_el(look, id, label, d, &cache, false, false)
+            Kind::Slider(id, label, d, field) if self.quiet => {
+                fader_el(look, id, label, d, field, false)
             }
-            Kind::Knob(id, label, d, cache) => {
-                knob_el(look, id, label, d, &cache, label_visible, true)
+            Kind::Slider(id, label, d, field) => {
+                slider_el(look, id, label, d, field, label_visible)
             }
-            Kind::Button(id, label) => button_el(look, id, label),
+            Kind::Knob(id, label, d, cache, field) if self.quiet => {
+                knob_el(look, id, label, d, &cache, field, false, false)
+            }
+            Kind::Knob(id, label, d, cache, field) => {
+                knob_el(look, id, label, d, &cache, field, label_visible, true)
+            }
+            Kind::Button(id, label, only) => button_el(look, id, label, only),
             Kind::Toggle(id, label, on) => toggle_el(look, id, label, on),
             Kind::Drag(id, label, d) => drag_el(look, id, label, d),
             Kind::Field(el, width) => look.describe(el.w(width), false),
@@ -702,14 +1090,22 @@ pub fn slider(
             *value = range.start() + t * (range.end() - range.start());
         }
     }
-    let dial = Dial::read(ui, &id, value, &domain, travel, vertical);
+    let field = typed_or_idle(ui, &id, label, value, &domain);
+    let dial = Reading::read(ui, &id, value, &domain, travel, vertical);
     Response {
         changed: moved(before, *value),
-        el: Control::new(ui, Kind::Slider(id, label.into(), dial)),
+        el: Control::new(ui, Kind::Slider(id, label.into(), dial, field)).format(&domain),
     }
 }
 
-fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
+fn slider_el(
+    look: &Look,
+    id: Id,
+    label: Arc<str>,
+    d: Reading,
+    field: Option<Box<El>>,
+    label_visible: bool,
+) -> El {
     // The rail is a fraction of the control's height, so one size token
     // moves the track, the thumb and the row together.
     let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
@@ -718,14 +1114,15 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool)
     let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
         .pill()
         .fill(look.role);
+    // While typed into, the field stands where the reading was.
+    let reading = match field {
+        Some(field) => *field,
+        None => d.readout(look).fill(Role::Dim).id(id.field("reading")),
+    };
     let header = (if label_visible {
-        row([
-            text(label.clone()),
-            spacer(),
-            d.readout(look).fill(Role::Dim),
-        ])
+        row([text(label.clone()), spacer(), reading])
     } else {
-        row([spacer(), d.readout(look).fill(Role::Dim)])
+        row([spacer(), reading])
     })
     .gap(S);
     col([
@@ -758,7 +1155,14 @@ fn slider_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool)
 
 /// A slider standing up (or a quiet one lying down): the lane alone, the
 /// caption under it when shown. The fill grows from the origin.
-fn fader_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) -> El {
+fn fader_el(
+    look: &Look,
+    id: Id,
+    label: Arc<str>,
+    d: Reading,
+    field: Option<Box<El>>,
+    label_visible: bool,
+) -> El {
     let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
     let (t, h) = (d.t, d.hover);
     let (a, b) = d.span();
@@ -788,12 +1192,13 @@ fn fader_el(look: &Look, id: Id, label: Arc<str>, d: Dial, label_visible: bool) 
         .id(id),
         true,
     );
-    if label_visible && !label.is_empty() {
-        col([input, text(label).fill(Role::Dim)])
+    // No reading to stand in for: a field being typed goes under the lane.
+    match field {
+        Some(field) => col([input, *field]).gap(Xs).align(Align::Center),
+        None if label_visible && !label.is_empty() => col([input, text(label).fill(Role::Dim)])
             .gap(Xs)
-            .align(Align::Center)
-    } else {
-        input
+            .align(Align::Center),
+        None => input,
     }
 }
 
@@ -824,10 +1229,11 @@ pub fn knob(
     let id: Id = id.into();
     let range = range.into();
     let before = *value;
+    let field = typed_or_idle(ui, &id, label, value, &range);
     // Unlike a slider's, a dial's travel is a hand distance, not a geometry:
     // the whole face is the target and 120 px of vertical drag sweeps the
     // range whatever the diameter, so a small knob is not a twitchy one.
-    let dial = Dial::read(ui, &id, value, &range, 120.0, true);
+    let dial = Reading::read(ui, &id, value, &range, 120.0, true);
     // The painted dial is three ~50-point paths; a still knob reuses them.
     let cache = ui.stash::<DialCache>(&id).cloned().unwrap_or_else(|| {
         let c = DialCache::new();
@@ -836,20 +1242,25 @@ pub fn knob(
     });
     Response {
         changed: moved(before, *value),
-        el: Control::new(ui, Kind::Knob(id, label.into(), dial, cache)),
+        el: Control::new(ui, Kind::Knob(id, label.into(), dial, cache, field)).format(&range),
     }
 }
 
-/// What a knob's painted dial reads: its sweep, colour, stroke width and
-/// modulation.
-type DialCache = CanvasCache<(u64, u64, Fill, u64, Option<Modulation>)>;
+/// What a knob's painted dial reads: its sweep, the arc's paint, the
+/// whole style and the modulation; the size is the cache's own.
+type DialCache = CanvasCache<(u64, u64, Fill, Knob, Option<Modulation>)>;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the pieces a knob is drawn from, moved out of its `Kind`"
+)]
 fn knob_el(
     look: &Look,
     id: Id,
     label: Arc<str>,
-    d: Dial,
+    d: Reading,
     cache: &DialCache,
+    field: Option<Box<El>>,
     label_visible: bool,
     reading_visible: bool,
 ) -> El {
@@ -857,56 +1268,92 @@ fn knob_el(
     // formatted reading in its centre. The square keeps one size across
     // values; units get a second centered line inside the same compact face.
     let size = look.px * 1.25;
-    let color = look.dial_color.clone().unwrap_or_else(|| look.role.into());
-    let active = color.map(&look.palette, look.palette.surface(), |color| {
-        color.with_alpha((0.82 + d.hover * 0.18) as f32)
-    });
+    let dial = &look.knob;
+    // An accent (`accent`) or the role brightens under the pointer; a
+    // style's own arc paint is painted as given.
+    let (color, active) = if let (None, Some(arc)) = (&look.accent, &dial.arc) {
+        (arc.clone(), arc.clone())
+    } else {
+        let color = look.accent.clone().unwrap_or_else(|| look.role.into());
+        let active = color.map(&look.palette, look.palette.surface(), |color| {
+            color.with_alpha((0.82 + d.hover * 0.18) as f32)
+        });
+        (color, active)
+    };
     let (from, to) = d.span();
-    let width = look.px / 16.;
+    let t = d.t;
     let modulation = look.modulation.clone();
     let key = (
         from.to_bits(),
         to.to_bits(),
         active.clone(),
-        width.to_bits(),
+        dial.clone(),
         look.modulation.clone(),
     );
+    let style = dial.clone();
     let paint = canvas_keyed(cache, key, move |size| {
         let center = Point::new(size.width * 0.5, size.height * 0.5);
-        let radius = size.width.min(size.height) * 0.42;
-        let arc_at = |from: f64, to: f64, radius: f64| {
+        let r = size.width.min(size.height) * 0.5;
+        let (ring, width) = (r * style.ring, r * style.width);
+        let arc_at = |from: f64, to: f64, ring: f64| {
             Path::polyline(
                 (0..=48).map(|i| {
                     let angle = std::f64::consts::PI * 0.75
                         + std::f64::consts::PI * 1.5 * (from + (to - from) * f64::from(i) / 48.);
-                    Point::new(
-                        center.x + angle.cos() * radius,
-                        center.y + angle.sin() * radius,
-                    )
+                    Point::new(center.x + angle.cos() * ring, center.y + angle.sin() * ring)
                 }),
                 false,
             )
         };
-        let arc = |from: f64, to: f64| arc_at(from, to, radius);
+        let arc = |from: f64, to: f64| arc_at(from, to, ring);
+        let face = (ring - width * 0.5 - r * style.inset).max(0.0);
         let disc = Path::polyline(
             (0..64).map(|i| {
                 let angle = std::f64::consts::TAU * f64::from(i) / 64.;
-                Point::new(
-                    center.x + angle.cos() * radius * 0.76,
-                    center.y + angle.sin() * radius * 0.76,
-                )
+                Point::new(center.x + angle.cos() * face, center.y + angle.sin() * face)
             }),
             true,
         );
         let mut draws = vec![
-            Draw::stroke(arc(0., 1.), Role::Dim.alpha(0.12), width),
-            Draw::stroke(arc(from, to), active.clone(), width),
-            Draw::fill(disc, Role::Field),
+            Draw::stroke(arc(0., 1.), style.track.clone(), width).cap(style.cap),
+            Draw::stroke(arc(from, to), active.clone(), width).cap(style.cap),
         ];
-        // The modulation rides a thin ring just outside the value arc: its
-        // reach faint, base to live value solid.
+        if let Some((blur, fill)) = &style.shadow
+            && let Ok(circle) = Path::circle(center, face)
+        {
+            draws.push(Draw::shadow(circle, r * blur, (0., 0.), fill.clone()));
+        }
+        draws.push(Draw::fill(disc, style.face.clone()));
+        if let Some(p) = &style.pointer {
+            let fill = p.fill.clone().unwrap_or_else(|| active.clone());
+            // The value's end of the arc, which a bipolar arc may start from.
+            let angle = std::f64::consts::PI * (0.75 + 1.5 * t);
+            let at = |share: f64| {
+                Point::new(
+                    center.x + angle.cos() * r * share,
+                    center.y + angle.sin() * r * share,
+                )
+            };
+            if p.width > 0.0 {
+                let line = Path::polyline([at(p.from), at(p.to)], false);
+                draws.push(Draw::stroke(line, fill.clone(), r * p.width).cap(Cap::Round));
+            }
+            if p.dot > 0.0
+                && let Ok(dot) = Path::circle(at(p.to), r * p.dot)
+            {
+                draws.push(Draw::fill(dot, fill));
+            }
+        }
+        // The modulation rides a thin ring just outside the track: its reach
+        // faint, base to live value solid. A track at the edge leaves no
+        // room outside, so there it rides just inside.
         if let Some(m) = &modulation {
-            let ring = radius + width * 1.5;
+            let outside = ring + width * 1.5;
+            let ring = if outside + width * 0.25 <= r {
+                outside
+            } else {
+                ring - width * 1.5
+            };
             let faint = m.fill.clone().faded(0.35);
             draws.push(Draw::stroke(arc_at(m.lo, m.hi, ring), faint, width * 0.5));
             if let Some(live) = m.live {
@@ -922,14 +1369,41 @@ fn knob_el(
     .full();
     let reading =
         if let Some((value, unit)) = look.text.as_deref().and_then(|text| text.split_once(' ')) {
-            col![
-                text(value).text_size(look.px * 0.3).fill(color.clone()),
-                text(unit).text_size(look.px * 0.3).fill(color.clone()),
-            ]
-            .gap(0.)
-            .align(Align::Center)
+            let samples = look.reserve.as_deref().unwrap_or(&[]);
+            let align = if look.value_align_explicit {
+                look.value_align
+            } else {
+                TextAlign::Center
+            };
+            let line = |content: &str, unit_line: bool| {
+                text(content)
+                    .reserve_all(
+                        samples
+                            .iter()
+                            .map(|sample| {
+                                let (v, u) = sample.split_once(' ').unwrap_or((sample, ""));
+                                if unit_line {
+                                    u.to_owned()
+                                } else {
+                                    v.to_owned()
+                                }
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                    .text_align(align)
+                    .text_size(look.px * 0.3)
+                    .fill(color.clone())
+            };
+            col![line(value, false), line(unit, true)]
+                .gap(0.)
+                .align(match align {
+                    TextAlign::Start => Align::Start,
+                    TextAlign::End => Align::End,
+                    _ => Align::Center,
+                })
         } else {
-            readout(look.text.clone(), d.value, d.min, d.max)
+            d.readout(look)
+                .text_align(look.value_align)
                 .text_size(look.px * 0.3)
                 .fill(color.clone())
         }
@@ -947,16 +1421,46 @@ fn knob_el(
     );
     // The single input target sits above the painted arc and reading. Clicking
     // the value must begin the same drag as clicking anywhere else on the dial.
-    let face = if reading_visible {
-        stack![paint, col![reading].center().full(), input].square(size)
+    // A field being typed into replaces the reading, above the target so it
+    // takes its own clicks.
+    let face = if look.fill_cell {
+        // Decorations, so nothing but the cell sizes the face: its reading
+        // would otherwise be a floor every filling knob shares, and sibling
+        // cells' dials would not keep their cells' proportions.
+        let layers = match field {
+            Some(field) => vec![
+                paint.underlay(),
+                input,
+                col![*field].center().full().overlay(),
+            ],
+            None if reading_visible => vec![
+                paint.underlay(),
+                col![reading].center().full().underlay(),
+                input,
+            ],
+            None => vec![paint.underlay(), input],
+        };
+        stack(layers).aspect_fit(1).grow(1)
     } else {
-        stack![paint, input].square(size)
+        match field {
+            Some(field) => stack![paint, input, col![*field].center().full()],
+            None if reading_visible => stack![paint, col![reading].center().full(), input],
+            None => stack![paint, input],
+        }
+        .square(size)
     };
     let mut content = vec![face];
     if label_visible && !label.is_empty() {
         content.push(text(label).text_size(look.px * 0.3).fill(Role::Dim));
     }
-    col(content).gap(Xs).align(Align::Center)
+    let knob = col(content).gap(Xs).align(Align::Center);
+    // Stretched across its parent and growing along it, not `100%`: a
+    // percentage would be every sibling's basis and undo their weights.
+    if look.fill_cell {
+        knob.grow(1).align_self(Align::Stretch)
+    } else {
+        knob
+    }
 }
 
 /// A labelled action. Returns the control and whether it was clicked last
@@ -973,15 +1477,62 @@ pub fn button(ui: &mut Ui, id: impl Into<Id>, label: &str) -> Response<bool, Con
     let id: Id = id.into();
     Response {
         changed: activated(ui, &id),
-        el: Control::new(ui, Kind::Button(id, label.into())),
+        el: Control::new(ui, Kind::Button(id, label.into(), None)),
     }
 }
 
-fn button_el(look: &Look, id: Id, label: Arc<str>) -> El {
+/// An action shown as an icon alone: a round target as tall as a text
+/// button of the same size, every [`Variant`] and size a [`button`] takes.
+/// The label is not drawn but is required: it is the button's accessible
+/// name and its tooltip.
+///
+/// ```
+/// use mui::prelude::*;
+/// let mut ui = Ui::default();
+/// let lock = icon_button(&mut ui, "lock", "Keep on preset load", sym::LOCK);
+/// assert!(!lock.changed, "nothing pressed it last frame");
+/// let el = lock.variant(Variant::Ghost).size(S).el.el();
+/// let name = el.payload().semantics.as_ref().and_then(|s| s.label.as_deref());
+/// assert_eq!(name, Some("Keep on preset load"));
+/// assert_eq!(el.payload().extras().tip.as_deref(), Some("Keep on preset load"));
+/// ```
+pub fn icon_button(
+    ui: &mut Ui,
+    id: impl Into<Id>,
+    label: &str,
+    symbol: char,
+) -> Response<bool, Control> {
+    let id: Id = id.into();
+    Response {
+        changed: activated(ui, &id),
+        el: Control::new(ui, Kind::Button(id, label.into(), Some(symbol))),
+    }
+}
+
+fn button_el(look: &Look, id: Id, label: Arc<str>, only: Option<char>) -> El {
+    let ink = look.ink();
+    let face = match only {
+        // Half the height, so the glyph scales with the size token.
+        Some(symbol) => row([icon(symbol).text_size(look.px * 0.5).fill(ink)])
+            .square(look.px)
+            .tip(label.clone()),
+        None if look.icons == [None; 2] => {
+            row([text(label.clone()).fill(ink)]).pad((look.px * 0.4, look.pad_y()))
+        }
+        None => {
+            let [start, end] = look.icons;
+            let mut parts = Vec::with_capacity(3);
+            parts.extend(start.map(|s| icon(s).fill(ink.clone())));
+            parts.push(text(label.clone()).fill(ink.clone()));
+            parts.extend(end.map(|s| icon(s).fill(ink.clone())));
+            row(parts)
+                .gap(Xs)
+                .align(Align::Center)
+                .pad((look.px * 0.4, look.pad_y()))
+        }
+    };
     look.describe(
-        row([text(label.clone()).fill(look.ink())])
-            .pad((look.px * 0.4, look.pad_y()))
-            .center()
+        face.center()
             .pill()
             .preset(look.style())
             .on(State::Hover, look.hover())
@@ -1081,73 +1632,139 @@ pub fn drag_value(
     id: impl Into<Id>,
     label: &str,
     value: &mut f64,
-    range: RangeInclusive<f64>,
+    range: impl Into<Domain>,
 ) -> Response<bool, Control> {
     let id: Id = id.into();
+    let domain = range.into();
     let before = *value;
-    let (lo, hi) = (
-        range.start().min(*range.end()),
-        range.start().max(*range.end()),
-    );
-    let field = id.field("edit");
-    // What was typed, and the width the number had when typing started.
-    let mut typing = ui.stash::<(String, f64)>(&field).cloned();
     let r = ui.get(&id);
-    // Focus moves to the field only once it is built: this frame's keys --
-    // the Enter that opened it -- are not the field's to type.
-    let opening = typing.is_none() && (r.double_clicked || r.key_activated);
-    if opening {
-        let width = ui
-            .scene()
-            .and_then(|s| s.surface(&id))
-            .map_or(ui.theme().control * 16.0, |s| s.frame.size.width);
-        typing = Some((format!("{value}"), width));
-    }
-    if let Some((mut s, width)) = typing {
-        let take = |s: &str, value: &mut f64| {
-            if let Ok(v) = s.trim().parse::<f64>()
-                && v.is_finite()
-            {
-                *value = v.clamp(lo, hi);
-            }
-        };
-        if opening || ui.focused(&field) {
-            let opts = TextOpts {
-                blur_on_submit: true,
-                ..TextOpts::default()
+    let open = r.double_clicked || r.key_activated;
+    match typed(ui, &id, label, value, &domain, open, &id) {
+        Typed::Open(el, width) => {
+            return Response {
+                el: Control::new(ui, Kind::Field(el, width)),
+                changed: false,
             };
-            let Response { el, changed: e } = text_edit(ui, field.as_str(), &mut s, opts);
-            let el = el.named(label);
-            if opening {
-                ui.set_sel(&field, 0, s.chars().count());
-                ui.focus(field.clone());
-            }
-            if !e.submitted {
-                ui.set_stash(&field, Some((s, width)));
-                return Response {
-                    el: Control::new(ui, Kind::Field(Box::new(el), width)),
-                    changed: false,
-                };
-            }
-            take(&s, value);
-        } else if !ui.shortcuts().iter().any(|k| k.key == Key::Escape) {
-            // The focus went elsewhere: a click away keeps what was typed.
-            take(&s, value);
         }
-        ui.set_stash::<(String, f64)>(&field, None);
-    } else {
-        ui.drag(&id, value, range.clone(), DRAG_TRAVEL, false);
-        stepped(ui, &id, value, &range);
+        // The frame that closed the field neither drags nor steps.
+        Typed::Closed => {}
+        Typed::Idle => {
+            ui.drag(&id, value, domain.range.clone(), DRAG_TRAVEL, false);
+            stepped(ui, &id, value, &domain.range);
+        }
     }
     // Nothing is drawn sliding, so there is no thumb to tween.
-    let dial = Dial::of(*value, &range, 0.0, 0.0);
+    let dial = Reading::of(*value, &domain.range, 0.0, 0.0);
     Response {
         changed: moved(before, *value),
-        el: Control::new(ui, Kind::Drag(id, label.into(), dial)),
+        el: Control::new(ui, Kind::Drag(id, label.into(), dial)).format(&domain),
     }
 }
 
-fn drag_el(look: &Look, id: Id, label: Arc<str>, d: Dial) -> El {
+/// Where typing into a ranged control stands this frame.
+enum Typed {
+    /// No field.
+    Idle,
+    /// The field closed this frame: what was typed is taken, or dropped on
+    /// Escape.
+    Closed,
+    /// The field, at the width it opened with.
+    Open(Box<El>, f64),
+}
+
+/// Typing a value in: `open` turns the control into a field holding the
+/// formatted value, selected, as wide as `at` was last frame. Enter or a
+/// click away takes what [`Domain::parsed`] reads from it; Escape, or text
+/// that does not read, leaves the value alone.
+fn typed(
+    ui: &mut Ui,
+    id: &Id,
+    label: &str,
+    value: &mut f64,
+    domain: &Domain,
+    open: bool,
+    at: &Id,
+) -> Typed {
+    let field = id.field("edit");
+    // What was typed, and the width the number had when typing started.
+    let mut typing = ui.stash::<(String, String, f64)>(&field).cloned();
+    // Focus moves to the field only once it is built: this frame's keys --
+    // the Enter that opened it -- are not the field's to type.
+    let opening = typing.is_none() && open;
+    if opening {
+        let width = ui
+            .scene()
+            .and_then(|s| s.surface(at))
+            .map_or(ui.theme().control * 16.0, |s| s.frame.size.width);
+        let shown = match &domain.format {
+            Some(f) => f(*value),
+            None => format!("{value}"),
+        };
+        typing = Some((shown.clone(), shown, width));
+    }
+    let Some((mut s, initial, width)) = typing else {
+        return Typed::Idle;
+    };
+    let take = |s: &str, value: &mut f64| {
+        if s != initial
+            && let Some(v) = domain.parsed(s)
+        {
+            *value = v;
+        }
+    };
+    if opening || ui.focused(&field) {
+        let opts = TextOpts {
+            blur_on_submit: true,
+            ..TextOpts::default()
+        };
+        let Response { el, changed: e } = text_edit(ui, field.as_str(), &mut s, opts);
+        let el = el.named(label);
+        if opening {
+            ui.set_sel(&field, 0, s.chars().count());
+            ui.focus(field.clone());
+        }
+        if !e.submitted {
+            ui.set_stash(&field, Some((s, initial, width)));
+            return Typed::Open(Box::new(el), width);
+        }
+        take(&s, value);
+    } else if !ui.shortcuts().iter().any(|k| k.key == Key::Escape) {
+        // The focus went elsewhere: a click away keeps what was typed.
+        take(&s, value);
+    }
+    ui.set_stash::<(String, String, f64)>(&field, None);
+    Typed::Closed
+}
+
+/// Typing into a knob or slider: only with a [`Domain::parse`], opened by
+/// Enter on the focused control, or by a double click when the domain has
+/// no default for the double click to restore. The field stands in for the
+/// reading.
+fn typed_or_idle(
+    ui: &mut Ui,
+    id: &Id,
+    label: &str,
+    value: &mut f64,
+    domain: &Domain,
+) -> Option<Box<El>> {
+    if domain.parse.is_none() {
+        let field = id.field("edit");
+        ui.set_stash::<(String, String, f64)>(&field, None);
+        if ui.focused(&field) {
+            ui.focus(id.clone());
+        }
+        return None;
+    }
+    let r = ui.get(id);
+    let open = domain.parse.is_some()
+        && (r.key_activated || (r.double_clicked && domain.default.is_none()));
+    match typed(ui, id, label, value, domain, open, &id.field("reading")) {
+        Typed::Open(el, width) => Some(Box::new((*el).w(width))),
+        Typed::Idle | Typed::Closed => None,
+    }
+}
+
+fn drag_el(look: &Look, id: Id, label: Arc<str>, d: Reading) -> El {
     look.describe(
         row([d.readout(look)])
             .pad((look.px * 0.3, look.pad_y()))

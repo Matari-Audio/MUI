@@ -154,7 +154,7 @@ pub struct Font(pub(crate) Arc<FontData>);
 
 pub(crate) struct FontData {
     pub(crate) id: u64,
-    pub(crate) bytes: Arc<[u8]>,
+    pub(crate) bytes: Bytes,
     pub(crate) index: u32,
     /// harfrust's lookup accelerators for the face: the expensive part of
     /// setting a shaper up, and the same at every size and axis position.
@@ -165,18 +165,47 @@ pub(crate) struct FontData {
     pub(crate) plans: Mutex<Vec<Arc<ShapePlan>>>,
 }
 
+/// A face's bytes: shared, or borrowed for the life of the process so an
+/// `include_bytes!` face is never copied onto the heap.
+pub(crate) enum Bytes {
+    Shared(Arc<[u8]>),
+    Static(&'static [u8]),
+}
+impl std::ops::Deref for Bytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Shared(b) => b,
+            Self::Static(b) => b,
+        }
+    }
+}
+
 impl Font {
     /// Parse `bytes` as one font face. Bytes no parser accepts are an error
     /// here, once, rather than on every run shaped with them.
     pub fn new(bytes: impl Into<Arc<[u8]>>) -> Result<Self, Error> {
         Self::from_index(bytes, 0)
     }
+    /// [`Font::new`] without the copy: borrows `bytes` for good, the way to
+    /// open an `include_bytes!` face of many megabytes.
+    ///
+    /// ```
+    /// use mui_text::Font;
+    /// let hack = Font::from_static(epaint_default_fonts::HACK_REGULAR).unwrap();
+    /// assert_eq!(hack.as_ref().as_ptr(), epaint_default_fonts::HACK_REGULAR.as_ptr());
+    /// ```
+    pub fn from_static(bytes: &'static [u8]) -> Result<Self, Error> {
+        Self::open(Bytes::Static(bytes), 0)
+    }
     /// Parse a face in a TrueType/OpenType collection, or index 0 in a single font.
     /// The index is retained for shaping and rendering; each opened face has its
     /// own cache identity even when several faces share the same bytes.
     pub fn from_index(bytes: impl Into<Arc<[u8]>>, index: u32) -> Result<Self, Error> {
+        Self::open(Bytes::Shared(bytes.into()), index)
+    }
+    fn open(bytes: Bytes, index: u32) -> Result<Self, Error> {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
-        let bytes = bytes.into();
         FontRef::from_index(&bytes, index).map_err(Error::Font)?;
         Ok(Self(Arc::new(FontData {
             id: NEXT_ID.fetch_add(1, Ordering::Relaxed),

@@ -277,6 +277,48 @@ fn a_tip_comes_due_after_half_a_second_of_hover() {
 }
 
 #[test]
+fn tips_off_float_nothing_and_schedule_no_wake() {
+    let mut ui = Ui::default();
+    ui.set_tips(TipPolicy::Off);
+    let tree = || block(40., 40.).fill(Role::Raised).tip("why").id("b");
+    let win = || Some(Size::new(240., 300.));
+    for _ in 0..2 {
+        ui.frame(tree(), win(), at(10., 10., false), 0.016).unwrap();
+    }
+    let f = ui.frame(tree(), win(), at(10., 10., false), 0.016).unwrap();
+    assert!(!f.animating, "no tooltip deadline keeps the host awake");
+    assert_eq!(ui.repaint_after(), None, "and none is scheduled");
+    let f = ui.frame(tree(), win(), at(10., 10., false), 2.0).unwrap();
+    assert!(f.tip.is_none());
+    assert!(f.scene.surface("/tip").is_none(), "nothing floated");
+    // Back on: the hover already rested past the delay, so it is due now.
+    ui.set_tips(TipPolicy::default());
+    let f = ui.frame(tree(), win(), at(10., 10., false), 0.016).unwrap();
+    assert!(f.tip.is_some());
+}
+
+#[test]
+fn the_tip_delay_is_the_policy_s() {
+    let mut ui = Ui::default();
+    ui.set_tips(TipPolicy::After(1.5));
+    let tree = || block(40., 40.).fill(Role::Raised).tip("why").id("b");
+    let win = || Some(Size::new(240., 300.));
+    for _ in 0..2 {
+        ui.frame(tree(), win(), at(10., 10., false), 0.016).unwrap();
+    }
+    let f = ui.frame(tree(), win(), at(10., 10., false), 0.9).unwrap();
+    assert!(
+        f.tip.is_none(),
+        "0.9 s rests past the default, not this delay"
+    );
+    assert!(f.animating);
+    let left = ui.repaint_after().expect("woken for the tip").as_secs_f64();
+    assert!((left - 0.6).abs() < 1e-6, "{left}");
+    let f = ui.frame(tree(), win(), at(10., 10., false), 0.6).unwrap();
+    assert_eq!(f.tip.map(|t| t.0).as_deref(), Some("why"));
+}
+
+#[test]
 fn a_tip_lands_where_it_was_measured_even_under_a_padded_root() {
     let mut ui = Ui::default();
     let tree = || col([block(40., 40.).fill(Role::Raised).tip("why").id("b")]).pad(L);
@@ -898,4 +940,36 @@ fn removing_a_pressed_surface_cannot_press_its_replacement_until_release() {
         .unwrap();
     assert!(ui.get("plus").pressed);
     assert!(!ui.double_click("plus"));
+}
+
+#[test]
+fn a_turned_node_is_hit_across_its_slot_not_its_upright_frame() {
+    // A 60x12 word turned in a 12 wide rail: its slot is (0, 0, 12x60), its
+    // upright frame (-24, 24, 60x12).
+    let tree = || {
+        stack([row([block(60., 12.)
+            .turn(Turn::Ccw)
+            .fill(Role::Primary)
+            .id("word")])
+        .anchor(Align::Start, Align::Start)])
+        .size(100., 100.)
+    };
+    let mut ui = Ui::default();
+    ui.frame(tree(), None, PointerInput::default(), 0.016)
+        .unwrap();
+    let frame = ui.scene().unwrap().surface("word").unwrap().frame;
+    assert_eq!((frame.x, frame.y), (-24., 24.));
+    // Inside the slot, outside the upright frame.
+    ui.frame(tree(), None, at(6., 50., false), 0.016).unwrap();
+    assert!(ui.get("word").hovered);
+    // Inside the upright frame, outside the slot.
+    ui.frame(tree(), None, at(30., 30., false), 0.016).unwrap();
+    assert!(!ui.get("word").hovered);
+    // Local coordinates are upright: the slot's bottom is the word's start.
+    ui.frame(tree(), None, at(6., 58., false), 0.016).unwrap();
+    let local = ui.local("word").unwrap();
+    assert!(
+        (local.x - 2.).abs() < 1e-8 && (local.y - 6.).abs() < 1e-8,
+        "{local:?}"
+    );
 }

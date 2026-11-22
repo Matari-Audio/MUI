@@ -116,14 +116,22 @@ pub(crate) fn reach(p: &Painted) -> Option<Rect> {
         Layer::Clip | Layer::Mask | Layer::AlphaMask => path(),
         // Vello's blurred rect stops at 2.5 standard deviations.
         Layer::Backdrop | Layer::Shadow(_) => path().inflate(3. * p.blur, 3. * p.blur),
-        _ => match &p.text {
-            // As `replay` culls a run: its box is an estimate.
-            Some(t) => {
-                let pad = p.width + f64::from(t.size);
-                crate::paint_box(p, &crate::kurbo::BezPath::new()).inflate(pad, pad)
-            }
-            None => path().inflate(p.width, p.width),
-        },
+        // A canvas's `Draw::shadow`.
+        Layer::Draw(_) if p.blur > 0.0 => path().inflate(3. * p.blur, 3. * p.blur),
+        // As `replay` culls a run: its box is an estimate.
+        _ if let Some(t) = &p.text => {
+            let pad = p.width + f64::from(t.size);
+            crate::paint_box(p, &crate::kurbo::BezPath::new()).inflate(pad, pad)
+        }
+        // A miter reaches up to its limit, four half widths.
+        _ => {
+            let pen = if p.join == crate::kurbo::Join::Miter {
+                2. * p.width
+            } else {
+                p.width
+            };
+            path().inflate(pen, pen)
+        }
     };
     // Local paths, placed; a text run's box is in scene space already.
     let r = match &p.text {

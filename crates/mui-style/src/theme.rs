@@ -30,6 +30,25 @@ impl Corners {
         box_: 18.0,
         concave: 14.0,
     };
+    /// Restrained corners for a dense instrument panel: a few pixels on
+    /// every kind of thing, so panels read as plates rather than cards.
+    /// Pills (`.pill()`) stay round.
+    ///
+    /// A node with no `.radius(..)` rounds by `box_`, under any preset; one
+    /// that must stay square says `.radius(0)`.
+    ///
+    /// ```
+    /// use mui_style::{Corners, Theme};
+    /// let panel = Theme { corners: Corners::TIGHT, ..Theme::DEFAULT };
+    /// assert!(panel.is_valid());
+    /// assert!(Corners::TIGHT.box_ < Corners::DEFAULT.field);
+    /// ```
+    pub const TIGHT: Self = Self {
+        selector: 4.0,
+        field: 3.0,
+        box_: 4.0,
+        concave: 3.0,
+    };
 
     /// The radius this kind of thing rounds by.
     ///

@@ -174,6 +174,8 @@ fn empty(p: &Painted) -> Painted {
         offset: Point::ZERO,
         transform: Affine::IDENTITY,
         width: 0.,
+        cap: crate::kurbo::Cap::Round,
+        join: crate::kurbo::Join::Round,
         blur: 0.,
         text: None,
     }
@@ -212,6 +214,8 @@ fn image_entry(
         offset: Point::ZERO,
         transform: Affine::IDENTITY,
         width: 0.,
+        cap: crate::kurbo::Cap::Round,
+        join: crate::kurbo::Join::Round,
         blur: 0.,
         text: None,
     })

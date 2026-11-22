@@ -4,6 +4,104 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
+### Intrinsic gaps found by SMOOTH (`mui/intrinsic-gaps`)
+
+Additive unless marked **breaking**.
+
+- **Layout.** `.pad((x, y))` takes pixels or tokens per axis in any mix:
+  `(S, Xs)`, `(M, 4)`, `(16, 8)`. `Pad` gains `Pad::Axes(Spacing, Spacing)`
+  (**breaking** only for an exhaustive `match` on `Pad`).
+  `Node::at_pct(x, y)` puts the node's anchor point (`.anchor(..)`, centre by
+  default) at `x`% / `y`% of the parent's padding box; `.offset` nudges,
+  nothing clamps; `at`, `centered_at`, `centered` replace it.
+  `Node::turn(Turn::Cw | Turn::Ccw)` is a quarter turn that stays intrinsic:
+  the parent sees the box swapped, `Layout::frame` is the upright box centred
+  on its slot, and the scene rotates paint and hits onto the slot. Replace
+  `.rotation(-FRAC_PI_2)` plus a hand-sized slot with `.turn(Turn::Ccw)`.
+  `mui::audit`'s `Escapes` now judges rotated and turned children by what
+  they cover.
+- **Pinned floats are content-sized** (bug fix, visible change). A
+  `.pin(Pin::to(..))` node no longer takes its parent's stretch; it is
+  measured at its content size on both axes unless an axis opts back in with
+  `Pin::match_width`/`match_height`, a definite length, or
+  `.anchor(_, Align::Stretch)`. A content-sized menu now drops under its bar
+  instead of filling the window and being pulled back over it. The
+  `.anchor(Align::Start, Align::Start)` workaround before `.pin(..)` can go.
+  Unpinned `.float()` nodes are unchanged.
+- **Text.** `TextAlign { Start, Center, End }` and `Styled::text_align` (both
+  preludes): each line is placed across its box's spare width, inside a
+  `.reserve`/`.reserve_all` box, a stretched width, or a wrapped paragraph,
+  and `ResolvedScene::set_text` re-places a swapped run the same way. Start is
+  the default; editable text stays Start. `Extras` gains `text_align`.
+  Replace an invisible stacked twin with `.reserve(widest).text_align(TextAlign::Center)`.
+- **Canvas paint.** `Draw::stroke(..).cap(Cap::Butt | Round | Square).join(Join::Miter | Round | Bevel)`
+  (kurbo's types, in both preludes; Round/Round stays the default).
+  `Draw::shadow(path, blur, (dx, dy), fill)` is a backend-blurred fill: exact
+  for `Path::rect`, `RoundedRect::path` and the new `Path::circle`, a path
+  blur otherwise, on both renderers. `Shadow::halo(blur)` and
+  `Elevation::Halo` are centred shadows (**breaking** only for an exhaustive
+  `match` on `Elevation`). `Painted` gains `cap`/`join` and `Draw` gains
+  `cap`/`join`/`blur` (hand-built literals add them). An element shadow on an
+  `.outline(..)` that is exactly a circle or rounded rect now uses the exact
+  blur. New: `Path::circle`, `RoundedRect::of(&path)`.
+- **Theme.** `Corners::TIGHT` (4/3/4, concave 3) for instrument panels. An
+  unset radius still means `box_`; a node that must stay square says
+  `.radius(0)`.
+- **Icon font.** Opt-in `mui` features `icons` (= `icons-rounded`) and
+  `icons-outlined` embed the full Material Symbols variable font (about 15 MB
+  Rounded, 11 MB Outlined) and make it the icon face when
+  `Theme::icon_font` is `None`; `theme.icon_font` and `.font(f)` still win.
+  For a small binary leave them off, cut a subset with
+  `tools/subset_symbols.py`, and set `theme.icon_font`. Underneath:
+  `mui_symbols::font::{ROUNDED, OUTLINED}` (`font-rounded`/`font-outlined`),
+  mui-scene `symbols-rounded`/`symbols-outlined`, and
+  `mui_text::Font::from_static`, which opens an embedded face without
+  copying it. `sym` is regenerated from upstream 2026-10-23 (20 new symbols,
+  none removed).
+- **`select` (breaking).** `select(..)` / `Overlay::select(..)` return
+  `Response<bool, Select>` (was `Response<bool, El>`). `Select` takes the
+  button look (`.variant`, `.role`, `.size`, `.px`) and finishes into the
+  trigger itself, with the open list floated from inside it, so `.fill`,
+  `.radius`, `.stroke`, `.pad` land on the trigger, open or closed. Where an
+  `El` was required write `s.into_el()` (no mui-migrate rule: type-directed).
+  The open list's accessible parent is now its trigger; the default head's
+  hover lifts its own fill instead of swapping to `Role::Raised`. Every
+  `Response` forwards `.radius(..)` and `.stroke(..)`.
+- **Tooltips.** `Ui::set_tips(TipPolicy::Off | TipPolicy::After(secs))` and
+  `Ui::tips()`; the default `After(0.5)` is unchanged. Off builds, paints and
+  wakes for no tip. Tips were never screen-reader text; use `.described(..)`.
+- **Controls.** `Control::fill_cell()`: a knob's face takes the largest
+  square its cell leaves, so the parent's flex sizes each dial (`.grow(2)` /
+  `.grow(1)` in a column, `.flex(2)` / `.flex(1)` across a row); the reading
+  keeps the size token's text size.
+  **Knobs.** `Control::look(Knob)` sets how a knob is painted; `Knob` holds
+  `ring`, `width`, `inset` (shares of the radius), `track`, `arc`, `face`
+  (fills, roles by default), `cap`, `shadow: Option<(blur share, Fill)>` and
+  `pointer: Option<Pointer { from, to, width, dot, fill }>` (a line and/or dot
+  at the value's angle; `fill: None` takes the arc's colour). Presets are the
+  plugins' knobs: `Knob::smooth()` (the default), `Knob::k()` (KURV, KONTRA),
+  `Knob::drama()` (gradient arc, no face), `Knob::buffr()` (dot on the ring).
+  They are `fn`s, not `const`s, because a gradient fill boxes.
+  **Breaking:** the default knob is now SMOOTH's (square-cut thick track, ink
+  arc, raised shadowed face); `Dial`, `Dial::DEFAULT`, `Dial::RING` and
+  `Control::dial` are gone (`Knob { .. }`, `Control::look`), and
+  `Control::dial_color` is `Control::accent`. A bipolar arc still comes from
+  the domain's `origin`.
+  `Control::icon(sym)` / `.icon_end(sym)` and
+  `icon_button(ui, id, label, sym)` (label = accessible name and tooltip).
+  `Control::value_align(TextAlign)` places a readout in its reserved width.
+  All forwarded on `Response<_, Control>`.
+- **Typed entry in units.** `Domain` gains `.format(f)`, `.parse(f)`,
+  `.formatted(v)`, `.parsed(s)` (clamped, finite only); its `Debug` is now
+  hand-written. Readouts use `format` when no `.value_text` is set.
+  `drag_value` takes `impl Into<Domain>` (widening). A knob or slider whose
+  domain has a parser opens a field on Enter, and on double click when the
+  domain has no `default`; Escape cancels. Without a parser nothing changes.
+  mui-truce's `Bridge::knob`/`slider` build a per-parameter `Domain` from
+  truce's `format_value`/`parse_value`, falling back to inverting truce's
+  default unit text ("1.0 kHz", "1.2k", "250 ms", "50%"); a double click on
+  them now opens typing (they set no default to reset to).
+
 `mui::audit::audit(ui, sizes, build)` builds an editor at each size, lets it
 settle and returns typed `Finding`s: `Escapes`, `FloorViolated`,
 `IdleRebuild`, `Unnamed`, `Occluded` (and `Failed`). A plugin's whole check

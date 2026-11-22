@@ -376,6 +376,8 @@ impl Ui {
                 offset: Point::ZERO,
                 transform: mui_geometry::kurbo::Affine::IDENTITY,
                 width: 0.,
+                cap: mui_geometry::kurbo::Cap::Round,
+                join: mui_geometry::kurbo::Join::Round,
                 blur: 0.,
                 text: None,
             };

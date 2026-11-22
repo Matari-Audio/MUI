@@ -2,7 +2,7 @@
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::Arc;
 
-use mui_geometry::kurbo::Affine;
+use mui_geometry::kurbo::{Affine, Cap, Join};
 use mui_geometry::{Path, Point, Rect, RoundedRect};
 use mui_layout::{Frame, Id, Layout, Size};
 use mui_text::{Axes, Font};
@@ -119,7 +119,14 @@ pub struct Painted {
     pub transform: Affine,
     /// Stroke width; `0` fills.
     pub width: f64,
-    /// Gaussian blur radius: a shadow's, or a [`Layer::Backdrop`]'s.
+    /// A stroke's open ends; [`Cap::Round`] for everything but a
+    /// [`Draw::cap`](crate::Draw::cap).
+    pub cap: Cap,
+    /// A stroke's corners; [`Join::Round`] for everything but a
+    /// [`Draw::join`](crate::Draw::join).
+    pub join: Join,
+    /// Gaussian blur radius: a shadow's (a node's, or a canvas's
+    /// [`Draw::shadow`](crate::Draw::shadow)), or a [`Layer::Backdrop`]'s.
     pub blur: f64,
     /// Present on `Layer::Text` whenever [`SceneSpec::font`](crate::SceneSpec::font) is set: the
     /// layer's ink, as glyphs. `path` is then empty -- a renderer that draws
@@ -167,6 +174,8 @@ impl PartialEq for Painted {
             offset,
             transform,
             width,
+            cap,
+            join,
             blur,
             text,
         } = self;
@@ -178,6 +187,8 @@ impl PartialEq for Painted {
             && *offset == o.offset
             && *transform == o.transform
             && *width == o.width
+            && *cap == o.cap
+            && *join == o.join
             && *blur == o.blur
             && *text == o.text
     }
@@ -274,6 +285,9 @@ pub struct ResolvedSurface {
     /// was supplied. Live text swaps update this name; an explicit label does
     /// not move with the paint.
     pub(super) semantic_label_implicit: bool,
+    /// How a text node places its run, so [`ResolvedScene::set_text`]
+    /// places a swapped one the same way.
+    pub(super) text_align: crate::TextAlign,
     /// Current authored text, used as the accessible name unless explicitly
     /// overridden by semantics. Live readout updates change this too.
     pub text_value: Option<Arc<str>>,
@@ -348,6 +362,9 @@ pub struct ResolvedScene {
     pub(crate) external_welds: HashMap<Id, crate::ExternalWeld>,
     /// Where each memoised subtree landed, in pre-order.
     pub(crate) memos: Vec<super::MemoSpan>,
+    /// [`SceneSpec::device_scale`](crate::SceneSpec::device_scale), for
+    /// snapping a run [`Self::set_text`] re-places.
+    pub(super) device_scale: Option<f64>,
 }
 impl ResolvedScene {
     /// The external material's own hit geometry in its unrotated space.
@@ -385,7 +402,10 @@ impl ResolvedScene {
     /// box was measured for the widest string the node can show, so the
     /// shorter ones sit inside it and nothing reflows.
     ///
-    /// ponytail: one line, painted from the old run's origin. A string wider
+    /// A [`Styled::text_align`](crate::Styled::text_align)ed node re-centres
+    /// (or re-ends) the new run in its solved box.
+    ///
+    /// ponytail: one line, on the old run's baseline. A string wider
     /// than the frame overhangs instead of wrapping. The accessible text is
     /// updated, but an explicitly authored accessibility label is preserved.
     /// The next resolve paints whatever the tree says, so update its value too.
@@ -421,6 +441,16 @@ impl ResolvedScene {
             .ok_or(SceneError::NoTextLayer)?;
         // The faces the run was resolved with, per-node font included.
         let run = mui_text::shape_run(&text.fonts, s, f64::from(text.size), &text.axes.to_vec())?;
+        // Re-placed across the box the way the walk placed the old run; a
+        // start-aligned run keeps the old origin.
+        if let Some(surface) = self.at.get(key).map(|&i| &self.surfaces[i]) {
+            let share = surface.text_align.share();
+            if share != 0.0 {
+                let f = surface.frame;
+                let x = f.x + (f.size.width - run.advance) * share;
+                text.origin.x = super::snap(x, self.device_scale);
+            }
+        }
         text.glyphs = CachedRun::from_run(run).glyphs;
         self.paint[first].text = Some(text);
         for i in rest.into_iter().rev() {
@@ -475,6 +505,46 @@ mod tests {
             last <= frame.x + frame.size.width + 0.5,
             "{last} in {frame:?}"
         );
+    }
+
+    /// A "5.0" in a box reserved for "10.0" sits where its alignment puts
+    /// it, and a swapped run is re-placed the same way, on the device grid.
+    #[test]
+    fn an_aligned_readout_is_placed_in_its_reserved_box_and_after_a_swap() {
+        let hack = Font::new(epaint_default_fonts::HACK_REGULAR).unwrap();
+        let advance = |s: &str| {
+            mui_text::shape_run(std::slice::from_ref(&hack), s, 14.0, &[])
+                .unwrap()
+                .advance
+        };
+        let run_x = |s: &ResolvedScene| {
+            let t = s.paint.iter().find_map(|p| p.text.as_ref()).unwrap();
+            t.origin.x
+        };
+        for (align, share) in [
+            (TextAlign::Start, 0.0),
+            (TextAlign::Center, 0.5),
+            (TextAlign::End, 1.0),
+        ] {
+            for scale in [None, Some(1.5)] {
+                let root = row![text("5.0").reserve("10.0").text_align(align).id("v")];
+                let mut sp = SceneSpec::new(root).font(hack.clone());
+                sp.device_scale = scale;
+                let mut s = resolve(&sp).unwrap();
+                let f = s.surface("v").unwrap().frame;
+                assert!((f.size.width - advance("10.0")).abs() < 1e-6, "{f:?}");
+                let snapped = |x: f64| scale.map_or(x, |k| (x * k).round() / k);
+                let want = snapped(f.x + (f.size.width - advance("5.0")) * share);
+                assert!((run_x(&s) - want).abs() < 1e-9, "{align:?} {scale:?}");
+                s.set_text("v", "10.0").unwrap();
+                assert!(
+                    (run_x(&s) - snapped(f.x)).abs() < 1e-9,
+                    "{align:?}: the full-width value fills the box"
+                );
+                s.set_text("v", "5.0").unwrap();
+                assert!((run_x(&s) - want).abs() < 1e-9, "{align:?} after set_text");
+            }
+        }
     }
 
     #[test]

@@ -84,8 +84,7 @@ pub(crate) fn distribute<P>(
             let c = children[i];
             sizes[i] = c
                 .node
-                .rare()
-                .maximum
+                .outer_max()
                 .map_or(target, |m| target.min(m.main(vertical)))
                 .max(c.floor.main(vertical));
             violations[i] = sizes[i] - target;
@@ -116,8 +115,7 @@ pub(crate) fn cell<P>(
     let (w, h) = match c.aspect_width(cell) {
         Some((w, a)) => (
             w,
-            n.rare()
-                .maximum
+            n.outer_max()
                 .map_or(w / a, |m| (w / a).min(m.height))
                 .max(c.floor.height),
         ),
@@ -126,10 +124,22 @@ pub(crate) fn cell<P>(
             c.extent(true, cell.height, ay),
         ),
     };
+    // `at_pct` puts the anchor point at a share of the cell instead.
+    let at = |avail: f64, extent: f64, a: Align, axis: usize| match n.rare().at_pct {
+        Some(pct) => {
+            let point = match a {
+                Align::Start => 0.0,
+                Align::End => 1.0,
+                Align::Center | Align::Stretch => 0.5,
+            };
+            avail * pct[axis] / 100.0 - extent * point
+        }
+        None => place(avail, extent, a),
+    };
     (
         [
-            place(cell.width, w, ax) + n.offset[0],
-            place(cell.height, h, ay) + n.offset[1],
+            at(cell.width, w, ax, 0) + n.offset[0],
+            at(cell.height, h, ay, 1) + n.offset[1],
         ],
         Size::new(w, h),
     )
@@ -174,6 +184,19 @@ pub(crate) fn arrange<P>(
     if !size.valid(m.extent_limit) || !origin.iter().all(|v| v.is_finite()) {
         return Err(Error::BudgetExceeded);
     }
+    // A turned node was handed its slot; its own box is that slot upright,
+    // centred on it, and the scene turns it back over the slot.
+    let mut floor = m.floor;
+    let (origin, size) = if n.rare().turn.is_some() {
+        floor = Size::new(floor.height, floor.width);
+        let half = (size.width - size.height) * 0.5;
+        (
+            [origin[0] + half, origin[1] - half],
+            Size::new(size.height, size.width),
+        )
+    } else {
+        (origin, size)
+    };
     // A box handed less than its floor is not refused: `distribute` and
     // `extent` keep every child at its own floor, so the content overflows.
     let here = n.id.as_deref().unwrap_or(ancestor);
@@ -186,7 +209,7 @@ pub(crate) fn arrange<P>(
         out.0.push((id, out.1.len() as u32));
     }
     out.1.push(frame);
-    out.2.push(m.floor);
+    out.2.push(floor);
     let inner = Size::new(
         (size.width - m.padding.horizontal()).max(0.0),
         (size.height - m.padding.vertical()).max(0.0),
@@ -408,8 +431,7 @@ pub(crate) fn arrange<P>(
                     };
                     let cross = c
                         .node
-                        .rare()
-                        .maximum
+                        .outer_max()
                         .map_or(cross, |m| cross.min(m.cross(v)))
                         .max(c.floor.cross(v));
                     let cross_pos = line_start + place(line_cross, cross, align);
@@ -435,14 +457,14 @@ pub(crate) fn arrange<P>(
         let (pos, s) = if c.node.float {
             // A pin is placed against the root, so it is sized against it
             // too: a menu pinned from inside a short row is not squeezed to
-            // that row. Nor does it stretch: it has no flow to fill, so it
-            // takes its content size unless it anchors itself otherwise. Any
-            // other float belongs to this box.
-            let (p, s) = if c.node.rare().pin.is_some() {
-                cell(c, pins.root, (Align::Start, Align::Start))
+            // that row. Nor does it stretch (`float_default`, which measure
+            // shares). Any other float belongs to this box.
+            let room = if c.node.rare().pin.is_some() {
+                pins.root
             } else {
-                cell(c, inner, default)
+                inner
             };
+            let (p, s) = cell(c, room, float_default(c.node, n));
             match c
                 .node
                 .rare()
@@ -458,13 +480,20 @@ pub(crate) fn arrange<P>(
                 }
                 // A decoration belongs to this local box and its clip; do
                 // not pull authored offsets back in like a window popup.
-                None if c.node.is_underlay() || c.node.is_overlay() => (
-                    [
-                        origin[0] + m.padding.left + p[0],
-                        origin[1] + m.padding.top + p[1],
-                    ],
-                    s,
-                ),
+                // A share of the box (`at_pct`) is placed where it says,
+                // overhang and all: a tick label at 100% hangs past the edge.
+                None if c.node.is_underlay()
+                    || c.node.is_overlay()
+                    || c.node.rare().at_pct.is_some() =>
+                {
+                    (
+                        [
+                            origin[0] + m.padding.left + p[0],
+                            origin[1] + m.padding.top + p[1],
+                        ],
+                        s,
+                    )
+                }
                 // A tooltip or menu offset past the edge is pulled back inside
                 // the box it floats in -- floats are painted after the root and
                 // clipped by nothing, so off the box is off the window.

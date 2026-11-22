@@ -33,7 +33,7 @@ mod pin;
 pub use id::Id;
 pub use len::{Align, Insets, Justify, Len, Px, Size};
 mod spacing;
-pub use node::{Node, bar, block, col, fits, grid, row, stack};
+pub use node::{Node, Turn, bar, block, col, fits, grid, row, stack};
 pub use spacing::{Pad, Spacing, SpacingScale, SpacingToken};
 
 /// What a measurer says about a content leaf: its size in the room it was
@@ -63,7 +63,9 @@ impl From<Size> for Intrinsic {
 pub use pin::{Area, Match, Pin};
 
 pub(crate) use arrange::{arrange, distribute};
-pub(crate) use measure::{Measured, Pass, cell_default, grid_rows, measure, place, wrap_lines};
+pub(crate) use measure::{
+    Measured, Pass, cell_default, float_default, grid_rows, measure, place, wrap_lines,
+};
 pub(crate) use node::{Kind, Rare};
 pub(crate) use pin::{Pins, Viewport, inside};
 
@@ -344,7 +346,7 @@ fn resolve_impl<P, M: Into<Intrinsic>>(
         return Err(Error::InvalidValue);
     }
     // A root offered more than its maximum is its maximum, like any node.
-    let size = root.rare().maximum.map_or(size, |max| {
+    let size = root.outer_max().map_or(size, |max| {
         Size::new(size.width.min(max.width), size.height.min(max.height))
     });
     // Every measured node produces at most one frame.

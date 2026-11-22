@@ -688,6 +688,7 @@ fn resolve_with(
         at,
         external_welds,
         memos,
+        device_scale: spec.device_scale,
     })
 }
 

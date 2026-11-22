@@ -6,6 +6,12 @@ rust-version.workspace = true
 license.workspace = true
 description = "A styled element tree lowered to a resolved, paint-ordered scene: MUI's El DSL, theme resolution and scene walk."
 
+[features]
+# Embed Material Symbols Rounded / Outlined (mui-symbols' `font-*`) and draw
+# `icon(..)` in it when the theme sets no `icon_font`. Rounded wins if both.
+symbols-rounded = ["mui-symbols/font-rounded"]
+symbols-outlined = ["mui-symbols/font-outlined"]
+
 [dependencies]
 mui-weld.workspace = true
 mui-geometry.workspace = true

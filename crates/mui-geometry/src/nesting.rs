@@ -87,18 +87,67 @@ impl RoundedRect {
 
     /// All arcs are exact circles. Pixel approximation belongs to flattening.
     pub fn path(self) -> Path {
+        let (commands, n) = self.commands();
+        Path {
+            commands: commands[..n].to_vec(),
+        }
+    }
+
+    /// The rounded rectangle `path` is, when it is exactly what
+    /// [`RoundedRect::path`] (or [`Path::rect`], or [`Path::circle`]) built:
+    /// what lets a renderer blur it analytically instead of as a path. No
+    /// allocation; any other path, even the same shape drawn another way, is
+    /// `None`.
+    ///
+    /// ```
+    /// use mui_geometry::{Path, Point, Rect, RoundedRect};
+    /// let card = RoundedRect::new(Rect::new(0., 0., 80., 40.), 6.).unwrap();
+    /// assert_eq!(RoundedRect::of(&card.path()), Some(card));
+    /// let dot = Path::circle(Point::new(10., 10.), 4.).unwrap();
+    /// assert_eq!(RoundedRect::of(&dot).map(|r| r.radius()), Some(4.));
+    /// let tri = Path::polyline([(0., 0.), (9., 0.), (4., 7.)].map(|(x, y)| Point::new(x, y)), true);
+    /// assert_eq!(RoundedRect::of(&tri), None);
+    /// ```
+    // ponytail: exact command match only; a translated copy or another
+    // winding is a path blur. Match within a tolerance if one shows up.
+    pub fn of(path: &Path) -> Option<Self> {
+        use PathCommand::{ArcTo, Close, LineTo, MoveTo};
+        let (bounds, radius) = match path.commands[..] {
+            [MoveTo(a), LineTo(_), LineTo(c), LineTo(_), Close] => {
+                (Rect::new(a.x, a.y, c.x, c.y), 0.)
+            }
+            [
+                MoveTo(a),
+                _,
+                ArcTo(r0),
+                _,
+                ArcTo(r1),
+                _,
+                ArcTo(r2),
+                _,
+                ArcTo(_),
+                Close,
+            ] => (Rect::new(r2.to.x, a.y, r0.to.x, r1.to.y), r0.radius),
+            _ => return None,
+        };
+        let r = Self::new(bounds, radius).ok()?;
+        let (commands, n) = r.commands();
+        (r.radius == radius && commands[..n] == path.commands[..]).then_some(r)
+    }
+
+    /// [`RoundedRect::path`]'s commands, without the allocation.
+    fn commands(self) -> ([PathCommand; 10], usize) {
         let b = self.bounds;
         let r = self.radius;
+        let mut commands = [PathCommand::Close; 10];
         if r == 0.0 {
-            return Path {
-                commands: vec![
-                    PathCommand::MoveTo(b.origin()),
-                    PathCommand::LineTo(Point::new(b.x1, b.y0)),
-                    PathCommand::LineTo(Point::new(b.x1, b.y1)),
-                    PathCommand::LineTo(Point::new(b.x0, b.y1)),
-                    PathCommand::Close,
-                ],
-            };
+            commands[..4].copy_from_slice(&[
+                PathCommand::MoveTo(b.origin()),
+                PathCommand::LineTo(Point::new(b.x1, b.y0)),
+                PathCommand::LineTo(Point::new(b.x1, b.y1)),
+                PathCommand::LineTo(Point::new(b.x0, b.y1)),
+            ]);
+            return (commands, 5);
         }
         let centers = [
             Point::new(b.x1 - r, b.y0 + r),
@@ -120,19 +169,17 @@ impl RoundedRect {
             Point::new(b.x0, b.y0 + r),
         ];
         // One move, four line/arc pairs and the closing command.
-        let mut commands = Vec::with_capacity(10);
-        commands.push(PathCommand::MoveTo(Point::new(b.x0 + r, b.y0)));
+        commands[0] = PathCommand::MoveTo(Point::new(b.x0 + r, b.y0));
         for i in 0..4 {
-            commands.push(PathCommand::LineTo(tangent_starts[i]));
-            commands.push(PathCommand::ArcTo(Arc {
+            commands[1 + 2 * i] = PathCommand::LineTo(tangent_starts[i]);
+            commands[2 + 2 * i] = PathCommand::ArcTo(Arc {
                 center: centers[i],
                 radius: r,
                 start_angle: starts[i],
                 sweep: FRAC_PI_2,
                 to: ends[i],
-            }));
+            });
         }
-        commands.push(PathCommand::Close);
-        Path { commands }
+        (commands, 10)
     }
 }

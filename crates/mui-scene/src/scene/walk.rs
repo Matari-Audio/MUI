@@ -68,7 +68,7 @@ impl<'a> Walk<'a> {
         self.i += 1;
         let e = n.payload();
         let mut pose = ancestors.clone();
-        if let Some(radians) = e.extras().rotation {
+        if let Some(radians) = crate::element::rotation_of(n) {
             if !radians.is_finite() {
                 return Err(mui_geometry::Error::NonFinite.into());
             }
@@ -375,6 +375,12 @@ impl<'a> Walk<'a> {
             disabled: inner.disabled,
             semantics,
             semantic_label_implicit,
+            // An editable field draws its own runs, from the start.
+            text_align: if e.extras().editable_text.is_some() {
+                crate::TextAlign::Start
+            } else {
+                e.extras().text_align
+            },
             description: e.extras().description.clone(),
             value_description: e.extras().value_description.clone(),
             numeric_step: e.extras().numeric_step,
@@ -700,9 +706,16 @@ impl<'a> Walk<'a> {
                         };
                         hits.push((Arc::clone(tag), hit));
                     }
-                    if let Some(p) = self.push(Layer::Draw(k), local.clone(), None, &draw.fill, *bg)
+                    // A shadow of a rect or circle blurs analytically.
+                    let rect = (draw.blur > 0.0)
+                        .then(|| mui_geometry::RoundedRect::of(local))
+                        .flatten();
+                    if let Some(p) = self.push(Layer::Draw(k), local.clone(), rect, &draw.fill, *bg)
                     {
                         p.width = draw.width;
+                        p.cap = draw.cap;
+                        p.join = draw.join;
+                        p.blur = draw.blur;
                         p.offset = origin + draw.at.to_vec2();
                     }
                 }
@@ -748,11 +761,12 @@ impl<'a> Walk<'a> {
         let n = lines.len();
         let base = self.base_y;
         // A wrapped paragraph paints slices of its one run, at its metrics.
-        let sliced = if n > 1 {
+        let (widths, sliced) = if n > 1 {
             self.runs.line_glyphs(t, face, room, e.lines)
         } else {
-            Arc::default()
+            Default::default()
         };
+        let share = e.extras().text_align.share();
         let para = if sliced.is_empty() {
             None
         } else {
@@ -761,9 +775,10 @@ impl<'a> Walk<'a> {
                 .map(|r| (r.ascent, r.descent, r.line_height))
         };
         for (li, line) in lines.iter().enumerate() {
-            let run = match (sliced.get(li), para) {
-                (Some(glyphs), Some((ascent, descent, line_height))) => LineRun {
+            let run = match (sliced.get(li), widths.get(li), para) {
+                (Some(glyphs), Some(&advance), Some((ascent, descent, line_height))) => LineRun {
                     glyphs: glyphs.clone(),
+                    advance,
                     ascent,
                     descent,
                     line_height,
@@ -771,6 +786,7 @@ impl<'a> Walk<'a> {
                 _ => match self.runs.run(line, face)? {
                     Some(r) => LineRun {
                         glyphs: r.glyphs.clone(),
+                        advance: r.advance,
                         ascent: r.ascent,
                         descent: r.descent,
                         line_height: r.line_height,
@@ -799,8 +815,15 @@ impl<'a> Walk<'a> {
             // glifo hints by rounding the device-space baseline per
             // glyph, so an unsnapped stack of fractional line heights
             // rounds to uneven leading. Snap the line, not the glyph.
+            // The box's spare width, shared out by the node's alignment:
+            // none for Start, so a start-aligned label stays where it was.
+            let dx = if share == 0.0 {
+                0.0
+            } else {
+                (frame.size.width - run.advance) * share
+            };
             let origin = Point::new(
-                snap(frame.x, self.spec.device_scale),
+                snap(frame.x + dx, self.spec.device_scale),
                 snap(dy, self.spec.device_scale),
             );
             let text = Text {
@@ -934,6 +957,7 @@ impl<'a> Walk<'a> {
                 disabled: inner.disabled,
                 semantics: None,
                 semantic_label_implicit: false,
+                text_align: crate::TextAlign::Start,
                 text_value: None,
                 description: None,
                 value_description: None,
@@ -1133,6 +1157,7 @@ type Clips = Arc<[super::PlacedPath]>;
 /// One painted line's glyphs and the metrics it stacks at.
 struct LineRun {
     glyphs: Arc<[super::TextGlyph]>,
+    advance: f64,
     ascent: f64,
     descent: f64,
     line_height: f64,

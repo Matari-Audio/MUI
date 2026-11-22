@@ -98,6 +98,31 @@ pub(crate) struct Rare {
     pub(crate) underlay: bool,
     /// Local out-of-flow decoration painted above foreground siblings.
     pub(crate) overlay: bool,
+    /// The top and bottom padding when `.pad((x, y))` named a token on
+    /// either axis; `Node::pad` then holds the left and right.
+    pub(crate) pad_y: Option<Spacing>,
+    /// Percent of the parent's box the anchor point sits at; see
+    /// [`Node::at_pct`].
+    pub(crate) at_pct: Option<[f64; 2]>,
+    /// A quarter turn; see [`Node::turn`].
+    pub(crate) turn: Option<Turn>,
+}
+
+/// A quarter turn for [`Node::turn`]: clockwise, or counter-clockwise (a
+/// vertical rail word read bottom to top).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turn {
+    Cw,
+    Ccw,
+}
+impl Turn {
+    /// The rotation in radians, clockwise positive (screen y points down).
+    pub fn radians(self) -> f64 {
+        match self {
+            Self::Cw => std::f64::consts::FRAC_PI_2,
+            Self::Ccw => -std::f64::consts::FRAC_PI_2,
+        }
+    }
 }
 impl Rare {
     const NONE: Self = Self {
@@ -114,6 +139,9 @@ impl Rare {
         min_col: None,
         underlay: false,
         overlay: false,
+        pad_y: None,
+        at_pct: None,
+        turn: None,
     };
     pub(crate) fn fitted_aspect(&self, offered: Size) -> Option<Size> {
         let ratio = self.aspect.filter(|_| self.aspect_fit)?;
@@ -477,26 +505,51 @@ impl<P> Node<P> {
     /// `.pad(Spacing::step(3.))`. One slot per concept: the last call wins,
     /// whichever spelling it used.
     ///
-    /// `.pad((16, 8))` is 16 px left and right, 8 top and bottom;
-    /// `.pad(Insets { .. })` sets each side.
+    /// `.pad((16, 8))` is 16 px left and right, 8 top and bottom; either
+    /// axis may be a token instead, `.pad((S, Xs))` or `.pad((M, 4))`, and
+    /// scales with the theme. `.pad(Insets { .. })` sets each side.
+    ///
+    /// ```
+    /// use mui_layout::{block, SpacingScale, SpacingToken::*};
+    /// let p = block(10, 10).pad((S, 2)).padding(SpacingScale::DEFAULT);
+    /// assert_eq!((p.left, p.right, p.top, p.bottom), (8., 8., 2., 2.));
+    /// ```
     pub fn pad(mut self, padding: impl Into<Pad>) -> Self {
+        let mut y = None;
         match padding.into() {
             Pad::All(Spacing::Px(v)) => {
                 self.padding = Insets::all(v);
                 self.pad = None;
             }
             Pad::All(scaled) => self.pad = Some(scaled),
+            Pad::Axes(Spacing::Px(x), Spacing::Px(v)) => {
+                self.padding = Insets::symmetric(x, v);
+                self.pad = None;
+            }
+            Pad::Axes(x, v) => {
+                self.pad = Some(x);
+                y = Some(v);
+            }
             Pad::Insets(i) => {
                 self.padding = i;
                 self.pad = None;
             }
         }
+        // Box only a pair that needs it; clear a stale one without boxing.
+        if y.is_some() {
+            self.rare_mut().pad_y = y;
+        } else if let Some(rare) = &mut self.rare {
+            rare.pad_y = None;
+        }
         self
     }
     /// What the padding comes to under `scale`.
     pub fn padding(&self, scale: SpacingScale) -> Insets {
-        self.pad
-            .map_or(self.padding, |s| Insets::all(s.resolve(scale)))
+        match (self.pad, self.rare().pad_y) {
+            (Some(x), Some(y)) => Insets::symmetric(x.resolve(scale), y.resolve(scale)),
+            (Some(s), None) => Insets::all(s.resolve(scale)),
+            (None, _) => self.padding,
+        }
     }
     /// Declared outer size on both axes. `Auto` measures, `Px` fixes, `Pct`
     /// takes a share of the parent: `.size(Len::Pct(50.0), 24.0)`.
@@ -620,7 +673,11 @@ impl<P> Node<P> {
     }
     /// Where this child sits in a stack, overlay or grid cell of `parent`.
     pub(crate) fn cell_anchor(&self, parent: &Self) -> (Align, Align) {
-        let (x, y) = self.anchor.unwrap_or(crate::measure::cell_default(parent));
+        // A pinned float sizes to its content; anything else takes the
+        // parent's cell default.
+        let (x, y) = self
+            .anchor
+            .unwrap_or(crate::measure::float_default(self, parent));
         (self.place[0].unwrap_or(x), self.place[1].unwrap_or(y))
     }
     /// Its cross-axis alignment in a row (`vertical == false`) or column.
@@ -693,6 +750,62 @@ impl<P> Node<P> {
         self.offset = [dx.px(), dy.px()];
         self
     }
+    /// Place this node's anchor point at `x`% of the parent's width and `y`%
+    /// of its height (its box inside the padding, what [`Len::Pct`] is a
+    /// share of): a tick label at a data share of its plot. The point is the
+    /// one [`anchor`](Node::anchor) names -- `Start` the leading edge,
+    /// `Center` the centre, `End` the trailing edge -- and `Center` on both
+    /// axes when no anchor is set. [`offset`](Node::offset) still nudges it
+    /// in pixels. Nothing clamps it: at 100% a centred label overhangs, as
+    /// an offset does, floats included. Stack, content and float children
+    /// and grid cells; a row or column places its in-flow children itself.
+    /// `at`, `centered_at` and `centered` replace it.
+    ///
+    /// ```
+    /// use mui_layout::{block, resolve, stack, Align, Size};
+    /// let plot = block(200, 100);
+    /// let caption = block(20, 10).anchor(Align::Center, Align::End).at_pct(37, 100).id("t");
+    /// let l = resolve(&stack([plot, caption]), None, Default::default()).unwrap();
+    /// let f = l.frame("t").unwrap();
+    /// // Centred on x = 74 (37% of 200), bottom edge on y = 100.
+    /// assert_eq!((f.x, f.y), (64., 90.));
+    /// ```
+    pub fn at_pct(mut self, x: impl Px, y: impl Px) -> Self {
+        self.anchor.get_or_insert((Align::Center, Align::Center));
+        self.rare_mut().at_pct = Some([x.px(), y.px()]);
+        self
+    }
+    fn clear_pct(&mut self) {
+        if let Some(rare) = &mut self.rare {
+            rare.at_pct = None;
+        }
+    }
+    /// Turn this node a quarter: it lays itself and its children out in its
+    /// own upright space as before, but its parent sees its width and height
+    /// swapped (and offers it swapped sizes), so a turned caption in a rail
+    /// takes the rail's width as its height. [`Layout::frame`](crate::Layout::frame)
+    /// reports the upright box centred on the slot it was given; the scene
+    /// rotates it about that centre, which makes what is painted and hit
+    /// exactly the slot.
+    ///
+    /// ```
+    /// use mui_layout::{block, resolve, row, Size, Turn};
+    /// let l = resolve(&row([block(60, 12).turn(Turn::Ccw).id("word")]).id("rail"),
+    ///                 None, Default::default()).unwrap();
+    /// // The rail is the word turned: 12 wide, 60 tall.
+    /// assert_eq!(l.frame("rail").unwrap().size, Size::new(12., 60.));
+    /// // The word's own box stays 60 x 12, centred on that slot.
+    /// let f = l.frame("word").unwrap();
+    /// assert_eq!((f.x, f.y, f.size), (-24., 24., Size::new(60., 12.)));
+    /// ```
+    pub fn turn(mut self, turn: Turn) -> Self {
+        self.rare_mut().turn = Some(turn);
+        self
+    }
+    /// The quarter turn [`Node::turn`] set, if any.
+    pub fn turned(&self) -> Option<Turn> {
+        self.rare().turn
+    }
     /// Placed `(dx, dy)` from the top-left of the parent's box: `anchor` at
     /// the start of both axes, then `offset`.
     ///
@@ -704,11 +817,13 @@ impl<P> Node<P> {
     /// ```
     pub fn at(mut self, dx: impl Px, dy: impl Px) -> Self {
         self.anchor = Some((Align::Start, Align::Start));
+        self.clear_pct();
         self.offset(dx, dy)
     }
     /// Centred in the parent's box, then nudged by `(dx, dy)`.
     pub fn centered_at(mut self, dx: impl Px, dy: impl Px) -> Self {
         self.anchor = Some((Align::Center, Align::Center));
+        self.clear_pct();
         self.offset(dx, dy)
     }
     /// Centred in the parent's box (a stack or grid cell).
@@ -722,6 +837,7 @@ impl<P> Node<P> {
     pub fn centered(mut self) -> Self {
         self.anchor = Some((Align::Center, Align::Center));
         self.offset = [0.0, 0.0];
+        self.clear_pct();
         self
     }
     /// Let the children overflow the main axis behind a clip. The node's
@@ -964,8 +1080,23 @@ impl<P> Node<P> {
             _ => None,
         }
     }
+    /// The declared length on one of the *parent's* axes: a turned node's
+    /// height is its parent's width.
     pub(crate) fn len(&self, vertical: bool) -> Len {
-        if vertical { self.height } else { self.width }
+        if vertical == self.rare().turn.is_some() {
+            self.width
+        } else {
+            self.height
+        }
+    }
+    /// The maximum as the parent sees it: swapped for a turned node.
+    pub(crate) fn outer_max(&self) -> Option<Size> {
+        let max = self.rare().maximum?;
+        Some(if self.rare().turn.is_some() {
+            Size::new(max.height, max.width)
+        } else {
+            max
+        })
     }
 }
 

@@ -40,7 +40,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Fields::default()),
         Box::new(Picker::default()),
         Box::new(OklchScene::default()),
-        Box::new(Tips),
+        Box::new(Tips::default()),
         Box::new(Curve::default()),
         Box::new(CurveEditor::default()),
         Box::new(BinSpectrum::default()),
@@ -48,6 +48,7 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Swap::default()),
         Box::new(Images::new()),
         Box::new(Wrapping::default()),
+        Box::new(Aligned),
         Box::new(Motion::default()),
         Box::new(Cells),
         Box::new(Select::default()),
@@ -55,8 +56,69 @@ pub fn all() -> Vec<Box<dyn PreviewScene>> {
         Box::new(Switched::default()),
         Box::new(Editor),
         Box::new(Effects),
+        Box::new(CanvasPaint),
         Box::new(Frosted),
+        Box::new(Rails),
     ]
+}
+
+/// Words up a rail and tick labels at data shares of a plot, all intrinsic.
+pub struct Rails;
+impl PreviewScene for Rails {
+    fn name(&self) -> &'static str {
+        "Rails and ticks"
+    }
+    fn about(&self) -> &'static str {
+        "caption(..).turn(Turn::Ccw) reads bottom to top and its rail is as wide as the line is tall. Tick labels sit at a share of the plot with .at_pct(x, y); the plot is padded per axis in tokens, .pad((S, Xs))."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        rails()
+    }
+}
+
+/// The tree [`Rails`] shows, shared with its test.
+pub fn rails() -> El {
+    let rail = col(
+        ["stereo", "tilt", "scale"].map(|w| caption(w).turn(Turn::Ccw).id(format!("rail.{w}")))
+    )
+    .gap(M)
+    .pad((Xs, S))
+    .radius(8.0)
+    .fill(Role::Raised)
+    .id("rail");
+    let mut plot = vec![block(320.0, 160.0).radius(6.0).fill(Role::Field)];
+    for (i, pct) in [0, 25, 50, 75, 100].into_iter().enumerate() {
+        // Under the plot's bottom edge, centred on the share; the ends
+        // overhang, as a tick label should.
+        plot.push(
+            caption(format!("{pct}%"))
+                .anchor(Align::Center, Align::End)
+                .at_pct(pct, 100)
+                .offset(0, -2)
+                .id(format!("tick.x{i}")),
+        );
+        plot.push(
+            block(1.0, 160.0)
+                .fill(Role::Dim)
+                .anchor(Align::Center, Align::Start)
+                .at_pct(pct, 0),
+        );
+    }
+    plot.push(
+        caption("37%")
+            .fill(Role::Primary)
+            .anchor(Align::Center, Align::Start)
+            .at_pct(37, 0)
+            .offset(0, 4)
+            .id("tick.mark"),
+    );
+    let plot = stack(plot).pad((S, Xs)).id("plot");
+    row![rail, plot]
+        .gap(L)
+        .pad(L)
+        .align(Align::Start)
+        .fill(Role::Surface)
+        .id("rails")
 }
 
 /// A modal over a busy panel. The dim is `.backdrop_blur`, so the panel goes
@@ -180,14 +242,52 @@ impl PreviewScene for SegmentedRow {
 }
 
 /// The controls a plugin is made of, each a composition of flex shares.
-#[derive(Default)]
 pub struct Widgets {
     cutoff: f64,
     res: f64,
     gain: f64,
     bypass: bool,
     clicks: usize,
+    depth: f64,
+    mix: f64,
+    freq: f64,
 }
+impl Default for Widgets {
+    fn default() -> Self {
+        Self {
+            cutoff: 0.0,
+            res: 0.0,
+            gain: 0.0,
+            bypass: false,
+            clicks: 0,
+            depth: 0.6,
+            mix: 0.4,
+            freq: 1000.0,
+        }
+    }
+}
+
+/// A frequency read and typed in its units (`1.2k`, `440 Hz`). Built once;
+/// each frame clones it, sharing the closures.
+static HZ: std::sync::LazyLock<Domain> = std::sync::LazyLock::new(|| {
+    Domain::new(20.0..=20_000.0)
+        .default(1000.0)
+        .format(|v| {
+            if v >= 1000.0 {
+                format!("{:.1} kHz", v / 1000.0)
+            } else {
+                format!("{v:.0} Hz")
+            }
+        })
+        .parse(|s| {
+            let s = s.trim();
+            let s = s.strip_suffix("Hz").unwrap_or(s).trim();
+            match s.strip_suffix(['k', 'K']) {
+                Some(k) => k.trim().parse::<f64>().ok().map(|k| k * 1000.0),
+                None => s.parse().ok(),
+            }
+        })
+});
 impl PreviewScene for Widgets {
     fn name(&self) -> &'static str {
         "Widgets"
@@ -227,6 +327,40 @@ impl PreviewScene for Widgets {
             ])
             .gap(S)
             .align(Align::Center),
+            // Icons on buttons, and a frequency typed in its own units
+            // (focus it and press Enter, or double-click it).
+            row([
+                button(ui, "save", "Save")
+                    .icon(sym::SAVE)
+                    .variant(Variant::Soft)
+                    .size(S)
+                    .into_el(),
+                icon_button(ui, "lock", "Keep on preset load", sym::LOCK)
+                    .variant(Variant::Ghost)
+                    .size(S)
+                    .into_el(),
+                spacer(),
+                drag_value(ui, "freq", "Frequency", &mut self.freq, HZ.clone()).into_el(),
+            ])
+            .gap(S)
+            .align(Align::Center),
+            // Dials that fill their cells: weights 2 and 1 give a hero dial
+            // twice the small one: SMOOTH's look and DRAMA's.
+            row([
+                knob(ui, "depth", "Depth", &mut self.depth, 0.0..=1.0)
+                    .look(Knob::smooth())
+                    .fill_cell()
+                    .flex(2)
+                    .into_el(),
+                knob(ui, "mix", "Mix", &mut self.mix, 0.0..=1.0)
+                    .look(Knob::drama())
+                    .fill_cell()
+                    .flex(1)
+                    .into_el(),
+            ])
+            .gap(S)
+            .align(Align::End)
+            .h(200),
         ])
         .gap(M)
         .pad(L)
@@ -543,17 +677,33 @@ impl PreviewScene for Picker {
     }
 }
 
-/// Tips come due after half a second of rest; the third button holds a float
-/// open instead: an ordinary child of the card, so it reflows with it.
-pub struct Tips;
+/// Tips come due after a rest the user picks, or never; the third button
+/// holds a float open instead: an ordinary child of the card, so it reflows
+/// with it. The delay select wears the card's own plate chrome.
+#[derive(Default)]
+pub struct Tips {
+    /// 0 is off; then quick, normal, slow.
+    delay: usize,
+}
 impl PreviewScene for Tips {
     fn name(&self) -> &'static str {
         "Tooltip"
     }
     fn about(&self) -> &'static str {
-        "Rest on a button for a tip. Hold the last one and the menu drops in under it -- nothing is placed."
+        "Rest on a button for a tip, after the delay picked below (or never). Hold the last one and the menu drops in under it -- nothing is placed."
     }
     fn specimen(&mut self, ui: &mut Ui) -> El {
+        const DELAYS: [&str; 4] = ["Normal tips", "Quick tips", "Slow tips", "No tips"];
+        let delay = select(ui, "tip-delay", &DELAYS, &mut self.delay)
+            .variant(Variant::Outline)
+            .size(S)
+            .radius(12.0);
+        ui.set_tips(match self.delay {
+            1 => TipPolicy::After(0.15),
+            2 => TipPolicy::After(1.2),
+            3 => TipPolicy::Off,
+            _ => TipPolicy::default(),
+        });
         let save = button(ui, "tip-save", "Save").el;
         let revert = button(ui, "tip-revert", "Revert").el;
         let more = button(ui, "tip-more", "Hold for more").el;
@@ -570,6 +720,7 @@ impl PreviewScene for Tips {
             save.tip("Write the preset to disk"),
             revert.tip("Throw away every edit since the last save"),
             more,
+            delay.into_el(),
         ])
         .when(held, |c| {
             c.push(
@@ -1000,6 +1151,47 @@ impl PreviewScene for Images {
 
 /// A paragraph re-wrapped at whatever width the slider says, and a row that
 /// breaks into lines instead of overflowing.
+/// The same short value in a box reserved for a longer one, and a short
+/// paragraph, at each [`TextAlign`].
+pub struct Aligned;
+impl PreviewScene for Aligned {
+    fn name(&self) -> &'static str {
+        "Text align"
+    }
+    fn about(&self) -> &'static str {
+        ".text_align places each line across the room its box has: a .reserve(\"10.0\") plate showing 5.0, and every line of a wrapped paragraph."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        const PARA: &str = "Each line of a wrapped paragraph is placed on its own.";
+        let column = |align: TextAlign, name: &str| {
+            col([
+                caption(name.to_owned()).fill(Role::Dim),
+                row([text("5.0")
+                    .reserve("10.0")
+                    .text_size(20.0)
+                    .text_align(align)])
+                .pad((10.0, 4.0))
+                .radius(6.0)
+                .fill(Role::Field),
+                text(PARA).text_align(align).w(130.0),
+            ])
+            .gap(S)
+            .align(Align::Stretch)
+            .id(format!("align-{name}"))
+        };
+        row([
+            column(TextAlign::Start, "Start"),
+            column(TextAlign::Center, "Center"),
+            column(TextAlign::End, "End"),
+        ])
+        .gap(L)
+        .pad(L)
+        .radius(20.0)
+        .fill(Role::Surface)
+        .id("aligned")
+    }
+}
+
 pub struct Wrapping {
     width: f64,
     lines: f64,
@@ -1617,6 +1809,83 @@ impl PreviewScene for Effects {
     }
 }
 
+/// Stroke caps on a value arc, and a dial's soft shadow drawn by the
+/// renderer instead of stacked discs.
+pub struct CanvasPaint;
+impl PreviewScene for CanvasPaint {
+    fn name(&self) -> &'static str {
+        "Canvas paint"
+    }
+    fn about(&self) -> &'static str {
+        "Draw::stroke(..).cap(Cap::Butt | Round | Square) on the same value arc; a dial whose face casts Draw::shadow(circle, 12, (0, 0), ..), a centred halo; a disc outlined as a circle under .elevation(Elevation::Halo)."
+    }
+    fn specimen(&mut self, _: &mut Ui) -> El {
+        canvas_paint()
+    }
+}
+
+/// The tree [`CanvasPaint`] shows.
+pub fn canvas_paint() -> El {
+    use std::f64::consts::PI;
+    let arc = |c: Point, r: f64, share: f64| {
+        Path::polyline(
+            (0..=64).map(|i| {
+                let a = 0.75 * PI + 1.5 * PI * share * f64::from(i) / 64.;
+                Point::new(c.x + a.cos() * r, c.y + a.sin() * r)
+            }),
+            false,
+        )
+    };
+    let ends = |cap: Cap, name: &'static str| {
+        let ring = canvas(move |s: Size| {
+            let c = Point::new(s.width / 2., s.height / 2.);
+            vec![
+                Draw::stroke(arc(c, 30., 1.), Role::Field, 9.).cap(cap),
+                Draw::stroke(arc(c, 30., 0.6), Role::Primary, 9.).cap(cap),
+            ]
+        })
+        .square(84);
+        col([ring, caption(name).fill(Role::Dim)])
+            .gap(Xs)
+            .align(Align::Center)
+    };
+    let dial = canvas(move |s: Size| {
+        let c = Point::new(s.width / 2., s.height / 2.);
+        let face = Path::circle(c, 34.).expect("a positive radius");
+        let dome = Gradient::radial((0.5, 0.32), 0.55, [(0.0, Role::Raised), (1.0, Role::Field)]);
+        vec![
+            Draw::stroke(arc(c, 50., 1.), Role::Field, 8.).cap(Cap::Butt),
+            Draw::stroke(arc(c, 50., 0.7), Role::Primary, 8.).cap(Cap::Butt),
+            Draw::shadow(face.clone(), 12., (0., 0.), Color::oklcha(0., 0., 0., 0.6)),
+            Draw::fill(face, dome),
+        ]
+    })
+    .square(132)
+    .id("dial");
+    let puck = block(72, 72)
+        .outline(|s| {
+            Path::circle(Point::new(s.width / 2., s.height / 2.), 30.).expect("a positive radius")
+        })
+        .fill(Role::Raised)
+        .elevation(Elevation::Halo)
+        .id("puck");
+    row([
+        ends(Cap::Butt, "butt"),
+        ends(Cap::Round, "round"),
+        ends(Cap::Square, "square"),
+        col([dial, caption("Draw::shadow").fill(Role::Dim)])
+            .gap(Xs)
+            .align(Align::Center),
+        col([puck, caption("Elevation::Halo").fill(Role::Dim)])
+            .gap(Xs)
+            .align(Align::Center),
+    ])
+    .gap(L)
+    .align(Align::Center)
+    .pad(M)
+    .id("canvas-paint")
+}
+
 /// The tree [`Effects`] shows, as a free function so the snapshot test below
 /// paints the same one the gallery does.
 pub fn effects() -> El {
@@ -1659,7 +1928,7 @@ pub fn effects() -> El {
 mod tests {
     #[cfg(feature = "cpu")]
     use super::effects;
-    use super::{GlyphAxes, editor};
+    use super::{GlyphAxes, editor, rails};
     use mui::prelude::*;
     use mui::scene::Frame as LayoutFrame;
 
@@ -1739,6 +2008,30 @@ mod tests {
             under.0 < bare.0,
             "no shadow under the key: {under:?} vs {bare:?}"
         );
+    }
+
+    /// The turned words stand inside their rail once turned, and each tick
+    /// is centred on its share of the plot.
+    #[test]
+    fn rail_words_turn_into_their_rail_and_ticks_sit_at_their_share() {
+        let mut spec = SceneSpec::new(rails());
+        spec.font = Some(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap());
+        let scene = resolve(&spec).unwrap();
+        let rail = scene.layout.frame("rail").unwrap();
+        let word = scene.surface("rail.stereo").unwrap();
+        // Upright, the word is wider than tall; its rail is narrower than it.
+        assert!(word.frame.size.width > word.frame.size.height);
+        assert!(rail.size.width < word.frame.size.width);
+        let shown = word.bounds.unwrap();
+        assert!(
+            shown.x0 >= rail.x - 1e-6 && shown.x1 <= rail.right() + 1e-6,
+            "{shown:?} outside {rail:?}"
+        );
+        let plot = scene.layout.frame("plot").unwrap();
+        let inner_x = plot.x + 8.0;
+        let tick = scene.layout.frame("tick.mark").unwrap();
+        let centre = tick.x + tick.size.width / 2.0;
+        assert!((centre - (inner_x + 320.0 * 0.37)).abs() < 1e-6, "{centre}");
     }
 
     /// The three window shapes a plugin editor is actually dragged to. No
