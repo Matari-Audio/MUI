@@ -98,11 +98,10 @@ group supplies a fill.
   bake. It takes one to three plates that are plain rounded rectangles.
   The group itself must not `.clip()`; put a clipping container above it.
 
-A `Ui` opts in with `Ui::default().gpu_welding()`. The native hosts
-(`mui-baseview`, `mui-winit`) switch a `Ui` back to the reference backend
-while they present on the CPU, so the same tree works on both. A tree the
-GPU backend rejects makes `Ui::frame` return the error, so keep GPU welds
-within its limits.
+A `Ui` opts in with `Ui::default().gpu_welding()`. `mui-baseview` switches a
+`Ui` back to the reference backend while it presents on the CPU, so the same
+tree works on both. A tree the GPU backend rejects makes `Ui::frame` return the
+error, so keep GPU welds within its limits.
 
 On the GPU backend, a resolved weld can be changed without a relayout:
 

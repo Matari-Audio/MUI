@@ -52,6 +52,14 @@ impl ScalingFactor {
         self.system.get().is_none() && self.overridden.get().is_none()
     }
 
+    pub fn suggested(&self) -> Option<f64> {
+        self.suggested.get()
+    }
+
+    pub fn restore_suggestion(&self, value: Option<f64>) {
+        self.suggested.set(value);
+    }
+
     /// A new desktop scale (`Xft.dpi` changed).
     pub fn set_system(&self, value: Option<f64>) {
         self.system.set(value);
@@ -166,6 +174,7 @@ impl WindowInner {
 
         let mut cookies = vec![
             xcb_window.set_title(&options.title)?,
+            xcb_window.set_net_wm_name(&options.title)?,
             xcb_window.enable_wm_protocols()?,
             xcb_window.enable_dnd_protocols()?,
             xcb_window.set_size_hints(size_hints)?,
@@ -332,6 +341,14 @@ impl WindowInner {
         // This will trigger a `ConfigureNotify` event which will in turn change `self.window_info`
         // and notify the window handler about it
 
+        Ok(())
+    }
+
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        let name = self.xcb_window.set_title(title)?;
+        let utf8 = self.xcb_window.set_net_wm_name(title)?;
+        name.check()?;
+        utf8.check()?;
         Ok(())
     }
 

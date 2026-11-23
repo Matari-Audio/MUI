@@ -154,8 +154,8 @@ returns a `Response { el, changed }`. Finish a control with its look
 and `group(..)` give labelled rows and titled groups with accessible names.
 Their rustdoc in `mui::widgets` has a compiled example each.
 
-In a plugin, bind a control to a parameter through `mui-truce`'s `Bridge`;
-the drag becomes the host's begin/perform/end edit:
+In a Moose plugin, bind a control to a parameter through `moose-mui`'s parameter
+bridge; the drag becomes the host's begin/perform/end edit:
 
 ```rust,ignore
 let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));

@@ -56,6 +56,7 @@ struct Asked {
     alive: Arc<AtomicBool>,
     asked: Arc<AtomicBool>,
     active: Arc<AtomicBool>,
+    wake: Arc<dyn Fn() + Send + Sync>,
 }
 impl ActivationHandler for Asked {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
@@ -64,17 +65,23 @@ impl ActivationHandler for Asked {
         }
         self.active.store(true, Ordering::Release);
         self.asked.store(true, Ordering::Release);
+        (self.wake)();
         // No model lock from a native callback. A full tree follows next tick.
         None
     }
 }
-struct Actions(Sender<ActionRequest>, Arc<AtomicBool>);
+struct Actions(
+    Sender<ActionRequest>,
+    Arc<AtomicBool>,
+    Arc<dyn Fn() + Send + Sync>,
+);
 impl ActionHandler for Actions {
     fn do_action(&mut self, request: ActionRequest) {
         // The receiving editor may already have closed. No window/model is
         // retained by this callback, so reopening gets a fresh action queue.
         if self.1.load(Ordering::Acquire) {
             let _ = self.0.send(request);
+            (self.2)();
         }
     }
 }
@@ -103,6 +110,25 @@ impl NativeAccessibility {
         reason = "native adapter requires the caller's window lifetime contract"
     )]
     pub unsafe fn new(handle: RawWindowHandle) -> Option<(Self, AccessibilityUi)> {
+        // SAFETY: forwarded from this function's contract.
+        unsafe { Self::new_with_wake(handle, Arc::new(|| {})) }
+    }
+
+    /// Attach accessibility before showing the native window, invoking `wake`
+    /// whenever a screen reader requests the initial tree or dispatches an
+    /// action so settled 0 Hz windows wake immediately without polling.
+    ///
+    /// # Safety
+    /// Same safety contract as [`Self::new`]. `wake` must not lock the model
+    /// or reenter the native window handler synchronously.
+    #[expect(
+        unsafe_code,
+        reason = "native adapter requires the caller's window lifetime contract"
+    )]
+    pub unsafe fn new_with_wake(
+        handle: RawWindowHandle,
+        wake: Arc<dyn Fn() + Send + Sync>,
+    ) -> Option<(Self, AccessibilityUi)> {
         let (send, actions) = channel();
         let alive = Arc::new(AtomicBool::new(true));
         let asked = Arc::new(AtomicBool::new(false));
@@ -111,6 +137,7 @@ impl NativeAccessibility {
             alive: Arc::clone(&alive),
             asked: Arc::clone(&asked),
             active: Arc::clone(&active),
+            wake: Arc::clone(&wake),
         };
         #[cfg(target_os = "linux")]
         let adapter = {
@@ -122,7 +149,7 @@ impl NativeAccessibility {
             }
             accesskit_unix::Adapter::new(
                 activation,
-                Actions(send, Arc::clone(&alive)),
+                Actions(send, Arc::clone(&alive), wake),
                 Gone(Arc::clone(&active)),
             )
         };
@@ -138,7 +165,7 @@ impl NativeAccessibility {
                 accesskit_macos::SubclassingAdapter::new(
                     handle.ns_view.as_ptr(),
                     activation,
-                    Actions(send, Arc::clone(&alive)),
+                    Actions(send, Arc::clone(&alive), wake),
                 )
             }
         };
@@ -151,7 +178,7 @@ impl NativeAccessibility {
             accesskit_windows::SubclassingAdapter::new(
                 hwnd,
                 activation,
-                Actions(send, Arc::clone(&alive)),
+                Actions(send, Arc::clone(&alive), wake),
             )
         };
         Some((
@@ -386,8 +413,9 @@ mod tests {
             alive: Arc::clone(&alive),
             asked,
             active,
+            wake: Arc::new(|| {}),
         };
-        let mut callback = Actions(send, Arc::clone(&alive));
+        let mut callback = Actions(send, Arc::clone(&alive), Arc::new(|| {}));
         let request = || ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -436,6 +464,7 @@ mod tests {
             alive,
             asked,
             active: Arc::clone(&active),
+            wake: Arc::new(|| {}),
         };
         activation.request_initial_tree();
         assert!(endpoint.wants_tree());
@@ -457,12 +486,13 @@ mod tests {
             alive: Arc::clone(&alive),
             asked: asked.clone(),
             active: active.clone(),
+            wake: Arc::new(|| {}),
         };
         assert!(handler.request_initial_tree().is_none());
         assert!(asked.load(Ordering::Acquire));
         assert!(active.load(Ordering::Acquire));
         let (send, receive) = channel();
-        let mut handler = Actions(send, Arc::clone(&alive));
+        let mut handler = Actions(send, Arc::clone(&alive), Arc::new(|| {}));
         handler.do_action(ActionRequest {
             action: Action::Focus,
             target_tree: TreeId::ROOT,
@@ -612,10 +642,11 @@ mod tests {
                         alive: endpoint.alive.clone(),
                         asked: endpoint.asked.clone(),
                         active: endpoint.active.clone(),
+                        wake: Arc::new(|| {}),
                     };
                     let (requests, actions) = channel();
                     endpoint.actions = actions;
-                    let callback = Actions(requests, endpoint.alive.clone());
+                    let callback = Actions(requests, endpoint.alive.clone(), Arc::new(|| {}));
                     send.send((endpoint, activation, callback)).unwrap();
                     Ok(Probe {
                         native: RefCell::new(Some(native)),

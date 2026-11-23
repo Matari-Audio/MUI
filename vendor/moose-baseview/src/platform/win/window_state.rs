@@ -161,6 +161,21 @@ impl WindowState {
         Ok(())
     }
 
+    pub fn set_title(&self, title: &str) -> Result<(), super::PlatformError> {
+        if !self.shared.is_alive.get() {
+            return Ok(());
+        }
+        let wide = windows_core::HSTRING::from(title);
+        // SAFETY: `self.hwnd` is live on this owning thread and `wide` is NUL-terminated UTF-16.
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::SetWindowTextW(
+                self.hwnd.as_raw(),
+                wide.as_ptr(),
+            );
+        }
+        Ok(())
+    }
+
     pub fn set_scale_factor_override(
         &self, scale_factor: Option<f64>,
     ) -> Result<(), super::PlatformError> {

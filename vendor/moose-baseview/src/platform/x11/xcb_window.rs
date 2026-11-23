@@ -153,6 +153,18 @@ impl XcbWindow {
         )
     }
 
+    pub fn set_net_wm_name(
+        &self, title: &str,
+    ) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
+        self.connection.conn.change_property8(
+            PropMode::REPLACE,
+            self.window_id.get(),
+            self.connection.atoms._NET_WM_NAME,
+            self.connection.atoms.UTF8_STRING,
+            title.as_bytes(),
+        )
+    }
+
     pub fn enable_wm_protocols(&self) -> Result<VoidCookie<'_, XCBConnection>, ConnectionError> {
         self.connection.conn.change_property32(
             PropMode::REPLACE,

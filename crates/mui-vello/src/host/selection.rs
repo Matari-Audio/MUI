@@ -54,31 +54,37 @@ pub(super) fn validate_renderer_requirements(
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
 ) -> Result<(), String> {
-    validate_renderer_requirements_with_warp(
+    if super::force_cpu() {
+        return Err("CPU rendering forced by environment (MUI_FORCE_CPU / MUI_RENDERER)".into());
+    }
+    validate_renderer_requirements_with_cpu_adapter(
         info,
         requested,
         supported,
         cfg!(feature = "test-support")
-            && std::env::var("MUI_TEST_ALLOW_WARP").is_ok_and(|value| value == "1"),
+            && (std::env::var("MUI_TEST_ALLOW_CPU_ADAPTER").is_ok_and(|value| value == "1")
+                || std::env::var("MUI_TEST_ALLOW_WARP").is_ok_and(|value| value == "1")),
     )
 }
 
-fn validate_renderer_requirements_with_warp(
+fn validate_renderer_requirements_with_cpu_adapter(
     info: &wgpu::AdapterInfo,
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
-    allow_warp: bool,
+    allow_cpu_adapter: bool,
 ) -> Result<(), String> {
-    // WARP's shader JIT faulted outside Rust error handling under Vello's
-    // compute (research/platform-validation-2026-10-08.md). The quad pass has
-    // no compute, but WARP stays out until it is shown safe: CPU rendering is
-    // as fast as WARP and cannot fault the host.
-    if !allow_warp
-        && info.backend == wgpu::Backend::Dx12
-        && info.device_type == wgpu::DeviceType::Cpu
-        && info.vendor == 0x1414
-    {
-        return Err("WARP shader compilation can crash; use CPU rendering".into());
+    // Reject all software/CPU wgpu adapters (Windows DX12 WARP, Linux Vulkan
+    // Lavapipe/SwiftShader, GL llvmpipe, etc.) so hosts fall back directly to
+    // our fast dirty-rect `vello_cpu` software path instead of running GPU
+    // shaders on a CPU emulator or risking driver JIT faults.
+    if !allow_cpu_adapter && info.device_type == wgpu::DeviceType::Cpu {
+        if info.backend == wgpu::Backend::Dx12 && info.vendor == 0x1414 {
+            return Err("WARP shader compilation can crash; use CPU rendering".into());
+        }
+        return Err(format!(
+            "software/CPU adapter ({:?}, {}) rejected; use CPU rendering",
+            info.backend, info.name
+        ));
     }
     let mut missing = Vec::new();
     requested.check_limits_with_fail_fn(supported, false, |name, requested, supported| {
@@ -150,29 +156,58 @@ mod tests {
     use super::*;
 
     #[test]
-    fn warp_is_rejected_before_device_creation_without_rejecting_hardware_or_mesa() {
+    fn cpu_adapters_are_rejected_before_device_creation_while_hardware_is_accepted() {
         let limits = wgpu::Limits::default();
         let validate = |info: &wgpu::AdapterInfo| {
-            validate_renderer_requirements_with_warp(info, &limits, &limits, false)
+            validate_renderer_requirements_with_cpu_adapter(info, &limits, &limits, false)
         };
-        let mut info = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, wgpu::Backend::Dx12);
-        info.name = "Microsoft Basic Render Driver".into();
-        info.vendor = 0x1414;
-        info.device = 0x008c;
-        info.driver = "10.0.26100.33438".into();
-        assert!(validate(&info).unwrap_err().contains("WARP"));
-        assert!(validate_renderer_requirements_with_warp(&info, &limits, &limits, true,).is_ok());
-        info.backend = wgpu::Backend::Vulkan;
-        assert!(validate(&info).is_ok());
-        info.backend = wgpu::Backend::Dx12;
-        info.device_type = wgpu::DeviceType::DiscreteGpu;
-        for vendor in [0x10de, 0x8086, 0x1002, 0x1414] {
-            info.vendor = vendor;
-            assert!(validate(&info).is_ok());
+        // Windows DX12 WARP is rejected by default and allowed only via explicit test opt-in.
+        let mut warp = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, wgpu::Backend::Dx12);
+        warp.name = "Microsoft Basic Render Driver".into();
+        warp.vendor = 0x1414;
+        warp.device = 0x008c;
+        warp.driver = "10.0.26100.33438".into();
+        assert!(validate(&warp).unwrap_err().contains("WARP"));
+        assert!(
+            validate_renderer_requirements_with_cpu_adapter(&warp, &limits, &limits, true).is_ok()
+        );
+
+        // Linux Lavapipe (Vulkan), llvmpipe (GL), and any other DeviceType::Cpu adapter
+        // are rejected so hosts fall back directly to dirty-rect vello_cpu software rendering.
+        for (backend, name) in [
+            (wgpu::Backend::Vulkan, "llvmpipe (LLVM 19.1.0, 256 bits)"),
+            (wgpu::Backend::Gl, "llvmpipe"),
+            (wgpu::Backend::Metal, "Software"),
+        ] {
+            let mut cpu = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, backend);
+            cpu.name = name.into();
+            let err = validate(&cpu).unwrap_err();
+            assert!(err.contains("CPU"), "{err}");
+            assert!(
+                validate_renderer_requirements_with_cpu_adapter(&cpu, &limits, &limits, true)
+                    .is_ok()
+            );
         }
-        info.device_type = wgpu::DeviceType::IntegratedGpu;
-        info.vendor = 0x8086;
-        assert!(validate(&info).is_ok());
+
+        // Discrete, integrated, virtual, and other GPU adapters remain accepted.
+        for kind in [
+            wgpu::DeviceType::DiscreteGpu,
+            wgpu::DeviceType::IntegratedGpu,
+            wgpu::DeviceType::VirtualGpu,
+            wgpu::DeviceType::Other,
+        ] {
+            for (backend, vendor) in [
+                (wgpu::Backend::Dx12, 0x10de),
+                (wgpu::Backend::Vulkan, 0x1002),
+                (wgpu::Backend::Vulkan, 0x8086),
+                (wgpu::Backend::Metal, 0x106b),
+                (wgpu::Backend::Dx12, 0x1414),
+            ] {
+                let mut hw = wgpu::AdapterInfo::new(kind, backend);
+                hw.vendor = vendor;
+                assert!(validate(&hw).is_ok(), "{kind:?} {backend:?} {vendor:#x}");
+            }
+        }
     }
 
     #[test]

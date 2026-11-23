@@ -14,10 +14,12 @@
 //!    drops the GPU and returns to CPU frames ([`Transition::CpuFallback`]);
 //!    a transient failure is promoted again after the next CPU frame.
 //! 5. Drop: surfaces go before the retained [`PlatformHandle`].
+use std::time::{Duration, Instant};
+
 use baseview::PlatformHandle;
 use mui::scene::ResolvedScene;
 use mui::vello::effects::Fallback;
-use mui::vello::host::{FailureClass, Frame, GpuInit, Host, Transparency};
+use mui::vello::host::{FailureClass, Frame, GpuDiagnostics, GpuInit, Host, Transparency};
 use mui::vello::kurbo::Affine;
 use mui::vello::software::Window as SoftwareWindow;
 
@@ -49,7 +51,9 @@ pub struct Presenter {
     size: (u32, u32),
     cpu_presented: bool,
     needs_rebuild: bool,
+    software_only: bool,
     reason: &'static str,
+    gpu_error: Option<String>,
     transitions: Vec<Transition>,
     /// Last: every surface above drops before the native handle.
     handle: PlatformHandle,
@@ -87,6 +91,7 @@ impl Presenter {
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, String> {
+        let software_only = mui::vello::host::force_cpu();
         Ok(Self {
             gpu: None,
             software: Some(software(handle.clone(), size)?),
@@ -95,10 +100,43 @@ impl Presenter {
             size,
             cpu_presented: false,
             needs_rebuild: false,
-            reason: "CPU startup",
+            software_only,
+            reason: if software_only {
+                "CPU forced"
+            } else {
+                "CPU startup"
+            },
+            gpu_error: None,
             transitions: Vec::new(),
             handle,
         })
+    }
+
+    pub fn size(&self) -> (u32, u32) {
+        self.size
+    }
+
+    /// Actual GPU candidates, absent when presenting without a GPU.
+    pub fn diagnostics(&self) -> Option<&GpuDiagnostics> {
+        self.gpu.as_ref().map(Host::diagnostics)
+    }
+
+    /// Last GPU initialization or runtime failure that fell back to CPU.
+    pub fn gpu_error(&self) -> Option<&str> {
+        self.gpu_error.as_deref()
+    }
+
+    /// Next deadline needed by asynchronous GPU initialization or backoff.
+    /// `None` when settled (GPU ready, or software-only / permanent fallback).
+    pub fn next_wake(&self, now: Instant) -> Option<Instant> {
+        if self.gpu.is_some() || self.software_only {
+            return None;
+        }
+        let init = self.init.as_ref()?;
+        if let Some(deadline) = init.deadline() {
+            return Some(deadline);
+        }
+        init.pending().then(|| now + Duration::from_millis(25))
     }
 
     /// The GPU host, to lend its device ([`Host::device`]) or hand it
@@ -149,11 +187,14 @@ impl Presenter {
         std::mem::take(&mut self.transitions)
     }
 
-    fn recover(&mut self, class: FailureClass, reason: &'static str) {
-        self.transitions.push(Transition::CpuFallback {
-            permanent: class == FailureClass::Permanent,
-        });
+    fn recover(&mut self, class: FailureClass, reason: &'static str, error: Option<String>) {
+        let permanent = class == FailureClass::Permanent;
+        self.transitions.push(Transition::CpuFallback { permanent });
         self.gpu = None;
+        self.software_only |= permanent;
+        if let Some(error) = error {
+            self.gpu_error = Some(error);
+        }
         if let Some(init) = &mut self.init {
             init.recover(class);
         }
@@ -168,14 +209,18 @@ impl Presenter {
     pub fn prepare(&mut self) -> bool {
         let mut changed = std::mem::take(&mut self.needs_rebuild);
         if self.device_lost() {
-            self.recover(FailureClass::Transient, "CPU GPU recovery");
+            self.recover(
+                FailureClass::Transient,
+                "CPU GPU recovery",
+                Some("GPU device lost".into()),
+            );
             changed = true;
         }
         if self.gpu.is_none() && self.software.is_none() {
             self.software = software(self.handle.clone(), self.size).ok();
         }
         // GPU initialization starts only once CPU pixels are on screen.
-        if !self.cpu_presented || self.gpu.is_some() {
+        if !self.cpu_presented || self.gpu.is_some() || self.software_only {
             return changed;
         }
         let transparency = self.transparency;
@@ -194,12 +239,15 @@ impl Presenter {
         }) {
             Some(Ok(gpu)) => {
                 self.gpu = Some(gpu);
+                self.gpu_error = None;
                 self.reason = "GPU ready";
                 self.transitions.push(Transition::Promoted);
                 true
             }
             Some(Err(error)) => {
                 let permanent = error.failure_class() == FailureClass::Permanent;
+                self.software_only |= permanent;
+                self.gpu_error = Some(error.to_string());
                 self.transitions.push(Transition::CpuFallback { permanent });
                 self.reason = "CPU GPU initialization failed";
                 if self.software.is_none() {
@@ -215,22 +263,51 @@ impl Presenter {
     /// since the last frame on screen. A GPU failure returns `Skipped` and
     /// falls back to CPU frames from the next [`Presenter::prepare`].
     pub fn present(&mut self, scene: &ResolvedScene, transform: Affine) -> Result<Frame, String> {
+        self.present_inner(scene, transform, None::<fn(&mut dyn mui::vello::Canvas)>)
+    }
+
+    /// Paint `scene` under `transform`, followed by a host overlay drawn on
+    /// whichever presenter (GPU or CPU) is active.
+    pub fn present_with_overlay(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        overlay: impl FnOnce(&mut dyn mui::vello::Canvas),
+    ) -> Result<Frame, String> {
+        self.present_inner(scene, transform, Some(overlay))
+    }
+
+    fn present_inner(
+        &mut self,
+        scene: &ResolvedScene,
+        transform: Affine,
+        overlay: Option<impl FnOnce(&mut dyn mui::vello::Canvas)>,
+    ) -> Result<Frame, String> {
         if let Some(gpu) = self.gpu.as_mut() {
             let frame = gpu
                 .resize(self.size.0, self.size.1)
-                .and_then(|()| gpu.present(scene, transform));
+                .and_then(|()| match overlay {
+                    Some(overlay) => {
+                        gpu.present_with_overlay(scene, transform, |canvas| overlay(canvas))
+                    }
+                    None => gpu.present(scene, transform),
+                });
             return match frame {
                 Ok(Frame::SurfaceLost) => {
                     let replaced = surface(gpu.instance(), self.handle.clone())
                         .and_then(|s| gpu.try_replace_surface(s).map_err(|e| e.to_string()));
-                    if replaced.is_err() {
-                        self.recover(FailureClass::Transient, "CPU surface recovery");
+                    if let Err(err) = replaced {
+                        self.recover(FailureClass::Transient, "CPU surface recovery", Some(err));
                     }
                     Ok(Frame::Skipped)
                 }
                 Ok(frame) => Ok(frame),
                 Err(error) => {
-                    self.recover(error.failure_class(), "CPU GPU recovery");
+                    self.recover(
+                        error.failure_class(),
+                        "CPU GPU recovery",
+                        Some(error.to_string()),
+                    );
                     Ok(Frame::Skipped)
                 }
             };
@@ -239,7 +316,10 @@ impl Presenter {
             .software
             .as_mut()
             .ok_or("native CPU presenter unavailable")?;
-        let drew = software.present(scene, transform, self.size)?;
+        let drew = match overlay {
+            Some(overlay) => software.present_with_overlay(scene, transform, self.size, overlay)?,
+            None => software.present(scene, transform, self.size)?,
+        };
         self.cpu_presented |= drew;
         Ok(if drew {
             Frame::Presented(mui::vello::effects::EffectStats::default())

@@ -23,6 +23,8 @@ pub use size_hints::get_size_hints;
 x11rb::atom_manager! {
     pub Atoms: AtomsCookie {
         WM_STATE,
+        _NET_WM_NAME,
+        UTF8_STRING,
         _NET_WM_MOVERESIZE,
         WM_PROTOCOLS,
         WM_DELETE_WINDOW,

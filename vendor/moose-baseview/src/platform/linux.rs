@@ -28,7 +28,9 @@ macro_rules! forward {
 
 impl WindowHandle {
     pub fn create_window(init: WindowInitializer) -> Result<Self> {
-        if init.settings.dock.is_some() && std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if (init.settings.dock.is_some() && std::env::var_os("WAYLAND_DISPLAY").is_some())
+            || (init.settings.wayland && init.settings.parent.is_none())
+        {
             layer::WindowHandle::create_window(init).map(Self::Layer)
         } else {
             x11::WindowHandle::create_window(init).map(Self::X11)
@@ -39,6 +41,9 @@ impl WindowHandle {
     }
     pub fn resize(&self, size: Size) -> Result<()> {
         forward!(self, control => resize, size)
+    }
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        forward!(self, control => set_title, title)
     }
     pub fn suggest_scale_factor(&self, scale: f64) -> Result<()> {
         forward!(self, control => suggest_scale_factor, scale)
@@ -104,11 +109,7 @@ impl WindowThreadControl {
         }
     }
     pub fn set_title(&self, title: &str) -> Result<()> {
-        match self {
-            // ponytail: X11 floating keeps its creation title; add when a host retitles one.
-            Self::X11(_) => Ok(()),
-            Self::Layer(inner) => inner.set_title(title),
-        }
+        forward!(self, set_title, title)
     }
     pub fn size(&self) -> WindowSize {
         forward!(self, size)
@@ -181,6 +182,9 @@ impl WindowContext {
 
     pub fn set_mouse_cursor(&self, cursor: MouseCursor) -> Result<()> {
         forward!(self, set_mouse_cursor, cursor)
+    }
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        forward!(self, set_title, title)
     }
     pub fn request_close(&self) {
         forward!(self, request_close)

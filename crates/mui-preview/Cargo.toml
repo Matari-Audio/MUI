@@ -15,19 +15,17 @@ cpu = ["mui/cpu"]
 [dependencies]
 mui = { workspace = true, features = ["gpu-quad"] }
 mui-text.workspace = true
-mui-winit = { path = "../mui-winit" }
-# The gallery owns the window and the device, which is exactly the split a
-# plugin wrapper has. The library crates above pick no backend of their own.
-wgpu = { workspace = true, features = ["default"] }
-winit = "0.30"
-pollster.workspace = true
+mui-baseview.workspace = true
 # Fallback face so the glyph scene has something to draw without a system font.
 # Zero dependencies of its own -- no egui reaches the graph through it.
 epaint_default_fonts.workspace = true
 mui-access.workspace = true
 mui-headless.workspace = true
-accesskit_winit = { path = "../../vendor/accesskit_winit" }
 serde_json = "1"
+
+[dev-dependencies]
+wgpu.workspace = true
+pollster.workspace = true
 
 [lints]
 workspace = true

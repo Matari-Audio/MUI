@@ -4,6 +4,7 @@ use std::ffi::CStr;
 use std::fmt::Formatter;
 use std::os::raw::c_int;
 use std::ptr::NonNull;
+use std::sync::{Mutex, PoisonError};
 use x11_dl::xlib::{Display, Xlib};
 use x11_dl::xlib_xcb::{XEventQueueOwner, Xlib_xcb};
 
@@ -19,21 +20,47 @@ pub struct XlibConnection {
     default_screen: ScreenIndex,
 }
 
-// SAFETY: Xlib functions should be thread-safe, since we initialize it with XInitThreads below
+// Serialize display opens within this baseview image. Standalone initializes
+// Xlib before launching workers. In a plugin, the host must initialize Xlib
+// itself if its Xlib calls (including calls from other plugin images) can
+// overlap ours; a library-local mutex cannot coordinate with those callers.
+static DISPLAY_OPEN: Mutex<()> = Mutex::new(());
+
+// SAFETY: Each window uses a dedicated Display. After open, the event queue
+// belongs to XCB (XCBOwnsEventQueue); shared XCB operations use its locking.
+// Xlib operations are subject to the threading contract above.
 unsafe impl Send for XlibConnection {}
 // SAFETY: same as above
 unsafe impl Sync for XlibConnection {}
 
 impl XlibConnection {
+    /// Call `XInitThreads()` once for standalone processes only.
+    ///
+    /// Calling `XInitThreads()` from a dynamically loaded plugin after the DAW
+    /// host has already called Xlib is undefined behavior per the Xlib spec.
+    pub(crate) fn init_threads_for_standalone() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
+            if let Ok(xlib) = Xlib::open() {
+                // SAFETY: caller asserted standalone process ownership before any Xlib calls.
+                unsafe {
+                    (xlib.XInitThreads)();
+                }
+            }
+        });
+    }
+
     pub fn open() -> Result<Self> {
         let xlib = Box::new(Xlib::open()?);
 
-        if unsafe { (xlib.XInitThreads)() } == 0 {
-            return Err(InitThreadsFailedError.into());
-        }
-
-        // SAFETY: It's always safe to call XOpenDisplay with a NULL display_name
-        let ptr = unsafe { (xlib.XOpenDisplay)(core::ptr::null()) };
+        // Do NOT call XInitThreads() here: plugins loaded into a host that
+        // already uses Xlib trigger UB if XInitThreads() is called late.
+        let ptr = {
+            let _open = DISPLAY_OPEN.lock().unwrap_or_else(PoisonError::into_inner);
+            // SAFETY: NULL selects DISPLAY. This image serializes its opens;
+            // concurrent calls outside it require host Xlib initialization.
+            unsafe { (xlib.XOpenDisplay)(core::ptr::null()) }
+        };
 
         let Some(display) = NonNull::new(ptr) else { return Err(DisplayOpenFailedError.into()) };
 

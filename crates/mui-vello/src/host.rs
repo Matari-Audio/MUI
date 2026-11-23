@@ -1,7 +1,7 @@
 //! The one GPU host for a window MUI paints into: the surface, a device
-//! chosen for it, and the retained [`GpuRenderer`]. The gallery (winit) and
-//! the plugin editor (baseview) both drive this; only the window and how a
-//! surface is made from it stay theirs.
+//! chosen for it, and the retained [`GpuRenderer`]. Both standalone apps
+//! (`mui-preview`) and embedded plugin editors drive this through
+//! `mui-baseview`; only the window and how a surface is made from it stay theirs.
 //!
 //! Loss is handled here, not by a panic: a lost device (driver reset,
 //! eGPU unplugged) is rebuilt on the next [`Host::present`], and a lost
@@ -240,11 +240,26 @@ pub fn surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFo
     })
 }
 
-/// Prefer an offered nonblocking mode; use FIFO when it is the only choice.
-/// The native host owns display pacing. No application frame cap is introduced.
+/// Whether the environment explicitly forces CPU-only software rendering
+/// (`MUI_FORCE_CPU=1` / `true`, or `MUI_RENDERER=cpu`). Needed on drivers such
+/// as proprietary NVIDIA that ignore `LIBGL_ALWAYS_SOFTWARE=1`.
+pub fn force_cpu() -> bool {
+    force_cpu_from(
+        std::env::var("MUI_FORCE_CPU").ok().as_deref(),
+        std::env::var("MUI_RENDERER").ok().as_deref(),
+    )
+}
+
+fn force_cpu_from(force_cpu: Option<&str>, renderer: Option<&str>) -> bool {
+    force_cpu.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        || renderer.is_some_and(|v| v.eq_ignore_ascii_case("cpu"))
+}
+
+/// Prefer Mailbox (tear-free low latency) then Fifo / FifoRelaxed, falling back
+/// to uncapped Immediate only when no vsynced mode is offered.
 fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
     use wgpu::PresentMode as P;
-    [P::Mailbox, P::Immediate, P::FifoRelaxed, P::Fifo]
+    [P::Mailbox, P::Fifo, P::FifoRelaxed, P::Immediate]
         .into_iter()
         .find(|m| modes.contains(m))
         .unwrap_or(P::AutoVsync)
@@ -1151,8 +1166,9 @@ impl Host {
         if overlay.is_none() && renderer.is_current(scene, xf) {
             return Ok(Frame::Current);
         }
-        let frame = match surface.get_current_texture() {
-            Acquired::Success(frame) | Acquired::Suboptimal(frame) => frame,
+        let (frame, suboptimal) = match surface.get_current_texture() {
+            Acquired::Success(frame) => (frame, false),
+            Acquired::Suboptimal(frame) => (frame, true),
             Acquired::Outdated => {
                 renderer.invalidate();
                 configure(surface, device, config).map_err(HostError::Configuration)?;
@@ -1173,6 +1189,12 @@ impl Host {
             Err(error) => return Err(HostError::Render(error)),
         };
         queue.present(frame);
+        if suboptimal {
+            // Reconfigure the swapchain for the next frame so a changed
+            // surface transform/extent/DPI stops returning Suboptimal.
+            renderer.invalidate();
+            configure(surface, device, config).map_err(HostError::Configuration)?;
+        }
         // Driver compilation can fault after submit returns, before work completes.
         if let Some(operation) = operation {
             queue.on_submitted_work_done(move || drop(operation));
@@ -1193,6 +1215,33 @@ impl Host {
 mod tests {
     use super::*;
     use mui_scene::prelude::*;
+
+    #[test]
+    fn present_mode_prefers_mailbox_then_fifo_before_immediate() {
+        use wgpu::PresentMode as P;
+        assert_eq!(
+            present_mode(&[P::Immediate, P::Fifo, P::Mailbox]),
+            P::Mailbox
+        );
+        assert_eq!(present_mode(&[P::Immediate, P::Fifo]), P::Fifo);
+        assert_eq!(
+            present_mode(&[P::Immediate, P::FifoRelaxed]),
+            P::FifoRelaxed
+        );
+        assert_eq!(present_mode(&[P::Immediate]), P::Immediate);
+        assert_eq!(present_mode(&[]), P::AutoVsync);
+    }
+
+    #[test]
+    fn force_cpu_override_accepts_mui_force_cpu_and_mui_renderer() {
+        assert!(!force_cpu_from(None, None));
+        assert!(!force_cpu_from(Some("0"), Some("gpu")));
+        assert!(force_cpu_from(Some("1"), None));
+        assert!(force_cpu_from(Some("true"), None));
+        assert!(force_cpu_from(Some("TRUE"), None));
+        assert!(force_cpu_from(None, Some("cpu")));
+        assert!(force_cpu_from(None, Some("CPU")));
+    }
 
     #[test]
     fn transient_retries_double_to_a_cap_and_permanent_failures_require_reset() {
@@ -1335,8 +1384,13 @@ mod tests {
     #[test]
     fn present_mode_follows_the_platform() {
         use wgpu::PresentMode as P;
-        let mode = present_mode(&[P::Fifo, P::FifoRelaxed]);
-        assert_eq!(mode, P::FifoRelaxed);
+        assert_eq!(present_mode(&[P::Fifo, P::FifoRelaxed]), P::Fifo);
+        assert_eq!(present_mode(&[P::Fifo, P::Immediate]), P::Fifo);
+        assert_eq!(present_mode(&[P::Fifo, P::Mailbox]), P::Mailbox);
+        assert_eq!(
+            present_mode(&[P::FifoRelaxed, P::Immediate]),
+            P::FifoRelaxed
+        );
         assert_eq!(present_mode(&[P::Fifo]), P::Fifo);
         assert_eq!(present_mode(&[P::Immediate]), P::Immediate);
         assert_eq!(present_mode(&[]), P::AutoVsync);

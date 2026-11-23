@@ -128,8 +128,8 @@ CGImages. No AppKit view leaves its native thread. This avoids softbuffer's AppK
 full-image upload on every patch. Direct wgpu-surface clients still need to restore
 a newly acquired swapchain image from retained pixels; wgpu does not expose
 Present1 dirty rectangles. Their scene rasterization is incremental, but that
-surface restoration is not a claim of platform dirty-present support. The separate
-winit/Wayland floating runtime is not rewritten into the baseview worker here.
+surface restoration is not a claim of platform dirty-present support. Floating
+Wayland layer-shell editors continue to run through `mui-baseview::open_floating_threaded`.
 
 Set `MUI_DEBUG_DAMAGE=1` before launching the host to flash damage borders. Native
 Windows/X11 restore clean retained pixels after the diagnostic flash without scene
@@ -197,16 +197,16 @@ and adapter owner, with a thin moose shim. No moose files are edited here.
    startup; revoke it before close. Keep plugin instance references out of native
    renderer callbacks. Adopt MUI's future `mui-plugin` PluginHost/ParamHost/HostPump
    and Bridge lifecycle so moose-mui becomes a compatibility shim.
-4. **Actual host-main-thread pumping remains wrapper work.** This branch drains
-   mui-truce's pump on the native window thread. Windows/AppKit match the normal
-   host UI thread; X11 baseview owns a separate native thread, so this alone does
-   not establish CLAP/VST3 main-thread affinity. Implement `Editor::idle` with a
-   MainThread token and make wrappers actually invoke it: CLAP request_callback /
-   on_main_thread (timer/posix-fd support as needed, debug thread-check), VST3's
-   existing IRunLoop/shim timer, AU main run loop, and standalone event loop.
-   Add bounded `PluginContext::request_main_thread(FnOnce)` delivery; drain
-   begin/set/end, resize and dirty notifications there. Never dispatch them from
-   the editor worker or treat X11's native thread as the DAW main thread.
+4. **Actual host-main-thread pumping remains wrapper work.** Windows/AppKit
+   match the normal host UI thread; X11 baseview owns a separate native thread,
+   so this alone does not establish CLAP/VST3 main-thread affinity. Implement
+   `Editor::idle` with a MainThread token and make wrappers actually invoke it:
+   CLAP request_callback / on_main_thread (timer/posix-fd support as needed,
+   debug thread-check), VST3's existing IRunLoop/shim timer, AU main run loop,
+   and standalone event loop. Add bounded `PluginContext::request_main_thread(FnOnce)`
+   delivery; drain begin/set/end, resize and dirty notifications there. Never
+   dispatch them from the editor worker or treat X11's native thread as the DAW
+   main thread.
 5. Gate convergence with one runtime package in `cargo tree -d`, ordered gesture
    and resize tests with thread assertions, and the CLAP/VST3 native matrix on
    all three operating systems. Remove compatibility crates only after consumers
@@ -224,10 +224,10 @@ cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib windows_frame_
 cargo test -p mui --lib host::tests
 cargo test -p mui-vello --no-default-features --features cpu --lib
 cargo test -p mui-vello --features cpu,gpu-quad --lib
-cargo test -p mui-baseview -p mui-truce --lib
-cargo clippy -p mui-baseview -p mui-truce --all-targets -- -D warnings
-cargo check --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets
-cargo clippy --target x86_64-pc-windows-gnu -p mui-baseview -p mui-truce --all-targets -- -D warnings
+cargo test -p mui-baseview --lib
+cargo clippy -p mui-baseview --all-targets -- -D warnings
+cargo check --target x86_64-pc-windows-gnu -p mui-baseview --all-targets
+cargo clippy --target x86_64-pc-windows-gnu -p mui-baseview --all-targets -- -D warnings
 cargo build --target x86_64-pc-windows-gnu -p mui-baseview --examples
 cargo check --manifest-path vendor/moose-baseview/Cargo.toml --target x86_64-pc-windows-gnu --features opengl
 xvfb-run -a cargo run -p mui-baseview --example worker_close_probe
@@ -254,8 +254,8 @@ Windows desktop** with MSVC available, also run:
 
 ```powershell
 cargo test -p mui-vello --features cpu,gpu-quad --lib
-cargo test -p mui-baseview -p mui-truce --lib
-cargo clippy -p mui-baseview -p mui-truce --all-targets -- -D warnings
+cargo test -p mui-baseview --lib
+cargo clippy -p mui-baseview --all-targets -- -D warnings
 cargo run -p mui-baseview --example worker_close_probe
 cargo run -p mui-baseview --example native_editor
 $env:MUI_RENDERER='cpu'; $env:MUI_EXPECT_SOFTWARE='1'

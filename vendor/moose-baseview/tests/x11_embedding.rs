@@ -27,6 +27,7 @@ impl HasWindowHandle for Parent {
 #[derive(Default)]
 struct Seen {
     focused: bool,
+    reject_next_resize: bool,
     scales: Vec<f64>,
     sizes: Vec<(u32, u32, f64)>,
 }
@@ -34,6 +35,9 @@ struct Probe(Arc<Mutex<Seen>>);
 impl WindowHandler for Probe {
     fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
         let mut seen = self.0.lock().expect("lock poisoned");
+        if std::mem::take(&mut seen.reject_next_resize) {
+            return Err(std::io::Error::other("test rejects resize").into());
+        }
         seen.sizes.push((size.physical.width, size.physical.height, size.scale_factor));
         Ok(())
     }
@@ -213,4 +217,27 @@ fn xft_dpi_change_keeps_the_logical_size() {
     child.close();
     assert!(rescaled, "64x64 points at 2x is 128x128 pixels");
     assert_eq!(scales, [2.0]);
+}
+
+#[test]
+#[ignore = "requires an isolated X11 server; run with xvfb-run"]
+fn rejected_fallback_scale_preserves_size_and_can_be_retried() {
+    let host = Host::new();
+    let seen = Arc::new(Mutex::new(Seen::default()));
+    let (child, _) = open(&host, &seen);
+    let before = child.size();
+    assert_eq!(before.scale_factor, 1.0);
+    seen.lock().expect("lock poisoned").reject_next_resize = true;
+
+    assert!(child.suggest_fallback_scale_factor(2.0).is_err());
+    let after = child.size();
+    assert_eq!(after.scale_factor, before.scale_factor);
+    assert_eq!(after.physical, before.physical);
+
+    child.suggest_fallback_scale_factor(2.0).expect("retry accepted");
+    let after = child.size();
+    assert_eq!(after.scale_factor, 2.0);
+    assert_eq!(after.physical.width, before.physical.width * 2);
+    assert_eq!(after.physical.height, before.physical.height * 2);
+    child.close();
 }

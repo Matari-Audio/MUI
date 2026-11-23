@@ -14,12 +14,11 @@
 //! assert_eq!(update.nodes.len(), 2); // window + button
 //! ```
 //!
-//! Host side: on winit, keep an `accesskit_winit::Adapter` and build the
-//! update lazily, so a frame costs nothing when no screen reader listens —
-//! `adapter.update_if_active(|| tree_update(&scene, focus, scale))`, where
-//! `scale` is the window's device pixels per scene unit. A plugin
-//! with no window of its own hands the same `TreeUpdate` to whatever wrapper
-//! owns the host's platform adapter.
+//! Host side: `mui-baseview` attaches the platform AccessKit adapter
+//! (`accesskit_unix`, `accesskit_macos`, `accesskit_windows`) directly to the
+//! owned window and builds updates lazily when a screen reader listens —
+//! `update_if_active(|| tree_update(&scene, focus, scale))`, where `scale` is
+//! the window's device pixels per scene unit.
 #![forbid(unsafe_code)]
 
 pub use accesskit;

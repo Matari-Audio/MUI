@@ -71,6 +71,12 @@ unsafe extern "C" fn release_pixels(_: *mut c_void, data: *const c_void, bytes: 
     });
 }
 fn make_image(pixels: Vec<u32>, w: u32, h: u32) -> Result<*mut c_void, String> {
+    if (w as usize).checked_mul(h as usize) != Some(pixels.len()) {
+        return Err(format!(
+            "invalid bitmap length {} for {w}x{h}",
+            pixels.len()
+        ));
+    }
     let pixels = pixels.into_boxed_slice();
     let bytes = pixels.len() * 4;
     let data = Box::into_raw(pixels).cast::<c_void>();
@@ -254,6 +260,49 @@ impl Presenter {
                 self.flashes
                     .push((now + std::time::Duration::from_millis(150), layer));
             }
+            let _: () = msg_send![class!(CATransaction), commit];
+        }
+        Ok(())
+    }
+
+    /// Present a budgeted `src_size` bitmap stretched to fill the view bounds
+    /// (used when a HiDPI / ultrawide window exceeds the 16 Mi pixel 1:1 budget).
+    pub(super) fn present_scaled(
+        &mut self,
+        window: &WindowContext,
+        src_size: (u32, u32),
+        pixels: Vec<u32>,
+    ) -> Result<(), String> {
+        let image = make_image(pixels, src_size.0, src_size.1)?;
+        let physical = window.size().physical;
+        self.size = (physical.width, physical.height);
+        self.pieces.clear();
+        // SAFETY: all layers belong to this native main thread; `self.container`
+        // is alive until Drop and `image` is retained by CoreAnimation on assignment.
+        unsafe {
+            let root: *mut Object = msg_send![self.container, superlayer];
+            let bounds: Rect = msg_send![root, bounds];
+            let scale: f64 = msg_send![root, contentsScale];
+            let scale = if scale > 0. {
+                scale
+            } else {
+                window.size().scale_factor
+            };
+            let _: () = msg_send![class!(CATransaction), begin];
+            let _: () = msg_send![class!(CATransaction), setDisableActions:true];
+            let _: () = msg_send![self.container, setFrame:bounds];
+            let _: () = msg_send![self.container, setContentsScale:scale];
+            let layer: *mut Object = msg_send![class!(CALayer), new];
+            let _: () = msg_send![layer, setFrame:bounds];
+            let _: () = msg_send![layer, setContentsScale:scale];
+            let _: () = msg_send![layer, setContents:image];
+            let _: () = msg_send![self.container, addSublayer:layer];
+            self.pieces.push(Piece {
+                rect: [0, 0, physical.width, physical.height],
+                source: [0, 0, src_size.0, src_size.1],
+                layer,
+                image,
+            });
             let _: () = msg_send![class!(CATransaction), commit];
         }
         Ok(())

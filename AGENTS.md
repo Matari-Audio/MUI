@@ -56,11 +56,9 @@ same command gives byte-identical PNGs and JSON. Look at pixels and trees instea
 of guessing. Flags follow Rune's agent tooling.
 
 ```sh
-cargo run -p mui-gain-plugin --example headless -- --snap out.png --scale 2 --theme light   # pixels
-cargo run -p mui-gain-plugin --example headless -- --tree tree.json                          # ids, roles, rects, state
-cargo run -p mui-gain-plugin --example headless -- --script examples/scripts/gain-knob-drag.json --at mark:end --snap after.png
-cargo run -p mui-gain-plugin --example headless -- --script s.json --trace run.jsonl --strip strip.png --frames 24 --every 3
-cargo run -p mui-preview -- --list-scenes && cargo run -p mui-preview -- --scene widgets --snap w.png   # the gallery
+cargo run -p mui-preview -- --list-scenes
+cargo run -p mui-preview -- --scene widgets --snap w.png --scale 2 --theme light   # pixels
+cargo run -p mui-preview -- --scene widgets --tree tree.json                        # ids, roles, rects, state
 ```
 
 Scripts are `[{"t": 0.4, "type": "click", "key": "bypass"}, ...]` (`move down up click

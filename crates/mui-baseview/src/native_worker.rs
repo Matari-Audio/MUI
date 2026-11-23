@@ -65,6 +65,7 @@ pub(super) fn build<V: View + Send + 'static>(
             start();
         }
         let size = cx.size();
+        let a11y_wake = Arc::downgrade(&requests);
         #[expect(
             unsafe_code,
             reason = "attach provider to builder's live HWND on its owning thread"
@@ -72,7 +73,16 @@ pub(super) fn build<V: View + Send + 'static>(
         // SAFETY: the native endpoint stays here and drops before cx.
         let endpoints = cx.window_handle().ok().and_then(|h| {
             // SAFETY: builder owns this HWND; native drops before cx.
-            unsafe { NativeAccessibility::new(h.as_raw()) }
+            unsafe {
+                NativeAccessibility::new_with_wake(
+                    h.as_raw(),
+                    Arc::new(move || {
+                        if let Some(requests) = a11y_wake.upgrade() {
+                            requests.redraw();
+                        }
+                    }),
+                )
+            }
         });
         let (mut native, accessibility) =
             endpoints.map_or((None, None), |(n, a)| (Some(n), Some(a)));
@@ -236,6 +246,9 @@ enum Command {
 struct Output {
     patches: Vec<Patch>,
     size: (u32, u32),
+    /// Backing pixel dimensions of `patches`: equals `size` within the 16 Mi
+    /// pixel 1:1 budget, or a proportionally scaled target above it.
+    render_size: (u32, u32),
     software: bool,
     reason: &'static str,
     capture: bool,
@@ -317,7 +330,7 @@ impl NativeAdapter {
     }
     fn blit_raw(&self, rect: [u32; 4], pixels: &[u32]) -> bool {
         #[cfg(target_os = "windows")]
-        let result = blit(&self.cx, rect, pixels);
+        let result = blit(&self.cx, rect, (rect[2], rect[3]), pixels);
         #[cfg(target_os = "macos")]
         let result = self
             .presenter
@@ -332,6 +345,27 @@ impl NativeAdapter {
                 self.cx.size().physical.height,
             ),
         );
+        if let Err(error) = result {
+            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+            return false;
+        }
+        true
+    }
+    fn blit_scaled(&self, src_size: (u32, u32), pixels: &[u32], dst_size: (u32, u32)) -> bool {
+        #[cfg(target_os = "macos")]
+        let _ = dst_size; // The AppKit presenter reads the destination bounds from the view.
+        #[cfg(target_os = "windows")]
+        let result = blit(&self.cx, [0, 0, dst_size.0, dst_size.1], src_size, pixels);
+        #[cfg(target_os = "macos")]
+        let result =
+            self.presenter
+                .borrow_mut()
+                .present_scaled(&self.cx, src_size, pixels.to_vec());
+        #[cfg(target_os = "linux")]
+        let result = self
+            .presenter
+            .borrow_mut()
+            .present_scaled(src_size, pixels, dst_size);
         if let Err(error) = result {
             mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
             return false;
@@ -485,9 +519,9 @@ impl NativeAdapter {
             self.requests.drag.rendered(output.drag);
             return;
         }
-        #[cfg(not(target_os = "macos"))]
         let mut bitmap = self.bitmap.borrow_mut();
         let blitting = std::time::Instant::now();
+        let scaled = output.render_size != output.size;
         let submitted = submit_patches(
             &self.requests,
             output.size,
@@ -496,39 +530,35 @@ impl NativeAdapter {
             output.patches,
             |patch| {
                 #[cfg(target_os = "macos")]
-                {
-                    match self
-                        .presenter
-                        .borrow_mut()
-                        .present(&self.cx, patch.rect, patch.pixels)
-                    {
-                        Ok(()) => true,
-                        Err(error) => {
-                            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
-                            false
-                        }
-                    }
+                if !scaled {
+                    *bitmap = None;
+                    return self.blit_raw(patch.rect, &patch.pixels);
                 }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    if patch.rect == [0, 0, output.size.0, output.size.1] {
-                        let success = self.blit(patch.rect, &patch.pixels);
-                        *bitmap = Some(Bitmap {
-                            size: output.size,
-                            pixels: patch.pixels,
-                        });
-                        return success;
-                    }
-                    let Some(bitmap) = bitmap.as_mut().filter(|b| b.size == output.size) else {
-                        return false;
+                if patch.rect == [0, 0, output.render_size.0, output.render_size.1] {
+                    let success = if scaled {
+                        self.blit_scaled(output.render_size, &patch.pixels, output.size)
+                    } else {
+                        self.blit(patch.rect, &patch.pixels)
                     };
-                    let [x, y, w, h] = patch.rect;
-                    for row in 0..h as usize {
-                        let dest = (y as usize + row) * output.size.0 as usize + x as usize;
-                        let source = row * w as usize;
-                        bitmap.pixels[dest..dest + w as usize]
-                            .copy_from_slice(&patch.pixels[source..source + w as usize]);
-                    }
+                    *bitmap = Some(Bitmap {
+                        size: output.render_size,
+                        pixels: patch.pixels,
+                    });
+                    return success;
+                }
+                let Some(bitmap) = bitmap.as_mut().filter(|b| b.size == output.render_size) else {
+                    return false;
+                };
+                let [x, y, w, h] = patch.rect;
+                for row in 0..h as usize {
+                    let dest = (y as usize + row) * output.render_size.0 as usize + x as usize;
+                    let source = row * w as usize;
+                    bitmap.pixels[dest..dest + w as usize]
+                        .copy_from_slice(&patch.pixels[source..source + w as usize]);
+                }
+                if scaled {
+                    self.blit_scaled(output.render_size, &bitmap.pixels, output.size)
+                } else {
                     self.blit(patch.rect, &patch.pixels)
                 }
             },
@@ -661,22 +691,30 @@ impl WindowHandler for NativeAdapter {
             self.apply(output);
         }
         let exposed = std::mem::take(&mut *self.expose.borrow_mut());
-        if let Some(bitmap) = self.bitmap.borrow().as_ref() {
-            for [x, y, w, h] in exposed {
-                let x = x.min(bitmap.size.0);
-                let y = y.min(bitmap.size.1);
-                let w = w.min(bitmap.size.0 - x);
-                let h = h.min(bitmap.size.1 - y);
-                if [x, y, w, h] == [0, 0, bitmap.size.0, bitmap.size.1] {
-                    self.blit([x, y, w, h], &bitmap.pixels);
-                } else if w > 0 && h > 0 {
-                    let mut pixels = Vec::with_capacity(w as usize * h as usize);
-                    for row in y..y + h {
-                        let start = row as usize * bitmap.size.0 as usize + x as usize;
-                        pixels.extend_from_slice(&bitmap.pixels[start..start + w as usize]);
+        if !exposed.is_empty()
+            && let Some(bitmap) = self.bitmap.borrow().as_ref()
+        {
+            let actual = self.cx.size().physical;
+            let actual_size = (actual.width, actual.height);
+            if bitmap.size == actual_size {
+                for [x, y, w, h] in exposed {
+                    let x = x.min(bitmap.size.0);
+                    let y = y.min(bitmap.size.1);
+                    let w = w.min(bitmap.size.0 - x);
+                    let h = h.min(bitmap.size.1 - y);
+                    if [x, y, w, h] == [0, 0, bitmap.size.0, bitmap.size.1] {
+                        self.blit([x, y, w, h], &bitmap.pixels);
+                    } else if w > 0 && h > 0 {
+                        let mut pixels = Vec::with_capacity(w as usize * h as usize);
+                        for row in y..y + h {
+                            let start = row as usize * bitmap.size.0 as usize + x as usize;
+                            pixels.extend_from_slice(&bitmap.pixels[start..start + w as usize]);
+                        }
+                        self.blit([x, y, w, h], &pixels);
                     }
-                    self.blit([x, y, w, h], &pixels);
                 }
+            } else if actual_size.0 > 0 && actual_size.1 > 0 {
+                self.blit_scaled(bitmap.size, &bitmap.pixels, actual_size);
             }
         }
         let due = match self.demand.get() {
@@ -809,8 +847,26 @@ fn worker<V: View>(
     shared: &Arc<Mutex<Shared<V>>>,
     requests: &Arc<Requests>,
     size: WindowSize,
+    accessibility: Option<AccessibilityUi>,
+    channels: WorkerChannels,
+) {
+    worker_with_mode(
+        shared,
+        requests,
+        size,
+        accessibility,
+        channels,
+        mui::vello::host::force_cpu(),
+    );
+}
+
+fn worker_with_mode<V: View>(
+    shared: &Arc<Mutex<Shared<V>>>,
+    requests: &Arc<Requests>,
+    size: WindowSize,
     mut accessibility: Option<AccessibilityUi>,
     channels: WorkerChannels,
+    software_only: bool,
 ) {
     let WorkerChannels {
         commands,
@@ -840,7 +896,6 @@ fn worker<V: View>(
     let mut asked = false;
     let direct_wanted = presents_directly();
     let mut gpu = None::<Offscreen>;
-    let software_only = std::env::var("MUI_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("cpu"));
     let mut init = (!software_only).then(|| GpuInit::new(true));
     let mut reason = if software_only {
         "CPU forced"
@@ -851,7 +906,25 @@ fn worker<V: View>(
     let mut retry = Retry::default();
     let mut unpainted = true;
     lock(shared).ui.set_gpu_welding_available(false);
-    while let Ok(command) = commands.recv() {
+    let mut scheduled_poll = None;
+    loop {
+        let command = match commands.recv_timeout(Duration::from_millis(250)) {
+            Ok(command) => command,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if stopped.load(Ordering::Acquire) {
+                    break;
+                }
+                let poll = requests.poll_interval();
+                if scheduled_poll != poll {
+                    scheduled_poll = poll;
+                    // Ask the native pump for a tick so it can replace its
+                    // cached demand. The audio thread only published a value.
+                    requests.redraw();
+                }
+                continue;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        };
         if stopped.load(Ordering::Acquire) || matches!(command, Command::Stop) {
             break;
         }
@@ -912,10 +985,10 @@ fn worker<V: View>(
         }
         let now = Instant::now();
         let size = driver.size();
-        let valid =
-            size.0 > 0 && size.1 > 0 && u64::from(size.0) * u64::from(size.1) <= 16 * 1024 * 1024;
+        let has_area = size.0 > 0 && size.1 > 0;
+        let cpu_plan = cpu_render_plan(size, CPU_PIXEL_BUDGET);
         let mut surface_request = None;
-        if valid
+        if has_area
             && direct_wanted
             && direct.is_none()
             && gpu.is_none()
@@ -952,10 +1025,10 @@ fn worker<V: View>(
                 asked = surface_request.is_some();
             }
         }
-        if valid
+        if let Some(plan) = cpu_plan
             && !direct_wanted
             && gpu.is_none()
-            && let Some(result) = init.as_mut().and_then(|i| i.poll_offscreen(size))
+            && let Some(result) = init.as_mut().and_then(|i| i.poll_offscreen(plan.target))
         {
             match result {
                 Ok(renderer) => {
@@ -1006,7 +1079,7 @@ fn worker<V: View>(
                 }
             });
             (
-                if unpainted && valid {
+                if unpainted && has_area {
                     crate::timing::time("snapshot ms", || shared.ui.scene_snapshot())
                 } else {
                     None
@@ -1023,6 +1096,7 @@ fn worker<V: View>(
             )
         };
         let mut patches = Vec::new();
+        let mut render_size = size;
         if let Some(scene) = scene {
             let transform = Affine::scale(driver.ui_scale());
             let drawn = render_gpu(&mut direct, |host| {
@@ -1064,11 +1138,15 @@ fn worker<V: View>(
                         driver.redraw();
                     }
                 }
-            } else if let Some(result) = render_gpu(&mut gpu, |renderer| {
-                crate::timing::time("gpu render+readback ms", || {
-                    renderer.render(&scene, transform, size)
+            } else if let Some(plan) = cpu_plan
+                && let Some(result) = render_gpu(&mut gpu, |renderer| {
+                    let scaled = plan.transform(driver.ui_scale());
+                    crate::timing::time("gpu render+readback ms", || {
+                        renderer.render(&scene, scaled, plan.target)
+                    })
                 })
-            }) {
+            {
+                render_size = plan.target;
                 match result {
                     Ok(damage) => {
                         patches = damage;
@@ -1095,23 +1173,27 @@ fn worker<V: View>(
                         driver.redraw();
                     }
                 }
-            } else if retry.ready(now) {
+            } else if let Some(plan) = cpu_plan
+                && retry.ready(now)
+            {
+                render_size = plan.target;
+                let scaled = plan.transform(driver.ui_scale());
                 let result = (|| {
                     if cpu.is_none() {
-                        cpu = Some(mui::vello::software::Renderer::new(size)?);
+                        cpu = Some(mui::vello::software::Renderer::new(plan.target)?);
                     }
                     let cpu = cpu.as_mut().expect("created above");
-                    cpu.resize(size)?;
-                    let rects = crate::timing::time("cpu render ms", || {
-                        cpu.render_damage(&scene, transform)
-                    })?;
+                    cpu.resize(plan.target)?;
+                    let rects =
+                        crate::timing::time("cpu render ms", || cpu.render_damage(&scene, scaled))?;
                     Ok::<_, String>(
                         rects
                             .into_iter()
                             .map(|rect @ [x, y, w, h]| {
                                 let mut pixels = Vec::with_capacity(w as usize * h as usize);
                                 for row in y..y + h {
-                                    let start = (row as usize * size.0 as usize + x as usize) * 4;
+                                    let start =
+                                        (row as usize * plan.target.0 as usize + x as usize) * 4;
                                     pixels.extend(
                                         cpu.pixels()[start..start + w as usize * 4]
                                             .as_chunks::<4>()
@@ -1149,31 +1231,29 @@ fn worker<V: View>(
                 .sum();
             crate::timing::note(
                 "damage % of window",
-                px as f64 * 100. / (u64::from(size.0) * u64::from(size.1)).max(1) as f64,
+                px as f64 * 100.
+                    / (u64::from(render_size.0) * u64::from(render_size.1)).max(1) as f64,
             );
         }
         if stopped.load(Ordering::Acquire) {
             break;
         }
-        let heartbeat = requests
-            .poll_interval()
-            .unwrap_or(Duration::from_millis(250));
-        let mut at = now + heartbeat;
-        if let Some(wake) = driver.next_wake() {
-            at = at.min(wake);
-        }
-        if let Some(init) = &init
-            && gpu.is_none()
-        {
-            at = at.min(init.deadline().unwrap_or(now + Duration::from_millis(25)));
-        }
-        if let Some(deadline) = retry.deadline() {
-            at = at.max(deadline);
-        }
+        scheduled_poll = requests.poll_interval();
+        let demand = worker_frame_demand(
+            now,
+            scheduled_poll,
+            driver.next_wake(),
+            direct.is_some() || gpu.is_some(),
+            init.as_ref().is_some_and(GpuInit::pending),
+            init.as_ref().and_then(GpuInit::deadline),
+            retry.deadline(),
+            unpainted && has_area,
+        );
         if output
             .send(Output {
                 patches,
                 size,
+                render_size,
                 software: gpu.is_none() && direct.is_none(),
                 reason,
                 capture,
@@ -1182,7 +1262,7 @@ fn worker<V: View>(
                 hide_pointer,
                 input_revision,
                 accessibility: update,
-                demand: baseview::FrameDemand::At(at),
+                demand,
                 drag,
                 surface: surface_request,
                 direct: direct.is_some(),
@@ -1198,6 +1278,124 @@ fn worker<V: View>(
     drop((direct, surface));
     drop(release);
     driver.close(&mut lock(shared));
+}
+
+/// Pixel budget for 1:1 CPU / offscreen-readback raster targets (64 MiB RGBA8).
+/// Direct GPU surfaces render at full native physical resolution; CPU and
+/// offscreen readback scale proportionally above this cap instead of stopping.
+const CPU_PIXEL_BUDGET: u64 = 16 * 1024 * 1024;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct RenderPlan {
+    target: (u32, u32),
+    scale_x: f64,
+    scale_y: f64,
+}
+
+impl RenderPlan {
+    fn transform(self, ui_scale: f64) -> Affine {
+        if (self.scale_x - 1.0).abs() == 0.0 && (self.scale_y - 1.0).abs() == 0.0 {
+            Affine::scale(ui_scale)
+        } else {
+            Affine::scale_non_uniform(ui_scale * self.scale_x, ui_scale * self.scale_y)
+        }
+    }
+}
+
+/// Choose a CPU / offscreen-readback target size within `max_pixels` and
+/// `u16::MAX` per axis. Returns `None` only for empty windows; large HiDPI or
+/// ultrawide surfaces scale proportionally rather than ceasing to paint.
+fn cpu_render_plan(window: (u32, u32), max_pixels: u64) -> Option<RenderPlan> {
+    if window.0 == 0 || window.1 == 0 || max_pixels == 0 {
+        return None;
+    }
+    let max_dim = u32::from(u16::MAX);
+    let pixels = u64::from(window.0) * u64::from(window.1);
+    if pixels <= max_pixels && window.0 <= max_dim && window.1 <= max_dim {
+        return Some(RenderPlan {
+            target: window,
+            scale_x: 1.0,
+            scale_y: 1.0,
+        });
+    }
+    let area_scale = (max_pixels as f64 / pixels as f64).sqrt();
+    let dim_scale =
+        (f64::from(max_dim) / f64::from(window.0)).min(f64::from(max_dim) / f64::from(window.1));
+    let factor = area_scale.min(dim_scale).min(1.0);
+    let mut tw = ((f64::from(window.0) * factor).floor() as u32).clamp(1, max_dim);
+    let mut th = ((f64::from(window.1) * factor).floor() as u32).clamp(1, max_dim);
+    while u64::from(tw) * u64::from(th) > max_pixels {
+        if tw >= th && tw > 1 {
+            tw -= 1;
+        } else if th > 1 {
+            th -= 1;
+        } else {
+            break;
+        }
+    }
+    Some(RenderPlan {
+        target: (tw, th),
+        scale_x: f64::from(tw) / f64::from(window.0),
+        scale_y: f64::from(th) / f64::from(window.1),
+    })
+}
+
+/// Push-driven worker schedule: truly `Idle` (0 Hz) when settled, waking only
+/// for active animation/tooltip/caret deadlines, explicit live telemetry
+/// polling (`Requests::set_poll_interval`), pending GPU initialization/backoff,
+/// or CPU retry backoff. External changes wake immediately via `Requests`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pure scheduler inputs kept explicit for deterministic unit testing"
+)]
+fn worker_frame_demand(
+    now: Instant,
+    poll_interval: Option<Duration>,
+    driver_wake: Option<Instant>,
+    gpu_active: bool,
+    gpu_init_pending: bool,
+    gpu_init_deadline: Option<Instant>,
+    retry_deadline: Option<Instant>,
+    unpainted: bool,
+) -> baseview::FrameDemand {
+    let mut at: Option<Instant> = None;
+    let mut sooner = |candidate: Instant| {
+        at = Some(match at {
+            Some(existing) => existing.min(candidate),
+            None => candidate,
+        });
+    };
+    if let Some(interval) = poll_interval {
+        sooner(now.checked_add(interval).unwrap_or(now));
+    }
+    if let Some(wake) = driver_wake {
+        sooner(wake);
+    }
+    if !gpu_active {
+        if let Some(deadline) = gpu_init_deadline {
+            sooner(deadline);
+        } else if gpu_init_pending {
+            sooner(now + Duration::from_millis(25));
+        }
+    }
+    let retry_deadline = if gpu_active { None } else { retry_deadline };
+    if let Some(deadline) = retry_deadline {
+        sooner(deadline);
+    } else if unpainted {
+        sooner(now + Duration::from_millis(16));
+    }
+    match at {
+        Some(deadline) => {
+            let deadline = match retry_deadline {
+                Some(min_retry) if driver_wake.is_none() && poll_interval.is_none() => {
+                    deadline.max(min_retry)
+                }
+                _ => deadline,
+            };
+            baseview::FrameDemand::At(deadline)
+        }
+        None => baseview::FrameDemand::Idle,
+    }
 }
 
 /// Whether the worker presents to the window's own surface. macOS keeps the
@@ -1342,7 +1540,12 @@ fn dispatch<V: View>(
     reason = "bounded GDI bitmap blit on the HWND's owning thread"
 )]
 #[cfg(target_os = "windows")]
-fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) -> Result<(), String> {
+fn blit(
+    window: &WindowContext,
+    [x, y, dst_w, dst_h]: [u32; 4],
+    (src_w, src_h): (u32, u32),
+    pixels: &[u32],
+) -> Result<(), String> {
     #[repr(C)]
     struct Info {
         size: u32,
@@ -1381,7 +1584,12 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) -> Resul
             rop: u32,
         ) -> i32;
     }
-    if w == 0 || h == 0 || pixels.len() != w as usize * h as usize {
+    if dst_w == 0
+        || dst_h == 0
+        || src_w == 0
+        || src_h == 0
+        || pixels.len() != src_w as usize * src_h as usize
+    {
         return Err("invalid bitmap patch".into());
     }
     let handle = window.window_handle().map_err(|error| error.to_string())?;
@@ -1391,8 +1599,8 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) -> Resul
     let hwnd = handle.hwnd.get() as *mut std::ffi::c_void;
     let info = Info {
         size: 40,
-        width: w as i32,
-        height: -(h as i32),
+        width: src_w as i32,
+        height: -(src_h as i32),
         planes: 1,
         bits: 32,
         compression: 0,
@@ -1404,7 +1612,7 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) -> Resul
         rgb: 0,
     };
     // SAFETY: cx owns this live HWND on this thread. pixels contains exactly
-    // w*h 32-bit pixels, and the top-down BITMAPINFO describes those bytes.
+    // src_w*src_h 32-bit pixels, and the top-down BITMAPINFO describes those bytes.
     unsafe {
         let dc = GetDC(hwnd);
         if dc.is_null() {
@@ -1414,12 +1622,12 @@ fn blit(window: &WindowContext, [x, y, w, h]: [u32; 4], pixels: &[u32]) -> Resul
             dc,
             x as i32,
             y as i32,
-            w as i32,
-            h as i32,
+            dst_w as i32,
+            dst_h as i32,
             0,
             0,
-            w as i32,
-            h as i32,
+            src_w as i32,
+            src_h as i32,
             pixels.as_ptr().cast(),
             &info,
             0,
@@ -1570,6 +1778,185 @@ mod gpu_recovery_tests {
         }
         drop(commands);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn large_hidpi_and_ultrawide_surfaces_scale_within_budget_instead_of_stopping() {
+        assert_eq!(cpu_render_plan((0, 1080), CPU_PIXEL_BUDGET), None);
+        assert_eq!(cpu_render_plan((1920, 0), CPU_PIXEL_BUDGET), None);
+
+        // Normal and 5K surfaces stay 1:1 with zero scaling overhead.
+        for normal in [(1920, 1080), (3840, 2160), (5120, 2880)] {
+            let plan = cpu_render_plan(normal, CPU_PIXEL_BUDGET).expect("valid normal plan");
+            assert_eq!(plan.target, normal);
+            assert_eq!(plan.scale_x, 1.0);
+            assert_eq!(plan.scale_y, 1.0);
+        }
+
+        // 6K, dual-4K ultrawide, 8K, and extreme >u16::MAX surfaces all produce a
+        // non-empty budgeted target strictly within 16 Mi pixels and u16::MAX.
+        for huge in [
+            (6016, 3384),
+            (7680, 2160),
+            (7680, 4320),
+            (8192, 4096),
+            (70_000, 1000),
+        ] {
+            let plan = cpu_render_plan(huge, CPU_PIXEL_BUDGET).expect("valid large plan");
+            assert!(plan.target.0 >= 1 && plan.target.0 <= u32::from(u16::MAX));
+            assert!(plan.target.1 >= 1 && plan.target.1 <= u32::from(u16::MAX));
+            assert!(
+                u64::from(plan.target.0) * u64::from(plan.target.1) <= CPU_PIXEL_BUDGET,
+                "{huge:?} -> {:?}",
+                plan.target
+            );
+            assert!(plan.scale_x > 0.0 && plan.scale_x <= 1.0);
+            assert!(plan.scale_y > 0.0 && plan.scale_y <= 1.0);
+            // Verify vello_cpu::Renderer accepts the planned target directly.
+            assert!(mui::vello::software::Renderer::new(plan.target).is_ok());
+        }
+    }
+
+    #[test]
+    fn settled_worker_is_truly_idle_zero_hz_while_deadlines_and_wakes_fire_promptly() {
+        let now = Instant::now();
+        // Settled GPU-active window: zero timers, true 0 Hz idle.
+        assert_eq!(
+            worker_frame_demand(now, None, None, true, true, None, None, false),
+            baseview::FrameDemand::Idle
+        );
+        // Settled CPU-only / permanently-failed GPU window: also true 0 Hz idle.
+        assert_eq!(
+            worker_frame_demand(now, None, None, false, false, None, None, false),
+            baseview::FrameDemand::Idle
+        );
+        // Exact animation / tooltip / caret deadline wakes at that instant.
+        let caret = now + Duration::from_millis(530);
+        assert_eq!(
+            worker_frame_demand(now, None, Some(caret), true, false, None, None, false),
+            baseview::FrameDemand::At(caret)
+        );
+        // Explicit live telemetry poll interval schedules until cleared.
+        let meter = Duration::from_millis(16);
+        assert_eq!(
+            worker_frame_demand(now, Some(meter), None, true, false, None, None, false),
+            baseview::FrameDemand::At(now + meter)
+        );
+        // Pending GPU init polls only while GPU is not yet active.
+        assert_eq!(
+            worker_frame_demand(now, None, None, false, true, None, None, false),
+            baseview::FrameDemand::At(now + Duration::from_millis(25))
+        );
+        // Explicit GPU init backoff deadline overrides the 25 ms poll.
+        let backoff = now + Duration::from_secs(2);
+        assert_eq!(
+            worker_frame_demand(now, None, None, false, false, Some(backoff), None, false),
+            baseview::FrameDemand::At(backoff)
+        );
+        // A CPU retry still matters in software mode but must not keep
+        // a settled GPU window awake after promotion.
+        assert_eq!(
+            worker_frame_demand(now, None, None, false, false, None, Some(backoff), false),
+            baseview::FrameDemand::At(backoff)
+        );
+        assert_eq!(
+            worker_frame_demand(now, None, None, true, false, None, Some(backoff), false),
+            baseview::FrameDemand::Idle
+        );
+        // Unpainted frame that needs a retry does not go permanently silent.
+        assert_eq!(
+            worker_frame_demand(now, None, None, true, false, None, None, true),
+            baseview::FrameDemand::At(now + Duration::from_millis(16))
+        );
+    }
+
+    #[test]
+    fn worker_thread_settles_to_idle_and_wakes_when_polling_is_enabled() {
+        use mui::prelude::Paints as _;
+
+        struct StaticView;
+        impl View for StaticView {
+            fn build(&mut self, _: &mut mui::Ui, _: &mui::prelude::Input) -> mui::prelude::El {
+                mui::prelude::block(64., 64.).fill(mui::prelude::Color::srgb(0.2, 0.3, 0.4))
+            }
+            fn changed(&mut self) -> bool {
+                false
+            }
+            fn request_resize(&mut self, _: u32, _: u32) -> bool {
+                false
+            }
+        }
+        let shared = Arc::new(Mutex::new(Shared {
+            ui: mui::Ui::default(),
+            view: StaticView,
+        }));
+        let requests = Arc::new(Requests::default());
+        let woke = Arc::new(AtomicBool::new(false));
+        let woke_flag = Arc::clone(&woke);
+        requests.bind_requester(Some(baseview::FrameRequester::new(move || {
+            woke_flag.store(true, Ordering::Release);
+        })));
+        let (send, commands) = mpsc::channel();
+        let (publish, output) = mpsc::sync_channel(4);
+        let (release, _released) = mpsc::channel();
+        let stopped = Arc::new(AtomicBool::new(false));
+        let tick_pending = Arc::new(AtomicBool::new(false));
+        let worker_shared = Arc::clone(&shared);
+        let worker_requests = Arc::clone(&requests);
+        let worker_stopped = Arc::clone(&stopped);
+        let worker_tick = Arc::clone(&tick_pending);
+        let handle = std::thread::spawn(move || {
+            worker_with_mode(
+                &worker_shared,
+                &worker_requests,
+                WindowSize::from_physical(baseview::dpi::PhysicalSize::new(64, 64), 1.0),
+                None,
+                WorkerChannels {
+                    commands,
+                    output: publish,
+                    stopped: worker_stopped,
+                    tick_pending: worker_tick,
+                    release,
+                },
+                true,
+            );
+        });
+
+        // First tick paints the initial static frame and settles immediately to
+        // FrameDemand::Idle (0 Hz) with no periodic timer armed.
+        send.send(Command::Tick(None)).unwrap();
+        let frame = output.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(frame.demand, baseview::FrameDemand::Idle);
+        // Wait for the initial frame's wake before checking idle behavior.
+        let wait_for_wake = || {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while !woke.swap(false, Ordering::AcqRel) {
+                assert!(Instant::now() < deadline, "worker did not wake native pump");
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        };
+        wait_for_wake();
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            !woke.load(Ordering::Acquire),
+            "disabled polling must not wake the window"
+        );
+
+        requests.set_poll_interval(Some(Duration::from_millis(16)));
+        wait_for_wake();
+        assert!(
+            requests.redraw.load(Ordering::Acquire),
+            "wake must queue a native tick"
+        );
+        send.send(Command::Tick(None)).unwrap();
+        assert!(matches!(
+            output.recv_timeout(Duration::from_secs(5)).unwrap().demand,
+            baseview::FrameDemand::At(_)
+        ));
+
+        stopped.store(true, Ordering::Release);
+        let _ = send.send(Command::Stop);
+        handle.join().unwrap();
     }
 }
 

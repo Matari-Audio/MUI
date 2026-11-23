@@ -103,6 +103,66 @@ fn native_idle_has_no_frames_and_explicit_request_wakes() {
 
 #[test]
 #[ignore = "requires a live X11 display"]
+fn idle_dispatches_configure_buffered_during_scheduling() {
+    use std::cell::Cell;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::mpsc;
+
+    struct ResizeOnDemand {
+        cx: crate::WindowContext,
+        arm: Arc<AtomicBool>,
+        resize: Cell<bool>,
+        configured: mpsc::Sender<()>,
+    }
+    impl WindowHandler for ResizeOnDemand {
+        fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+            self.resize.set(self.arm.swap(false, Ordering::AcqRel));
+            Ok(())
+        }
+        fn frame_demand(&self) -> FrameDemand {
+            if self.resize.replace(false) {
+                // The checked configure request reads its reply on this window's
+                // connection, buffering the preceding ConfigureNotify in XCB.
+                self.cx.resize(PhysicalSize::new(80u32, 72)).unwrap();
+            }
+            FrameDemand::Idle
+        }
+        fn resized(&self, size: crate::WindowSize) -> std::result::Result<(), HandlerError> {
+            if size.physical == PhysicalSize::new(80, 72) {
+                self.configured.send(()).unwrap();
+            }
+            Ok(())
+        }
+        fn on_event(&self, _: crate::Event) -> crate::EventStatus {
+            crate::EventStatus::Ignored
+        }
+    }
+
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    conn.map_window(host).unwrap().check().unwrap();
+    let mut settings = WindowSettings::new().with_size(PhysicalSize::new(96u32, 64));
+    settings.parent = Some(crate::ParentWindowHandle {
+        inner: ParentWindowHandle { window_id: NonZeroU32::new(host).unwrap() },
+    });
+    let (configured, received) = mpsc::channel();
+    let arm = Arc::new(AtomicBool::new(false));
+    let arm_handler = Arc::clone(&arm);
+    let window = Window::create(settings, move |cx| {
+        Ok(ResizeOnDemand { cx, arm: arm_handler, resize: Cell::new(false), configured })
+    })
+    .unwrap();
+    window.show().unwrap();
+    thread::sleep(Duration::from_millis(100));
+    arm.store(true, Ordering::Release);
+    window.frame_requester().unwrap().request_frame();
+    received.recv_timeout(Duration::from_secs(2)).expect("buffered resize must wake idle window");
+    window.close_bounded(Duration::from_millis(250));
+    conn.destroy_window(host).unwrap().check().unwrap();
+}
+
+#[test]
+#[ignore = "requires a live X11 display"]
 fn native_request_racing_demand_and_timer_rearm_is_not_lost() {
     use std::cell::RefCell;
     use std::sync::atomic::AtomicBool;

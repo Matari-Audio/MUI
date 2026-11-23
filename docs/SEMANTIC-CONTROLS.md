@@ -138,11 +138,9 @@ caption; reading and caption keep the size token's text size. `Knob` styles the
 track, arc, face and pointer as shares of the radius in semantic roles. A `Domain` with a
 formatter drives the readout, its reserve and the typing field; with a parser a
 knob or slider opens a field on Enter (or on a double click when the domain has
-no default to reset to), and Escape cancels. `Bridge::knob`/`slider` fill both
-from the parameter: truce's `format_value`, and `parse_value` falling back to
-the inverse of truce's default unit formatting (`1.0 kHz`, `250 ms`, `50%`,
-`12L`), because the derive answers `parse_value` only for fields declaring
-`parse = ".."`. Typed values land normalised, inside one begin/set/end.
+no default to reset to), and Escape cancels. Plugin parameter bridges (such as
+`moose-mui`) populate both from the parameter's formatter and parser, landing
+typed values normalised inside one begin/set/end gesture.
 
 ## Settings and groups
 
@@ -208,8 +206,8 @@ cargo run -p mui --features cpu --example semantic_gallery -- /tmp/controls
 This writes `/tmp/controls-dark.png` and `/tmp/controls-light.png`, with the Save
 button keyboard-focused. The example is separate from existing golden snapshots.
 
-The new tests live in `mui/tests/semantic_controls.rs`, `mui-truce/src/bridge/tests.rs`
-and `mui-access`'s unit tests. They cover semantic publication, measurement/cache
+The new tests live in `mui/tests/semantic_controls.rs` and `mui-access`'s unit
+tests. They cover semantic publication, measurement/cache
 parity, integer bounds/negative ranges, nonlinear mapping, disabled actions and
 keyboard/pointer interruption. Existing layout and editor/host gesture suites are
 also part of the gate. Native OS/DAW and screen-reader certification is separate

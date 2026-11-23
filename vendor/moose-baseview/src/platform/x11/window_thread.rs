@@ -111,6 +111,7 @@ pub enum WindowThreadRequest {
     SuggestScaleFactor(f64),
     SetScaleFactorOverride(Option<f64>),
     Resize(Size),
+    SetTitle(String),
     SetParent(ParentWindowHandle),
     Show,
     Hide,
@@ -327,6 +328,10 @@ impl WindowThreadControl {
 
     pub fn resize(&self, size: Size) -> Result<()> {
         self.request(WindowThreadRequest::Resize(size))
+    }
+
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        self.request(WindowThreadRequest::SetTitle(title.to_owned()))
     }
 
     pub fn suggest_scale_factor(&self, scale_factor: f64) -> Result<()> {

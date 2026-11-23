@@ -1,5 +1,6 @@
-//! Automated gallery traversal over the real window / GPU path.
+//! Automated gallery traversal over the real owned window / GPU path.
 use super::*;
+use mui_baseview::baseview::dpi::{LogicalSize, PhysicalSize};
 use serde_json::{Value, json};
 use std::fs::{self, File};
 use std::io::Write;
@@ -18,7 +19,7 @@ pub(super) struct Tester {
     capture: bool,
     waiting_capture: bool,
     error: Option<String>,
-    wanted: winit::dpi::PhysicalSize<u32>,
+    resize_grace_until: Instant,
 }
 
 impl Tester {
@@ -38,7 +39,7 @@ impl Tester {
             capture: std::env::var_os("MUI_TEST_CAPTURE").is_some_and(|v| v == "1"),
             waiting_capture: false,
             error: None,
-            wanted: winit::dpi::PhysicalSize::new(0, 0),
+            resize_grace_until: Instant::now(),
         };
         tester.record(&json!({"event":"run_begin", "schema":1,
             "os":std::env::consts::OS, "arch":std::env::consts::ARCH,
@@ -49,6 +50,10 @@ impl Tester {
         Ok(tester)
     }
 
+    pub fn waiting_capture(&self) -> bool {
+        self.waiting_capture
+    }
+
     fn record(&mut self, value: &Value) -> Result<(), String> {
         serde_json::to_writer(&mut self.journal, value).map_err(|e| e.to_string())?;
         writeln!(self.journal).map_err(|e| e.to_string())?;
@@ -56,41 +61,40 @@ impl Tester {
         self.journal.sync_data().map_err(|e| e.to_string())
     }
 
-    fn fail(&mut self, event_loop: &ActiveEventLoop, error: String) {
+    fn fail(&mut self, cx: &WindowContext, error: String) {
         let _ = self.record(&json!({"event":"failed", "case":self.case,
             "step":self.step,"message":error}));
         eprintln!("MUI tester failed: {error}");
         self.error = Some(error);
-        event_loop.exit();
+        cx.request_close();
     }
 
-    pub fn draw(&mut self, app: &mut App, event_loop: &ActiveEventLoop) {
-        if let Err(error) = self.frame(app, event_loop) {
-            self.fail(event_loop, error);
+    pub fn draw(&mut self, app: &mut App, cx: &WindowContext) {
+        if let Err(error) = self.frame(app, cx) {
+            self.fail(cx, error);
         } else {
             // Active traversal follows the native redraw path without a frame
             // cap. Screenshot acknowledgement is IPC polling and draws nothing.
             if self.waiting_capture {
                 app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
-            } else if let Some(gpu) = &app.gpu {
-                gpu.window().request_redraw();
+            } else {
+                cx.request_redraw();
             }
         }
     }
 
-    fn frame(&mut self, app: &mut App, event_loop: &ActiveEventLoop) -> Result<(), String> {
+    fn frame(&mut self, app: &mut App, cx: &WindowContext) -> Result<(), String> {
         let expected = app.scenes.len() * SIZES.len() * 2;
         if self.case == expected {
-            event_loop.exit();
+            cx.request_close();
             return Ok(());
         }
         if Instant::now() > self.deadline {
             return Err(format!(
-                "case {} step {} did not complete before its deadline; wanted {:?}, actual {:?}",
+                "case {} step {} did not complete before its deadline; actual {:?}",
                 self.case,
                 self.step,
-                self.wanted,
-                app.gpu.as_ref().map(|gpu| gpu.window().inner_size())
+                cx.size().physical
             ));
         }
         // CPU-first startup belongs outside the GPU gallery's qualified cases.
@@ -106,7 +110,7 @@ impl Tester {
                     return Err(format!("required gallery GPU unavailable: {error}"));
                 }
                 let size = gpu.size();
-                let scale = gpu.window().scale_factor();
+                let scale = gpu.scale_factor();
                 app.replay(size, scale);
                 let _ = app.draw()?;
                 return Ok(());
@@ -126,29 +130,14 @@ impl Tester {
                 .gpu
                 .as_ref()
                 .ok_or("native GPU initialization is required")?;
-            gpu.window().set_title("MUI tester");
-            // Hosted desktops can be smaller than a portrait specimen. Fit
-            // within the monitor so OS work-area clamping cannot stall traversal.
-            let fit = gpu.window().current_monitor().map_or(1., |monitor| {
-                let screen = monitor.size();
-                let scale = gpu.window().scale_factor();
-                ((f64::from(screen.width) / scale - 160.).max(64.) / f64::from(size.0))
-                    .min((f64::from(screen.height) / scale - 160.).max(64.) / f64::from(size.1))
-                    .min(1.)
-            });
-            let size = winit::dpi::LogicalSize::new(
-                (f64::from(size.0) * fit).floor().max(1.) as u32,
-                (f64::from(size.1) * fit).floor().max(1.) as u32,
-            );
-            // Synchronous platforms return the size actually accepted by the OS.
-            self.wanted = gpu
-                .window()
-                .request_inner_size(size)
-                .unwrap_or_else(|| size.to_physical(gpu.window().scale_factor()));
+            gpu.set_title("MUI tester");
+            let logical = LogicalSize::new(f64::from(size.0), f64::from(size.1));
+            cx.resize(logical)
+                .map_err(|e| format!("resize to {logical:?}: {e}"))?;
+            self.resize_grace_until = Instant::now() + Duration::from_millis(150);
             self.deadline = Instant::now() + Duration::from_secs(60);
             self.presented = 0;
             self.started = true;
-            let logical = self.wanted.to_logical::<f64>(gpu.window().scale_factor());
             let requested = SIZES[variant / 2];
             self.record(&json!({"event":"case_begin", "case":self.case,
                 "scene":app.scenes[scene_index].name(), "light":app.light,
@@ -167,9 +156,18 @@ impl Tester {
             return self.complete_case();
         }
         let gpu = app.gpu.as_mut().ok_or("window GPU disappeared")?;
-        let scale = gpu.window().scale_factor();
-        let actual = gpu.window().inner_size();
-        if actual != self.wanted {
+        let window_size = cx.size();
+        let scale = window_size.scale_factor;
+        let actual = window_size.physical;
+        // Allow an asynchronous configure to arrive. A compositor may
+        // constrain it; after the grace period use the actual size, which
+        // is recorded for every frame along with its current scale.
+        let wanted: PhysicalSize<u32> =
+            LogicalSize::new(f64::from(size.0), f64::from(size.1)).to_physical(scale);
+        if actual.width == 0
+            || actual.height == 0
+            || (actual != wanted && Instant::now() < self.resize_grace_until)
+        {
             return Ok(());
         }
         gpu.try_resize(actual.width, actual.height)?;

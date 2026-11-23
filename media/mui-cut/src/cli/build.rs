@@ -13,9 +13,9 @@
 //! then rejects remaining incompatible git MUI packages. The plugin's
 //! checkout, `Cargo.lock` included, is only read.
 //!
-//! Frameworks: moose and truce plugins (`moose::plugin!` / `truce::plugin!`
-//! make `crate::cli::Plugin`), nice-plug (the type `nice_export_clap!` names,
-//! public at the crate root), and plain MUI crates, which export
+//! Frameworks: moose plugins (`moose::plugin!` makes `crate::cli::Plugin`),
+//! nice-plug (the type `nice_export_clap!` names, public at the crate root),
+//! and plain MUI crates, which export
 //! `pub fn mui_editor() -> (mui::Ui, (u32, u32), impl mui::host::View + Send + 'static)`
 //! and, for sound, `pub fn mui_audio(sample_rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static`.
 use std::collections::{BTreeMap, BTreeSet};
@@ -33,7 +33,6 @@ pub const MUI_GIT: &str = "https://github.com/Matari-Audio/MUI";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Framework {
     Moose,
-    Truce,
     NicePlug,
     /// No plugin framework: MUI alone.
     Mui,
@@ -44,7 +43,6 @@ impl Framework {
     fn krate(self) -> Option<&'static str> {
         match self {
             Framework::Moose => Some("moose"),
-            Framework::Truce => Some("truce"),
             Framework::NicePlug => Some("nice-plug"),
             Framework::Mui => None,
         }
@@ -58,7 +56,7 @@ impl Framework {
 /// `dependencies`): the first plugin framework, or plain MUI.
 pub fn framework(deps: &[Value]) -> Option<Framework> {
     let has = |n: &str| deps.iter().any(|d| d["name"] == n);
-    [Framework::Moose, Framework::Truce, Framework::NicePlug]
+    [Framework::Moose, Framework::NicePlug]
         .into_iter()
         .find(|f| f.krate().is_some_and(has))
         .or_else(|| has("mui").then_some(Framework::Mui))
@@ -73,7 +71,7 @@ pub struct Plugin {
     pub framework: Framework,
     /// The framework dependency, as `cargo metadata` lists it.
     framework_dep: Option<Value>,
-    /// The type the adapter opens: `Plugin` (moose, truce) or nice-plug's.
+    /// The type the adapter opens: `Plugin` (moose) or nice-plug's.
     pub entry: String,
     /// The MUI crates it uses, from its dependencies and its lock.
     pub mui: Vec<String>,
@@ -338,7 +336,7 @@ fn entry(
         .find(|(f, _)| f == "src/lib.rs")
         .map_or("", |(_, t)| t.as_str());
     let entry = match fw {
-        Framework::Moose | Framework::Truce => {
+        Framework::Moose => {
             let mac = format!("{}::plugin!", fw.name());
             if find(src, &[&mac]).is_none() {
                 missing.push(format!(
@@ -824,7 +822,6 @@ fn main_rs(p: &Plugin) -> String {
     let own = std::fs::read_to_string(p.dir.join(OWN_ADAPTER)).ok();
     let body = own.as_deref().unwrap_or(match p.framework {
         Framework::Moose => include_str!("adapter/moose.rs"),
-        Framework::Truce => include_str!("adapter/truce.rs"),
         Framework::NicePlug => include_str!("adapter/nice.rs"),
         Framework::Mui => include_str!("adapter/mui.rs"),
     });
@@ -1015,7 +1012,7 @@ mui = { git = "https://github.com/Matari-Audio/MUI", rev = "48dde277444db4c4b9fa
 mui-text = { git = "https://github.com/Matari-Audio/MUI" }
 # mui-old = { git = "https://github.com/Matari-Audio/MUI", rev = "1" }
 moose = { git = "https://github.com/Matari-Audio/moose", rev = "48879b1" }
-mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
+mui-baseview = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
 "#;
         assert_eq!(pinned(manifest), ["mui"]);
     }
@@ -1043,7 +1040,6 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
     fn detects_each_framework_and_what_it_lacks() {
         for (dir, fw, entry) in [
             ("moose", Framework::Moose, "Plugin"),
-            ("truce", Framework::Truce, "Plugin"),
             ("nice", Framework::NicePlug, "Synth"),
             ("plain", Framework::Mui, "mui_editor"),
         ] {
@@ -1082,6 +1078,6 @@ mui-truce = { git = "https://github.com/Matari-Audio/MUI", branch = "revamp" }
         let deps =
             |names: &[&str]| -> Vec<Value> { names.iter().map(|n| json!({"name": n})).collect() };
         assert_eq!(framework(&deps(&["serde"])), None);
-        assert_eq!(framework(&deps(&["mui", "truce"])), Some(Framework::Truce));
+        assert_eq!(framework(&deps(&["mui", "moose"])), Some(Framework::Moose));
     }
 }
