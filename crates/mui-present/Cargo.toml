@@ -9,9 +9,11 @@ description = "Owned native presentation layer for MUI (Win32 DIB WM_PAINT, macO
 [dependencies]
 raw-window-handle = "0.6"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["loaded"] }
-libc = "0.2"
 wayland-backend = { version = "0.3", features = ["client_system", "dlopen"] }
 wayland-client = { version = "0.31", features = ["system", "dlopen"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }

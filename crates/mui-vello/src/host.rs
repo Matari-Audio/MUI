@@ -261,15 +261,22 @@ fn force_cpu_from(force_cpu: Option<&str>, renderer: Option<&str>) -> bool {
 fn enter_sentinel(
     sentinel: &mui_present::CrashSentinel,
     candidate: &mut AdapterDiagnostic,
-) -> Result<Option<mui_present::SentinelGuard>, String> {
+) -> Result<mui_present::SentinelGuard, String> {
     let driver = driver_id(&candidate.adapter);
-    if sentinel.is_tripped(&driver) {
+    let mut storage_error = |error| {
+        candidate.stage = GpuStage::SentinelUnavailable;
+        format!("GPU crash sentinel unavailable for {driver}: {error}")
+    };
+    if sentinel
+        .check_tripped(&driver)
+        .map_err(&mut storage_error)?
+    {
         candidate.stage = GpuStage::Sentinel;
         return Err(format!(
             "per-driver crash sentinel tripped for {driver}; auto-falling back to CPU"
         ));
     }
-    Ok(sentinel.enter(&driver, "gpu_init").ok())
+    sentinel.enter(&driver, "gpu_init").map_err(storage_error)
 }
 
 /// The graphics API of a wgpu backend.
@@ -371,6 +378,8 @@ pub enum GpuStage {
     Surface,
     /// The crash sentinel quarantined this adapter's driver.
     Sentinel,
+    /// The crash sentinel could not safely check or guard this adapter.
+    SentinelUnavailable,
     /// The complete candidate was installed.
     Ready,
 }
@@ -586,6 +595,14 @@ impl HostError {
                     .any(|c| c.stage == GpuStage::Sentinel) =>
             {
                 R::DriverSentinelTripped
+            }
+            Self::Initialization(report)
+                if report
+                    .candidates
+                    .iter()
+                    .any(|c| c.stage == GpuStage::SentinelUnavailable) =>
+            {
+                R::InitializationFailed
             }
             Self::Initialization(_) | Self::Adapter(_) | Self::Unavailable { .. } => {
                 R::AdapterUnavailable
@@ -1597,7 +1614,10 @@ mod tests {
 
     #[test]
     fn a_quarantined_driver_reports_a_sentinel_fallback() {
-        let dir = std::env::temp_dir().join(format!("mui-vello-sentinel-{}", std::process::id()));
+        let dir = std::env::temp_dir()
+            .canonicalize()
+            .unwrap()
+            .join(format!("mui-vello-sentinel-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let sentinel = mui_present::CrashSentinel::new(dir.clone());
         let mut candidate = AdapterDiagnostic {
@@ -1613,7 +1633,7 @@ mod tests {
             alpha_mode: None,
             failure: None,
         };
-        assert!(enter_sentinel(&sentinel, &mut candidate).unwrap().is_some());
+        drop(enter_sentinel(&sentinel, &mut candidate).unwrap());
         sentinel
             .trip(&driver_id(&candidate.adapter), "test crash")
             .unwrap();
@@ -1634,6 +1654,24 @@ mod tests {
         let mut state = mui_present::PresentationState::default();
         state.record_fallback(Some(error.fallback_reason()));
         assert!(state.driver_sentinel_tripped);
+
+        let blocked = dir.join("not-a-directory");
+        std::fs::write(&blocked, b"").unwrap();
+        let sentinel = mui_present::CrashSentinel::new(blocked);
+        let mut candidate = error.diagnostics().unwrap().candidates[0].clone();
+        let Err(reason) = enter_sentinel(&sentinel, &mut candidate) else {
+            panic!("an unguarded adapter must be refused");
+        };
+        assert!(reason.contains("GPU crash sentinel unavailable"));
+        assert_eq!(candidate.stage, GpuStage::SentinelUnavailable);
+        candidate.failure = Some(reason);
+        let error = HostError::Initialization(GpuDiagnostics {
+            candidates: vec![candidate],
+        });
+        assert_eq!(
+            error.fallback_reason(),
+            mui_present::FallbackReason::InitializationFailed
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
