@@ -715,8 +715,13 @@ impl WindowHandler for PreviewHandler {
             app.dirty = true;
         }
         if let Some(mut tester) = app.tester.take() {
-            tester.draw(&mut app, &self.cx);
-            app.tester = Some(tester);
+            let resize = tester.draw(&mut app, &self.cx);
+            drop(app);
+            if let Some((logical, event)) = resize {
+                // AppKit can call resized synchronously during the resize.
+                tester.start_case(&self.cx, logical, &event);
+            }
+            self.app.borrow_mut().tester = Some(tester);
             return Ok(());
         }
         if !app.visible {

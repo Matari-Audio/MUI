@@ -69,25 +69,48 @@ impl Tester {
         cx.request_close();
     }
 
-    pub fn draw(&mut self, app: &mut App, cx: &WindowContext) {
-        if let Err(error) = self.frame(app, cx) {
-            self.fail(cx, error);
-        } else {
-            // Active traversal follows the native redraw path without a frame
-            // cap. Screenshot acknowledgement is IPC polling and draws nothing.
-            if self.waiting_capture {
-                app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
-            } else {
-                cx.request_redraw();
+    pub fn draw(&mut self, app: &mut App, cx: &WindowContext) -> Option<(LogicalSize<f64>, Value)> {
+        match self.frame(app, cx) {
+            Ok(Some(resize)) => return Some(resize),
+            Err(error) => self.fail(cx, error),
+            Ok(None) => {
+                // Active traversal follows the native redraw path without a frame
+                // cap. Screenshot acknowledgement is IPC polling and draws nothing.
+                if self.waiting_capture {
+                    app.repaint_at = Some(Instant::now() + Duration::from_millis(25));
+                } else {
+                    cx.request_redraw();
+                }
             }
+        }
+        None
+    }
+
+    pub fn start_case(&mut self, cx: &WindowContext, logical: LogicalSize<f64>, event: &Value) {
+        let result = (|| {
+            cx.resize(logical)
+                .map_err(|e| format!("resize to {logical:?}: {e}"))?;
+            self.resize_grace_until = Instant::now() + Duration::from_millis(150);
+            self.deadline = Instant::now() + Duration::from_secs(60);
+            self.presented = 0;
+            self.started = true;
+            self.record(event)
+        })();
+        match result {
+            Ok(()) => cx.request_redraw(),
+            Err(error) => self.fail(cx, error),
         }
     }
 
-    fn frame(&mut self, app: &mut App, cx: &WindowContext) -> Result<(), String> {
+    fn frame(
+        &mut self,
+        app: &mut App,
+        cx: &WindowContext,
+    ) -> Result<Option<(LogicalSize<f64>, Value)>, String> {
         let expected = app.scenes.len() * SIZES.len() * 2;
         if self.case == expected {
             cx.request_close();
-            return Ok(());
+            return Ok(None);
         }
         if Instant::now() > self.deadline {
             return Err(format!(
@@ -113,7 +136,7 @@ impl Tester {
                 let scale = gpu.scale_factor();
                 app.replay(size, scale);
                 let _ = app.draw()?;
-                return Ok(());
+                return Ok(None);
             }
         }
         let scene_index = self.case / (SIZES.len() * 2);
@@ -132,28 +155,22 @@ impl Tester {
                 .ok_or("native GPU initialization is required")?;
             gpu.set_title("MUI tester");
             let logical = LogicalSize::new(f64::from(size.0), f64::from(size.1));
-            cx.resize(logical)
-                .map_err(|e| format!("resize to {logical:?}: {e}"))?;
-            self.resize_grace_until = Instant::now() + Duration::from_millis(150);
-            self.deadline = Instant::now() + Duration::from_secs(60);
-            self.presented = 0;
-            self.started = true;
             let requested = SIZES[variant / 2];
-            self.record(&json!({"event":"case_begin", "case":self.case,
+            let event = json!({"event":"case_begin", "case":self.case,
                 "scene":app.scenes[scene_index].name(), "light":app.light,
                 "requested_logical_size":[requested.0,requested.1], "logical_size":[logical.width,logical.height], "overlay":app.frames,
                 "rendering_mode":gpu.rendering_mode(), "gpu_error":gpu.gpu_error(),
-                "gpu":gpu.diagnostics().map(ToString::to_string)}))?;
-            return Ok(());
+                "gpu":gpu.diagnostics().map(ToString::to_string)});
+            return Ok(Some((logical, event)));
         }
         if self.waiting_capture {
             let ack = self.directory.join(format!("capture-{}.ack", self.case));
             if !ack.is_file() {
-                return Ok(());
+                return Ok(None);
             }
             fs::remove_file(ack).map_err(|e| e.to_string())?;
             self.waiting_capture = false;
-            return self.complete_case();
+            return self.complete_case().map(|()| None);
         }
         let gpu = app.gpu.as_mut().ok_or("window GPU disappeared")?;
         let window_size = cx.size();
@@ -168,7 +185,7 @@ impl Tester {
             || actual.height == 0
             || (actual != wanted && Instant::now() < self.resize_grace_until)
         {
-            return Ok(());
+            return Ok(None);
         }
         gpu.try_resize(actual.width, actual.height)?;
         let physical = (actual.width, actual.height);
@@ -220,7 +237,7 @@ impl Tester {
         let submit_ms = start.elapsed().as_secs_f64() * 1000.;
         let current = app.gpu.as_ref().is_some_and(Gpu::frame_was_current);
         if stats.is_none() && !current {
-            return Ok(());
+            return Ok(None);
         }
         self.presented += usize::from(stats.is_some());
         let scene = app.ui.scene().ok_or("frame resolved no scene")?;
@@ -264,7 +281,7 @@ impl Tester {
                 self.complete_case()?;
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     fn complete_case(&mut self) -> Result<(), String> {
