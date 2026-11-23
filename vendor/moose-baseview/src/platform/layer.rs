@@ -98,6 +98,14 @@ impl Shared {
             f64::from_bits(self.scale.load(Ordering::Acquire)),
         )
     }
+
+    fn event(&self, handler: Option<&dyn WindowHandler>, event: Event) -> EventStatus {
+        if !self.open.load(Ordering::Acquire) {
+            return EventStatus::Ignored;
+        }
+        self.redraw.store(true, Ordering::Release);
+        handler.map_or(EventStatus::Ignored, |h| h.on_event(event))
+    }
 }
 
 enum Command {
@@ -635,7 +643,8 @@ impl Runtime {
             self.command(if visible { Command::Show } else { Command::Hide });
         }
         self.start_pending_drag();
-        self.data.progress(self.handler.as_deref());
+        // Completing the transfer can deliver input without another pointer event.
+        self.data.progress(|event| self.shared.event(self.handler.as_deref(), event));
         if self.context.as_ref().is_some_and(|cx| cx.resize_pending.replace(false)) {
             self.resized();
         }
@@ -734,11 +743,7 @@ impl Runtime {
         }
     }
     fn event(&self, event: Event) -> EventStatus {
-        if !self.shared.open.load(Ordering::Acquire) {
-            return EventStatus::Ignored;
-        }
-        self.shared.redraw.store(true, Ordering::Release);
-        self.handler.as_ref().map_or(EventStatus::Ignored, |h| h.on_event(event))
+        self.shared.event(self.handler.as_deref(), event)
     }
     fn resized(&mut self) {
         if let Some(cx) = &self.context {

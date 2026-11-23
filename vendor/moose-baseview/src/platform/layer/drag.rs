@@ -166,7 +166,7 @@ impl Data {
     pub fn has_transfers(&self) -> bool {
         !self.transfers.is_empty() || self.inbound.as_ref().is_some_and(|i| i.pipe.is_some())
     }
-    pub fn progress(&mut self, handler: Option<&dyn WindowHandler>) {
+    pub fn progress(&mut self, mut event: impl FnMut(Event) -> EventStatus) {
         self.transfers.retain_mut(|transfer| {
             if Instant::now() > transfer.deadline {
                 return false;
@@ -204,25 +204,21 @@ impl Data {
         }
         if !failed && inbound.pipe.is_none() && !inbound.announced {
             inbound.announced = true;
-            if let Some(handler) = handler {
-                handler.on_event(Event::Mouse(MouseEvent::DragEntered {
-                    position: inbound.position,
-                    modifiers: keyboard_types::Modifiers::empty(),
-                    data: DropData::Files(inbound.paths.clone()),
-                }));
-            }
+            event(Event::Mouse(MouseEvent::DragEntered {
+                position: inbound.position,
+                modifiers: keyboard_types::Modifiers::empty(),
+                data: DropData::Files(inbound.paths.clone()),
+            }));
         }
         if failed || (inbound.dropped && inbound.pipe.is_none()) {
-            if let Some(inbound) = self.inbound.take() {
-                if let Some(handler) = handler.filter(|_| !failed) {
-                    let accepted = handler.on_event(Event::Mouse(MouseEvent::DragDropped {
-                        position: inbound.position,
-                        modifiers: keyboard_types::Modifiers::empty(),
-                        data: DropData::Files(inbound.paths),
-                    }));
-                    if matches!(accepted, EventStatus::AcceptDrop(DropEffect::Copy)) {
-                        inbound.offer.finish();
-                    }
+            if let Some(inbound) = self.inbound.take().filter(|_| !failed) {
+                let accepted = event(Event::Mouse(MouseEvent::DragDropped {
+                    position: inbound.position,
+                    modifiers: keyboard_types::Modifiers::empty(),
+                    data: DropData::Files(inbound.paths),
+                }));
+                if matches!(accepted, EventStatus::AcceptDrop(DropEffect::Copy)) {
+                    inbound.offer.finish();
                 }
             }
         }
