@@ -166,7 +166,7 @@ fn gradient(scale: f64) -> ResolvedScene {
     resolve_with(ground(kids), scale, hack())
 }
 
-fn device_gpu(quad: impl FnOnce(&wgpu::Device) -> QuadRenderer) -> Option<Gpu> {
+fn device_gpu(quad: impl FnOnce(&mui_hal::Device) -> QuadRenderer) -> Option<Gpu> {
     let (device, queue) = device()?;
     let quad = quad(&device);
     Some(Gpu {
@@ -176,8 +176,8 @@ fn device_gpu(quad: impl FnOnce(&wgpu::Device) -> QuadRenderer) -> Option<Gpu> {
     })
 }
 
-fn standard(device: &wgpu::Device) -> QuadRenderer {
-    QuadRenderer::new(device, wgpu::TextureFormat::Rgba8Unorm)
+fn standard(device: &mui_hal::Device) -> QuadRenderer {
+    QuadRenderer::new(device, mui_hal::TextureFormat::Rgba8Unorm)
 }
 
 /// Both renderers draw glyphs from a quarter-pixel horizontal bin with the
@@ -189,7 +189,9 @@ fn text_matches_vello_cpu() {
     let Some(mut gpu) = device_gpu(standard) else {
         return;
     };
-    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = gpu
+        .device
+        .push_error_scope(mui_hal::ErrorFilter::Validation);
     let mut failures = Vec::new();
     let f = &mut failures;
     compare_keep(&mut gpu, f, "text-sizes", TEXT, true, sizes);
@@ -538,7 +540,7 @@ fn a_small_atlas_evicts_and_still_draws_every_frame_right() {
     // Two 128-pixel pages: a few sizes of the label fill it.
     let budget = 2 * 128 * 128;
     let mut small =
-        QuadRenderer::with_atlas_budget(&gpu.device, wgpu::TextureFormat::Rgba8Unorm, budget);
+        QuadRenderer::with_atlas_budget(&gpu.device, mui_hal::TextureFormat::Rgba8Unorm, budget);
     let size = sized(1.);
     let mut again = false;
     let sizes = (9..=40)

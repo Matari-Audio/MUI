@@ -47,7 +47,7 @@ pub enum Bind {
     /// A registered host texture, by key.
     Host(u64),
     /// A weld's texture, by its allocation id.
-    Weld(u64, wgpu::Texture),
+    Weld(u64, mui_hal::Texture),
     /// The target of surface `0`.
     Surface(u16),
     /// A group layer's target, and the snapshot of what it blends onto.

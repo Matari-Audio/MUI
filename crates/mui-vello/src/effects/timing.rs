@@ -19,9 +19,9 @@ enum State {
     Pending(u64),
 }
 struct Slot {
-    queries: wgpu::QuerySet,
-    resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
+    queries: mui_hal::QuerySet,
+    resolve: mui_hal::Buffer,
+    read: mui_hal::Buffer,
     ready: Arc<AtomicU8>,
     state: State,
 }
@@ -39,10 +39,10 @@ pub struct GpuTimer {
     pub failed_samples: u64,
 }
 impl GpuTimer {
-    pub fn required_features() -> wgpu::Features {
-        wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
+    pub fn required_features() -> mui_hal::Features {
+        mui_hal::Features::TIMESTAMP_QUERY | mui_hal::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS
     }
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<Self, Error> {
+    pub fn new(device: &mui_hal::Device, queue: &mui_hal::Queue) -> Result<Self, Error> {
         if !device.features().contains(Self::required_features()) {
             return Err(Error::Unsupported(
                 "timestamp features were not enabled on the device",
@@ -50,21 +50,21 @@ impl GpuTimer {
         }
         let slots = (0..SLOTS)
             .map(|_| Slot {
-                queries: device.create_query_set(&wgpu::QuerySetDescriptor {
+                queries: device.create_query_set(&mui_hal::QuerySetDescriptor {
                     label: Some("MUI frame timestamps"),
-                    ty: wgpu::QueryType::Timestamp,
+                    ty: mui_hal::QueryType::Timestamp,
                     count: 2,
                 }),
-                resolve: device.create_buffer(&wgpu::BufferDescriptor {
+                resolve: device.create_buffer(&mui_hal::BufferDescriptor {
                     label: Some("MUI timestamp resolve"),
                     size: 16,
-                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+                    usage: mui_hal::BufferUsages::QUERY_RESOLVE | mui_hal::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 }),
-                read: device.create_buffer(&wgpu::BufferDescriptor {
+                read: device.create_buffer(&mui_hal::BufferDescriptor {
                     label: Some("MUI timestamp readback"),
                     size: 16,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                    usage: mui_hal::BufferUsages::MAP_READ | mui_hal::BufferUsages::COPY_DST,
                     mapped_at_creation: false,
                 }),
                 ready: Arc::new(AtomicU8::new(0)),
@@ -79,7 +79,7 @@ impl GpuTimer {
             failed_samples: 0,
         })
     }
-    pub fn begin(&mut self, encoder: &mut wgpu::CommandEncoder) -> Option<TimingTicket> {
+    pub fn begin(&mut self, encoder: &mut mui_hal::CommandEncoder) -> Option<TimingTicket> {
         let frame = self.frame;
         self.frame = self.frame.wrapping_add(1);
         let Some(i) = self.slots.iter().position(|s| s.state == State::Idle) else {
@@ -93,7 +93,7 @@ impl GpuTimer {
     }
     /// May be in the same encoder or a later encoder on the SAME queue. A
     /// multi-submission bracket includes any intervening queue idle time.
-    pub fn finish(&mut self, encoder: &mut wgpu::CommandEncoder, ticket: TimingTicket) {
+    pub fn finish(&mut self, encoder: &mut mui_hal::CommandEncoder, ticket: TimingTicket) {
         let s = &mut self.slots[ticket.slot];
         if s.state != State::Recording(ticket.frame) {
             return;
@@ -117,7 +117,7 @@ impl GpuTimer {
         let ready = s.ready.clone();
         s.read
             .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
+            .map_async(mui_hal::MapMode::Read, move |result| {
                 ready.store(if result.is_ok() { 1 } else { 2 }, Ordering::Release);
             });
     }
@@ -129,8 +129,8 @@ impl GpuTimer {
     }
     /// Pump completion callbacks without waiting. At most four samples are
     /// appended. Reuse the output Vec and drain it into a bounded history.
-    pub fn collect(&mut self, device: &wgpu::Device, out: &mut Vec<GpuTiming>) {
-        let _ = device.poll(wgpu::PollType::Poll);
+    pub fn collect(&mut self, device: &mui_hal::Device, out: &mut Vec<GpuTiming>) {
+        let _ = device.poll(mui_hal::PollType::Poll);
         for s in &mut self.slots {
             let State::Pending(frame) = s.state else {
                 continue;

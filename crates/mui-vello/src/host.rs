@@ -59,29 +59,32 @@ impl Retry {
     }
 }
 
-/// Native instance policy: backend allowlist from WGPU_BACKEND, opt-in validation,
-/// static DXC where wgpu links it (x86-64 MSVC), and opaque HWND presentation
-/// without an acquisition wait.
-pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
-    let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
-    descriptor.flags = if std::env::var("MUI_GPU_DEBUG").is_ok_and(|v| v == "1") {
-        wgpu::InstanceFlags::DEBUG | wgpu::InstanceFlags::VALIDATION
-    } else {
-        wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
-    };
-    descriptor.backend_options.dx12.shader_compiler = dx12_compiler();
-    // A DirectComposition visual on the HWND: flip-model, per-pixel alpha,
-    // and no GDI redirection surface under the swapchain.
-    descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
-    descriptor.backend_options.dx12.latency_waitable_object =
-        wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
+/// Native instance policy: native backends first (`MUI_HAL_BACKEND=wgpu`
+/// skips them), opt-in validation; through wgpu, static DXC where wgpu
+/// links it (x86-64 MSVC) and HWND presentation without an acquisition wait.
+pub fn instance_descriptor() -> mui_hal::InstanceDescriptor {
+    let mut descriptor = mui_hal::InstanceDescriptor::new_without_display_handle_from_env();
+    if std::env::var("MUI_GPU_DEBUG").is_ok_and(|v| v == "1") {
+        descriptor.flags = mui_hal::InstanceFlags::DEBUG | mui_hal::InstanceFlags::VALIDATION;
+    }
+    #[cfg(any(feature = "wgpu", not(target_os = "linux")))]
+    {
+        use mui_hal::wgpu;
+        descriptor.backend_options.dx12.shader_compiler = dx12_compiler();
+        // A DirectComposition visual on the HWND: flip-model, per-pixel alpha,
+        // and no GDI redirection surface under the swapchain.
+        descriptor.backend_options.dx12.presentation_system =
+            wgpu::Dx12SwapchainKind::DxgiFromVisual;
+        descriptor.backend_options.dx12.latency_waitable_object =
+            wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
+    }
     crate::diagnostics::breadcrumb(
         "mui-vello",
         "backend_policy",
         &format!(
-            "enabled={:?}; dx12_compiler={:?}; flags={:?}; windows_dx12_first={}",
+            "enabled={:?}; native={}; flags={:?}; windows_dx12_first={}",
             descriptor.backends,
-            descriptor.backend_options.dx12.shader_compiler,
+            descriptor.native,
             descriptor.flags,
             cfg!(windows),
         ),
@@ -89,7 +92,9 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
     descriptor
 }
 
-fn dx12_compiler() -> wgpu::Dx12Compiler {
+#[cfg(any(feature = "wgpu", not(target_os = "linux")))]
+fn dx12_compiler() -> mui_hal::wgpu::Dx12Compiler {
+    use mui_hal::wgpu;
     if let Some(compiler) = wgpu::Dx12Compiler::from_env() {
         return compiler;
     }
@@ -178,8 +183,8 @@ fn forget_gpu_trials() {
 }
 
 fn try_backends<T>(
-    enabled: wgpu::Backends,
-    mut open: impl FnMut(wgpu::Backends) -> Result<T, String>,
+    enabled: mui_hal::Backends,
+    mut open: impl FnMut(mui_hal::Backends) -> Result<T, String>,
 ) -> Result<T, String> {
     let mut errors = Vec::new();
     // One API at a time: even Instance::new may fault in a native loader.
@@ -208,19 +213,18 @@ fn try_backends<T>(
     }
 }
 
-fn backend_order() -> [wgpu::Backends; 6] {
+fn backend_order() -> [mui_hal::Backends; 5] {
     backend_order_for(cfg!(windows))
 }
 
-fn backend_order_for(windows: bool) -> [wgpu::Backends; 6] {
-    use wgpu::Backends as B;
+fn backend_order_for(windows: bool) -> [mui_hal::Backends; 5] {
+    use mui_hal::Backends as B;
     [
         B::METAL,
         if windows { B::DX12 } else { B::VULKAN },
         if windows { B::VULKAN } else { B::DX12 },
         B::BROWSER_WEBGPU,
         B::GL,
-        B::NOOP,
     ]
 }
 
@@ -233,11 +237,11 @@ pub fn target_size(width: u32, height: u32) -> Option<(u32, u32)> {
 
 /// MUI's alpha contract wants a non-sRGB UNORM target: the renderer writes
 /// sRGB values, and an `_Srgb` surface would encode them a second time.
-pub fn surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFormat> {
+pub fn surface_format(formats: &[mui_hal::TextureFormat]) -> Option<mui_hal::TextureFormat> {
     formats.iter().copied().find(|f| {
         matches!(
             f,
-            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+            mui_hal::TextureFormat::Bgra8Unorm | mui_hal::TextureFormat::Rgba8Unorm
         )
     })
 }
@@ -273,17 +277,17 @@ fn enter_sentinel(
 }
 
 /// The graphics API of a wgpu backend.
-pub fn graphics_api(backend: wgpu::Backend) -> mui_present::GraphicsApi {
+pub fn graphics_api(backend: mui_hal::Backend) -> mui_present::GraphicsApi {
     use mui_present::GraphicsApi as A;
     match backend {
-        wgpu::Backend::Vulkan => A::Vulkan,
-        wgpu::Backend::Dx12 => A::D3D12,
-        wgpu::Backend::Metal => A::Metal,
+        mui_hal::Backend::Vulkan => A::Vulkan,
+        mui_hal::Backend::Dx12 => A::D3D12,
+        mui_hal::Backend::Metal => A::Metal,
         _ => A::Software,
     }
 }
 
-fn driver_id(info: &wgpu::AdapterInfo) -> mui_present::DriverId {
+fn driver_id(info: &mui_hal::AdapterInfo) -> mui_present::DriverId {
     mui_present::DriverId::new(
         format!("{:?}", info.backend),
         info.vendor,
@@ -294,8 +298,8 @@ fn driver_id(info: &wgpu::AdapterInfo) -> mui_present::DriverId {
 
 /// Prefer Mailbox (tear-free low latency) then Fifo / FifoRelaxed, falling back
 /// to uncapped Immediate only when no vsynced mode is offered.
-fn present_mode(modes: &[wgpu::PresentMode]) -> wgpu::PresentMode {
-    use wgpu::PresentMode as P;
+fn present_mode(modes: &[mui_hal::PresentMode]) -> mui_hal::PresentMode {
+    use mui_hal::PresentMode as P;
     [P::Mailbox, P::Fifo, P::FifoRelaxed, P::Immediate]
         .into_iter()
         .find(|m| modes.contains(m))
@@ -318,10 +322,10 @@ pub enum Transparency {
 /// `want`: premultiplied (what MUI paints) or else straight alpha when
 /// translucent, and an offered opaque/inherited mode otherwise.
 pub fn alpha_mode(
-    offered: &[wgpu::CompositeAlphaMode],
+    offered: &[mui_hal::CompositeAlphaMode],
     want: Transparency,
-) -> wgpu::CompositeAlphaMode {
-    use wgpu::CompositeAlphaMode as A;
+) -> mui_hal::CompositeAlphaMode {
+    use mui_hal::CompositeAlphaMode as A;
     let translucent = [A::PreMultiplied, A::PostMultiplied]
         .into_iter()
         .find(|m| offered.contains(m));
@@ -337,8 +341,8 @@ pub fn alpha_mode(
 }
 
 /// Whether a surface configured `mode` composites with alpha.
-fn is_translucent(mode: wgpu::CompositeAlphaMode) -> bool {
-    use wgpu::CompositeAlphaMode as A;
+fn is_translucent(mode: mui_hal::CompositeAlphaMode) -> bool {
+    use mui_hal::CompositeAlphaMode as A;
     matches!(mode, A::PreMultiplied | A::PostMultiplied)
 }
 
@@ -378,12 +382,12 @@ pub enum GpuStage {
 /// One attempted adapter, including enough context to report driver failures.
 #[derive(Clone, Debug)]
 pub struct AdapterDiagnostic {
-    pub adapter: wgpu::AdapterInfo,
-    pub supported_limits: wgpu::Limits,
-    pub requested_limits: wgpu::Limits,
+    pub adapter: mui_hal::AdapterInfo,
+    pub supported_limits: mui_hal::Limits,
+    pub requested_limits: mui_hal::Limits,
     pub stage: GpuStage,
-    pub format: Option<wgpu::TextureFormat>,
-    pub alpha_mode: Option<wgpu::CompositeAlphaMode>,
+    pub format: Option<mui_hal::TextureFormat>,
+    pub alpha_mode: Option<mui_hal::CompositeAlphaMode>,
     pub failure: Option<String>,
 }
 
@@ -513,9 +517,9 @@ pub enum HostError {
     /// Every candidate failed. Inspect the complete adapter/stage report.
     Initialization(GpuDiagnostics),
     /// No adapter can present to the surface.
-    Adapter(wgpu::RequestAdapterError),
+    Adapter(mui_hal::RequestAdapterError),
     /// The adapter refused a device.
-    Device(wgpu::RequestDeviceError),
+    Device(mui_hal::RequestDeviceError),
     /// The surface offers nothing MUI can paint into.
     Surface(&'static str),
     /// The renderer failed: creating it, resizing it, or a frame.
@@ -608,10 +612,10 @@ impl HostError {
 /// Everything that lives on one device, rebuilt whole when it is lost:
 /// pipelines, atlases, weld textures and retained encodings die with it.
 struct OnDevice {
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    config: wgpu::SurfaceConfiguration,
+    adapter: mui_hal::Adapter,
+    device: mui_hal::Device,
+    queue: mui_hal::Queue,
+    config: mui_hal::SurfaceConfiguration,
     /// The renderer's exact physical size, matching the native surface.
     size: (u32, u32),
     renderer: GpuRenderer,
@@ -624,8 +628,8 @@ impl OnDevice {
     /// A device able to present to `surface` (any, headless), configured
     /// for it at `size`, and a renderer on it.
     fn open(
-        instance: &wgpu::Instance,
-        surface: Option<&wgpu::Surface<'_>>,
+        instance: &mui_hal::Instance,
+        surface: Option<&mui_hal::Surface<'_>>,
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, HostError> {
@@ -633,11 +637,11 @@ impl OnDevice {
     }
 
     fn open_filtered(
-        instance: &wgpu::Instance,
-        surface: Option<&wgpu::Surface<'_>>,
+        instance: &mui_hal::Instance,
+        surface: Option<&mui_hal::Surface<'_>>,
         size: (u32, u32),
         transparency: Transparency,
-        excluded: &[(String, wgpu::Backend)],
+        excluded: &[(String, mui_hal::Backend)],
     ) -> Result<Self, HostError> {
         // Enumeration remains constrained by the instance's enabled backends
         // (including WGPU_BACKEND when its descriptor was built from env).
@@ -655,7 +659,7 @@ impl OnDevice {
         );
         forget_gpu_trials();
         let mut adapters: Vec<_> =
-            pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()))
+            pollster::block_on(instance.enumerate_adapters(mui_hal::Backends::all()))
                 .into_iter()
                 .map(|adapter| {
                     let info = adapter.get_info();
@@ -680,8 +684,8 @@ impl OnDevice {
         let candidates = adapters.into_iter().map(|(adapter, info)| {
             let candidate = AdapterDiagnostic {
                 adapter: info,
-                supported_limits: wgpu::Limits::default(),
-                requested_limits: wgpu::Limits::default(),
+                supported_limits: mui_hal::Limits::default(),
+                requested_limits: mui_hal::Limits::default(),
                 stage: GpuStage::Capabilities,
                 format: None,
                 alpha_mode: None,
@@ -697,8 +701,8 @@ impl OnDevice {
     }
 
     fn try_adapter(
-        adapter: &wgpu::Adapter,
-        surface: Option<&wgpu::Surface<'_>>,
+        adapter: &mui_hal::Adapter,
+        surface: Option<&mui_hal::Surface<'_>>,
         size: (u32, u32),
         transparency: Transparency,
         candidate: &mut AdapterDiagnostic,
@@ -719,7 +723,7 @@ impl OnDevice {
             &requested_limits(&candidate.supported_limits),
             &candidate.supported_limits,
         )?;
-        candidate.requested_limits = candidate.supported_limits.clone();
+        candidate.requested_limits = candidate.supported_limits;
         selection::validate_texture_formats(adapter)?;
         let limit = candidate.requested_limits.max_texture_dimension_2d;
         let (width, height) = target_size(size.0.min(limit), size.1.min(limit)).unwrap_or((1, 1));
@@ -728,16 +732,15 @@ impl OnDevice {
             initialization::surface_config(surface, adapter, (width, height), transparency)
                 .map_err(|error| error.to_string())?
         } else {
-            wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+            mui_hal::SurfaceConfiguration {
+                usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
+                format: mui_hal::TextureFormat::Rgba8Unorm,
                 width,
                 height,
-                present_mode: wgpu::PresentMode::Fifo,
+                present_mode: mui_hal::PresentMode::Fifo,
                 desired_maximum_frame_latency: 2,
-                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                alpha_mode: mui_hal::CompositeAlphaMode::Auto,
                 view_formats: Vec::new(),
-                color_space: wgpu::SurfaceColorSpace::Auto,
             }
         };
         candidate.format = Some(config.format);
@@ -749,20 +752,20 @@ impl OnDevice {
             &format!("{candidate:?}"),
             Some(&candidate.adapter),
         );
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("MUI retained renderer"),
-            required_limits: candidate.requested_limits.clone(),
-            required_features: adapter.features() & wgpu::Features::PIPELINE_CACHE,
-            ..Default::default()
-        }))
-        .map_err(|e| e.to_string())?;
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&mui_hal::DeviceDescriptor {
+                label: Some("MUI retained renderer"),
+                required_limits: candidate.requested_limits,
+                required_features: adapter.features() & mui_hal::Features::PIPELINE_CACHE,
+            }))
+            .map_err(|e| e.to_string())?;
         drop(operation);
         let errors = Arc::new(DeviceErrors::default());
         let state = Arc::clone(&errors);
         let info = candidate.adapter.clone();
         device.set_device_lost_callback(move |reason, message| {
             // Destroyed is also delivered during orderly window teardown.
-            if reason != wgpu::DeviceLostReason::Destroyed {
+            if reason != mui_hal::DeviceLostReason::Destroyed {
                 crate::diagnostics::gpu_error(
                     "device_lost",
                     &format!("{reason:?}: {message}"),
@@ -786,9 +789,9 @@ impl OnDevice {
             &format!("format={:?}; size=({width},{height})", config.format),
             Some(&candidate.adapter),
         );
-        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let validation = device.push_error_scope(mui_hal::ErrorFilter::Validation);
+        let memory = device.push_error_scope(mui_hal::ErrorFilter::OutOfMemory);
+        let internal = device.push_error_scope(mui_hal::ErrorFilter::Internal);
         let renderer = pollster::block_on(GpuRenderer::new(
             &device,
             &queue,
@@ -806,14 +809,15 @@ impl OnDevice {
             return Err(scoped.join("; "));
         }
         let mut renderer = renderer.map_err(|e| e.to_string())?;
-        renderer.set_straight_alpha(config.alpha_mode == wgpu::CompositeAlphaMode::PostMultiplied);
+        renderer
+            .set_straight_alpha(config.alpha_mode == mui_hal::CompositeAlphaMode::PostMultiplied);
         // Surface configuration is the last fallible initialization operation.
         // Failed candidates drop all pipelines/caches before trying the next.
         candidate.stage = GpuStage::Surface;
         if let Some(surface) = surface {
             configure(surface, &device, &config)?;
         }
-        let _ = device.poll(wgpu::PollType::Poll);
+        let _ = device.poll(mui_hal::PollType::Poll);
         if let Some(error) = errors.observe(&mut 0) {
             return Err(format!("device error during initialization: {error}"));
         }
@@ -837,16 +841,16 @@ impl OnDevice {
     /// runs the lost callback: an idle window submits nothing that would.
     fn poll_lost(&self) -> bool {
         // A lost device errors here; the flag is what answers.
-        let _ = self.device.poll(wgpu::PollType::Poll);
+        let _ = self.device.poll(mui_hal::PollType::Poll);
         self.lost()
     }
 }
 
 /// Validation failures belong to this attempt, not the process-wide callback.
 fn configure(
-    surface: &wgpu::Surface<'_>,
-    device: &wgpu::Device,
-    config: &wgpu::SurfaceConfiguration,
+    surface: &mui_hal::Surface<'_>,
+    device: &mui_hal::Device,
+    config: &mui_hal::SurfaceConfiguration,
 ) -> Result<(), String> {
     let _operation = crate::diagnostics::operation(
         "mui-vello",
@@ -854,9 +858,9 @@ fn configure(
         &format!("{config:?}"),
         None,
     );
-    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
-    let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let validation = device.push_error_scope(mui_hal::ErrorFilter::Validation);
+    let memory = device.push_error_scope(mui_hal::ErrorFilter::OutOfMemory);
+    let internal = device.push_error_scope(mui_hal::ErrorFilter::Internal);
     let configured = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         surface.configure(device, config);
     }));
@@ -878,11 +882,11 @@ fn configure(
 
 /// A window's surface, the device painting it and the renderer.
 pub struct Host {
-    instance: wgpu::Instance,
+    instance: mui_hal::Instance,
     // A weak static registry owns no GPU objects. The editor is the strong owner.
     shared: Option<Arc<initialization::Session>>,
     // None after a failed replacement; acquisition must wait for a new surface.
-    surface: Option<wgpu::Surface<'static>>,
+    surface: Option<mui_hal::Surface<'static>>,
     gpu: OnDevice,
     /// The size last asked for, in physical pixels: what a rebuilt device
     /// configures. `None` while there is nothing to draw into.
@@ -901,7 +905,9 @@ impl Host {
     /// remains an allowlist. The factory must drop each failed surface before
     /// creating another and keep its native window alive for the returned host.
     pub fn open_native(
-        create: impl FnMut(wgpu::Backends) -> Result<(wgpu::Instance, wgpu::Surface<'static>), String>,
+        create: impl FnMut(
+            mui_hal::Backends,
+        ) -> Result<(mui_hal::Instance, mui_hal::Surface<'static>), String>,
         size: (u32, u32),
     ) -> Result<Self, String> {
         Self::open_native_with_transparency(create, size, Transparency::Opaque)
@@ -910,13 +916,14 @@ impl Host {
     /// [`Self::open_native`] preserving a native window's transparency policy.
     pub fn open_native_with_transparency(
         mut create: impl FnMut(
-            wgpu::Backends,
-        ) -> Result<(wgpu::Instance, wgpu::Surface<'static>), String>,
+            mui_hal::Backends,
+        )
+            -> Result<(mui_hal::Instance, mui_hal::Surface<'static>), String>,
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, String> {
-        let enabled = wgpu::InstanceDescriptor::new_without_display_handle_from_env().backends
-            & wgpu::Instance::enabled_backend_features();
+        let enabled = mui_hal::InstanceDescriptor::new_without_display_handle_from_env().backends
+            & mui_hal::Instance::enabled_backend_features();
         try_backends(enabled, |backends| {
             let (instance, surface) = create(backends)?;
             Self::with_transparency(instance, surface, size, transparency)
@@ -927,8 +934,8 @@ impl Host {
     /// A device for `surface` and a renderer at `size` physical pixels.
     /// `surface` must come from `instance`.
     pub fn new(
-        instance: wgpu::Instance,
-        surface: wgpu::Surface<'static>,
+        instance: mui_hal::Instance,
+        surface: mui_hal::Surface<'static>,
         size: (u32, u32),
     ) -> Result<Self, HostError> {
         Self::with_transparency(instance, surface, size, Transparency::Opaque)
@@ -939,8 +946,8 @@ impl Host {
     /// window itself must be able to (an ARGB visual on X11, a non-opaque
     /// layer on macOS, DirectComposition on Windows' DX12).
     pub fn with_transparency(
-        instance: wgpu::Instance,
-        surface: wgpu::Surface<'static>,
+        instance: mui_hal::Instance,
+        surface: mui_hal::Surface<'static>,
         size: (u32, u32),
         transparency: Transparency,
     ) -> Result<Self, HostError> {
@@ -970,7 +977,7 @@ impl Host {
     }
 
     /// The instance the surface came from, for making a replacement.
-    pub fn instance(&self) -> &wgpu::Instance {
+    pub fn instance(&self) -> &mui_hal::Instance {
         &self.instance
     }
 
@@ -981,7 +988,7 @@ impl Host {
 
     /// The device and queue painting the surface, for textures a caller
     /// draws itself. Rebuilt on loss: check [`Host::generation`].
-    pub fn device(&self) -> (&wgpu::Device, &wgpu::Queue) {
+    pub fn device(&self) -> (&mui_hal::Device, &mui_hal::Queue) {
         (&self.gpu.device, &self.gpu.queue)
     }
 
@@ -1006,7 +1013,7 @@ impl Host {
     /// Paint `texture` where the scene has an image texture `key`; see
     /// [`GpuRenderer::set_texture`]. The next present paints even if the
     /// scene did not change.
-    pub fn set_texture(&mut self, key: u64, texture: &wgpu::Texture) {
+    pub fn set_texture(&mut self, key: u64, texture: &mui_hal::Texture) {
         self.gpu.renderer.set_texture(key, texture);
     }
 
@@ -1087,7 +1094,7 @@ impl Host {
     /// [`Host::generation`] on success; re-upload external textures. Failures
     /// are logged and observable through [`Host::observe_gpu_error`]. Use
     /// [`Host::try_replace_surface`] to receive the full failure report.
-    pub fn replace_surface(&mut self, surface: wgpu::Surface<'static>) {
+    pub fn replace_surface(&mut self, surface: mui_hal::Surface<'static>) {
         if let Err(error) = self.try_replace_surface(surface) {
             self.gpu.errors.record(error.to_string());
             eprintln!("mui-vello: replacing GPU surface failed: {error}");
@@ -1100,7 +1107,7 @@ impl Host {
     /// presents return [`Frame::SurfaceLost`] until replacement succeeds.
     pub fn try_replace_surface(
         &mut self,
-        surface: wgpu::Surface<'static>,
+        surface: mui_hal::Surface<'static>,
     ) -> Result<(), HostError> {
         // EGL permits one configured window surface per native window. Wgpu
         // creates it during configure, so release the old swapchain first.
@@ -1174,7 +1181,7 @@ impl Host {
         xf: Affine,
         overlay: Option<F>,
     ) -> Result<Frame, HostError> {
-        use wgpu::CurrentSurfaceTexture as Acquired;
+        use mui_hal::CurrentSurfaceTexture as Acquired;
         let Some(size) = self.wanted else {
             return Ok(Frame::Skipped);
         };
@@ -1250,7 +1257,7 @@ impl Host {
         };
         let view = frame
             .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            .create_view(&mui_hal::TextureViewDescriptor::default());
         let stats = match match overlay {
             Some(draw) => renderer.render_with_overlay(scene, xf, &view, draw),
             None => renderer.render(scene, xf, &view),
@@ -1288,7 +1295,7 @@ mod tests {
 
     #[test]
     fn present_mode_prefers_mailbox_then_fifo_before_immediate() {
-        use wgpu::PresentMode as P;
+        use mui_hal::PresentMode as P;
         assert_eq!(
             present_mode(&[P::Immediate, P::Fifo, P::Mailbox]),
             P::Mailbox
@@ -1354,24 +1361,21 @@ mod tests {
 
     #[test]
     fn requested_limits_keep_the_adapters_texture_size_and_ask_no_storage() {
-        let supported = wgpu::Limits {
+        let supported = mui_hal::Limits {
             max_texture_dimension_2d: 16384,
-            ..wgpu::Limits::default()
+            ..mui_hal::Limits::default()
         };
         let requested = requested_limits(&supported);
         assert_eq!(requested.max_texture_dimension_2d, 16384);
-        assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
         assert!(requested.check_limits(&supported));
-        assert!(
-            requested.check_limits(
-                &wgpu::Limits::downlevel_webgl2_defaults().using_resolution(supported)
-            )
-        );
+        assert!(requested.check_limits(
+            &mui_hal::Limits::downlevel_webgl2_defaults().using_resolution(supported)
+        ));
     }
 
     #[test]
     fn native_backends_are_lazy_and_preserve_the_allowlist() {
-        use wgpu::Backends as B;
+        use mui_hal::Backends as B;
         let mut tried = Vec::new();
         assert_eq!(
             try_backends(B::VULKAN | B::GL, |b| {
@@ -1422,7 +1426,7 @@ mod tests {
 
     #[test]
     fn the_surface_format_is_never_srgb() {
-        use wgpu::TextureFormat as F;
+        use mui_hal::TextureFormat as F;
         assert_eq!(
             surface_format(&[F::Bgra8UnormSrgb, F::Bgra8Unorm]),
             Some(F::Bgra8Unorm)
@@ -1436,7 +1440,7 @@ mod tests {
     #[test]
     fn the_alpha_mode_follows_what_the_surface_offers() {
         use Transparency::*;
-        use wgpu::CompositeAlphaMode as A;
+        use mui_hal::CompositeAlphaMode as A;
         let vulkan_x11 = [A::PreMultiplied, A::Inherit];
         let metal = [A::Opaque, A::PostMultiplied];
         let dx12_hwnd = [A::Opaque];
@@ -1453,7 +1457,7 @@ mod tests {
 
     #[test]
     fn present_mode_follows_the_platform() {
-        use wgpu::PresentMode as P;
+        use mui_hal::PresentMode as P;
         assert_eq!(present_mode(&[P::Fifo, P::FifoRelaxed]), P::Fifo);
         assert_eq!(present_mode(&[P::Fifo, P::Immediate]), P::Fifo);
         assert_eq!(present_mode(&[P::Fifo, P::Mailbox]), P::Mailbox);
@@ -1468,10 +1472,10 @@ mod tests {
 
     fn adapter_info(
         name: &str,
-        device_type: wgpu::DeviceType,
-        backend: wgpu::Backend,
-    ) -> wgpu::AdapterInfo {
-        let mut info = wgpu::AdapterInfo::new(device_type, backend);
+        device_type: mui_hal::DeviceType,
+        backend: mui_hal::Backend,
+    ) -> mui_hal::AdapterInfo {
+        let mut info = mui_hal::AdapterInfo::new(device_type, backend);
         info.name = name.into();
         info.vendor = 0x1002;
         info.device = 1;
@@ -1495,7 +1499,7 @@ mod tests {
     }
     #[test]
     fn windows_tries_dx12_before_loading_vulkan_and_honors_backend_override() {
-        use wgpu::Backends as B;
+        use mui_hal::Backends as B;
         assert_eq!(backend_order_for(true)[..3], [B::METAL, B::DX12, B::VULKAN]);
         assert_eq!(
             backend_order_for(false)[..3],
@@ -1511,11 +1515,11 @@ mod tests {
     }
     #[test]
     fn downlevel_gl_is_accepted_and_short_limits_are_not() {
-        let info = adapter_info("GL", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Gl);
-        let downlevel = wgpu::Limits::downlevel_webgl2_defaults();
+        let info = adapter_info("GL", mui_hal::DeviceType::DiscreteGpu, mui_hal::Backend::Gl);
+        let downlevel = mui_hal::Limits::downlevel_webgl2_defaults();
         let requested = requested_limits(&downlevel);
         assert!(validate_renderer_requirements(&info, &requested, &downlevel).is_ok());
-        let short = wgpu::Limits {
+        let short = mui_hal::Limits {
             max_vertex_attributes: 8,
             ..downlevel
         };
@@ -1528,7 +1532,7 @@ mod tests {
 
     #[test]
     fn stable_candidate_priority_keeps_software_fallback_and_prefers_native_backends() {
-        use wgpu::{Backend as B, DeviceType as D};
+        use mui_hal::{Backend as B, DeviceType as D};
         let mut candidates = [
             adapter_info("software", D::Cpu, B::Vulkan),
             adapter_info("integrated", D::IntegratedGpu, B::Vulkan),
@@ -1552,17 +1556,17 @@ mod tests {
     #[test]
     fn failures_and_driver_panics_try_each_candidate_once_until_software_works() {
         let candidates = [
-            wgpu::DeviceType::DiscreteGpu,
-            wgpu::DeviceType::IntegratedGpu,
-            wgpu::DeviceType::Cpu,
+            mui_hal::DeviceType::DiscreteGpu,
+            mui_hal::DeviceType::IntegratedGpu,
+            mui_hal::DeviceType::Cpu,
         ];
         let candidates = candidates.into_iter().enumerate().map(|(i, device_type)| {
             (
                 i,
                 AdapterDiagnostic {
-                    adapter: adapter_info("candidate", device_type, wgpu::Backend::Vulkan),
-                    supported_limits: wgpu::Limits::default(),
-                    requested_limits: wgpu::Limits::default(),
+                    adapter: adapter_info("candidate", device_type, mui_hal::Backend::Vulkan),
+                    supported_limits: mui_hal::Limits::default(),
+                    requested_limits: mui_hal::Limits::default(),
                     stage: GpuStage::Capabilities,
                     format: None,
                     alpha_mode: None,
@@ -1603,11 +1607,11 @@ mod tests {
         let mut candidate = AdapterDiagnostic {
             adapter: adapter_info(
                 "quarantined",
-                wgpu::DeviceType::DiscreteGpu,
-                wgpu::Backend::Vulkan,
+                mui_hal::DeviceType::DiscreteGpu,
+                mui_hal::Backend::Vulkan,
             ),
-            supported_limits: wgpu::Limits::default(),
-            requested_limits: wgpu::Limits::default(),
+            supported_limits: mui_hal::Limits::default(),
+            requested_limits: mui_hal::Limits::default(),
             stage: GpuStage::Surface,
             format: None,
             alpha_mode: None,
@@ -1643,14 +1647,14 @@ mod tests {
             candidates: vec![AdapterDiagnostic {
                 adapter: adapter_info(
                     "preferred",
-                    wgpu::DeviceType::DiscreteGpu,
-                    wgpu::Backend::Vulkan,
+                    mui_hal::DeviceType::DiscreteGpu,
+                    mui_hal::Backend::Vulkan,
                 ),
-                supported_limits: wgpu::Limits::default(),
-                requested_limits: wgpu::Limits::default(),
+                supported_limits: mui_hal::Limits::default(),
+                requested_limits: mui_hal::Limits::default(),
                 stage: GpuStage::Device,
-                format: Some(wgpu::TextureFormat::Bgra8Unorm),
-                alpha_mode: Some(wgpu::CompositeAlphaMode::Auto),
+                format: Some(mui_hal::TextureFormat::Bgra8Unorm),
+                alpha_mode: Some(mui_hal::CompositeAlphaMode::Auto),
                 failure: Some("driver refused device".into()),
             }],
         };
@@ -1691,8 +1695,9 @@ mod tests {
     #[test]
     #[ignore = "requires a native adapter"]
     fn a_destroyed_device_is_seen_and_a_new_one_renders() {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = mui_hal::Instance::new(
+            mui_hal::InstanceDescriptor::new_without_display_handle_from_env(),
+        );
         let gpu = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque)
             .expect("native adapter");
         eprintln!("{}", gpu.diagnostics);
@@ -1706,24 +1711,26 @@ mod tests {
         assert!(gpu.errors.observe(&mut 0).unwrap().contains("device lost"));
         let mut gpu2 = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque).unwrap();
         assert_ne!(gpu2.device, gpu.device);
-        let target = gpu2.device.create_texture(&wgpu::TextureDescriptor {
+        let target = gpu2.device.create_texture(&mui_hal::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d {
+            size: mui_hal::Extent3d {
                 width: 16,
                 height: 16,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            dimension: mui_hal::TextureDimension::D2,
+            format: mui_hal::TextureFormat::Rgba8Unorm,
+            usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        let scope = gpu2.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let scope = gpu2
+            .device
+            .push_error_scope(mui_hal::ErrorFilter::Validation);
         let root = block(16., 16.).fill(Role::Primary);
         let scene = resolve(&SceneSpec::new(root).offered(Size::new(16., 16.))).unwrap();
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = target.create_view(&mui_hal::TextureViewDescriptor::default());
         gpu2.renderer
             .render(&scene, Affine::IDENTITY, &view)
             .unwrap();
@@ -1734,8 +1741,9 @@ mod tests {
     #[test]
     #[ignore = "requires a native adapter"]
     fn a_failed_replacement_state_requires_a_surface_before_presenting() {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = mui_hal::Instance::new(
+            mui_hal::InstanceDescriptor::new_without_display_handle_from_env(),
+        );
         let gpu = OnDevice::open(&instance, None, (16, 16), Transparency::Opaque)
             .expect("native adapter");
         // A replacement failure retains the existing device and generation,

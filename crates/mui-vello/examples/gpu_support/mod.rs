@@ -41,11 +41,11 @@ pub fn fixture(scale: f64) -> mui_scene::ResolvedScene {
     mui_scene::resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu))
         .expect("GPU fixture resolves")
 }
-pub async fn device() -> Result<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> {
-    let instance = wgpu::Instance::new(mui_vello::host::instance_descriptor());
+pub async fn device() -> Result<(mui_hal::AdapterInfo, mui_hal::Device, mui_hal::Queue)> {
+    let instance = mui_hal::Instance::new(mui_vello::host::instance_descriptor());
     let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions {
-            power_preference: wgpu::PowerPreference::HighPerformance,
+        .request_adapter(&mui_hal::RequestAdapterOptions {
+            power_preference: mui_hal::PowerPreference::HighPerformance,
             ..Default::default()
         })
         .await?;
@@ -53,66 +53,66 @@ pub async fn device() -> Result<(wgpu::AdapterInfo, wgpu::Device, wgpu::Queue)> 
     let features = if adapter.features().contains(flags) {
         flags
     } else {
-        wgpu::Features::empty()
+        mui_hal::Features::empty()
     };
     // As a host asks it (`host::open`): pipelines built through a cache.
-    let features = features | (adapter.features() & wgpu::Features::PIPELINE_CACHE);
+    let features = features | (adapter.features() & mui_hal::Features::PIPELINE_CACHE);
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
+        .request_device(&mui_hal::DeviceDescriptor {
             required_features: features,
             ..Default::default()
         })
         .await?;
     Ok((adapter.get_info(), device, queue))
 }
-pub fn target(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+pub fn target(device: &mui_hal::Device, size: [u32; 2]) -> mui_hal::Texture {
+    device.create_texture(&mui_hal::TextureDescriptor {
         label: Some("MUI conformance target"),
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: size[0],
             height: size[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }
 /// Synchronous readback is ONLY for this correctness/benchmark tooling. Neither
 /// GpuRenderer nor the gallery uses it during normal presentation.
 pub fn readback(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
+    device: &mui_hal::Device,
+    queue: &mui_hal::Queue,
+    texture: &mui_hal::Texture,
     size: [u32; 2],
 ) -> Result<Vec<u8>> {
     let stride = (size[0] * 4 + 255) & !255;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+    let buffer = device.create_buffer(&mui_hal::BufferDescriptor {
         label: Some("conformance readback"),
         size: u64::from(stride) * u64::from(size[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        usage: mui_hal::BufferUsages::COPY_DST | mui_hal::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut encoder = device.create_command_encoder(&mui_hal::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
+        mui_hal::TexelCopyTextureInfo {
             texture,
             mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
+            origin: mui_hal::Origin3d::ZERO,
+            aspect: mui_hal::TextureAspect::All,
         },
-        wgpu::TexelCopyBufferInfo {
+        mui_hal::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
+            layout: mui_hal::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(stride),
                 rows_per_image: Some(size[1]),
             },
         },
-        wgpu::Extent3d {
+        mui_hal::Extent3d {
             width: size[0],
             height: size[1],
             depth_or_array_layers: 1,
@@ -120,10 +120,12 @@ pub fn readback(
     );
     queue.submit([encoder.finish()]);
     let (send, recv) = mpsc::sync_channel(1);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = send.send(r);
-    });
-    device.poll(wgpu::PollType::wait_indefinitely())?;
+    buffer
+        .slice(..)
+        .map_async(mui_hal::MapMode::Read, move |r| {
+            let _ = send.send(r);
+        });
+    device.poll(mui_hal::PollType::wait_indefinitely())?;
     recv.recv_timeout(Duration::from_secs(10))??;
     let mapped = buffer.slice(..).get_mapped_range()?;
     let mut pixels = Vec::with_capacity(size[0] as usize * size[1] as usize * 4);

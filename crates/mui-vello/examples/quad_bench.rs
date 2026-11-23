@@ -124,33 +124,33 @@ fn ms(t: Instant) -> f64 {
 
 /// The device and the query set the quad pass writes its timestamps to.
 struct Gpu {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    queries: wgpu::QuerySet,
-    resolve: wgpu::Buffer,
-    read: wgpu::Buffer,
+    device: mui_hal::Device,
+    queue: mui_hal::Queue,
+    queries: mui_hal::QuerySet,
+    resolve: mui_hal::Buffer,
+    read: mui_hal::Buffer,
 }
 
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const FORMAT: mui_hal::TextureFormat = mui_hal::TextureFormat::Rgba8Unorm;
 
 impl Gpu {
-    fn target(&self) -> wgpu::TextureView {
+    fn target(&self) -> mui_hal::TextureView {
         self.device
-            .create_texture(&wgpu::TextureDescriptor {
+            .create_texture(&mui_hal::TextureDescriptor {
                 label: Some("quad bench"),
-                size: wgpu::Extent3d {
+                size: mui_hal::Extent3d {
                     width: W,
                     height: H,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
+                dimension: mui_hal::TextureDimension::D2,
                 format: FORMAT,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
                 view_formats: &[],
             })
-            .create_view(&wgpu::TextureViewDescriptor::default())
+            .create_view(&mui_hal::TextureViewDescriptor::default())
     }
 
     fn quad(&self) -> QuadRenderer {
@@ -173,9 +173,9 @@ impl Gpu {
     /// The quad pass's last begin-to-end time, in ms; 0 when it drew none.
     fn pass_ms(&self) -> f64 {
         let slice = self.read.slice(..);
-        slice.map_async(wgpu::MapMode::Read, |r| r.expect("map timestamps"));
+        slice.map_async(mui_hal::MapMode::Read, |r| r.expect("map timestamps"));
         self.device
-            .poll(wgpu::PollType::wait_indefinitely())
+            .poll(mui_hal::PollType::wait_indefinitely())
             .expect("poll");
         let ticks = {
             let bytes = slice.get_mapped_range().expect("mapped");
@@ -192,7 +192,7 @@ impl Gpu {
         quad: &mut QuadRenderer,
         s: &ResolvedScene,
         xf: Affine,
-        view: &wgpu::TextureView,
+        view: &mui_hal::TextureView,
     ) -> bool {
         quad.render(&self.device, &self.queue, &s.paint, xf, view, [W, H])
             .expect("quad render");
@@ -204,7 +204,7 @@ fn wired_frame(
     r: &mut GpuRenderer,
     s: &ResolvedScene,
     xf: Affine,
-    view: &wgpu::TextureView,
+    view: &mui_hal::TextureView,
 ) -> bool {
     r.render(s, xf, view).expect("wired render");
     r.quad_frame().drawn
@@ -235,7 +235,7 @@ fn rounds(
     let mut spans = Vec::new();
     let encoder = || {
         gpu.device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default())
+            .create_command_encoder(&mui_hal::CommandEncoderDescriptor::default())
     };
     for i in 0..warm + n {
         for (job, out) in jobs.iter_mut().zip(&mut samples) {
@@ -251,7 +251,7 @@ fn rounds(
                 if drew {
                     after.resolve_query_set(&gpu.queries, 0..2, &gpu.resolve, 0);
                 } else {
-                    after.clear_buffer(&gpu.resolve, 0, None);
+                    gpu.queue.write_buffer(&gpu.resolve, 0, &[0; 16]);
                 }
                 after.copy_buffer_to_buffer(&gpu.resolve, 0, &gpu.read, 0, 16);
             }
@@ -259,7 +259,7 @@ fn rounds(
             timer.submitted(ticket);
             let t = Instant::now();
             gpu.device
-                .poll(wgpu::PollType::wait_indefinitely())
+                .poll(mui_hal::PollType::wait_indefinitely())
                 .expect("poll");
             let wait = ms(t);
             spans.clear();
@@ -321,16 +321,17 @@ fn table(title: &str, rows: &[Row]) {
 
 fn main() {
     let (device, queue, info) = pollster::block_on(async {
-        let adapter =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    ..Default::default()
-                })
-                .await
-                .expect("adapter");
+        let adapter = mui_hal::Instance::new(
+            mui_hal::InstanceDescriptor::new_without_display_handle_from_env(),
+        )
+        .request_adapter(&mui_hal::RequestAdapterOptions {
+            power_preference: mui_hal::PowerPreference::HighPerformance,
+            ..Default::default()
+        })
+        .await
+        .expect("adapter");
         let (d, q) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
+            .request_device(&mui_hal::DeviceDescriptor {
                 required_features: GpuTimer::required_features(),
                 required_limits: adapter.limits(),
                 ..Default::default()
@@ -341,7 +342,7 @@ fn main() {
     });
     println!("adapter: {} ({:?})", info.name, info.backend);
     let buffer = |usage| {
-        device.create_buffer(&wgpu::BufferDescriptor {
+        device.create_buffer(&mui_hal::BufferDescriptor {
             label: Some("quad pass timestamps"),
             size: 16,
             usage,
@@ -350,17 +351,17 @@ fn main() {
     };
     let mut timer = GpuTimer::new(&device, &queue).expect("timestamp queries");
     let gpu = Gpu {
-        queries: device.create_query_set(&wgpu::QuerySetDescriptor {
+        queries: device.create_query_set(&mui_hal::QuerySetDescriptor {
             label: Some("quad pass"),
-            ty: wgpu::QueryType::Timestamp,
+            ty: mui_hal::QueryType::Timestamp,
             count: 2,
         }),
         resolve: buffer(
-            wgpu::BufferUsages::QUERY_RESOLVE
-                | wgpu::BufferUsages::COPY_SRC
-                | wgpu::BufferUsages::COPY_DST,
+            mui_hal::BufferUsages::QUERY_RESOLVE
+                | mui_hal::BufferUsages::COPY_SRC
+                | mui_hal::BufferUsages::COPY_DST,
         ),
-        read: buffer(wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST),
+        read: buffer(mui_hal::BufferUsages::MAP_READ | mui_hal::BufferUsages::COPY_DST),
         device,
         queue,
     };
@@ -484,8 +485,8 @@ fn editor(gpu: &Gpu, timer: &mut GpuTimer) {
 fn open(gpu: &Gpu, still: &ResolvedScene) {
     let wait = || {
         gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("poll")
+            .poll(mui_hal::PollType::wait_indefinitely())
+            .expect("poll");
     };
     let mut made = Vec::new();
     let mut first = Vec::new();
@@ -574,7 +575,7 @@ fn pngs(gpu: &Gpu, scene: &ResolvedScene, tag: &str, quad: &mut QuadRenderer) {
         quad,
         scene,
         Affine::IDENTITY,
-        &q.create_view(&wgpu::TextureViewDescriptor::default()),
+        &q.create_view(&mui_hal::TextureViewDescriptor::default()),
     );
     let path = std::env::temp_dir().join(format!("quad-bench-editor{tag}-quad.png"));
     let rgba = gpu_support::readback(&gpu.device, &gpu.queue, &q, [W, H]).expect("readback");

@@ -295,7 +295,7 @@ pub(super) fn enqueue(
     stage: &str,
     message: &str,
     history: &[String],
-    adapter: Option<&wgpu::AdapterInfo>,
+    adapter: Option<&mui_hal::AdapterInfo>,
 ) {
     let worker = ACTIVE
         .lock()
@@ -319,7 +319,7 @@ fn report(
     stage: &str,
     message: &str,
     history: &[String],
-    adapter: Option<&wgpu::AdapterInfo>,
+    adapter: Option<&mui_hal::AdapterInfo>,
 ) -> Value {
     let host = std::env::current_exe()
         .ok()
@@ -412,7 +412,7 @@ pub(super) fn operation(
     component: &str,
     stage: &str,
     message: &str,
-    adapter: Option<&wgpu::AdapterInfo>,
+    adapter: Option<&mui_hal::AdapterInfo>,
 ) -> Option<Operation> {
     let worker = ACTIVE
         .lock()

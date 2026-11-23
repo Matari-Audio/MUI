@@ -24,18 +24,18 @@ async fn run() -> gpu_support::Result<()> {
         let layout = scene.layout.clone();
         let paint = scene.paint.clone();
         let texture = gpu_support::target(&device, size);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
         eprintln!("STAGE renderer_begin scale={scale}");
         let mut renderer = GpuRenderer::new(
             &device,
             &queue,
-            wgpu::TextureFormat::Rgba8Unorm,
+            mui_hal::TextureFormat::Rgba8Unorm,
             size,
             Budget::default(),
         )
         .await?;
         eprintln!("STAGE renderer_ready scale={scale}");
-        let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let error_scope = device.push_error_scope(mui_hal::ErrorFilter::Validation);
         let first = renderer.render(&scene, Affine::scale(scale), &view)?;
         assert_eq!(first.effect_draws, 1);
         assert_eq!(first.texture_allocations, 1);

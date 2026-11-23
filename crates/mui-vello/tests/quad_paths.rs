@@ -361,7 +361,7 @@ fn canvas_shadows(scale: f64) -> ResolvedScene {
 
 fn gpu() -> Option<Gpu> {
     let (device, queue) = device()?;
-    let quad = QuadRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let quad = QuadRenderer::new(&device, mui_hal::TextureFormat::Rgba8Unorm);
     Some(Gpu {
         device,
         queue,
@@ -374,7 +374,9 @@ fn paths_match_vello_cpu() {
     let Some(mut gpu) = gpu() else {
         return;
     };
-    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = gpu
+        .device
+        .push_error_scope(mui_hal::ErrorFilter::Validation);
     let mut failures = Vec::new();
     let f = &mut failures;
     let g = &mut gpu;

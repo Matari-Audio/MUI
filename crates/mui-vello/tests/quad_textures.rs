@@ -16,7 +16,7 @@ use mui_vello::kurbo::Affine;
 use mui_vello::quad::{Error, QuadRenderer, Reason};
 use std::sync::Arc;
 
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const FORMAT: mui_hal::TextureFormat = mui_hal::TextureFormat::Rgba8Unorm;
 const SIZE: [u32; 2] = [W as u32, H as u32];
 
 /// Two welded plates, with a block under them and, when `over`, a
@@ -47,19 +47,19 @@ fn welded(over: bool) -> ResolvedScene {
     mui_scene::resolve(&spec.weld_backend(mui_scene::WeldBackend::AnalyticGpu)).expect("resolves")
 }
 
-fn target(device: &wgpu::Device) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+fn target(device: &mui_hal::Device) -> mui_hal::Texture {
+    device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: SIZE[0],
             height: SIZE[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
+        dimension: mui_hal::TextureDimension::D2,
         format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }
@@ -76,12 +76,12 @@ fn a_weld_paints_its_texture_in_its_slot() {
     let Some((device, queue)) = device() else {
         return;
     };
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = device.push_error_scope(mui_hal::ErrorFilter::Validation);
     let mut quad = QuadRenderer::new(&device, FORMAT);
     let mut pool =
         pollster::block_on(WeldTextures::new(&device, &queue, Budget::default())).expect("pool");
     let out = target(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let scene = welded(true);
     // Without a pool, the weld is refused by index.
     let slot = scene
@@ -188,24 +188,24 @@ fn a_host_texture_is_sampled_in_place() {
         return;
     };
     let quad = QuadRenderer::new(&device, FORMAT);
-    let host = device.create_texture(&wgpu::TextureDescriptor {
+    let host = device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: 4,
             height: 4,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
+        dimension: mui_hal::TextureDimension::D2,
         format: FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        usage: mui_hal::TextureUsages::TEXTURE_BINDING | mui_hal::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     queue.write_texture(
         host.as_image_copy(),
         &[200, 100, 50, 128].repeat(16),
-        wgpu::TexelCopyBufferLayout {
+        mui_hal::TexelCopyBufferLayout {
             offset: 0,
             bytes_per_row: Some(16),
             rows_per_image: None,

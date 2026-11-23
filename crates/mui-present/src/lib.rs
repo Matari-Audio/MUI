@@ -160,6 +160,8 @@ pub enum PresentError {
     SurfaceLost,
     /// Swapchain extent/transform is out of date and needs reconfiguration.
     OutOfDate,
+    /// No image became available within the timeout; try again next frame.
+    Timeout,
     /// A GPU driver previously crashed on this adapter; CPU fallback is required.
     DriverSentinelTripped(DriverId),
     /// Platform API failure with a concise description.
@@ -174,6 +176,7 @@ impl fmt::Display for PresentError {
             Self::UnsupportedHandle(msg) => write!(f, "unsupported native handle: {msg}"),
             Self::SurfaceLost => f.write_str("native presentation surface lost"),
             Self::OutOfDate => f.write_str("native swapchain out of date"),
+            Self::Timeout => f.write_str("no swapchain image became available in time"),
             Self::DriverSentinelTripped(driver) => {
                 write!(f, "crash sentinel tripped for GPU driver {driver}")
             }

@@ -40,12 +40,12 @@ async fn run() -> gpu_support::Result<()> {
     for alpha in [0., 0.9] {
         let size = [1180, 760];
         let target = gpu_support::target(&device, size);
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = target.create_view(&mui_hal::TextureViewDescriptor::default());
         // A fresh renderer AND target prevent a stale cached frame from passing.
         let mut renderer = GpuRenderer::new(
             &device,
             &queue,
-            wgpu::TextureFormat::Rgba8Unorm,
+            mui_hal::TextureFormat::Rgba8Unorm,
             size,
             Budget::default(),
         )
@@ -94,7 +94,7 @@ async fn run() -> gpu_support::Result<()> {
         let resized = [590, 380];
         renderer.resize(resized)?;
         let target = gpu_support::target(&device, resized);
-        let resized_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let resized_view = target.create_view(&mui_hal::TextureViewDescriptor::default());
         let frame = renderer.render(&next, Affine::scale(0.5), &resized_view)?;
         assert_eq!(frame.encoded_scenes, 1);
         assert_eq!(

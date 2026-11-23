@@ -20,12 +20,12 @@ const N: u32 = 200;
 
 fn render() -> [u8; 4] {
     let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        mui_hal::Instance::new(mui_hal::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+        pollster::block_on(instance.request_adapter(&mui_hal::RequestAdapterOptions::default()))
             .expect("adapter");
     let (device, queue) =
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+        pollster::block_on(adapter.request_device(&mui_hal::DeviceDescriptor::default()))
             .expect("device");
 
     let px = vec![
@@ -52,21 +52,21 @@ fn render() -> [u8; 4] {
         )
         .expect("frame");
 
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    let texture = device.create_texture(&mui_hal::TextureDescriptor {
         label: Some("image fill target"),
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: N,
             height: N,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut renderer = pollster::block_on(GpuRenderer::new(
         &device,
         &queue,
@@ -80,29 +80,29 @@ fn render() -> [u8; 4] {
         .expect("render");
 
     let row = (N * 4).next_multiple_of(256);
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+    let readback = device.create_buffer(&mui_hal::BufferDescriptor {
         label: Some("readback"),
         size: u64::from(row) * u64::from(N),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        usage: mui_hal::BufferUsages::COPY_DST | mui_hal::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut encoder = device.create_command_encoder(&mui_hal::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
+        mui_hal::TexelCopyTextureInfo {
             texture: &texture,
             mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
+            origin: mui_hal::Origin3d::ZERO,
+            aspect: mui_hal::TextureAspect::All,
         },
-        wgpu::TexelCopyBufferInfo {
+        mui_hal::TexelCopyBufferInfo {
             buffer: &readback,
-            layout: wgpu::TexelCopyBufferLayout {
+            layout: mui_hal::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row),
                 rows_per_image: None,
             },
         },
-        wgpu::Extent3d {
+        mui_hal::Extent3d {
             width: N,
             height: N,
             depth_or_array_layers: 1,
@@ -111,9 +111,9 @@ fn render() -> [u8; 4] {
     queue.submit([encoder.finish()]);
     readback
         .slice(..)
-        .map_async(wgpu::MapMode::Read, |r| r.expect("map"));
+        .map_async(mui_hal::MapMode::Read, |r| r.expect("map"));
     device
-        .poll(wgpu::PollType::wait_indefinitely())
+        .poll(mui_hal::PollType::wait_indefinitely())
         .expect("poll");
     let mapped = readback.slice(..).get_mapped_range().expect("mapped");
     // Just inside the first (Cover) pill's top-left cap. Bilinear sampling

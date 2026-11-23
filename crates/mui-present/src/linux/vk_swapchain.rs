@@ -53,6 +53,7 @@ pub struct VkSwapchain {
     format: SurfaceFormat,
     extent: (u32, u32),
     translucent: bool,
+    composite_alpha: vk::CompositeAlphaFlagsKHR,
     /// Dedicated child `wl_subsurface` kept alive until after `vkDestroySurfaceKHR`.
     wayland_subsurface: Option<WaylandSubsurface>,
 }
@@ -169,6 +170,7 @@ impl VkSwapchain {
             format: SurfaceFormat::Bgra8Unorm,
             extent: (0, 0),
             translucent: false,
+            composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
             wayland_subsurface,
         };
 
@@ -340,6 +342,7 @@ impl VkSwapchain {
         self.format = format;
         self.extent = (extent.width, extent.height);
         self.translucent = translucent;
+        self.composite_alpha = composite_alpha;
         Ok(())
     }
 
@@ -373,6 +376,7 @@ impl VkSwapchain {
             )
         } {
             Ok((index, suboptimal)) => Ok(AcquiredImage { index, suboptimal }),
+            Err(vk::Result::TIMEOUT | vk::Result::NOT_READY) => Err(PresentError::Timeout),
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(PresentError::OutOfDate),
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => Err(PresentError::SurfaceLost),
             Err(e) => Err(PresentError::Platform(format!(
@@ -457,6 +461,12 @@ impl VkSwapchain {
     #[must_use]
     pub const fn extent(&self) -> (u32, u32) {
         self.extent
+    }
+
+    /// The composite-alpha mode the swapchain was created with.
+    #[must_use]
+    pub const fn composite_alpha(&self) -> vk::CompositeAlphaFlagsKHR {
+        self.composite_alpha
     }
 
     /// Whether the swapchain composites alpha with the desktop compositor.

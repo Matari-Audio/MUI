@@ -64,7 +64,7 @@ async fn rasterise(resolved: &mui_scene::ResolvedScene) -> gpu_support::Result<V
     let texture = gpu_support::target(&device, SIZE);
     let format = texture.format();
     let mut renderer = GpuRenderer::new(&device, &queue, format, SIZE, Budget::default()).await?;
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
     renderer.render(resolved, Affine::translate((32.0, 32.0)), &view)?;
     gpu_support::readback(&device, &queue, &texture, SIZE)
 }

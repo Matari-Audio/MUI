@@ -178,7 +178,7 @@ enum Stored {
     Pixmap(Arc<Pixmap>),
     /// The quad pass's image texture, bound as its own group.
     #[cfg(feature = "gpu-quad")]
-    Texture(wgpu::BindGroup),
+    Texture(mui_hal::BindGroup),
 }
 
 #[cfg_attr(

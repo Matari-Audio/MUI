@@ -1543,6 +1543,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mui-hal"
+version = "0.4.2"
+dependencies = [
+ "ash",
+ "bitflags",
+ "mui-present",
+ "mui-shaders",
+ "raw-window-handle",
+ "wgpu",
+]
+
+[[package]]
 name = "mui-input"
 version = "0.4.2"
 dependencies = [
@@ -1649,6 +1661,7 @@ dependencies = [
  "half",
  "mui",
  "mui-geometry",
+ "mui-hal",
  "mui-scene",
  "mui-text",
  "mui-vello",
@@ -1706,6 +1719,7 @@ dependencies = [
  "glifo 0.4.0",
  "mach-dxcompiler-rs",
  "mui-geometry",
+ "mui-hal",
  "mui-present",
  "mui-scene",
  "mui-shaders",

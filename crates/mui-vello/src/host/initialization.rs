@@ -14,11 +14,18 @@ fn session_slot(transparency: Transparency) -> usize {
     usize::from(cfg!(windows) && transparency == Transparency::Translucent)
 }
 
-fn session_descriptor(transparency: Transparency) -> wgpu::InstanceDescriptor {
+fn session_descriptor(transparency: Transparency) -> mui_hal::InstanceDescriptor {
+    #[cfg_attr(
+        not(any(feature = "wgpu", not(target_os = "linux"))),
+        expect(unused_mut, reason = "only wgpu has backend options")
+    )]
     let mut descriptor = instance_descriptor();
+    #[cfg(not(any(feature = "wgpu", not(target_os = "linux"))))]
+    let _ = transparency;
+    #[cfg(any(feature = "wgpu", not(target_os = "linux")))]
     if transparency == Transparency::Translucent {
         descriptor.backend_options.dx12.presentation_system =
-            wgpu::Dx12SwapchainKind::DxgiFromVisual;
+            mui_hal::wgpu::Dx12SwapchainKind::DxgiFromVisual;
     }
     descriptor
 }
@@ -27,7 +34,7 @@ pub(super) struct Session {
     state: Mutex<State>,
     detached: bool,
     transparency: Transparency,
-    excluded: Vec<(String, wgpu::Backend)>,
+    excluded: Vec<(String, mui_hal::Backend)>,
 }
 struct State {
     generation: u64,
@@ -49,10 +56,10 @@ impl State {
     }
 }
 struct Context {
-    instance: wgpu::Instance,
-    adapter: wgpu::Adapter,
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    instance: mui_hal::Instance,
+    adapter: mui_hal::Adapter,
+    device: mui_hal::Device,
+    queue: mui_hal::Queue,
     errors: Arc<DeviceErrors>,
     diagnostics: GpuDiagnostics,
     shared: crate::effects::renderer::Shared,
@@ -94,7 +101,7 @@ impl Session {
     fn private(
         detached: bool,
         transparency: Transparency,
-        excluded: Vec<(String, wgpu::Backend)>,
+        excluded: Vec<(String, mui_hal::Backend)>,
     ) -> Arc<Self> {
         Arc::new(Self {
             detached,
@@ -144,7 +151,7 @@ impl Session {
                 // own Host::open_native still reaches GL. Vulkan WSI accepts each
                 // window's own X connection; no process-wide display is retained.
                 descriptor.backends &=
-                    wgpu::Backends::PRIMARY & wgpu::Instance::enabled_backend_features();
+                    mui_hal::Backends::PRIMARY & mui_hal::Instance::enabled_backend_features();
                 if descriptor.backends.is_empty() {
                     return Err(HostError::Unavailable {
                         message: "no native GPU backend enabled".into(),
@@ -155,7 +162,7 @@ impl Session {
                 let (instance, gpu) = try_backends(descriptor.backends, |backends| {
                     let mut descriptor = session_descriptor(transparency);
                     descriptor.backends = backends;
-                    let instance = wgpu::Instance::new(descriptor);
+                    let instance = mui_hal::Instance::new(descriptor);
                     let gpu = OnDevice::open_filtered(
                         &instance,
                         None,
@@ -312,7 +319,7 @@ pub struct GpuInit {
     context: Option<Arc<Context>>,
     installed: bool,
     retry: Retry,
-    excluded: Vec<(String, wgpu::Backend)>,
+    excluded: Vec<(String, mui_hal::Backend)>,
     last_failure: Option<String>,
     incompatible: bool,
     transparency: Transparency,
@@ -391,7 +398,7 @@ impl GpuInit {
     /// render worker that may not touch the native view sends this to its
     /// window thread, which makes the surface and sends it back: the worker
     /// then presents straight to the window, nothing read back.
-    pub fn ready_instance(&mut self) -> Option<wgpu::Instance> {
+    pub fn ready_instance(&mut self) -> Option<mui_hal::Instance> {
         if self.installed || !self.retry.ready(Instant::now()) {
             return None;
         }
@@ -413,7 +420,7 @@ impl GpuInit {
     pub fn poll(
         &mut self,
         size: (u32, u32),
-        mut create: impl FnMut(&wgpu::Instance) -> Result<wgpu::Surface<'static>, String>,
+        mut create: impl FnMut(&mui_hal::Instance) -> Result<mui_hal::Surface<'static>, String>,
     ) -> Option<Result<Host, HostError>> {
         if self.installed
             || target_size(size.0, size.1).is_none()
@@ -455,7 +462,7 @@ impl GpuInit {
                     let renderer = pollster::block_on(GpuRenderer::new_shared(
                         &context.device,
                         &context.queue,
-                        wgpu::TextureFormat::Bgra8Unorm,
+                        mui_hal::TextureFormat::Bgra8Unorm,
                         [width, height],
                         Budget::default(),
                         Some(context.shared.clone()),
@@ -469,22 +476,21 @@ impl GpuInit {
                         diagnostics: context.diagnostics.clone(),
                         size: (width, height),
                         renderer,
-                        config: wgpu::SurfaceConfiguration {
-                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                            format: wgpu::TextureFormat::Bgra8Unorm,
+                        config: mui_hal::SurfaceConfiguration {
+                            usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
+                            format: mui_hal::TextureFormat::Bgra8Unorm,
                             width,
                             height,
-                            present_mode: wgpu::PresentMode::AutoNoVsync,
+                            present_mode: mui_hal::PresentMode::AutoNoVsync,
                             desired_maximum_frame_latency: 1,
                             alpha_mode: alpha_mode(
                                 &[
-                                    wgpu::CompositeAlphaMode::Opaque,
-                                    wgpu::CompositeAlphaMode::PreMultiplied,
+                                    mui_hal::CompositeAlphaMode::Opaque,
+                                    mui_hal::CompositeAlphaMode::PreMultiplied,
                                 ],
                                 transparency,
                             ),
                             view_formats: Vec::new(),
-                            color_space: wgpu::SurfaceColorSpace::Auto,
                         },
                     })
                 }))
@@ -591,11 +597,11 @@ impl GpuInit {
 }
 
 pub(super) fn surface_config(
-    surface: &wgpu::Surface<'_>,
-    adapter: &wgpu::Adapter,
+    surface: &mui_hal::Surface<'_>,
+    adapter: &mui_hal::Adapter,
     size: (u32, u32),
     transparency: Transparency,
-) -> Result<wgpu::SurfaceConfiguration, HostError> {
+) -> Result<mui_hal::SurfaceConfiguration, HostError> {
     let limit = adapter.limits().max_texture_dimension_2d;
     let (width, height) = (size.0.min(limit).max(1), size.1.min(limit).max(1));
     let caps = surface.get_capabilities(adapter);
@@ -604,7 +610,7 @@ pub(super) fn surface_config(
     let config = surface
         .get_default_config(adapter, width, height)
         .ok_or(HostError::Surface("adapter cannot configure this window"))?;
-    Ok(wgpu::SurfaceConfiguration {
+    Ok(mui_hal::SurfaceConfiguration {
         format,
         alpha_mode,
         present_mode,
@@ -619,9 +625,9 @@ pub struct Offscreen {
     first_frame: bool,
     context: Arc<Context>,
     renderer: GpuRenderer,
-    target: wgpu::Texture,
-    view: wgpu::TextureView,
-    readback: wgpu::Buffer,
+    target: mui_hal::Texture,
+    view: mui_hal::TextureView,
+    readback: mui_hal::Buffer,
     size: (u32, u32),
     error_cursor: u64,
 }
@@ -641,7 +647,7 @@ impl GpuInit {
             let mut renderer = pollster::block_on(GpuRenderer::new_shared(
                 &context.device,
                 &context.queue,
-                wgpu::TextureFormat::Bgra8Unorm,
+                mui_hal::TextureFormat::Bgra8Unorm,
                 [size.0, size.1],
                 Budget::default(),
                 Some(context.shared.clone()),
@@ -649,7 +655,7 @@ impl GpuInit {
             .map_err(HostError::Render)?;
             renderer.incremental_output();
             let (target, readback, _) = offscreen_target(&context.device, size);
-            let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            let view = target.create_view(&mui_hal::TextureViewDescriptor::default());
             Ok(Some(Offscreen {
                 first_frame: true,
                 context,
@@ -685,7 +691,7 @@ impl GpuInit {
     }
 }
 
-fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> Result<(u32, u32), HostError> {
+fn offscreen_size(device: &mui_hal::Device, size: (u32, u32)) -> Result<(u32, u32), HostError> {
     let limit = device
         .limits()
         .max_texture_dimension_2d
@@ -702,26 +708,29 @@ fn offscreen_size(device: &wgpu::Device, size: (u32, u32)) -> Result<(u32, u32),
     }
     Ok(size)
 }
-fn offscreen_target(device: &wgpu::Device, size: (u32, u32)) -> (wgpu::Texture, wgpu::Buffer, u32) {
+fn offscreen_target(
+    device: &mui_hal::Device,
+    size: (u32, u32),
+) -> (mui_hal::Texture, mui_hal::Buffer, u32) {
     let stride = (size.0 * 4 + 255) & !255;
-    let target = device.create_texture(&wgpu::TextureDescriptor {
+    let target = device.create_texture(&mui_hal::TextureDescriptor {
         label: Some("MUI worker bitmap"),
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: size.0,
             height: size.1,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Bgra8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Bgra8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
+    let readback = device.create_buffer(&mui_hal::BufferDescriptor {
         label: Some("MUI worker readback"),
         size: u64::from(stride) * u64::from(size.1),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        usage: mui_hal::BufferUsages::COPY_DST | mui_hal::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
     (target, readback, stride)
@@ -752,7 +761,7 @@ impl Offscreen {
                 .resize([size.0, size.1])
                 .map_err(HostError::Render)?;
             let (target, readback, _) = offscreen_target(&self.context.device, size);
-            self.view = target.create_view(&wgpu::TextureViewDescriptor::default());
+            self.view = target.create_view(&mui_hal::TextureViewDescriptor::default());
             self.target = target;
             self.readback = readback;
             self.size = size;
@@ -775,34 +784,37 @@ impl Offscreen {
             })
             .collect::<Vec<_>>();
         if self.readback.size() < offset {
-            self.readback = self.context.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("MUI packed damage readback"),
-                size: offset,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
+            self.readback = self
+                .context
+                .device
+                .create_buffer(&mui_hal::BufferDescriptor {
+                    label: Some("MUI packed damage readback"),
+                    size: offset,
+                    usage: mui_hal::BufferUsages::COPY_DST | mui_hal::BufferUsages::MAP_READ,
+                    mapped_at_creation: false,
+                });
         }
         let mut encoder = self
             .context
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            .create_command_encoder(&mui_hal::CommandEncoderDescriptor::default());
         for &([x, y, w, h], stride, offset) in &copies {
             encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
+                mui_hal::TexelCopyTextureInfo {
                     texture: &self.target,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x, y, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
+                    origin: mui_hal::Origin3d { x, y, z: 0 },
+                    aspect: mui_hal::TextureAspect::All,
                 },
-                wgpu::TexelCopyBufferInfo {
+                mui_hal::TexelCopyBufferInfo {
                     buffer: &self.readback,
-                    layout: wgpu::TexelCopyBufferLayout {
+                    layout: mui_hal::TexelCopyBufferLayout {
                         offset,
                         bytes_per_row: Some(stride),
                         rows_per_image: Some(h),
                     },
                 },
-                wgpu::Extent3d {
+                mui_hal::Extent3d {
                     width: w,
                     height: h,
                     depth_or_array_layers: 1,
@@ -813,14 +825,14 @@ impl Offscreen {
         let (send, receive) = mpsc::sync_channel(1);
         self.readback
             .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
+            .map_async(mui_hal::MapMode::Read, move |result| {
                 let _ = send.send(result);
             });
         let until = Instant::now() + Duration::from_secs(2);
         loop {
             self.context
                 .device
-                .poll(wgpu::PollType::Poll)
+                .poll(mui_hal::PollType::Poll)
                 .map_err(|e| HostError::Configuration(e.to_string()))?;
             match receive.try_recv() {
                 Ok(result) => {
@@ -949,12 +961,13 @@ mod tests {
             Arc::ptr_eq(&opaque.session, &transparent.session),
             !cfg!(windows)
         );
+        #[cfg(any(feature = "wgpu", not(target_os = "linux")))]
         assert_eq!(
             session_descriptor(Transparency::Translucent)
                 .backend_options
                 .dx12
                 .presentation_system,
-            wgpu::Dx12SwapchainKind::DxgiFromVisual
+            mui_hal::wgpu::Dx12SwapchainKind::DxgiFromVisual
         );
         assert_eq!(
             session_slot(Transparency::Translucent),
@@ -1011,7 +1024,7 @@ mod tests {
         let adopted = second.context().unwrap().unwrap();
         assert!(Arc::ptr_eq(&context, &adopted));
         context.device.destroy();
-        let _ = context.device.poll(wgpu::PollType::Poll);
+        let _ = context.device.poll(mui_hal::PollType::Poll);
         assert!(editor.context().unwrap().is_none());
         editor.state.lock().unwrap().retry.reset();
         assert!(second.context().unwrap().is_none());

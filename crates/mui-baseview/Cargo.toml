@@ -20,13 +20,17 @@ baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
 mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }
 # baseview's handles; the same 0.6 wgpu takes.
-raw-window-handle = "0.6"
-# mui-vello picks no backend; the window that owns the device does.
-# Native primary APIs only (Vulkan/Metal/DX12); GLES is unreachable in GpuInit
-# and omitted to avoid pulling glow/EGL into Linux plugin binaries.
-wgpu = { workspace = true, features = ["wgsl", "vulkan", "metal", "dx12"] }
+raw-window-handle = { version = "0.6", features = ["std"] }
+# The GPU HAL: native Vulkan on Linux, so Linux plugins link no wgpu.
+mui-hal.workspace = true
 
 # Frame visibility, coordinates, and window effects.
+# Until mui-hal's Metal and D3D11 backends land, macOS and Windows windows
+# present through wgpu. Native primary APIs only: GLES is unreachable in
+# GpuInit.
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+wgpu = { workspace = true, features = ["wgsl", "metal", "dx12"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # Frosted windows (`frost`) and window levels (`sticky`).
 objc2 = { version = "0.6", default-features = false }

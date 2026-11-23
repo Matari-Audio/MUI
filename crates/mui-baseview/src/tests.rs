@@ -21,7 +21,7 @@ fn native_cpu_fallback_presents_and_reopens() {
 fn native_resize_failure_falls_back_and_presents() {
     // The shared GPU session uses native backends only; under WGPU_BACKEND=gl
     // the editor is CPU for good and there is no GPU resize to fail.
-    if (mui::vello::host::instance_descriptor().backends & wgpu::Backends::PRIMARY).is_empty() {
+    if (mui::vello::host::instance_descriptor().backends & mui_hal::Backends::PRIMARY).is_empty() {
         eprintln!("SKIPPED: no native GPU backend enabled by WGPU_BACKEND");
         return;
     }
@@ -32,7 +32,7 @@ fn native_resize_failure_falls_back_and_presents() {
 #[test]
 #[ignore = "requires a live X11 display and graphics driver; exercises the >1M pixel startup placeholder"]
 fn native_large_resize_failure_recovers_full_scene() {
-    if (mui::vello::host::instance_descriptor().backends & wgpu::Backends::PRIMARY).is_empty() {
+    if (mui::vello::host::instance_descriptor().backends & mui_hal::Backends::PRIMARY).is_empty() {
         return;
     }
     cpu_presentation_fixture(true, true);
@@ -112,7 +112,7 @@ fn cpu_presentation_fixture(resize_failure: bool, large: bool) {
                         gpu.device().0.destroy();
                         let deadline = Instant::now() + Duration::from_secs(2);
                         while !gpu.device_lost() && Instant::now() < deadline {
-                            let _ = gpu.device().0.poll(wgpu::PollType::Poll);
+                            let _ = gpu.device().0.poll(mui_hal::PollType::Poll);
                             std::thread::sleep(Duration::from_millis(1));
                         }
                         if !gpu.device_lost() {

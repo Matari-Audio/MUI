@@ -13,6 +13,7 @@ members = [
   "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-present",
+  "crates/mui-hal",
   "crates/mui-shaders",
   "crates/mui-vello",
   "crates/mui-baseview",
@@ -46,6 +47,7 @@ mui-material = { path = "crates/mui-material" }
 mui-motion = { path = "crates/mui-motion" }
 mui-playground = { path = "crates/mui-playground" }
 mui-present = { path = "crates/mui-present" }
+mui-hal = { path = "crates/mui-hal" }
 mui-preview = { path = "crates/mui-preview" }
 mui-scene = { path = "crates/mui-scene" }
 mui-shaders = { path = "crates/mui-shaders" }

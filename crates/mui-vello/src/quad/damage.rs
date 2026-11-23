@@ -10,7 +10,7 @@ pub(super) struct Retained {
     pub paint: Vec<Painted>,
     pub transform: Affine,
     pub size: [u32; 2],
-    pub target: wgpu::TextureView,
+    pub target: mui_hal::TextureView,
 }
 
 /// A partial frame pays while its damage is at most this share of the

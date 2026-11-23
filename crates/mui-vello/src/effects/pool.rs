@@ -66,16 +66,16 @@ impl ContentState {
     }
 }
 struct Slot {
-    view: wgpu::TextureView,
-    uniform: wgpu::Buffer,
-    boundary: wgpu::Buffer,
+    view: mui_hal::TextureView,
+    uniform: mui_hal::Buffer,
+    boundary: mui_hal::Buffer,
     boundary_uploaded: Option<Arc<[u8; BOUNDARY_BYTES]>>,
     boundary_rendered: Option<Arc<[u8; BOUNDARY_BYTES]>>,
     boundary_pending: Option<Arc<[u8; BOUNDARY_BYTES]>>,
-    bind: wgpu::BindGroup,
+    bind: mui_hal::BindGroup,
     capacity: [u32; 2],
     used: [u32; 2],
-    texture: wgpu::Texture,
+    texture: mui_hal::Texture,
     /// Minted per allocation: a renderer that registered the old texture
     /// sees the id change and registers the new one.
     id: u64,
@@ -96,10 +96,10 @@ impl Slot {
 /// been submitted. `abort()` leaves texture content dirty for a later attempt.
 /// The high-level `GpuRenderer` performs this transaction itself.
 pub struct WeldTextures {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
-    pipeline: wgpu::RenderPipeline,
-    layout: wgpu::BindGroupLayout,
+    device: mui_hal::Device,
+    queue: mui_hal::Queue,
+    pipeline: mui_hal::RenderPipeline,
+    layout: mui_hal::BindGroupLayout,
     slots: BTreeMap<Arc<str>, Slot>,
     budget: Budget,
     epoch: u64,
@@ -110,8 +110,8 @@ pub struct WeldTextures {
 }
 impl WeldTextures {
     pub async fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &mui_hal::Device,
+        queue: &mui_hal::Queue,
         budget: Budget,
     ) -> Result<Self, Error> {
         if budget.max_surfaces == 0
@@ -122,25 +122,25 @@ impl WeldTextures {
         }
         // Scope catches WGSL/type/layout errors instead of calling this a working
         // pipeline because the source string exists. Native smoke tests await it.
-        let error_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let error_scope = device.push_error_scope(mui_hal::ErrorFilter::Validation);
+        let layout = device.create_bind_group_layout(&mui_hal::BindGroupLayoutDescriptor {
             label: Some("MUI weld uniforms"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
+                mui_hal::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                    visibility: mui_hal::ShaderStages::VERTEX_FRAGMENT,
+                    ty: mui_hal::BindingType::Buffer {
+                        ty: mui_hal::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: NonZeroU64::new(PARAM_BYTES as u64),
                     },
                     count: None,
                 },
-                wgpu::BindGroupLayoutEntry {
+                mui_hal::BindGroupLayoutEntry {
                     binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
+                    visibility: mui_hal::ShaderStages::FRAGMENT,
+                    ty: mui_hal::BindingType::Buffer {
+                        ty: mui_hal::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
                         min_binding_size: NonZeroU64::new(BOUNDARY_BYTES as u64),
                     },
@@ -148,36 +148,36 @@ impl WeldTextures {
                 },
             ],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&mui_hal::PipelineLayoutDescriptor {
             label: Some("MUI weld layout"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let module = device.create_shader_module(mui_hal::ShaderModuleDescriptor {
             label: Some("MUI analytic weld"),
-            source: wgpu::ShaderSource::Wgsl(super::WELD_SHADER.into()),
+            source: mui_hal::ShaderSource::Mui(mui_hal::ShaderId::Weld),
         });
         let pipeline = gate(device, || {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            device.create_render_pipeline(&mui_hal::RenderPipelineDescriptor {
                 label: Some("MUI analytic weld"),
                 layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
+                vertex: mui_hal::VertexState {
                     module: &module,
                     entry_point: Some("vs_main"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: mui_hal::PipelineCompilationOptions,
                     buffers: &[],
                 },
-                primitive: wgpu::PrimitiveState::default(),
+                primitive: mui_hal::PrimitiveState::default(),
                 depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
+                multisample: mui_hal::MultisampleState,
+                fragment: Some(mui_hal::FragmentState {
                     module: &module,
                     entry_point: Some("fs_hybrid"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: wgpu::TextureFormat::Rgba8Unorm,
+                    compilation_options: mui_hal::PipelineCompilationOptions,
+                    targets: &[Some(mui_hal::ColorTargetState {
+                        format: mui_hal::TextureFormat::Rgba8Unorm,
                         blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
+                        write_mask: mui_hal::ColorWrites::ALL,
                     })],
                 }),
                 multiview_mask: None,
@@ -229,7 +229,7 @@ impl WeldTextures {
     }
     /// The weld's texture: its allocation id, the texture, and the corner
     /// of it the material fills. Premultiplied, sRGB-encoded RGBA.
-    pub fn texture(&self, key: &str) -> Option<(u64, &wgpu::Texture, [u32; 2])> {
+    pub fn texture(&self, key: &str) -> Option<(u64, &mui_hal::Texture, [u32; 2])> {
         self.slots.get(key).map(|s| (s.id, &s.texture, s.used))
     }
     fn resident_bytes(&self) -> u64 {
@@ -367,7 +367,7 @@ impl WeldTextures {
         &mut self,
         key: &str,
         material: &AnalyticWeld,
-        encoder: &mut wgpu::CommandEncoder,
+        encoder: &mut mui_hal::CommandEncoder,
         stats: &mut EffectStats,
     ) -> Result<(), Error> {
         if !self.in_frame {
@@ -397,49 +397,51 @@ impl WeldTextures {
                 .next_id
                 .checked_add(1)
                 .ok_or(Error::Budget("texture ID exhausted"))?;
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            let texture = self.device.create_texture(&mui_hal::TextureDescriptor {
                 label: Some("MUI retained weld"),
-                size: wgpu::Extent3d {
+                size: mui_hal::Extent3d {
                     width: capacity[0],
                     height: capacity[1],
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
                 sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::COPY_SRC,
+                dimension: mui_hal::TextureDimension::D2,
+                format: mui_hal::TextureFormat::Rgba8Unorm,
+                usage: mui_hal::TextureUsages::RENDER_ATTACHMENT
+                    | mui_hal::TextureUsages::TEXTURE_BINDING
+                    | mui_hal::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
+            let uniform = self.device.create_buffer(&mui_hal::BufferDescriptor {
                 label: Some("MUI weld parameters"),
                 size: PARAM_BYTES as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: mui_hal::BufferUsages::UNIFORM | mui_hal::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let boundary = self.device.create_buffer(&wgpu::BufferDescriptor {
+            let boundary = self.device.create_buffer(&mui_hal::BufferDescriptor {
                 label: Some("MUI crisp boundary"),
                 size: BOUNDARY_BYTES as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                usage: mui_hal::BufferUsages::UNIFORM | mui_hal::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
-            let bind = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MUI weld binding"),
-                layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: uniform.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: boundary.as_entire_binding(),
-                    },
-                ],
-            });
+            let bind = self
+                .device
+                .create_bind_group(&mui_hal::BindGroupDescriptor {
+                    label: Some("MUI weld binding"),
+                    layout: &self.layout,
+                    entries: &[
+                        mui_hal::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform.as_entire_binding(),
+                        },
+                        mui_hal::BindGroupEntry {
+                            binding: 1,
+                            resource: boundary.as_entire_binding(),
+                        },
+                    ],
+                });
             self.slots.insert(
                 Arc::from(key),
                 Slot {
@@ -501,16 +503,16 @@ impl WeldTextures {
             slot.boundary_uploaded = Some(geometry.clone());
         }
         if slot.state.needs_render(&bytes) || !equal(&slot.boundary_rendered) {
-            let attachment = Some(wgpu::RenderPassColorAttachment {
+            let attachment = Some(mui_hal::RenderPassColorAttachment {
                 view: &slot.view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                    store: wgpu::StoreOp::Store,
+                ops: mui_hal::Operations {
+                    load: mui_hal::LoadOp::Clear(mui_hal::Color::TRANSPARENT),
+                    store: mui_hal::StoreOp::Store,
                 },
             });
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&mui_hal::RenderPassDescriptor {
                 label: Some("MUI weld material"),
                 color_attachments: &[attachment],
                 depth_stencil_attachment: None,

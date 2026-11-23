@@ -15,7 +15,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct Shared {
     weld: Arc<WeldTextures>,
-    cache: Option<wgpu::PipelineCache>,
+    cache: Option<mui_hal::PipelineCache>,
 }
 
 /// How often the quad pass refused a frame, and why last.
@@ -43,8 +43,8 @@ pub struct Fallback {
 ///
 /// Device and queue ownership is per renderer. Recreate it on device loss.
 pub struct GpuRenderer {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: mui_hal::Device,
+    queue: mui_hal::Queue,
     quad: QuadRenderer,
     welds: WeldTextures,
     shared: Shared,
@@ -57,7 +57,7 @@ pub struct GpuRenderer {
     /// A host texture changed since the last frame.
     stale: bool,
     /// The view the frame was last presented to.
-    presented: Option<wgpu::TextureView>,
+    presented: Option<mui_hal::TextureView>,
     /// Present only damage, onto a target that keeps its pixels.
     incremental: bool,
     damage: Vec<[u32; 4]>,
@@ -68,67 +68,67 @@ pub struct GpuRenderer {
 
 /// The retained frame: what the quad pass draws and the present reads.
 struct Frame {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    bind: wgpu::BindGroup,
+    texture: mui_hal::Texture,
+    view: mui_hal::TextureView,
+    bind: mui_hal::BindGroup,
 }
 
 struct Present {
-    format: wgpu::TextureFormat,
-    layout: wgpu::BindGroupLayout,
-    premultiplied: wgpu::RenderPipeline,
-    straight: wgpu::RenderPipeline,
+    format: mui_hal::TextureFormat,
+    layout: mui_hal::BindGroupLayout,
+    premultiplied: mui_hal::RenderPipeline,
+    straight: mui_hal::RenderPipeline,
 }
 
 /// The frame's format: the quad pass draws premultiplied sRGB bytes, and
 /// `vello_cpu`'s pixels upload into it unchanged.
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const FORMAT: mui_hal::TextureFormat = mui_hal::TextureFormat::Rgba8Unorm;
 
 impl Present {
     fn new(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        cache: Option<&wgpu::PipelineCache>,
+        device: &mui_hal::Device,
+        format: mui_hal::TextureFormat,
+        cache: Option<&mui_hal::PipelineCache>,
     ) -> Self {
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let module = device.create_shader_module(mui_hal::ShaderModuleDescriptor {
             label: Some("MUI present"),
-            source: wgpu::ShaderSource::Wgsl(super::PRESENT_SHADER.into()),
+            source: mui_hal::ShaderSource::Mui(mui_hal::ShaderId::Present),
         });
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        let layout = device.create_bind_group_layout(&mui_hal::BindGroupLayoutDescriptor {
             label: Some("MUI present"),
-            entries: &[wgpu::BindGroupLayoutEntry {
+            entries: &[mui_hal::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
+                visibility: mui_hal::ShaderStages::FRAGMENT,
+                ty: mui_hal::BindingType::Texture {
+                    sample_type: mui_hal::TextureSampleType::Float { filterable: false },
+                    view_dimension: mui_hal::TextureViewDimension::D2,
                     multisampled: false,
                 },
                 count: None,
             }],
         });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let pipeline_layout = device.create_pipeline_layout(&mui_hal::PipelineLayoutDescriptor {
             label: Some("MUI present"),
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
         let pipeline = |entry: &str| {
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            device.create_render_pipeline(&mui_hal::RenderPipelineDescriptor {
                 label: Some(entry),
                 layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
+                vertex: mui_hal::VertexState {
                     module: &module,
                     entry_point: Some("vs"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: mui_hal::PipelineCompilationOptions,
                     buffers: &[],
                 },
-                primitive: wgpu::PrimitiveState::default(),
+                primitive: mui_hal::PrimitiveState::default(),
                 depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
+                multisample: mui_hal::MultisampleState,
+                fragment: Some(mui_hal::FragmentState {
                     module: &module,
                     entry_point: Some(entry),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    compilation_options: mui_hal::PipelineCompilationOptions,
                     targets: &[Some(format.into())],
                 }),
                 multiview_mask: None,
@@ -144,7 +144,7 @@ impl Present {
     }
 }
 
-fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
+fn checked_size(device: &mui_hal::Device, size: [u32; 2]) -> Result<(), Error> {
     let max = device.limits().max_texture_dimension_2d;
     if size.contains(&0) || size.iter().any(|s| *s > max) {
         return Err(Error::Budget("target dimensions"));
@@ -153,24 +153,24 @@ fn checked_size(device: &wgpu::Device, size: [u32; 2]) -> Result<(), Error> {
 }
 
 impl Frame {
-    fn new(device: &wgpu::Device, present: &Present, size: [u32; 2]) -> Self {
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+    fn new(device: &mui_hal::Device, present: &Present, size: [u32; 2]) -> Self {
+        let texture = device.create_texture(&mui_hal::TextureDescriptor {
             label: Some("MUI frame"),
-            size: wgpu::Extent3d {
+            size: mui_hal::Extent3d {
                 width: size[0],
                 height: size[1],
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
+            dimension: mui_hal::TextureDimension::D2,
             format: FORMAT,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::COPY_DST,
+            usage: mui_hal::TextureUsages::RENDER_ATTACHMENT
+                | mui_hal::TextureUsages::TEXTURE_BINDING
+                | mui_hal::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
         let bind = Self::bind(device, present, &view);
         Self {
             texture,
@@ -179,13 +179,17 @@ impl Frame {
         }
     }
 
-    fn bind(device: &wgpu::Device, present: &Present, view: &wgpu::TextureView) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
+    fn bind(
+        device: &mui_hal::Device,
+        present: &Present,
+        view: &mui_hal::TextureView,
+    ) -> mui_hal::BindGroup {
+        device.create_bind_group(&mui_hal::BindGroupDescriptor {
             label: Some("MUI frame"),
             layout: &present.layout,
-            entries: &[wgpu::BindGroupEntry {
+            entries: &[mui_hal::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(view),
+                resource: mui_hal::BindingResource::TextureView(view),
             }],
         })
     }
@@ -195,9 +199,9 @@ impl GpuRenderer {
     /// A renderer drawing into views of `format` (a non-sRGB UNORM one),
     /// with a frame of `size` pixels and welds held to `budget`.
     pub async fn new(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
+        device: &mui_hal::Device,
+        queue: &mui_hal::Queue,
+        format: mui_hal::TextureFormat,
         size: [u32; 2],
         budget: Budget,
     ) -> Result<Self, Error> {
@@ -209,9 +213,9 @@ impl GpuRenderer {
     }
 
     pub(crate) async fn new_shared(
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        format: wgpu::TextureFormat,
+        device: &mui_hal::Device,
+        queue: &mui_hal::Queue,
+        format: mui_hal::TextureFormat,
         size: [u32; 2],
         budget: Budget,
         shared: Option<Shared>,
@@ -264,7 +268,7 @@ impl GpuRenderer {
         })
     }
 
-    pub(crate) fn set_surface_format(&mut self, format: wgpu::TextureFormat) {
+    pub(crate) fn set_surface_format(&mut self, format: mui_hal::TextureFormat) {
         if self.present.format == format {
             return;
         }
@@ -307,7 +311,7 @@ impl GpuRenderer {
     /// is sampled in place, never copied; call again after drawing into it,
     /// and the next render redraws what samples it even if the scene did not
     /// change.
-    pub fn set_texture(&mut self, key: u64, texture: &wgpu::Texture) {
+    pub fn set_texture(&mut self, key: u64, texture: &mui_hal::Texture) {
         self.quad.set_texture(key, texture);
         self.stale = true;
     }
@@ -365,7 +369,7 @@ impl GpuRenderer {
         &mut self,
         resolved: &ResolvedScene,
         xf: Affine,
-        target: &wgpu::TextureView,
+        target: &mui_hal::TextureView,
     ) -> Result<EffectStats, Error> {
         let result = self.frame(resolved, xf);
         self.finish(result, target)
@@ -379,7 +383,7 @@ impl GpuRenderer {
         &mut self,
         resolved: &ResolvedScene,
         xf: Affine,
-        target: &wgpu::TextureView,
+        target: &mui_hal::TextureView,
         overlay: impl FnOnce(&mut dyn Canvas),
     ) -> Result<EffectStats, Error> {
         let result = self.cpu_frame(resolved, xf, Some(overlay)).inspect(|_| {
@@ -392,7 +396,7 @@ impl GpuRenderer {
     fn finish(
         &mut self,
         result: Result<EffectStats, Error>,
-        target: &wgpu::TextureView,
+        target: &mui_hal::TextureView,
     ) -> Result<EffectStats, Error> {
         if result.is_err() {
             self.invalidate();
@@ -416,25 +420,25 @@ impl GpuRenderer {
     }
 
     /// The frame onto `target`: whole (cleared first), or only `rects`.
-    fn draw(&self, target: &wgpu::TextureView, rects: Option<&[[u32; 4]]>) {
+    fn draw(&self, target: &mui_hal::TextureView, rects: Option<&[[u32; 4]]>) {
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            .create_command_encoder(&mui_hal::CommandEncoderDescriptor {
                 label: Some("MUI present"),
             });
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&mui_hal::RenderPassDescriptor {
                 label: Some("MUI present"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(mui_hal::RenderPassColorAttachment {
                     view: target,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations {
+                    ops: mui_hal::Operations {
                         load: match rects {
-                            Some(_) => wgpu::LoadOp::Load,
-                            None => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            Some(_) => mui_hal::LoadOp::Load,
+                            None => mui_hal::LoadOp::Clear(mui_hal::Color::TRANSPARENT),
                         },
-                        store: wgpu::StoreOp::Store,
+                        store: mui_hal::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
@@ -572,19 +576,19 @@ impl GpuRenderer {
         let pixels = cpu.pixels();
         for &[x, y, w, h] in &rects {
             self.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
+                mui_hal::TexelCopyTextureInfo {
                     texture: &self.frame.texture,
                     mip_level: 0,
-                    origin: wgpu::Origin3d { x, y, z: 0 },
-                    aspect: wgpu::TextureAspect::All,
+                    origin: mui_hal::Origin3d { x, y, z: 0 },
+                    aspect: mui_hal::TextureAspect::All,
                 },
                 &pixels[(y as usize * size.0 as usize + x as usize) * 4..],
-                wgpu::TexelCopyBufferLayout {
+                mui_hal::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(size.0 * 4),
                     rows_per_image: None,
                 },
-                wgpu::Extent3d {
+                mui_hal::Extent3d {
                     width: w,
                     height: h,
                     depth_or_array_layers: 1,

@@ -12,25 +12,26 @@ pub const W: f64 = 320.;
 pub const H: f64 = 200.;
 pub const SCALES: [f64; 3] = [1., 1.5, 2.];
 
-pub fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
-    device_with(|_| wgpu::Limits::downlevel_webgl2_defaults())
+pub fn device() -> Option<(mui_hal::Device, mui_hal::Queue)> {
+    device_with(|_| mui_hal::Limits::downlevel_webgl2_defaults())
 }
 
 /// A device with the limits `limits` picks from the adapter's: the
 /// compute-shader `GpuRenderer` needs more than WebGL2 allows.
 pub fn device_with(
-    limits: impl FnOnce(wgpu::Limits) -> wgpu::Limits,
-) -> Option<(wgpu::Device, wgpu::Queue)> {
+    limits: impl FnOnce(mui_hal::Limits) -> mui_hal::Limits,
+) -> Option<(mui_hal::Device, mui_hal::Queue)> {
     pollster::block_on(async {
-        let adapter =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
-                .await
-                .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
-                .ok()?;
+        let adapter = mui_hal::Instance::new(
+            mui_hal::InstanceDescriptor::new_without_display_handle_from_env(),
+        )
+        .request_adapter(&mui_hal::RequestAdapterOptions::default())
+        .await
+        .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
+        .ok()?;
         eprintln!("adapter: {:?}", adapter.get_info());
         adapter
-            .request_device(&wgpu::DeviceDescriptor {
+            .request_device(&mui_hal::DeviceDescriptor {
                 required_limits: limits(adapter.limits()),
                 ..Default::default()
             })
@@ -41,24 +42,24 @@ pub fn device_with(
 }
 
 pub fn readback(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
+    device: &mui_hal::Device,
+    queue: &mui_hal::Queue,
+    texture: &mui_hal::Texture,
     size: [u32; 2],
 ) -> Vec<u8> {
     let stride = (size[0] * 4).next_multiple_of(256);
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+    let buffer = device.create_buffer(&mui_hal::BufferDescriptor {
         label: None,
         size: u64::from(stride) * u64::from(size[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        usage: mui_hal::BufferUsages::COPY_DST | mui_hal::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut encoder = device.create_command_encoder(&mui_hal::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
         texture.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
+        mui_hal::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
+            layout: mui_hal::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(stride),
                 rows_per_image: Some(size[1]),
@@ -68,11 +69,13 @@ pub fn readback(
     );
     queue.submit([encoder.finish()]);
     let (send, recv) = mpsc::sync_channel(1);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, move |r| {
-        let _ = send.send(r);
-    });
+    buffer
+        .slice(..)
+        .map_async(mui_hal::MapMode::Read, move |r| {
+            let _ = send.send(r);
+        });
     device
-        .poll(wgpu::PollType::wait_indefinitely())
+        .poll(mui_hal::PollType::wait_indefinitely())
         .expect("poll");
     recv.recv_timeout(Duration::from_secs(10))
         .expect("mapped")
@@ -124,8 +127,8 @@ pub const fn corners(max: u8, mean: f64) -> Limit {
 }
 
 pub struct Gpu {
-    pub device: wgpu::Device,
-    pub queue: wgpu::Queue,
+    pub device: mui_hal::Device,
+    pub queue: mui_hal::Queue,
     pub quad: QuadRenderer,
 }
 
@@ -145,21 +148,21 @@ pub fn try_gpu_pixels(
     transform: Affine,
     size: [u32; 2],
 ) -> Result<Vec<u8>, mui_vello::quad::Error> {
-    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+    let texture = gpu.device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: size[0],
             height: size[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
     gpu.quad
         .render(&gpu.device, &gpu.queue, paint, transform, &view, size)?;
     Ok(readback(&gpu.device, &gpu.queue, &texture, size))

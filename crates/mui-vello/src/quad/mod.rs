@@ -237,34 +237,34 @@ const STRIDE: u64 = (SLOTS * 16) as u64;
 /// reused, a glyph atlas texture and one texture per image; offscreen
 /// targets and their pipelines once a frame needs them.
 pub struct QuadRenderer {
-    pipeline: wgpu::RenderPipeline,
+    pipeline: mui_hal::RenderPipeline,
     /// The same pass unblended: it draws [`build::clear`] under a scissor.
-    clear: wgpu::RenderPipeline,
-    module: wgpu::ShaderModule,
-    layout: wgpu::PipelineLayout,
+    clear: mui_hal::RenderPipeline,
+    module: mui_hal::ShaderModule,
+    layout: mui_hal::PipelineLayout,
     /// Every pass's uniform slot, at dynamic offsets: see [`Slots`].
-    uniforms: wgpu::Buffer,
+    uniforms: mui_hal::Buffer,
     slots: Slots,
-    view_layout: wgpu::BindGroupLayout,
-    image_layout: wgpu::BindGroupLayout,
-    sampler: wgpu::Sampler,
-    bind: wgpu::BindGroup,
+    view_layout: mui_hal::BindGroupLayout,
+    image_layout: mui_hal::BindGroupLayout,
+    sampler: mui_hal::Sampler,
+    bind: mui_hal::BindGroup,
     /// A 1x1 texture: what an unbound texture slot holds.
-    blank: wgpu::TextureView,
+    blank: mui_hal::TextureView,
     /// Group 1 for a run that samples no texture.
-    no_image: wgpu::BindGroup,
-    atlas: wgpu::Texture,
-    paths: wgpu::Texture,
-    instances: wgpu::Buffer,
+    no_image: mui_hal::BindGroup,
+    atlas: mui_hal::Texture,
+    paths: mui_hal::Texture,
+    instances: mui_hal::Buffer,
     cpu: Instances,
-    groups: Vec<wgpu::BindGroup>,
+    groups: Vec<mui_hal::BindGroup>,
     offscreen: Option<Offscreen>,
     /// Host textures by key (see [`QuadRenderer::set_texture`]).
     hosts: FxHashMap<u64, Host>,
     /// Host textures set or removed since the last frame.
     touched: Vec<u64>,
     /// Each drawn weld texture's group, by allocation id.
-    welds: FxHashMap<u64, wgpu::BindGroup>,
+    welds: FxHashMap<u64, mui_hal::BindGroup>,
     /// Welds whose texture this frame drew anew, by key.
     redrawn: Vec<std::sync::Arc<str>>,
     frame: Frame,
@@ -275,29 +275,29 @@ pub struct QuadRenderer {
     /// refused rebuilds them.
     boxes: Vec<[f32; 4]>,
     /// Where every pipeline is built through, offscreen ones included.
-    cache: Option<wgpu::PipelineCache>,
+    cache: Option<mui_hal::PipelineCache>,
     /// A profiling hook: when set, the frame's first render pass writes its
     /// start and its last its end to queries 0 and 1 of this set (the device
     /// needs `TIMESTAMP_QUERY`).
-    pub timestamps: Option<wgpu::QuerySet>,
+    pub timestamps: Option<mui_hal::QuerySet>,
 }
 
 struct Host {
-    view: wgpu::TextureView,
-    group: Option<wgpu::BindGroup>,
+    view: mui_hal::TextureView,
+    group: Option<mui_hal::BindGroup>,
 }
 
 impl QuadRenderer {
-    pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+    pub fn new(device: &mui_hal::Device, format: mui_hal::TextureFormat) -> Self {
         Self::with_budgets(device, format, ATLAS_BUDGET, PATH_BUDGET)
     }
 
     /// [`QuadRenderer::new`] whose pipelines, offscreen ones included, are
     /// built through `cache` (a device with `PIPELINE_CACHE`).
     pub fn with_cache(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        cache: Option<&wgpu::PipelineCache>,
+        device: &mui_hal::Device,
+        format: mui_hal::TextureFormat,
+        cache: Option<&mui_hal::PipelineCache>,
     ) -> Self {
         Self::build(device, format, ATLAS_BUDGET, PATH_BUDGET, cache)
     }
@@ -308,8 +308,8 @@ impl QuadRenderer {
     /// than fits empties the atlas and rasterises again, and a glyph that
     /// still has no room is drawn from its outline.
     pub fn with_atlas_budget(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        device: &mui_hal::Device,
+        format: mui_hal::TextureFormat,
         budget: usize,
     ) -> Self {
         Self::with_budgets(device, format, budget, PATH_BUDGET)
@@ -321,8 +321,8 @@ impl QuadRenderer {
     /// when space runs short; a frame whose records do not fit empties the
     /// texture and builds them again.
     pub fn with_budgets(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        device: &mui_hal::Device,
+        format: mui_hal::TextureFormat,
         budget: usize,
         paths: usize,
     ) -> Self {
@@ -330,11 +330,11 @@ impl QuadRenderer {
     }
 
     fn build(
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
+        device: &mui_hal::Device,
+        format: mui_hal::TextureFormat,
         budget: usize,
         paths: usize,
-        cache: Option<&wgpu::PipelineCache>,
+        cache: Option<&mui_hal::PipelineCache>,
     ) -> Self {
         let limits = device.limits();
         let mut side = 1024.min(limits.max_texture_dimension_2d);
@@ -343,12 +343,12 @@ impl QuadRenderer {
         }
         let pages =
             (budget / (side * side) as usize).clamp(1, limits.max_texture_array_layers as usize);
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        let module = device.create_shader_module(mui_hal::ShaderModuleDescriptor {
             label: Some("mui quad"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: mui_hal::ShaderSource::Mui(mui_hal::ShaderId::Quad),
         });
         let (view_layout, image_layout) = gpu::layouts(device);
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        let layout = device.create_pipeline_layout(&mui_hal::PipelineLayoutDescriptor {
             label: Some("mui quad"),
             bind_group_layouts: &[Some(&view_layout), Some(&image_layout)],
             immediate_size: 0,
@@ -356,10 +356,10 @@ impl QuadRenderer {
         let clear = gpu::pipeline(device, &module, &layout, format, None, cache);
         let pipeline = gpu::pipeline(device, &module, &layout, format, Some(gpu::OVER), cache);
         let uniforms = gpu::uniforms(device, 4);
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        let sampler = device.create_sampler(&mui_hal::SamplerDescriptor {
             label: Some("mui quad image"),
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
+            mag_filter: mui_hal::FilterMode::Linear,
+            min_filter: mui_hal::FilterMode::Linear,
             ..Default::default()
         });
         let atlas = atlas_texture(device, u32::from(side as u16), 1);
@@ -373,7 +373,7 @@ impl QuadRenderer {
             &sampler,
         );
         let blank =
-            image_texture(device, 1, 1).create_view(&wgpu::TextureViewDescriptor::default());
+            image_texture(device, 1, 1).create_view(&mui_hal::TextureViewDescriptor::default());
         let no_image = image_group(device, &image_layout, &blank, &blank);
         let mut cpu = Instances::new(side as u16, pages);
         cpu.walk.max_image = limits.max_texture_dimension_2d;
@@ -434,8 +434,8 @@ impl QuadRenderer {
     /// in place, never copied; call again after drawing into it, so the
     /// next frame redraws what samples it. An image whose key is not set
     /// paints its solid stand-in.
-    pub fn set_texture(&mut self, key: u64, texture: &wgpu::Texture) {
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    pub fn set_texture(&mut self, key: u64, texture: &mui_hal::Texture) {
+        let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
         self.hosts.insert(key, Host { view, group: None });
         self.cpu
             .walk
@@ -467,11 +467,11 @@ impl QuadRenderer {
     /// only when something it shows changed.
     pub fn render(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &mui_hal::Device,
+        queue: &mui_hal::Queue,
         paint: &[Painted],
         transform: Affine,
-        target: &wgpu::TextureView,
+        target: &mui_hal::TextureView,
         size: [u32; 2],
     ) -> Result<(), Error> {
         self.draw(device, queue, paint, None, transform, target, size)
@@ -489,12 +489,12 @@ impl QuadRenderer {
     )]
     pub fn render_scene(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &mui_hal::Device,
+        queue: &mui_hal::Queue,
         scene: &ResolvedScene,
         welds: &mut WeldTextures,
         transform: Affine,
-        target: &wgpu::TextureView,
+        target: &mui_hal::TextureView,
         size: [u32; 2],
     ) -> Result<crate::effects::EffectStats, Error> {
         if size.contains(&0) || !transform.as_coeffs().iter().all(|v| v.is_finite()) {
@@ -511,7 +511,7 @@ impl QuadRenderer {
                 continue;
             }
             let encoder = encoder.get_or_insert_with(|| {
-                device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                device.create_command_encoder(&mui_hal::CommandEncoderDescriptor {
                     label: Some("mui quad welds"),
                 })
             });
@@ -580,12 +580,12 @@ impl QuadRenderer {
     )]
     fn draw(
         &mut self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        device: &mui_hal::Device,
+        queue: &mui_hal::Queue,
         paint: &[Painted],
         welds: Option<Welds>,
         transform: Affine,
-        target: &wgpu::TextureView,
+        target: &mui_hal::TextureView,
         size: [u32; 2],
     ) -> Result<(), Error> {
         if size.contains(&0) || !transform.as_coeffs().iter().all(|v| v.is_finite()) {
@@ -713,7 +713,7 @@ impl QuadRenderer {
         self.slots.bytes.clear();
         let [w, h] = size.map(|v| v as f32);
         self.slots.push([w, h, 0., 0., 0., 0., 0., 0.]);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        let mut encoder = device.create_command_encoder(&mui_hal::CommandEncoderDescriptor {
             label: Some("mui quad"),
         });
         let draw = Draw {
@@ -737,23 +737,23 @@ impl QuadRenderer {
         };
         if damage.is_none_or(|d| d.as_slice().iter().any(|r| r[2] > 0 && r[3] > 0)) {
             let first = draw.stamp.take().is_some();
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut pass = encoder.begin_render_pass(&mui_hal::RenderPassDescriptor {
                 label: Some("mui quad"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                color_attachments: &[Some(mui_hal::RenderPassColorAttachment {
                     view: target,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: wgpu::Operations {
+                    ops: mui_hal::Operations {
                         load: match damage {
-                            Some(_) => wgpu::LoadOp::Load,
-                            None => wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            Some(_) => mui_hal::LoadOp::Load,
+                            None => mui_hal::LoadOp::Clear(mui_hal::Color::TRANSPARENT),
                         },
-                        store: wgpu::StoreOp::Store,
+                        store: mui_hal::StoreOp::Store,
                     },
                 })],
                 depth_stencil_attachment: None,
                 timestamp_writes: self.timestamps.as_ref().map(|query_set| {
-                    wgpu::RenderPassTimestampWrites {
+                    mui_hal::RenderPassTimestampWrites {
                         query_set,
                         beginning_of_pass_write_index: first.then_some(0),
                         end_of_pass_write_index: Some(1),

@@ -22,9 +22,9 @@ pub const PRESENT_SHADER: &str = mui_shaders::PRESENT_WGSL;
 /// Run `create` (pipeline creation) one at a time per process on DX12, where
 /// concurrent shader compilation from several editors has faulted drivers;
 /// elsewhere it just runs.
-pub(crate) fn gate<T>(device: &wgpu::Device, create: impl FnOnce() -> T) -> T {
+pub(crate) fn gate<T>(device: &mui_hal::Device, create: impl FnOnce() -> T) -> T {
     static DX12: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let _serial = (device.adapter_info().backend == wgpu::Backend::Dx12).then(|| {
+    let _serial = (device.adapter_info().backend == mui_hal::Backend::Dx12).then(|| {
         DX12.lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     });

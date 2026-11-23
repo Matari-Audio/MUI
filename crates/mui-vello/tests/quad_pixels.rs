@@ -454,13 +454,15 @@ fn the_quad_pass_matches_vello_cpu() {
     let Some((device, queue)) = device() else {
         return;
     };
-    let quad = QuadRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
+    let quad = QuadRenderer::new(&device, mui_hal::TextureFormat::Rgba8Unorm);
     let mut gpu = Gpu {
         device,
         queue,
         quad,
     };
-    let scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = gpu
+        .device
+        .push_error_scope(mui_hal::ErrorFilter::Validation);
     let mut failures = Vec::new();
     let f = &mut failures;
     compare(&mut gpu, f, "square", TIGHT, square);
@@ -502,22 +504,22 @@ fn an_unsupported_entry_is_refused_by_index_and_reason() {
     scene.paint[at].path = std::sync::Arc::new(mui_geometry::Path {
         commands: vec![mui_geometry::PathCommand::LineTo(Point::new(1., 1.))],
     });
-    let mut quad = QuadRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    let mut quad = QuadRenderer::new(&device, mui_hal::TextureFormat::Rgba8Unorm);
+    let texture = device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: 8,
             height: 8,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
     let error = quad
         .render(
             &device,

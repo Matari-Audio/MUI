@@ -13,23 +13,23 @@ use mui_vello::kurbo::Affine;
 use mui_vello::quad::{ATLAS_BUDGET as ATLAS, QuadRenderer};
 use std::sync::Arc;
 
-const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const FORMAT: mui_hal::TextureFormat = mui_hal::TextureFormat::Rgba8Unorm;
 const SIZE: [u32; 2] = [W as u32, H as u32];
 
 struct Kept {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    device: mui_hal::Device,
+    queue: mui_hal::Queue,
     quad: QuadRenderer,
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
+    texture: mui_hal::Texture,
+    view: mui_hal::TextureView,
 }
 
 impl Kept {
-    fn new(quad: impl FnOnce(&wgpu::Device) -> QuadRenderer) -> Option<Self> {
+    fn new(quad: impl FnOnce(&mui_hal::Device) -> QuadRenderer) -> Option<Self> {
         let (device, queue) = device()?;
         let quad = quad(&device);
         let texture = target(&device, SIZE);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
         Some(Self {
             device,
             queue,
@@ -44,7 +44,7 @@ impl Kept {
         self.texture = target(&self.device, size);
         self.view = self
             .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            .create_view(&mui_hal::TextureViewDescriptor::default());
     }
 
     /// `paint` on the kept target, checked against a whole redraw.
@@ -55,7 +55,7 @@ impl Kept {
             .expect("quad render");
         let got = readback(&self.device, &self.queue, &self.texture, size);
         let fresh = target(&self.device, size);
-        let view = fresh.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = fresh.create_view(&mui_hal::TextureViewDescriptor::default());
         QuadRenderer::new(&self.device, FORMAT)
             .render(&self.device, &self.queue, paint, xf, &view, size)
             .expect("quad render");
@@ -69,19 +69,19 @@ impl Kept {
     }
 }
 
-fn target(device: &wgpu::Device, size: [u32; 2]) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+fn target(device: &mui_hal::Device, size: [u32; 2]) -> mui_hal::Texture {
+    device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: size[0],
             height: size[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
+        dimension: mui_hal::TextureDimension::D2,
         format: FORMAT,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }
@@ -147,7 +147,7 @@ fn a_kept_target_matches_a_whole_redraw_after_every_change() {
     let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
         return;
     };
-    let scope = k.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = k.device.push_error_scope(mui_hal::ErrorFilter::Validation);
     let id = Affine::IDENTITY;
     let img = photo(3);
     let base = cards("Cutoff 440 Hz", 0.8, Some(img.clone()));
@@ -321,7 +321,7 @@ fn a_kept_target_matches_a_whole_redraw_after_path_changes() {
     let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
         return;
     };
-    let scope = k.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = k.device.push_error_scope(mui_hal::ErrorFilter::Validation);
     let id = Affine::IDENTITY;
     let m = memos();
     let mut amounts: Vec<f64> = (0..8).map(|i| f64::from(i) / 8.).collect();
@@ -436,7 +436,7 @@ fn a_kept_target_matches_a_whole_redraw_under_layers_and_backdrops() {
     let Some(mut k) = Kept::new(|d| QuadRenderer::new(d, FORMAT)) else {
         return;
     };
-    let scope = k.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = k.device.push_error_scope(mui_hal::ErrorFilter::Validation);
     let id = Affine::IDENTITY;
     k.check("modal first", &modal(0.5, 0.5, 0.9, 0.3).paint, id);
     let first = k.quad.frame();
@@ -496,25 +496,25 @@ fn a_kept_target_matches_a_whole_redraw_as_textures_change() {
         pollster::block_on(WeldTextures::new(&k.device, &k.queue, Budget::default())).expect("pool")
     };
     let mut welds = pool(&k);
-    let host = k.device.create_texture(&wgpu::TextureDescriptor {
+    let host = k.device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: 4,
             height: 4,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
+        dimension: mui_hal::TextureDimension::D2,
         format: FORMAT,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        usage: mui_hal::TextureUsages::TEXTURE_BINDING | mui_hal::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let fill = |k: &Kept, rgba: [u8; 4]| {
         k.queue.write_texture(
             host.as_image_copy(),
             &rgba.repeat(16),
-            wgpu::TexelCopyBufferLayout {
+            mui_hal::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(16),
                 rows_per_image: None,
@@ -545,7 +545,7 @@ fn a_kept_target_matches_a_whole_redraw_as_textures_change() {
             .expect("quad render");
         let got = readback(&k.device, &k.queue, &k.texture, SIZE);
         let fresh = target(&k.device, SIZE);
-        let view = fresh.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = fresh.create_view(&mui_hal::TextureViewDescriptor::default());
         let mut quad = QuadRenderer::new(&k.device, FORMAT);
         quad.set_texture(7, &host);
         quad.render_scene(&k.device, &k.queue, scene, &mut pool(k), id, &view, SIZE)

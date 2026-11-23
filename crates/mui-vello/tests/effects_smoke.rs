@@ -12,39 +12,40 @@ const SIZE: [u32; 2] = [320, 200];
 /// Far enough right that nothing lands on the target.
 const AWAY: Affine = Affine::new([1., 0., 0., 1., 5000., 0.]);
 
-fn device() -> Option<(wgpu::Device, wgpu::Queue)> {
+fn device() -> Option<(mui_hal::Device, mui_hal::Queue)> {
     pollster::block_on(async {
-        let adapter =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
-                .request_adapter(&wgpu::RequestAdapterOptions::default())
-                .await
-                .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
-                .ok()?;
+        let adapter = mui_hal::Instance::new(
+            mui_hal::InstanceDescriptor::new_without_display_handle_from_env(),
+        )
+        .request_adapter(&mui_hal::RequestAdapterOptions::default())
+        .await
+        .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
+        .ok()?;
         adapter
-            .request_device(&wgpu::DeviceDescriptor::default())
+            .request_device(&mui_hal::DeviceDescriptor::default())
             .await
             .map_err(|e| eprintln!("SKIPPED: no wgpu device ({e})"))
             .ok()
     })
 }
 
-fn target(device: &wgpu::Device) -> wgpu::TextureView {
+fn target(device: &mui_hal::Device) -> mui_hal::TextureView {
     device
-        .create_texture(&wgpu::TextureDescriptor {
+        .create_texture(&mui_hal::TextureDescriptor {
             label: None,
-            size: wgpu::Extent3d {
+            size: mui_hal::Extent3d {
                 width: SIZE[0],
                 height: SIZE[1],
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
             sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            dimension: mui_hal::TextureDimension::D2,
+            format: mui_hal::TextureFormat::Rgba8Unorm,
+            usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         })
-        .create_view(&wgpu::TextureViewDescriptor::default())
+        .create_view(&mui_hal::TextureViewDescriptor::default())
 }
 
 fn welded() -> ResolvedScene {
@@ -68,8 +69,8 @@ fn pictured(v: u8) -> (ResolvedScene, std::sync::Weak<[u8]>) {
     (scene, buffer)
 }
 
-async fn hybrid(device: &wgpu::Device, queue: &wgpu::Queue) -> GpuRenderer {
-    let format = wgpu::TextureFormat::Rgba8Unorm;
+async fn hybrid(device: &mui_hal::Device, queue: &mui_hal::Queue) -> GpuRenderer {
+    let format = mui_hal::TextureFormat::Rgba8Unorm;
     GpuRenderer::new(device, queue, format, SIZE, Budget::default())
         .await
         .unwrap()
@@ -140,38 +141,38 @@ fn a_static_frame_neither_encodes_nor_renders() {
     assert_eq!((moved.encoded_scenes, moved.renders), (0, 0));
 }
 
-fn readable(device: &wgpu::Device) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+fn readable(device: &mui_hal::Device) -> mui_hal::Texture {
+    device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: SIZE[0],
             height: SIZE[1],
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT | mui_hal::TextureUsages::COPY_SRC,
         view_formats: &[],
     })
 }
 
 /// The target's pixels, test-side only: the renderer never reads back.
-fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<u8> {
+fn pixels(device: &mui_hal::Device, queue: &mui_hal::Queue, t: &mui_hal::Texture) -> Vec<u8> {
     let row = SIZE[0] * 4;
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+    let buffer = device.create_buffer(&mui_hal::BufferDescriptor {
         label: None,
         size: u64::from(row * SIZE[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        usage: mui_hal::BufferUsages::COPY_DST | mui_hal::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    let mut encoder = device.create_command_encoder(&mui_hal::CommandEncoderDescriptor::default());
     encoder.copy_texture_to_buffer(
         t.as_image_copy(),
-        wgpu::TexelCopyBufferInfo {
+        mui_hal::TexelCopyBufferInfo {
             buffer: &buffer,
-            layout: wgpu::TexelCopyBufferLayout {
+            layout: mui_hal::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(row),
                 rows_per_image: None,
@@ -180,8 +181,8 @@ fn pixels(device: &wgpu::Device, queue: &wgpu::Queue, t: &wgpu::Texture) -> Vec<
         t.size(),
     );
     queue.submit([encoder.finish()]);
-    buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-    device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+    buffer.slice(..).map_async(mui_hal::MapMode::Read, |_| {});
+    device.poll(mui_hal::PollType::wait_indefinitely()).unwrap();
 
     buffer.slice(..).get_mapped_range().unwrap().to_vec()
 }
@@ -200,27 +201,27 @@ fn a_host_texture_paints_and_refreshes_without_a_new_scene() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
-    let host = device.create_texture(&wgpu::TextureDescriptor {
+    let host = device.create_texture(&mui_hal::TextureDescriptor {
         label: None,
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: 4,
             height: 4,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::TEXTURE_BINDING | mui_hal::TextureUsages::COPY_DST,
         view_formats: &[],
     });
     let fill = |rgba: [u8; 4]| {
         queue.write_texture(
             host.as_image_copy(),
             &rgba.repeat(16),
-            wgpu::TexelCopyBufferLayout {
+            mui_hal::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(16),
                 rows_per_image: None,
@@ -258,7 +259,7 @@ fn a_backdrop_blurs_the_edge_under_it() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let half = |c: Color| block(160., 200.).fill(Fill::Color(c));
     let root = stack![
@@ -285,7 +286,7 @@ fn backdrop_blur_strength_tracks_one_and_ten_points() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let scene = |sigma| {
         let half = |c: Color| block(160., 200.).fill(Fill::Color(c));
@@ -314,7 +315,7 @@ fn a_custom_outline_shadow_blurs_on_the_gpu() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let diamond = |s: Size| {
         let p = mui_geometry::Point::new;
@@ -436,7 +437,7 @@ fn damaged_at(
 ) -> Option<(Vec<u8>, Vec<u8>, mui_vello::effects::EffectStats)> {
     let (device, queue) = device()?;
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     r.render(before, xf, &view).unwrap();
     let stats = r.render(after, xf, &view).unwrap();
@@ -635,7 +636,7 @@ fn big_changes_the_first_frame_and_a_resize_render_everything() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let a = board(None, false, 0.6, Role::Background);
     let first = r.render(&a, Affine::IDENTITY, &view).unwrap();
@@ -730,7 +731,7 @@ fn the_present_writes_premultiplied_or_straight_alpha() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let root = block(320., 200.).fill(Fill::Color(Color::srgba(1., 0., 0., 0.5)));
     let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
@@ -755,7 +756,7 @@ fn past_the_frame_the_present_writes_clear() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let root = block(320., 200.).fill(Fill::Color(Color::srgb(1., 0., 0.)));
     let scene = resolve(&SceneSpec::new(root).offered(Size::new(320., 200.))).unwrap();
@@ -777,7 +778,7 @@ fn a_backdrop_over_nothing_stays_translucent() {
         return;
     };
     let out = readable(&device);
-    let view = out.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = out.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut r = pollster::block_on(hybrid(&device, &queue));
     let root = block(320., 200.)
         .fill(Fill::Color(Color::srgba(0., 0., 1., 0.5)))
@@ -869,7 +870,7 @@ fn non_apple_bitmap_glyph_bearings_match_cpu_and_gpu() {
     };
     eprintln!("bitmap regression adapter: {:?}", device.adapter_info());
     let output = readable(&device);
-    let view = output.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = output.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut gpu = pollster::block_on(hybrid(&device, &queue));
     gpu.render(&scene, Affine::IDENTITY, &view).unwrap();
     let readback = pixels(&device, &queue, &output);
@@ -932,8 +933,8 @@ fn bounded_uniform_morph_reuses_encoding_and_matches_a_fresh_frame() {
         let mut scene = bounded_weld(Role::Primary, 32.);
         let output = readable(&device);
         let reference = readable(&device);
-        let output_view = output.create_view(&wgpu::TextureViewDescriptor::default());
-        let reference_view = reference.create_view(&wgpu::TextureViewDescriptor::default());
+        let output_view = output.create_view(&mui_hal::TextureViewDescriptor::default());
+        let reference_view = reference.create_view(&mui_hal::TextureViewDescriptor::default());
         let mut retained = pollster::block_on(hybrid(&device, &queue));
         let mut fresh = pollster::block_on(hybrid(&device, &queue));
         let xf = Affine::scale(scale);

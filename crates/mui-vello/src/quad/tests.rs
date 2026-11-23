@@ -5,7 +5,7 @@ use mui_scene::prelude::*;
 /// variables. The instance is sized against both.
 #[test]
 fn the_instance_fits_webgl2_limits() {
-    let limits = wgpu::Limits::downlevel_webgl2_defaults();
+    let limits = mui_hal::Limits::downlevel_webgl2_defaults();
     assert!(SLOTS as u32 <= limits.max_vertex_attributes);
     assert!(SLOTS as u32 <= limits.max_inter_stage_shader_variables);
 }

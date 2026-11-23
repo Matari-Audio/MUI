@@ -13,7 +13,10 @@ reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hick
 # The GPU renderer (`effects::GpuRenderer`, `host`): the instanced SDF quad
 # pass, with no compute shaders and no storage buffers. `vello_cpu` rasterises
 # glyph masks for its atlas and the frames the pass refuses.
-gpu-quad = ["cpu", "wgpu/wgsl", "dep:pollster", "dep:mui-shaders"]
+gpu-quad = ["cpu", "dep:pollster", "dep:mui-shaders"]
+# Also open devices through wgpu (`mui-hal`'s passthrough): media, BUFFR and
+# the web, which share the device with their own wgpu work.
+wgpu = ["mui-hal/wgpu"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
@@ -30,9 +33,6 @@ mui-scene.workspace = true
 mui-weld.workspace = true
 mui-geometry.workspace = true
 rustc-hash.workspace = true
-# No wgpu backend features: a plugin renders into the device its host wrapper
-# already created, so this crate must not choose the backend. Hosts turn on
-# `wgpu_default` (desktop) or `webgl` (browser) themselves.
 # `host` opens and, after a loss, reopens a device from a frame callback.
 pollster = { workspace = true, optional = true }
 # `Glyph` is the one glyph type `vello_cpu` does not re-export, so it comes
@@ -40,8 +40,8 @@ pollster = { workspace = true, optional = true }
 glifo = { version = "0.4", path = "../../vendor/glifo", default-features = false, optional = true }
 # kurbo and peniko reach us through vello_common so the types cannot version-skew.
 vello_common = { version = "0.3", default-features = false, features = ["std"] }
-# Types only (`Device`, `Queue`) for the image atlas upload; still no backend.
-wgpu.workspace = true
+# The GPU HAL: native Vulkan on Linux, wgpu (feature `wgpu`) elsewhere.
+mui-hal.workspace = true
 vello_cpu = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -51,10 +51,13 @@ epaint_default_fonts.workspace = true
 mui-text.workspace = true
 ttf-inter.workspace = true
 png.workspace = true
-# The example builds its own headless device.
-wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster.workspace = true
 mui.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+# A/B runs through the wgpu passthrough (`--features wgpu`, MUI_HAL_BACKEND=wgpu)
+# need a wgpu backend to open.
+wgpu = { workspace = true, features = ["vulkan"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Pin only: safe nonblocking report cancellation requires keeping this native
@@ -95,6 +98,11 @@ workspace = true
 # this feature. The shared GPU session needs it to compile; spawning its
 # initializer fails on wasm and the caller takes the recorded failure path.
 wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
+mui-hal = { workspace = true, features = ["wgpu"] }
+
+[target.'cfg(not(any(target_os = "linux", target_arch = "wasm32")))'.dependencies]
+# No native backend here yet (Metal and D3D11 are to come): wgpu covers it.
+mui-hal = { workspace = true, features = ["wgpu"] }
 
 [target.'cfg(all(windows, not(target_arch = "aarch64"), target_env = "msvc"))'.dependencies]
 # Not used directly: pins wgpu's static-dxc backend for every downstream lock.

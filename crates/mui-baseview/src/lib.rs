@@ -1731,51 +1731,12 @@ fn log<V: View>(shared: &Mutex<Shared<V>>, line: &str) {
 // Native tests explicitly request the synchronous GPU lane. Production windows
 // use GpuInit only, after a successful CPU frame.
 #[cfg(all(test, target_os = "linux"))]
-mod test_display {
-    use raw_window_handle::{DisplayHandle, HandleError, HasDisplayHandle, RawDisplayHandle};
-
-    /// The window's X connection, retained for a synchronous instance. GL
-    /// (EGL) needs the display at instance creation; Vulkan does not.
-    #[derive(Debug)]
-    pub struct Display {
-        raw: RawDisplayHandle,
-        _owner: baseview::PlatformHandle,
-    }
-    impl Display {
-        pub fn new(window: &baseview::WindowContext) -> Result<Self, HandleError> {
-            // The surface takes its display from this same handle; wgpu
-            // rejects a surface whose display differs from the instance's.
-            let owner = window.platform_handle();
-            Ok(Self {
-                raw: owner.display_handle()?.as_raw(),
-                _owner: owner,
-            })
-        }
-    }
-    // SAFETY: PlatformHandle retains the same thread-safe X11 connection.
-    #[expect(unsafe_code, reason = "retained thread-safe X11 connection")]
-    unsafe impl Send for Display {}
-    // SAFETY: as above.
-    #[expect(unsafe_code, reason = "retained thread-safe X11 connection")]
-    unsafe impl Sync for Display {}
-    impl HasDisplayHandle for Display {
-        #[expect(unsafe_code, reason = "borrows the retained display connection")]
-        fn display_handle(&self) -> Result<DisplayHandle<'_>, HandleError> {
-            // SAFETY: _owner keeps the connection behind raw alive.
-            Ok(unsafe { DisplayHandle::borrow_raw(self.raw) })
-        }
-    }
-}
-
-#[cfg(all(test, target_os = "linux"))]
 fn open_gpu(window: &WindowContext, size: (u32, u32)) -> Result<Host, String> {
     Host::open_native(
         |backends| {
-            let display = test_display::Display::new(window).map_err(|e| e.to_string())?;
-            let mut descriptor =
-                mui::vello::host::instance_descriptor().with_display_handle(Box::new(display));
+            let mut descriptor = mui::vello::host::instance_descriptor();
             descriptor.backends = backends;
-            let instance = wgpu::Instance::new(descriptor);
+            let instance = mui_hal::Instance::new(descriptor);
             let (surface, _) = surface::create(
                 &instance,
                 window.platform_handle(),

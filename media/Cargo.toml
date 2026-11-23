@@ -26,6 +26,7 @@ mui-geometry = { path = "../crates/mui-geometry" }
 mui-scene = { path = "../crates/mui-scene" }
 mui-text = { path = "../crates/mui-text" }
 mui-vello = { path = "../crates/mui-vello" }
+mui-hal = { path = "../crates/mui-hal" }
 # Media crates.
 mui-stage = { path = "mui-stage" }
 

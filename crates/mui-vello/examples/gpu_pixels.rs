@@ -15,6 +15,7 @@ fn main() -> gpu_support::Result<()> {
 async fn run() -> gpu_support::Result<()> {
     let (info, device, queue) = gpu_support::device().await?;
     println!("ADAPTER {info:?}");
+    #[cfg(any(feature = "wgpu", not(target_os = "linux")))]
     println!(
         "COMPILER {:?}",
         mui_vello::host::instance_descriptor()
@@ -28,7 +29,7 @@ async fn run() -> gpu_support::Result<()> {
             .unwrap_or_else(|| "gpu-pixels".into()),
     );
     std::fs::create_dir_all(&dir)?;
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let scope = device.push_error_scope(mui_hal::ErrorFilter::Validation);
     let mut failures = Vec::new();
     for scale in [1., 1.5, 2.] {
         let size = [
@@ -62,12 +63,12 @@ async fn run() -> gpu_support::Result<()> {
             .fill(Color::srgb(0.04, 0.06, 0.08)),
         ))?;
         let texture = gpu_support::target(&device, size);
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
         eprintln!("STAGE renderer_begin scale={scale}");
         let mut gpu = GpuRenderer::new(
             &device,
             &queue,
-            wgpu::TextureFormat::Rgba8Unorm,
+            mui_hal::TextureFormat::Rgba8Unorm,
             size,
             Budget::default(),
         )
@@ -77,7 +78,7 @@ async fn run() -> gpu_support::Result<()> {
         let _bgra = GpuRenderer::new(
             &device,
             &queue,
-            wgpu::TextureFormat::Bgra8Unorm,
+            mui_hal::TextureFormat::Bgra8Unorm,
             size,
             Budget::default(),
         )
@@ -91,7 +92,7 @@ async fn run() -> gpu_support::Result<()> {
             failures.push(e.to_string());
         }
     }
-    device.poll(wgpu::PollType::wait_indefinitely())?;
+    device.poll(mui_hal::PollType::wait_indefinitely())?;
     if let Some(error) = scope.pop().await {
         return Err(error.to_string().into());
     }
@@ -107,7 +108,7 @@ fn compare(
     size: [u32; 2],
     actual: &[u8],
     reference: &[u8],
-    backend: wgpu::Backend,
+    backend: mui_hal::Backend,
 ) -> gpu_support::Result<()> {
     // 8-bit channel tolerances, one set for every backend: Vulkan (RADV),
     // Metal and DX12 measured the same 219 pixels over 4 levels, every one
@@ -117,9 +118,10 @@ fn compare(
     // limits sit just above. All pixels participate; the mean keeps
     // widespread small errors from hiding behind the corner maximum.
     let (maximum, mean_limit) = match backend {
-        wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal | wgpu::Backend::Gl => {
-            (60, 0.03)
-        }
+        mui_hal::Backend::Vulkan
+        | mui_hal::Backend::Dx12
+        | mui_hal::Backend::Metal
+        | mui_hal::Backend::Gl => (60, 0.03),
         other => return Err(format!("unqualified pixel backend {other:?}").into()),
     };
     let diff: Vec<u8> = actual

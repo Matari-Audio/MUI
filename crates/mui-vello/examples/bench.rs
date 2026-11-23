@@ -269,23 +269,23 @@ fn main() {
 }
 
 /// The retained GPU renderer. `None` when there is no adapter.
-async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
+async fn gpu() -> Option<(mui_hal::AdapterInfo, Vec<Row>)> {
     let font = epaint_default_fonts::HACK_REGULAR;
     // The cold frame case resets UI state, not the device or its pipelines.
     // Report startup separately so editor-open stalls are not hidden by warmup.
     let startup = Instant::now();
     let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        mui_hal::Instance::new(mui_hal::InstanceDescriptor::new_without_display_handle_from_env());
     let instance_ms = since(startup);
     let start = Instant::now();
     let adapter = instance
-        .request_adapter(&wgpu::RequestAdapterOptions::default())
+        .request_adapter(&mui_hal::RequestAdapterOptions::default())
         .await
         .ok()?;
     let adapter_ms = since(start);
     let start = Instant::now();
     let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
+        .request_device(&mui_hal::DeviceDescriptor {
             // Bench on everything the adapter offers, as a desktop host would.
             required_limits: adapter.limits(),
             ..Default::default()
@@ -294,21 +294,21 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
         .ok()?;
     let device_ms = since(start);
     let start = Instant::now();
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
+    let texture = device.create_texture(&mui_hal::TextureDescriptor {
         label: Some("bench target"),
-        size: wgpu::Extent3d {
+        size: mui_hal::Extent3d {
             width: W.into(),
             height: H.into(),
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
         sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8Unorm,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        dimension: mui_hal::TextureDimension::D2,
+        format: mui_hal::TextureFormat::Rgba8Unorm,
+        usage: mui_hal::TextureUsages::RENDER_ATTACHMENT,
         view_formats: &[],
     });
-    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let view = texture.create_view(&mui_hal::TextureViewDescriptor::default());
     let mut renderer = mui_vello::effects::GpuRenderer::new(
         &device,
         &queue,
@@ -339,7 +339,7 @@ async fn gpu() -> Option<(wgpu::AdapterInfo, Vec<Row>)> {
             let encode = since(start);
             let start = Instant::now();
             device
-                .poll(wgpu::PollType::wait_indefinitely())
+                .poll(mui_hal::PollType::wait_indefinitely())
                 .expect("poll");
             (encode, since(start))
         }));

@@ -404,8 +404,17 @@ impl GpuView {
             .await
             .map_err(|e| e.to_string())?;
         let caps = surface.get_capabilities(&adapter);
-        let format =
-            mui_vello::host::surface_format(&caps.formats).ok_or("no non-sRGB canvas format")?;
+        let format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|f| {
+                matches!(
+                    f,
+                    wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+                )
+            })
+            .ok_or("no non-sRGB canvas format")?;
         let config = wgpu::SurfaceConfiguration {
             format,
             view_formats: Vec::new(),

@@ -17,7 +17,9 @@ backends = ["wgpu/vulkan", "wgpu/gles", "wgpu/metal", "wgpu/dx12"]
 mui-scene.workspace = true
 mui-geometry.workspace = true
 mui-text.workspace = true
-mui-vello = { workspace = true, features = ["gpu-quad"] }
+mui-vello = { workspace = true, features = ["gpu-quad", "wgpu"] }
+# Its own wgpu device, wrapped for mui-vello's layers.
+mui-hal = { workspace = true, features = ["wgpu"] }
 wgpu = { workspace = true, features = ["wgsl"] }
 pollster.workspace = true
 bytemuck = "1"

@@ -1,0 +1,45 @@
+[package]
+name = "mui-hal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "MUI's owned render-only GPU HAL: Vulkan (ash), with an opt-in wgpu passthrough"
+
+[features]
+default = []
+# Passthrough backend for web/wasm, media and BUFFR, and for macOS/Windows
+# plugin builds until the Metal and D3D11 backends land.
+wgpu = ["dep:wgpu"]
+# Open every device through wgpu, never natively: for a plugin that shares
+# the renderer's device with its own wgpu work (BUFFR's compute). Per build,
+# unlike MUI_HAL_BACKEND, so other plugins in the same process keep Vulkan.
+wgpu-only = ["wgpu"]
+
+[dependencies]
+bitflags = "2"
+mui-shaders.workspace = true
+raw-window-handle = "0.6"
+wgpu = { workspace = true, optional = true, features = ["wgsl"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
+mui-present.workspace = true
+
+# The passthrough's native backend per target, so `wgpu` alone works
+# (Linux users of it enable `vulkan` themselves; plugins there never do).
+[target.'cfg(target_os = "macos")'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["metal"] }
+
+[target.'cfg(windows)'.dependencies]
+wgpu = { workspace = true, optional = true, features = ["dx12"] }
+
+[dev-dependencies]
+pollster.workspace = true
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libc = "0.2"
+wgpu = { workspace = true, features = ["wgsl", "vulkan"] }
+
+[lints]
+workspace = true

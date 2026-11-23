@@ -1541,18 +1541,26 @@ impl Stage {
             view(&self.layer_target(id, [w, h], wgpu::TextureFormat::Rgba8Unorm, u32::MAX)?);
         let renderer = match &mut self.renderer {
             Some(r) => r,
-            none => none.insert(pollster::block_on(GpuRenderer::new(
-                &self.device,
-                &self.queue,
-                wgpu::TextureFormat::Rgba8Unorm,
-                [1, 1],
-                Budget::default(),
-            ))?),
+            none => {
+                let (device, queue) =
+                    mui_hal::Device::from_wgpu(self.device.clone(), self.queue.clone());
+                none.insert(pollster::block_on(GpuRenderer::new(
+                    &device,
+                    &queue,
+                    mui_hal::TextureFormat::Rgba8Unorm,
+                    [1, 1],
+                    Budget::default(),
+                ))?)
+            }
         };
         // Shared across layers: switching layers re-encodes (damage against
         // the last layer drawn), which a layer call does anyway.
         renderer.resize([w, h])?;
-        renderer.render(scene, Affine::scale(supersample), &target)?;
+        renderer.render(
+            scene,
+            Affine::scale(supersample),
+            &mui_hal::TextureView::from_wgpu(target),
+        )?;
         self.layer_done(id)
     }
 

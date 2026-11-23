@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(crate) struct Cache {
-    pub cache: wgpu::PipelineCache,
+    pub cache: mui_hal::PipelineCache,
     path: Option<PathBuf>,
 }
 
@@ -31,11 +31,14 @@ fn decode(bytes: &[u8]) -> Option<&[u8]> {
     (checksum(data) == u64::from_le_bytes(header.try_into().ok()?)).then_some(data)
 }
 
-pub(crate) fn load(device: &wgpu::Device) -> Option<Cache> {
-    if !device.features().contains(wgpu::Features::PIPELINE_CACHE) {
+pub(crate) fn load(device: &mui_hal::Device) -> Option<Cache> {
+    if !device
+        .features()
+        .contains(mui_hal::Features::PIPELINE_CACHE)
+    {
         return None;
     }
-    let key = wgpu::util::pipeline_cache_key(&device.adapter_info())?;
+    let key = mui_hal::util::pipeline_cache_key(&device.adapter_info())?;
     let path = directory().map(|p| {
         p.join(format!(
             "{key}-wgpu30-quad1-mui{}.bin",
@@ -56,7 +59,7 @@ pub(crate) fn load(device: &wgpu::Device) -> Option<Cache> {
     // starts an empty cache. This directory must not contain untrusted imports.
     #[expect(unsafe_code, reason = "wgpu's persisted pipeline-cache API is unsafe")]
     let cache = unsafe {
-        device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+        device.create_pipeline_cache(&mui_hal::PipelineCacheDescriptor {
             label: Some("MUI pipeline cache"),
             data,
             fallback: true,

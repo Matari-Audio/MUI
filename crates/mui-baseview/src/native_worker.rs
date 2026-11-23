@@ -234,7 +234,7 @@ enum Command {
     Invalidate,
     /// The window thread's surface for the worker to present to, made from
     /// the instance the worker asked with; `None` if it could not be made.
-    Surface(Option<wgpu::Surface<'static>>),
+    Surface(Option<mui_hal::Surface<'static>>),
     Stop,
 }
 struct Output {
@@ -257,7 +257,7 @@ struct Output {
     demand: baseview::FrameDemand,
     drag: Option<(u64, u64)>,
     /// Make a surface on the window from this instance and send it back.
-    surface: Option<wgpu::Instance>,
+    surface: Option<mui_hal::Instance>,
     /// The worker presents to the window itself: no patches, no blit, and
     /// an expose is a repaint there.
     direct: bool,
@@ -882,7 +882,7 @@ fn worker_with_mode<V: View>(
     // targets read back to the window thread only where a direct surface is
     // unavailable or asked against (`MUI_PRESENT=readback`).
     let mut direct = None::<Host>;
-    let mut surface = None::<wgpu::Surface<'static>>;
+    let mut surface = None::<mui_hal::Surface<'static>>;
     let mut asked = false;
     let direct_wanted = presents_directly();
     let mut gpu = None::<Offscreen>;

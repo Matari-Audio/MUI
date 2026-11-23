@@ -9,7 +9,7 @@ fn wgpu_backend_env_reaches_the_instance() {
     if std::env::var_os("MUI_BACKEND_ENV_CHILD").is_some() {
         assert_eq!(
             mui_vello::host::instance_descriptor().backends,
-            wgpu::Backends::DX12
+            mui_hal::Backends::DX12
         );
         return;
     }

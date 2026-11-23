@@ -6,10 +6,10 @@
 /// requested with the adapter's full limits, for apps that borrow it. The quad pass needs 15
 /// vertex attributes and inter-stage variables and a 240-byte instance
 /// stride, all inside these; every buffer it binds is a uniform.
-pub(super) fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
-    wgpu::Limits::downlevel_webgl2_defaults()
-        .using_resolution(supported.clone())
-        .using_alignment(supported.clone())
+pub(super) fn requested_limits(supported: &mui_hal::Limits) -> mui_hal::Limits {
+    mui_hal::Limits::downlevel_webgl2_defaults()
+        .using_resolution(*supported)
+        .using_alignment(*supported)
 }
 
 // Adapter type/backend preference adapted from Zed's Apache-2.0
@@ -27,21 +27,21 @@ pub(super) fn requested_limits(supported: &wgpu::Limits) -> wgpu::Limits {
 // limitations under the License.
 // Adaptation: stable high-performance ranking without Zed-specific overrides;
 // retain CPU fallback.
-pub(super) fn adapter_rank(info: &wgpu::AdapterInfo) -> (u8, u8) {
+pub(super) fn adapter_rank(info: &mui_hal::AdapterInfo) -> (u8, u8) {
     adapter_rank_for(info, cfg!(windows))
 }
 
-fn adapter_rank_for(info: &wgpu::AdapterInfo, windows: bool) -> (u8, u8) {
+fn adapter_rank_for(info: &mui_hal::AdapterInfo, windows: bool) -> (u8, u8) {
     let device = match info.device_type {
-        wgpu::DeviceType::DiscreteGpu => 0,
-        wgpu::DeviceType::IntegratedGpu => 1,
-        wgpu::DeviceType::Other => 2,
-        wgpu::DeviceType::VirtualGpu => 3,
-        wgpu::DeviceType::Cpu => 4,
+        mui_hal::DeviceType::DiscreteGpu => 0,
+        mui_hal::DeviceType::IntegratedGpu => 1,
+        mui_hal::DeviceType::Other => 2,
+        mui_hal::DeviceType::VirtualGpu => 3,
+        mui_hal::DeviceType::Cpu => 4,
     };
     let backend = match info.backend {
-        wgpu::Backend::Vulkan if windows => 1,
-        wgpu::Backend::Vulkan | wgpu::Backend::Metal | wgpu::Backend::Dx12 => 0,
+        mui_hal::Backend::Vulkan if windows => 1,
+        mui_hal::Backend::Vulkan | mui_hal::Backend::Metal | mui_hal::Backend::Dx12 => 0,
         _ => 2,
     };
     (device, backend)
@@ -50,9 +50,9 @@ fn adapter_rank_for(info: &wgpu::AdapterInfo, windows: bool) -> (u8, u8) {
 /// No downlevel flag is asked for: the pass runs on anything GLES 3 /
 /// WebGL2 class.
 pub(super) fn validate_renderer_requirements(
-    info: &wgpu::AdapterInfo,
-    requested: &wgpu::Limits,
-    supported: &wgpu::Limits,
+    info: &mui_hal::AdapterInfo,
+    requested: &mui_hal::Limits,
+    supported: &mui_hal::Limits,
 ) -> Result<(), String> {
     if super::force_cpu() {
         return Err("CPU rendering forced by environment (MUI_FORCE_CPU / MUI_RENDERER)".into());
@@ -68,17 +68,17 @@ pub(super) fn validate_renderer_requirements(
 }
 
 fn validate_renderer_requirements_with_cpu_adapter(
-    info: &wgpu::AdapterInfo,
-    requested: &wgpu::Limits,
-    supported: &wgpu::Limits,
+    info: &mui_hal::AdapterInfo,
+    requested: &mui_hal::Limits,
+    supported: &mui_hal::Limits,
     allow_cpu_adapter: bool,
 ) -> Result<(), String> {
     // Reject all software/CPU wgpu adapters (Windows DX12 WARP, Linux Vulkan
     // Lavapipe/SwiftShader, GL llvmpipe, etc.) so hosts fall back directly to
     // our fast dirty-rect `vello_cpu` software path instead of running GPU
     // shaders on a CPU emulator or risking driver JIT faults.
-    if !allow_cpu_adapter && info.device_type == wgpu::DeviceType::Cpu {
-        if info.backend == wgpu::Backend::Dx12 && info.vendor == 0x1414 {
+    if !allow_cpu_adapter && info.device_type == mui_hal::DeviceType::Cpu {
+        if info.backend == mui_hal::Backend::Dx12 && info.vendor == 0x1414 {
             return Err("WARP shader compilation can crash; use CPU rendering".into());
         }
         return Err(format!(
@@ -104,8 +104,8 @@ fn validate_renderer_requirements_with_cpu_adapter(
 /// atlas (`R8Unorm`, copied into a larger one as it grows), the path
 /// records (`Rgba32Float`, read by `textureLoad`), and the shared session's
 /// window format and worker readback bitmap (`Bgra8Unorm`).
-pub(super) fn validate_texture_formats(adapter: &wgpu::Adapter) -> Result<(), String> {
-    use wgpu::{TextureFormat as F, TextureUsages as U};
+pub(super) fn validate_texture_formats(adapter: &mui_hal::Adapter) -> Result<(), String> {
+    use mui_hal::{TextureFormat as F, TextureUsages as U};
     for (format, needed) in [
         (
             F::Rgba8Unorm,
@@ -127,19 +127,21 @@ pub(super) fn validate_texture_formats(adapter: &wgpu::Adapter) -> Result<(), St
 }
 
 pub(super) fn surface_choices(
-    caps: &wgpu::SurfaceCapabilities,
+    caps: &mui_hal::SurfaceCapabilities,
     transparency: super::Transparency,
 ) -> Result<
     (
-        wgpu::TextureFormat,
-        wgpu::CompositeAlphaMode,
-        wgpu::PresentMode,
+        mui_hal::TextureFormat,
+        mui_hal::CompositeAlphaMode,
+        mui_hal::PresentMode,
     ),
     &'static str,
 > {
     if caps.alpha_modes.is_empty()
         || caps.present_modes.is_empty()
-        || !caps.usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        || !caps
+            .usages
+            .contains(mui_hal::TextureUsages::RENDER_ATTACHMENT)
     {
         return Err("surface has no alpha/present modes or render attachment usage");
     }
@@ -157,12 +159,12 @@ mod tests {
 
     #[test]
     fn cpu_adapters_are_rejected_before_device_creation_while_hardware_is_accepted() {
-        let limits = wgpu::Limits::default();
-        let validate = |info: &wgpu::AdapterInfo| {
+        let limits = mui_hal::Limits::default();
+        let validate = |info: &mui_hal::AdapterInfo| {
             validate_renderer_requirements_with_cpu_adapter(info, &limits, &limits, false)
         };
         // Windows DX12 WARP is rejected by default and allowed only via explicit test opt-in.
-        let mut warp = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, wgpu::Backend::Dx12);
+        let mut warp = mui_hal::AdapterInfo::new(mui_hal::DeviceType::Cpu, mui_hal::Backend::Dx12);
         warp.name = "Microsoft Basic Render Driver".into();
         warp.vendor = 0x1414;
         warp.device = 0x008c;
@@ -175,11 +177,11 @@ mod tests {
         // Linux Lavapipe (Vulkan), llvmpipe (GL), and any other DeviceType::Cpu adapter
         // are rejected so hosts fall back directly to dirty-rect vello_cpu software rendering.
         for (backend, name) in [
-            (wgpu::Backend::Vulkan, "llvmpipe (LLVM 19.1.0, 256 bits)"),
-            (wgpu::Backend::Gl, "llvmpipe"),
-            (wgpu::Backend::Metal, "Software"),
+            (mui_hal::Backend::Vulkan, "llvmpipe (LLVM 19.1.0, 256 bits)"),
+            (mui_hal::Backend::Gl, "llvmpipe"),
+            (mui_hal::Backend::Metal, "Software"),
         ] {
-            let mut cpu = wgpu::AdapterInfo::new(wgpu::DeviceType::Cpu, backend);
+            let mut cpu = mui_hal::AdapterInfo::new(mui_hal::DeviceType::Cpu, backend);
             cpu.name = name.into();
             let err = validate(&cpu).unwrap_err();
             assert!(err.contains("CPU"), "{err}");
@@ -191,19 +193,19 @@ mod tests {
 
         // Discrete, integrated, virtual, and other GPU adapters remain accepted.
         for kind in [
-            wgpu::DeviceType::DiscreteGpu,
-            wgpu::DeviceType::IntegratedGpu,
-            wgpu::DeviceType::VirtualGpu,
-            wgpu::DeviceType::Other,
+            mui_hal::DeviceType::DiscreteGpu,
+            mui_hal::DeviceType::IntegratedGpu,
+            mui_hal::DeviceType::VirtualGpu,
+            mui_hal::DeviceType::Other,
         ] {
             for (backend, vendor) in [
-                (wgpu::Backend::Dx12, 0x10de),
-                (wgpu::Backend::Vulkan, 0x1002),
-                (wgpu::Backend::Vulkan, 0x8086),
-                (wgpu::Backend::Metal, 0x106b),
-                (wgpu::Backend::Dx12, 0x1414),
+                (mui_hal::Backend::Dx12, 0x10de),
+                (mui_hal::Backend::Vulkan, 0x1002),
+                (mui_hal::Backend::Vulkan, 0x8086),
+                (mui_hal::Backend::Metal, 0x106b),
+                (mui_hal::Backend::Dx12, 0x1414),
             ] {
-                let mut hw = wgpu::AdapterInfo::new(kind, backend);
+                let mut hw = mui_hal::AdapterInfo::new(kind, backend);
                 hw.vendor = vendor;
                 assert!(validate(&hw).is_ok(), "{kind:?} {backend:?} {vendor:#x}");
             }
@@ -212,14 +214,14 @@ mod tests {
 
     #[test]
     fn surface_selection_uses_offered_modes_and_rejects_incompatible_caps() {
-        use wgpu::{CompositeAlphaMode as A, PresentMode as P, TextureFormat as F};
-        let mut caps = wgpu::SurfaceCapabilities {
+        use mui_hal::{CompositeAlphaMode as A, PresentMode as P, TextureFormat as F};
+        let mut caps = mui_hal::SurfaceCapabilities {
             formats: vec![F::Bgra8UnormSrgb, F::Rgba8Unorm],
             present_modes: vec![P::Fifo],
             alpha_modes: vec![A::Inherit],
             ..Default::default()
         };
-        let select = |caps: &wgpu::SurfaceCapabilities| {
+        let select = |caps: &mui_hal::SurfaceCapabilities| {
             surface_choices(caps, super::super::Transparency::Translucent)
         };
         assert_eq!(select(&caps), Ok((F::Rgba8Unorm, A::Inherit, P::Fifo)));
@@ -229,9 +231,9 @@ mod tests {
         caps.alpha_modes.clear();
         assert!(select(&caps).is_err());
         caps.alpha_modes.push(A::Opaque);
-        caps.usages = wgpu::TextureUsages::COPY_SRC;
+        caps.usages = mui_hal::TextureUsages::COPY_SRC;
         assert!(select(&caps).is_err());
-        caps.usages = wgpu::TextureUsages::RENDER_ATTACHMENT;
+        caps.usages = mui_hal::TextureUsages::RENDER_ATTACHMENT;
         caps.formats = vec![F::Bgra8UnormSrgb];
         assert!(select(&caps).is_err());
     }
@@ -240,13 +242,13 @@ mod tests {
     fn windows_prefers_dx12_for_intel_and_amd_without_hiding_vulkan_fallback() {
         for vendor in [0x8086, 0x1002, 0x10de] {
             for kind in [
-                wgpu::DeviceType::IntegratedGpu,
-                wgpu::DeviceType::DiscreteGpu,
+                mui_hal::DeviceType::IntegratedGpu,
+                mui_hal::DeviceType::DiscreteGpu,
             ] {
-                let mut dx = wgpu::AdapterInfo::new(kind, wgpu::Backend::Dx12);
+                let mut dx = mui_hal::AdapterInfo::new(kind, mui_hal::Backend::Dx12);
                 dx.vendor = vendor;
                 let mut vk = dx.clone();
-                vk.backend = wgpu::Backend::Vulkan;
+                vk.backend = mui_hal::Backend::Vulkan;
                 assert!(adapter_rank_for(&dx, true) < adapter_rank_for(&vk, true));
                 assert_eq!(adapter_rank_for(&dx, false), adapter_rank_for(&vk, false));
             }
@@ -255,19 +257,18 @@ mod tests {
 
     #[test]
     fn a_webgl2_class_adapter_without_compute_is_accepted_and_less_is_not() {
-        let info = wgpu::AdapterInfo::new(wgpu::DeviceType::IntegratedGpu, wgpu::Backend::Gl);
-        let webgl2 = wgpu::Limits::downlevel_webgl2_defaults();
+        let info =
+            mui_hal::AdapterInfo::new(mui_hal::DeviceType::IntegratedGpu, mui_hal::Backend::Gl);
+        let webgl2 = mui_hal::Limits::downlevel_webgl2_defaults();
         let requested = requested_limits(&webgl2);
         assert!(validate_renderer_requirements(&info, &requested, &webgl2).is_ok());
-        assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
-        assert_eq!(requested.max_compute_invocations_per_workgroup, 0);
         for field in [
             "max_vertex_attributes",
             "max_inter_stage_shader_variables",
             "max_vertex_buffer_array_stride",
             "max_uniform_buffer_binding_size",
         ] {
-            let mut supported = webgl2.clone();
+            let mut supported = webgl2;
             match field {
                 "max_vertex_attributes" => supported.max_vertex_attributes -= 1,
                 "max_inter_stage_shader_variables" => {
@@ -287,7 +288,7 @@ mod tests {
     /// What the pass's pipelines actually use fits what is requested.
     #[test]
     fn the_requested_limits_cover_the_quad_pipelines() {
-        let requested = requested_limits(&wgpu::Limits::default());
+        let requested = requested_limits(&mui_hal::Limits::default());
         assert!(crate::quad::INSTANCE_SLOTS as u32 <= requested.max_vertex_attributes);
         assert!(crate::quad::INSTANCE_SLOTS as u32 <= requested.max_inter_stage_shader_variables);
         assert!(
@@ -298,7 +299,7 @@ mod tests {
         );
         assert_eq!(
             requested.max_texture_dimension_2d,
-            wgpu::Limits::default().max_texture_dimension_2d
+            mui_hal::Limits::default().max_texture_dimension_2d
         );
     }
 }

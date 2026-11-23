@@ -4,7 +4,7 @@
 //! window's own `wl_surface`, which carries the CPU presenter's `wl_shm`
 //! anchor. Elsewhere the surface targets the window itself.
 //!
-//! The wgpu surface retains its [`Target`] (the child surface, then the
+//! The GPU surface retains its [`Target`] (the child surface, then the
 //! window's retained [`PlatformHandle`]), so whichever thread drops the last
 //! GPU surface releases both without the window thread waiting for it.
 
@@ -70,13 +70,13 @@ impl Layer {
     }
 }
 
-/// A wgpu surface on `window` (a fresh child on Wayland) sized for `logical`
+/// A GPU surface on `window` (a fresh child on Wayland) sized for `logical`
 /// points. Call on the window's thread after its CPU presenter has gone.
 pub fn create(
-    instance: &wgpu::Instance,
+    instance: &mui_hal::Instance,
     window: PlatformHandle,
     logical: (u32, u32),
-) -> Result<(wgpu::Surface<'static>, Layer), String> {
+) -> Result<(mui_hal::Surface<'static>, Layer), String> {
     #[cfg(target_os = "linux")]
     let child = wayland_child(&window)?;
     let layer = Layer {
@@ -91,9 +91,7 @@ pub fn create(
         child,
         window,
     };
-    let surface = instance
-        .create_surface(wgpu::SurfaceTarget::from(target))
-        .map_err(|e| e.to_string())?;
+    let surface = instance.create_surface(target).map_err(|e| e.to_string())?;
     Ok((surface, layer))
 }
 

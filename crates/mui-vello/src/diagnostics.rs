@@ -198,14 +198,14 @@ pub fn error(component: &str, stage: &str, message: &str) {
 
 /// Include the device that actually raised the error, even when other windows
 /// are using different adapters.
-pub fn gpu_error(stage: &str, message: &str, adapter: &wgpu::AdapterInfo) {
+pub fn gpu_error(stage: &str, message: &str, adapter: &mui_hal::AdapterInfo) {
     record("mui-vello", stage, message, true, Some(adapter));
 }
 
 /// One bounded identity record and a separate reason: a verbose limits dump must
 /// not truncate the driver version or the rejection that support needs.
 #[cfg(feature = "gpu-quad")]
-pub(crate) fn gpu_candidate(stage: &str, message: &str, adapter: &wgpu::AdapterInfo) {
+pub(crate) fn gpu_candidate(stage: &str, message: &str, adapter: &mui_hal::AdapterInfo) {
     let identity = format!(
         "name={:?}; vendor={:#06x}; device={:#06x}; backend={:?}; type={:?}; driver={:?}; driver_info={:?}",
         bounded(&adapter.name, 384),
@@ -234,7 +234,7 @@ pub fn operation(
     component: &str,
     stage: &str,
     message: &str,
-    adapter: Option<&wgpu::AdapterInfo>,
+    adapter: Option<&mui_hal::AdapterInfo>,
 ) -> Operation {
     breadcrumb(component, stage, message);
     #[cfg(all(feature = "reporting", not(target_arch = "wasm32")))]
@@ -253,7 +253,7 @@ fn record(
     stage: &str,
     message: &str,
     failed: bool,
-    adapter: Option<&wgpu::AdapterInfo>,
+    adapter: Option<&mui_hal::AdapterInfo>,
 ) {
     let component = bounded(component, 32);
     let stage = bounded(stage, 48);
@@ -284,7 +284,7 @@ fn record(
 }
 
 #[cfg(target_arch = "wasm32")]
-fn record(_: &str, _: &str, _: &str, _: bool, _: Option<&wgpu::AdapterInfo>) {}
+fn record(_: &str, _: &str, _: &str, _: bool, _: Option<&mui_hal::AdapterInfo>) {}
 
 /// Preserve the payload of a caught Rust panic without installing a host-wide hook.
 pub fn panic_message(payload: &(dyn Any + Send)) -> &str {
