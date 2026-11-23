@@ -365,8 +365,7 @@ fn default_sentinel_dir() -> PathBuf {
     };
     #[cfg(not(test))]
     root.filter(|path| path.is_absolute())
-        .map(|path| path.join("MUI").join("gpu-sentinels"))
-        .unwrap_or_default()
+        .map_or_default(|path| path.join("MUI").join("gpu-sentinels"))
 }
 
 #[cfg(unix)]
