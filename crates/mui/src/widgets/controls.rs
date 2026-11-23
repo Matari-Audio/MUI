@@ -224,6 +224,10 @@ struct Look {
     /// The domain's formatter, for a reading no `.value_text` replaced.
     format: Option<Format>,
     knob: Knob,
+    /// A slider drawn flat: a hairline rail, a block thumb across it and a
+    /// tick at a bipolar origin (KONTRA's look). Off: a pill rail and a round
+    /// thumb.
+    flat: bool,
     /// A knob face that takes a square share of its cell.
     fill_cell: bool,
     /// A button's leading and trailing icons.
@@ -407,6 +411,7 @@ impl Look {
             step: None,
             format: None,
             knob: Knob::smooth(),
+            flat: false,
             fill_cell: false,
             icons: [None; 2],
             value_align: TextAlign::Start,
@@ -750,6 +755,23 @@ impl Control {
         self.look.knob = knob;
         self
     }
+    /// Draw a [`slider`] flat: a hairline rail, a block thumb standing
+    /// across it, and a tick where a bipolar domain's fill starts (a pan's
+    /// centre). The drag and keys are the same; only the paint changes.
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let mut pan = 0.0;
+    /// let p = slider(&mut ui, "pan", "Pan", &mut pan, Domain::new(-1.0..=1.0).origin(0.0))
+    ///     .el
+    ///     .quiet()
+    ///     .flat();
+    /// ```
+    pub fn flat(mut self) -> Self {
+        self.look.flat = true;
+        self
+    }
     /// A knob whose face takes a square share of whatever its cell gives
     /// it -- the smaller of the cell's width and the height left under the
     /// caption -- instead of a diameter from [`Control::size`]. The knob
@@ -901,9 +923,10 @@ impl Control {
             Kind::Slider(id, label, d, field) if self.vertical => {
                 fader_el(look, id, label, d, field, label_visible && !self.quiet)
             }
-            Kind::Slider(id, label, d, field) if self.quiet => {
-                fader_el(look, id, label, d, field, false)
-            }
+            Kind::Slider(id, label, d, field) if self.quiet => match field {
+                Some(field) => col([lane_el(look, id, label, &d, false), *field]).gap(Xs),
+                None => lane_el(look, id, label, &d, false),
+            },
             Kind::Slider(id, label, d, field) => {
                 slider_el(look, id, label, d, field, label_visible)
             }
@@ -1106,14 +1129,6 @@ fn slider_el(
     field: Option<Box<El>>,
     label_visible: bool,
 ) -> El {
-    // The rail is a fraction of the control's height, so one size token
-    // moves the track, the thumb and the row together.
-    let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
-    let (t, h) = (d.t, d.hover);
-    let (a, b) = d.span();
-    let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
-        .pill()
-        .fill(look.role);
     // While typed into, the field stands where the reading was.
     let reading = match field {
         Some(field) => *field,
@@ -1125,36 +1140,10 @@ fn slider_el(
         row([spacer(), reading])
     })
     .gap(S);
-    col([
-        header,
-        look.describe(
-            stack([
-                row([
-                    block(0.0, track).grow(a),
-                    block(0.0, track).grow(b - a).pill().fill(look.role),
-                    block(0.0, track).grow(1.0 - b),
-                ])
-                .anchor(Align::Stretch, Align::Center)
-                .pill()
-                .preset(look.face(Role::Field)),
-                row([spacer().grow(t), grip, spacer().grow(1.0 - t)])
-                    .anchor(Align::Stretch, Align::Center),
-            ])
-            .h(lane)
-            .a11y(d.a11y())
-            .named(label)
-            .focusable()
-            .cursor(Cursor::ResizeH)
-            .on(State::FocusVisible, focus_ring)
-            .id(id),
-            true,
-        ),
-    ])
-    .gap(Xs)
+    col([header, lane_el(look, id, label, &d, false)]).gap(Xs)
 }
 
-/// A slider standing up (or a quiet one lying down): the lane alone, the
-/// caption under it when shown. The fill grows from the origin.
+/// A slider standing up: the lane alone, the caption under it when shown. The fill grows from the origin.
 fn fader_el(
     look: &Look,
     id: Id,
@@ -1163,35 +1152,7 @@ fn fader_el(
     field: Option<Box<El>>,
     label_visible: bool,
 ) -> El {
-    let (track, thumb, lane) = (look.px * 0.15, look.px * THUMB, look.px * LANE);
-    let (t, h) = (d.t, d.hover);
-    let (a, b) = d.span();
-    let grip = block(thumb + 2.0 * h, thumb + 2.0 * h)
-        .pill()
-        .fill(look.role);
-    let input = look.describe(
-        stack([
-            col([
-                block(track, 0.0).grow(1.0 - b),
-                block(track, 0.0).grow(b - a).pill().fill(look.role),
-                block(track, 0.0).grow(a),
-            ])
-            .anchor(Align::Center, Align::Stretch)
-            .pill()
-            .preset(look.face(Role::Field)),
-            col([spacer().grow(1.0 - t), grip, spacer().grow(t)])
-                .anchor(Align::Center, Align::Stretch),
-        ])
-        .w(lane)
-        .h(pct(100.))
-        .a11y(d.a11y())
-        .named(label.clone())
-        .focusable()
-        .cursor(Cursor::ResizeV)
-        .on(State::FocusVisible, focus_ring)
-        .id(id),
-        true,
-    );
+    let input = lane_el(look, id, label.clone(), &d, true);
     // No reading to stand in for: a field being typed goes under the lane.
     match field {
         Some(field) => col([input, *field]).gap(Xs).align(Align::Center),
@@ -1200,6 +1161,119 @@ fn fader_el(
             .align(Align::Center),
         None => input,
     }
+}
+
+/// A slider's lane alone: the rail, the fill from the origin, the thumb.
+/// Lying down it runs left to right; standing up, bottom to top. The thumb
+/// sits centred in a box as long as [`slider`]'s grip, so a press lands on
+/// the value it shows whatever the look.
+fn lane_el(look: &Look, id: Id, label: Arc<str>, d: &Reading, vertical: bool) -> El {
+    let (lane, grip) = (look.px * LANE, look.px * THUMB + 2.0 * d.hover);
+    let (t, (a, b)) = (d.t, d.span());
+    // Along the travel, from its start: three blocks of `cross` across.
+    let along = |cross: f64, parts: [(f64, Option<Role>); 3]| {
+        let blocks = parts.map(|(grow, fill)| {
+            let b = if vertical {
+                block(cross, 0.0)
+            } else {
+                block(0.0, cross)
+            }
+            .grow(grow);
+            match fill {
+                Some(role) => b.pill().fill(role),
+                None => b,
+            }
+        });
+        let [x, y, z] = blocks;
+        if vertical {
+            col([z, y, x]).anchor(Align::Center, Align::Stretch)
+        } else {
+            row([x, y, z]).anchor(Align::Stretch, Align::Center)
+        }
+    };
+    // `thing` sitting at `at` (0..1) along the travel.
+    let at = |at: f64, thing: El| {
+        if vertical {
+            col([spacer().grow(1.0 - at), thing, spacer().grow(at)])
+                .anchor(Align::Center, Align::Stretch)
+        } else {
+            row([spacer().grow(at), thing, spacer().grow(1.0 - at)])
+                .anchor(Align::Stretch, Align::Center)
+        }
+    };
+    let sized = |el: El, along: f64, across: f64| {
+        if vertical {
+            el.w(across).h(along)
+        } else {
+            el.w(along).h(across)
+        }
+    };
+    let mut layers = Vec::new();
+    if look.flat {
+        // The rail runs where the thumb's centre travels, half a grip in
+        // from each end, so the fill ends under the thumb.
+        let inset = |el: El| {
+            let pad = || {
+                if vertical {
+                    block(0.0, grip / 2.0)
+                } else {
+                    block(grip / 2.0, 0.0)
+                }
+            };
+            if vertical {
+                col([pad(), el.grow(1.0), pad()]).anchor(Align::Center, Align::Stretch)
+            } else {
+                row([pad(), el.grow(1.0), pad()]).anchor(Align::Stretch, Align::Center)
+            }
+        };
+        layers.push(inset(
+            // A rail a shade above the panel, as KONTRA drew it, not a
+            // sunken field.
+            along(2.0, [(a, None), (b - a, Some(look.role)), (1.0 - b, None)])
+                .fill(Role::Dim.alpha(0.35)),
+        ));
+        // Position both markers using the same grip, even though their
+        // painted widths along the travel differ.
+        let marker = |position, mark| {
+            let centred = if vertical {
+                col([spacer(), mark, spacer()]).align(Align::Center)
+            } else {
+                row([spacer(), mark, spacer()]).align(Align::Center)
+            };
+            at(position, sized(centred, grip, lane))
+        };
+        if d.origin > 0.0 && d.origin < 1.0 {
+            let tick = sized(block(0.0, 0.0).fill(Role::Dim), 1.0, lane * 0.7);
+            layers.push(marker(d.origin, tick));
+        }
+        let thumb = sized(block(0.0, 0.0).fill(look.role).radius(0.), 4.0, lane * 0.9);
+        layers.push(marker(t, thumb));
+    } else {
+        layers.push(
+            along(
+                look.px * 0.15,
+                [(a, None), (b - a, Some(look.role)), (1.0 - b, None)],
+            )
+            .pill()
+            .preset(look.face(Role::Field)),
+        );
+        layers.push(at(t, block(grip, grip).pill().fill(look.role)));
+    }
+    let lane_el = stack(layers);
+    let lane_el = if vertical {
+        lane_el.w(lane).h(pct(100.)).cursor(Cursor::ResizeV)
+    } else {
+        lane_el.h(lane).cursor(Cursor::ResizeH)
+    };
+    look.describe(
+        lane_el
+            .a11y(d.a11y())
+            .named(label)
+            .focusable()
+            .on(State::FocusVisible, focus_ring)
+            .id(id),
+        true,
+    )
 }
 
 /// A dial: vertical drag, pointer on a 270° sweep; returns the control and

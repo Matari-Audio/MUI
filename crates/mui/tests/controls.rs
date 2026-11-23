@@ -150,6 +150,55 @@ fn a_slider_takes_a_track_press_and_drags_across_its_width() {
     assert!((v - 0.75).abs() < 0.02, "the drag spans the lane: {v}");
 }
 
+#[test]
+fn a_flat_slider_has_a_square_cornered_thumb_aligned_with_its_origin_tick() {
+    for vertical in [false, true] {
+        let mut ui = Ui::default();
+        let mut value = 0.25;
+        let control = slider(
+            &mut ui,
+            "s",
+            "S",
+            &mut value,
+            Domain::new(0.0..=1.0).origin(0.25),
+        )
+        .el
+        .quiet()
+        .flat();
+        let lane = if vertical {
+            control.vertical().el().h(160.)
+        } else {
+            control.el().w(160.)
+        };
+        ui.frame(lane, None, Input::default(), 0.016).unwrap();
+        let scene = ui.scene().unwrap();
+        let marker = |thickness: f64| {
+            scene
+                .surfaces()
+                .find(|surface| {
+                    let length = if vertical {
+                        surface.frame.size.height
+                    } else {
+                        surface.frame.size.width
+                    };
+                    (length - thickness).abs() < 1e-6
+                })
+                .unwrap()
+        };
+        let center = |frame: mui_layout::Frame| {
+            let (x, y) = frame.center();
+            if vertical { y } else { x }
+        };
+        let thumb = marker(4.);
+        assert_eq!(thumb.rect.expect("rectangular thumb outline").radius(), 0.);
+        let (tick, thumb) = (center(marker(1.).frame), center(thumb.frame));
+        assert!(
+            (tick - thumb).abs() < 1e-6,
+            "vertical={vertical}: tick {tick}, thumb {thumb}"
+        );
+    }
+}
+
 /// A value set from outside glides the thumb over; the value itself,
 /// and what the slider reports, are exact from the first frame.
 #[test]
