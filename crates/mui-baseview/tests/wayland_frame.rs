@@ -149,7 +149,31 @@ fn screenshot(dir: &Path, socket: &str) -> (Vec<u8>, usize, usize) {
     let info = reader.next_frame(&mut pixels).expect("png pixels");
     let channels = info.color_type.samples();
     pixels.truncate(info.buffer_size());
+    // The next capture must not reuse this PNG, even within the same second.
+    std::fs::remove_file(shot).expect("remove consumed screenshot");
     (pixels, info.width as usize, channels)
+}
+
+fn check_weston_frame(pixels: &[u8], width: usize, channels: usize) -> Result<(), String> {
+    let (x, y, w, h) = find(pixels, width, channels).ok_or("the content is not on screen")?;
+    if (w, h) != (SIZE.0 as usize, SIZE.1 as usize) {
+        return Err(format!(
+            "the frame should leave the content its logical size: got {w}x{h}"
+        ));
+    }
+    // Weston has no server decorations. The fallback title bar above the
+    // content is neither background black nor content magenta.
+    if y < 10 {
+        return Err(format!(
+            "no room for the title bar above the content at y = {y}"
+        ));
+    }
+    let at = ((y - 10) * width + x + w / 2) * channels;
+    let bar = &pixels[at..at + 3];
+    if bar == [0, 0, 0] || magenta(bar) {
+        return Err(format!("no title bar above the content: {bar:?}"));
+    }
+    Ok(())
 }
 
 fn weston(closed: &Arc<AtomicUsize>) {
@@ -180,28 +204,18 @@ fn weston(closed: &Arc<AtomicUsize>) {
         return;
     };
     let window = open(&name, closed);
-    // The frame paints on its own subsurfaces after the first configure.
-    std::thread::sleep(Duration::from_millis(500));
-    let (pixels, width, channels) = screenshot(&dir, &name);
+    // A client submit does not mean Weston has painted the content and its
+    // decoration subsurfaces yet.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let (pixels, width, channels) = screenshot(&dir, &name);
+        let Err(problem) = check_weston_frame(&pixels, width, channels) else {
+            break;
+        };
+        assert!(Instant::now() < deadline, "{problem}");
+        std::thread::sleep(Duration::from_millis(100));
+    }
     close(window, closed);
-    let (x, y, w, h) = find(&pixels, width, channels).expect("the content is on screen");
-    assert_eq!(
-        (w, h),
-        (SIZE.0 as usize, SIZE.1 as usize),
-        "the frame leaves the content its logical size"
-    );
-    // weston has no server decorations: the fallback frame's title bar sits
-    // right above the content, neither background black nor content.
-    assert!(
-        y >= 10,
-        "room for the title bar above the content at y = {y}"
-    );
-    let at = ((y - 10) * width + x + w / 2) * channels;
-    let bar = &pixels[at..at + 3];
-    assert!(
-        bar != [0, 0, 0] && !magenta(bar),
-        "no title bar above the content: {bar:?}"
-    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
