@@ -20,7 +20,8 @@ impl Gpu {
     pub fn try_new(cx: WindowContext) -> Result<Self, String> {
         let physical = cx.size().physical;
         let size = (physical.width.max(1), physical.height.max(1));
-        let presenter = Presenter::new(cx.platform_handle(), size, Transparency::Opaque)?;
+        let mut presenter = Presenter::new(cx.platform_handle(), size, Transparency::Opaque)?;
+        presenter.set_scale_factor(cx.scale_factor());
         Ok(Self {
             presenter,
             cx,
@@ -55,11 +56,12 @@ impl Gpu {
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
+        self.presenter.set_scale_factor(self.cx.scale_factor());
         self.presenter.resize(width, height);
     }
 
     pub fn try_resize(&mut self, width: u32, height: u32) -> Result<(), String> {
-        self.presenter.resize(width, height);
+        self.resize(width, height);
         Ok(())
     }
 

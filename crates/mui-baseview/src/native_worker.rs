@@ -89,14 +89,11 @@ pub(super) fn build<V: View + Send + 'static>(
         if let Some(native) = &mut native {
             native.focus(cx.has_focus());
         }
-        #[cfg(target_os = "macos")]
-        let presenter = mac_transport::Presenter::new(&cx).map_err(std::io::Error::other)?;
-        #[cfg(target_os = "linux")]
-        let presenter =
+        let mut presenter =
             mui::vello::software::BitmapWindow::new(cx.clone()).map_err(std::io::Error::other)?;
+        presenter.set_scale_factor(size.scale_factor);
         let (send, receive) = mpsc::channel();
         let (publish, output) = mpsc::sync_channel(1);
-        let (release, released) = mpsc::channel::<()>();
         let stopped = Arc::new(AtomicBool::new(false));
         let tick_pending = Arc::new(AtomicBool::new(false));
         let stop = stopped.clone();
@@ -146,7 +143,6 @@ pub(super) fn build<V: View + Send + 'static>(
                             output: publish,
                             stopped: stop,
                             tick_pending: pending,
-                            release,
                         },
                     );
                 }));
@@ -224,10 +220,8 @@ pub(super) fn build<V: View + Send + 'static>(
             flash_at: Cell::new(None),
             flash_rects: RefCell::new(Vec::new()),
             direct: Cell::new(false),
-            lent: Cell::new(false),
-            released,
-            #[cfg(not(target_os = "windows"))]
-            presenter: RefCell::new(presenter),
+            layer: RefCell::new(crate::surface::Layer::default()),
+            presenter: RefCell::new(Some(presenter)),
         })
     }
 }
@@ -249,7 +243,10 @@ struct Output {
     /// Backing pixel dimensions of `patches`: equals `size` within the 16 Mi
     /// pixel 1:1 budget, or a proportionally scaled target above it.
     render_size: (u32, u32),
-    software: bool,
+    /// Graphics API that rendered this frame.
+    api: mui_present::GraphicsApi,
+    /// Why this frame is not a GPU one.
+    fallback: Option<mui_present::FallbackReason>,
     reason: &'static str,
     capture: bool,
     ime: Option<baseview::ImeConfiguration>,
@@ -274,10 +271,9 @@ pub(super) struct NativeAdapter {
     close: NativeClose,
     requests: Arc<Requests>,
     native: RefCell<Option<NativeAccessibility>>,
-    #[cfg(target_os = "macos")]
-    presenter: RefCell<mac_transport::Presenter>,
-    #[cfg(target_os = "linux")]
-    presenter: RefCell<mui::vello::software::BitmapWindow<WindowContext>>,
+    /// Owned `mui-present` CPU presenter (dropped before `cx` and detached when
+    /// handing the native window to a direct GPU swapchain).
+    presenter: RefCell<Option<mui::vello::software::BitmapWindow<WindowContext>>>,
     cx: WindowContext,
     send: Sender<Command>,
     output: RefCell<Receiver<Output>>,
@@ -300,10 +296,9 @@ pub(super) struct NativeAdapter {
     flash_rects: RefCell<Vec<[u32; 4]>>,
     /// The worker presents to the window: an expose asks it to repaint.
     direct: Cell<bool>,
-    /// A surface on this window was lent to the worker: closing waits for
-    /// `released` so the window never goes while the worker presents to it.
-    lent: Cell<bool>,
-    released: Receiver<()>,
+    /// The layer of the GPU surface lent to the worker. The surface retains
+    /// its window handle and layer, so closing never waits for the worker.
+    layer: RefCell<crate::surface::Layer>,
 }
 impl NativeAdapter {
     fn blit(&self, rect: [u32; 4], pixels: &[u32]) -> bool {
@@ -328,23 +323,32 @@ impl NativeAdapter {
         }
         self.blit_raw(rect, decorated.as_deref().unwrap_or(pixels))
     }
+    fn ensure_presenter(&self) -> Result<(), String> {
+        let mut slot = self.presenter.borrow_mut();
+        if slot.is_none() {
+            let mut presenter = mui::vello::software::BitmapWindow::new(self.cx.clone())?;
+            presenter.set_scale_factor(self.cx.size().scale_factor);
+            *slot = Some(presenter);
+        }
+        Ok(())
+    }
+    fn cpu_backend(&self) -> mui_present::PresentationBackend {
+        self.presenter.borrow().as_ref().map_or(
+            mui_present::PresentationBackend::Offscreen,
+            mui::vello::software::BitmapWindow::backend,
+        )
+    }
     fn blit_raw(&self, rect: [u32; 4], pixels: &[u32]) -> bool {
-        #[cfg(target_os = "windows")]
-        let result = blit(&self.cx, rect, (rect[2], rect[3]), pixels);
-        #[cfg(target_os = "macos")]
-        let result = self
-            .presenter
-            .borrow_mut()
-            .present(&self.cx, rect, pixels.to_vec());
-        #[cfg(target_os = "linux")]
-        let result = self.presenter.borrow_mut().present_patch(
-            rect,
-            pixels,
-            (
-                self.cx.size().physical.width,
-                self.cx.size().physical.height,
-            ),
-        );
+        if let Err(error) = self.ensure_presenter() {
+            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+            return false;
+        }
+        let size = self.cx.size();
+        let mut slot = self.presenter.borrow_mut();
+        let presenter = slot.as_mut().expect("presenter ensured above");
+        presenter.set_scale_factor(size.scale_factor);
+        let result =
+            presenter.present_patch(rect, pixels, (size.physical.width, size.physical.height));
         if let Err(error) = result {
             mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
             return false;
@@ -352,20 +356,14 @@ impl NativeAdapter {
         true
     }
     fn blit_scaled(&self, src_size: (u32, u32), pixels: &[u32], dst_size: (u32, u32)) -> bool {
-        #[cfg(target_os = "macos")]
-        let _ = dst_size; // The AppKit presenter reads the destination bounds from the view.
-        #[cfg(target_os = "windows")]
-        let result = blit(&self.cx, [0, 0, dst_size.0, dst_size.1], src_size, pixels);
-        #[cfg(target_os = "macos")]
-        let result =
-            self.presenter
-                .borrow_mut()
-                .present_scaled(&self.cx, src_size, pixels.to_vec());
-        #[cfg(target_os = "linux")]
-        let result = self
-            .presenter
-            .borrow_mut()
-            .present_scaled(src_size, pixels, dst_size);
+        if let Err(error) = self.ensure_presenter() {
+            mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
+            return false;
+        }
+        let mut slot = self.presenter.borrow_mut();
+        let presenter = slot.as_mut().expect("presenter ensured above");
+        presenter.set_scale_factor(self.cx.size().scale_factor);
+        let result = presenter.present_scaled(src_size, pixels, dst_size);
         if let Err(error) = result {
             mui::diagnostics::error("mui-baseview", "native_bitmap", &error);
             return false;
@@ -388,30 +386,9 @@ impl NativeAdapter {
             self.requests.bind_requester(None);
             #[cfg(target_os = "linux")]
             self.x11.cancel();
-            self.await_surface_release();
-        }
-    }
-    /// Wait, briefly, for the worker to drop the surface it presents to this
-    /// window, draining frames so a worker blocked handing one over can see
-    /// the stop.
-    fn await_surface_release(&self) {
-        if !self.lent.get() {
-            return;
-        }
-        let deadline = Instant::now() + Duration::from_millis(500);
-        while let Err(mpsc::RecvTimeoutError::Timeout) =
-            self.released.recv_timeout(Duration::from_millis(1))
-        {
+            // A worker blocked handing over a frame sees the stop now.
             if let Ok(output) = self.output.try_borrow() {
                 while output.try_recv().is_ok() {}
-            }
-            if Instant::now() >= deadline {
-                mui::diagnostics::error(
-                    "mui-baseview",
-                    "native_surface",
-                    "render worker still held the window surface at close",
-                );
-                return;
             }
         }
     }
@@ -493,15 +470,24 @@ impl NativeAdapter {
             native.publish(update);
         }
         if let Some(instance) = output.surface {
+            // Detach the CPU presenter before handing the native window to GPU
+            // (drops macOS IOSurface CALayer, Win32 WM_PAINT subclass, and
+            // Linux Wayland wl_shm child subsurface cleanly with zero wait).
+            drop(self.presenter.borrow_mut().take());
             // Made here, on the window's thread (AppKit allows nothing else),
             // and presented from the worker.
-            let surface = instance
-                .create_surface(wgpu::SurfaceTarget::from(self.cx.platform_handle()))
-                .map_err(|error| {
-                    mui::diagnostics::error("mui-baseview", "native_surface", &error.to_string());
-                })
-                .ok();
-            self.lent.set(self.lent.get() || surface.is_some());
+            let logical = self.cx.size().logical;
+            let surface = crate::surface::create(
+                &instance,
+                self.cx.platform_handle(),
+                (logical.width.round() as u32, logical.height.round() as u32),
+            )
+            .map_err(|error| mui::diagnostics::error("mui-baseview", "native_surface", &error))
+            .ok()
+            .map(|(surface, layer)| {
+                *self.layer.borrow_mut() = layer;
+                surface
+            });
             self.send(Command::Surface(surface));
         }
         self.direct.set(output.direct);
@@ -515,7 +501,8 @@ impl NativeAdapter {
         if output.direct {
             // On screen already: the worker presented it.
             *self.bitmap.borrow_mut() = None;
-            requests_presented(&self.requests, output.size, output.reason);
+            self.requests
+                .presented_gpu(output.size, output.api, output.reason);
             self.requests.drag.rendered(output.drag);
             return;
         }
@@ -525,15 +512,13 @@ impl NativeAdapter {
         let submitted = submit_patches(
             &self.requests,
             output.size,
-            output.software,
+            output.render_size,
+            self.cpu_backend(),
+            output.api,
+            output.fallback,
             output.reason,
             output.patches,
             |patch| {
-                #[cfg(target_os = "macos")]
-                if !scaled {
-                    *bitmap = None;
-                    return self.blit_raw(patch.rect, &patch.pixels);
-                }
                 if patch.rect == [0, 0, output.render_size.0, output.render_size.1] {
                     let success = if scaled {
                         self.blit_scaled(output.render_size, &patch.pixels, output.size)
@@ -573,21 +558,17 @@ impl NativeAdapter {
         self.requests.drag.rendered(output.drag);
     }
 }
-fn requests_presented(requests: &Requests, size: (u32, u32), reason: &'static str) {
-    let first = requests.presentation().is_none_or(|old| old.software);
-    requests.presented(size, false, reason);
-    if first {
-        mui::diagnostics::breadcrumb(
-            "mui-baseview",
-            "gpu_frame_presented",
-            "native GPU surface presentation succeeded",
-        );
-    }
-}
+#[expect(
+    clippy::too_many_arguments,
+    reason = "records both legacy Presentation and full PresentationState atomically"
+)]
 fn submit_patches(
     requests: &Requests,
     size: (u32, u32),
-    software: bool,
+    render_size: (u32, u32),
+    backend: mui_present::PresentationBackend,
+    api: mui_present::GraphicsApi,
+    fallback: Option<mui_present::FallbackReason>,
     reason: &'static str,
     patches: Vec<Patch>,
     mut submit: impl FnMut(Patch) -> bool,
@@ -601,8 +582,16 @@ fn submit_patches(
     {
         return false;
     }
+    let software = api == mui_present::GraphicsApi::Software;
     let first_gpu = !software && requests.presentation().is_none_or(|old| old.software);
-    requests.presented(size, software, reason);
+    let mode = if !software {
+        mui_present::PresentationMode::ReadbackGpu
+    } else if render_size != size {
+        mui_present::PresentationMode::CpuScaled
+    } else {
+        mui_present::PresentationMode::CpuDirect
+    };
+    requests.presented_with(size, render_size, mode, backend, api, fallback, reason);
     if first_gpu {
         mui::diagnostics::breadcrumb(
             "mui-baseview",
@@ -766,6 +755,10 @@ impl WindowHandler for NativeAdapter {
         }
     }
     fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+        self.layer.borrow().resize((
+            size.logical.width.round() as u32,
+            size.logical.height.round() as u32,
+        ));
         self.send(Command::Resize(size));
         self.requests.wake();
         Ok(())
@@ -839,8 +832,6 @@ struct WorkerChannels {
     output: SyncSender<Output>,
     stopped: Arc<AtomicBool>,
     tick_pending: Arc<AtomicBool>,
-    /// Dropped once the worker no longer holds a window surface.
-    release: Sender<()>,
 }
 
 fn worker<V: View>(
@@ -873,7 +864,6 @@ fn worker_with_mode<V: View>(
         output,
         stopped,
         tick_pending,
-        release,
     } = channels;
     let mut driver = Driver::new(
         (size.physical.width, size.physical.height),
@@ -902,6 +892,7 @@ fn worker_with_mode<V: View>(
     } else {
         "CPU startup"
     };
+    let mut fallback = software_only.then_some(mui_present::FallbackReason::ForceCpu);
     let mut cpu = None::<mui::vello::software::Renderer>;
     let mut retry = Retry::default();
     let mut unpainted = true;
@@ -1002,12 +993,14 @@ fn worker_with_mode<V: View>(
                     Some(Ok(host)) => {
                         direct = Some(host);
                         reason = "GPU ready";
+                        fallback = None;
                         lock(shared).ui.set_gpu_welding_available(true);
                         driver.redraw();
                     }
                     Some(Err(error)) => {
                         surface = None;
                         asked = false;
+                        fallback = Some(error.fallback_reason());
                         if reason != "CPU GPU initialization failed" {
                             log(
                                 shared,
@@ -1034,10 +1027,12 @@ fn worker_with_mode<V: View>(
                 Ok(renderer) => {
                     gpu = Some(renderer);
                     reason = "GPU ready";
+                    fallback = None;
                     lock(shared).ui.set_gpu_welding_available(true);
                     driver.redraw();
                 }
                 Err(error) => {
+                    fallback = Some(error.fallback_reason());
                     if reason != "CPU GPU initialization failed" {
                         log(
                             shared,
@@ -1111,6 +1106,7 @@ fn worker_with_mode<V: View>(
                     Ok(Frame::Skipped) => driver.redraw(),
                     Ok(Frame::SurfaceLost) => {
                         // A new surface from the window, then paint again.
+                        fallback = Some(mui_present::FallbackReason::SurfaceLost);
                         direct = None;
                         asked = false;
                         if let Some(init) = &mut init {
@@ -1126,6 +1122,7 @@ fn worker_with_mode<V: View>(
                             &error.to_string(),
                         );
                         reason = "CPU GPU recovery";
+                        fallback = Some(error.fallback_reason());
                         if let Some(cpu) = &mut cpu {
                             cpu.invalidate();
                         }
@@ -1160,6 +1157,7 @@ fn worker_with_mode<V: View>(
                             &error.to_string(),
                         );
                         reason = "CPU GPU recovery";
+                        fallback = Some(error.fallback_reason());
                         // Its retained bitmap predates the GPU frames now on
                         // screen. A presenter change needs one complete repaint.
                         if let Some(cpu) = &mut cpu {
@@ -1254,7 +1252,12 @@ fn worker_with_mode<V: View>(
                 patches,
                 size,
                 render_size,
-                software: gpu.is_none() && direct.is_none(),
+                api: direct
+                    .as_ref()
+                    .map(Host::api)
+                    .or_else(|| gpu.as_ref().map(Offscreen::api))
+                    .unwrap_or_default(),
+                fallback,
                 reason,
                 capture,
                 ime,
@@ -1276,7 +1279,6 @@ fn worker_with_mode<V: View>(
     // No HWND or host callbacks here. The owner revokes host delivery first.
     // The window is about to go: give up its surface before anything slow.
     drop((direct, surface));
-    drop(release);
     driver.close(&mut lock(shared));
 }
 
@@ -1533,114 +1535,6 @@ fn dispatch<V: View>(
     }
 }
 
-/// GDI only: completed pixels are copied by dirty rectangle, without a GPU
-/// surface, worker mutex, fence, shader compiler or native cross-thread call.
-#[expect(
-    unsafe_code,
-    reason = "bounded GDI bitmap blit on the HWND's owning thread"
-)]
-#[cfg(target_os = "windows")]
-fn blit(
-    window: &WindowContext,
-    [x, y, dst_w, dst_h]: [u32; 4],
-    (src_w, src_h): (u32, u32),
-    pixels: &[u32],
-) -> Result<(), String> {
-    #[repr(C)]
-    struct Info {
-        size: u32,
-        width: i32,
-        height: i32,
-        planes: u16,
-        bits: u16,
-        compression: u32,
-        bytes: u32,
-        xppm: i32,
-        yppm: i32,
-        colors: u32,
-        important: u32,
-        rgb: u32,
-    }
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn GetDC(hwnd: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-        fn ReleaseDC(hwnd: *mut std::ffi::c_void, dc: *mut std::ffi::c_void) -> i32;
-    }
-    #[link(name = "gdi32")]
-    unsafe extern "system" {
-        fn StretchDIBits(
-            dc: *mut std::ffi::c_void,
-            x: i32,
-            y: i32,
-            w: i32,
-            h: i32,
-            sx: i32,
-            sy: i32,
-            sw: i32,
-            sh: i32,
-            bits: *const std::ffi::c_void,
-            info: *const Info,
-            usage: u32,
-            rop: u32,
-        ) -> i32;
-    }
-    if dst_w == 0
-        || dst_h == 0
-        || src_w == 0
-        || src_h == 0
-        || pixels.len() != src_w as usize * src_h as usize
-    {
-        return Err("invalid bitmap patch".into());
-    }
-    let handle = window.window_handle().map_err(|error| error.to_string())?;
-    let raw_window_handle::RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        return Err("window is not Win32".into());
-    };
-    let hwnd = handle.hwnd.get() as *mut std::ffi::c_void;
-    let info = Info {
-        size: 40,
-        width: src_w as i32,
-        height: -(src_h as i32),
-        planes: 1,
-        bits: 32,
-        compression: 0,
-        bytes: 0,
-        xppm: 0,
-        yppm: 0,
-        colors: 0,
-        important: 0,
-        rgb: 0,
-    };
-    // SAFETY: cx owns this live HWND on this thread. pixels contains exactly
-    // src_w*src_h 32-bit pixels, and the top-down BITMAPINFO describes those bytes.
-    unsafe {
-        let dc = GetDC(hwnd);
-        if dc.is_null() {
-            return Err("GetDC failed".into());
-        }
-        let copied = StretchDIBits(
-            dc,
-            x as i32,
-            y as i32,
-            dst_w as i32,
-            dst_h as i32,
-            0,
-            0,
-            src_w as i32,
-            src_h as i32,
-            pixels.as_ptr().cast(),
-            &info,
-            0,
-            0x00cc0020,
-        );
-        ReleaseDC(hwnd, dc);
-        if copied == 0 || copied == -1 {
-            return Err("StretchDIBits failed".into());
-        }
-    }
-    Ok(())
-}
-
 struct WorkerClipboard {
     #[cfg(not(target_os = "linux"))]
     requests: Arc<Requests>,
@@ -1665,9 +1559,6 @@ impl mui::Clipboard for WorkerClipboard {
         }
     }
 }
-#[cfg(target_os = "macos")]
-#[path = "mac_transport.rs"]
-mod mac_transport;
 
 #[cfg(test)]
 mod gpu_recovery_tests {
@@ -1692,7 +1583,10 @@ mod gpu_recovery_tests {
         assert!(!submit_patches(
             &requests,
             (2, 1),
-            false,
+            (2, 1),
+            mui_present::PresentationBackend::Offscreen,
+            mui_present::GraphicsApi::Vulkan,
+            None,
             "gpu",
             patches(),
             |_| {
@@ -1704,7 +1598,10 @@ mod gpu_recovery_tests {
         assert!(submit_patches(
             &requests,
             (2, 1),
-            false,
+            (2, 1),
+            mui_present::PresentationBackend::Offscreen,
+            mui_present::GraphicsApi::Vulkan,
+            None,
             "gpu",
             patches(),
             |_| true
@@ -1714,10 +1611,17 @@ mod gpu_recovery_tests {
             .expect("successful native submission");
         assert_eq!(presented.frames, 1);
         assert!(!presented.software);
+        assert_eq!(
+            requests.presentation_state().mode,
+            mui_present::PresentationMode::ReadbackGpu
+        );
         assert!(!submit_patches(
             &requests,
             (2, 1),
-            true,
+            (2, 1),
+            mui_present::PresentationBackend::Offscreen,
+            mui_present::GraphicsApi::Software,
+            None,
             "cpu",
             patches(),
             |_| false
@@ -1898,7 +1802,6 @@ mod gpu_recovery_tests {
         })));
         let (send, commands) = mpsc::channel();
         let (publish, output) = mpsc::sync_channel(4);
-        let (release, _released) = mpsc::channel();
         let stopped = Arc::new(AtomicBool::new(false));
         let tick_pending = Arc::new(AtomicBool::new(false));
         let worker_shared = Arc::clone(&shared);
@@ -1916,7 +1819,6 @@ mod gpu_recovery_tests {
                     output: publish,
                     stopped: worker_stopped,
                     tick_pending: worker_tick,
-                    release,
                 },
                 true,
             );

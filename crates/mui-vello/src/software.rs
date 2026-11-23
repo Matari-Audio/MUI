@@ -2,8 +2,6 @@
 use crate::{Cache, Canvas, Cpu, kurbo::Affine};
 use mui_scene::{Painted, ResolvedScene};
 use vello_common::pixmap::Pixmap;
-#[cfg(all(target_os = "macos", feature = "software-window"))]
-mod macos;
 
 /// A single-threaded CPU renderer. Unchanged scenes reuse their pixels.
 /// SIMD selection remains Vello's runtime choice; no machine-specific ISA is required.
@@ -241,20 +239,18 @@ pub fn rgba8(
     Ok(renderer.rgba8())
 }
 
-/// An opaque native window presenting CPU pixels. No wgpu device or surface is used.
+/// An opaque native window presenting CPU pixels via `mui-present`.
 #[cfg(feature = "software-window")]
 pub struct Window<W> {
-    // Removed before the softbuffer observer and native window are dropped.
-    #[cfg(target_os = "macos")]
-    _cpu_layers: macos::Layers,
-    surface: softbuffer::Surface<W, W>,
+    presenter: mui_present::CpuPresenter,
     renderer: Renderer,
+    pixels_0rgb: Vec<u32>,
     presented: bool,
-    opaque_bits: u32,
     startup: bool,
     size: (u32, u32),
     startup_color: Option<u32>,
-    damage_history: std::collections::VecDeque<Vec<[u32; 4]>>,
+    /// Retained last so `presenter` always drops before the native window handle.
+    _window: W,
 }
 
 #[cfg(feature = "software-window")]
@@ -275,39 +271,43 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         )
     }
     fn open(window: W, size: (u32, u32), startup: bool) -> Result<Self, String> {
-        // Softbuffer's X11 backend also accepts depth-32 ARGB visuals (which
-        // baseview prefers). Their high byte is alpha, not padding; zero would
-        // make an otherwise correct CPU frame invisible under a compositor.
-        // Depth-24 X11 ignores it. Other backends use softbuffer's 0x00RRGGBB.
-        let opaque_bits = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
-            raw_window_handle::RawWindowHandle::Xlib(_)
-            | raw_window_handle::RawWindowHandle::Xcb(_) => 0xff00_0000,
-            _ => 0,
-        };
+        let display = window.display_handle().map_err(|e| e.to_string())?.as_raw();
+        let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
         let renderer = Renderer::new(if background_only(startup, size) {
             (1, 1)
         } else {
             size
         })?;
-        let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
-        #[cfg(target_os = "macos")]
-        let before = macos::Snapshot::new(&window);
-        let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string());
-        #[cfg(target_os = "macos")]
-        let cpu_layers = before.finish();
-        let surface = surface?;
+        #[expect(
+            unsafe_code,
+            reason = "owned CpuPresenter borrows raw handles retained by Self::_window"
+        )]
+        let presenter = {
+            // SAFETY: `window` is retained as `_window` and dropped after `presenter`.
+            unsafe { mui_present::CpuPresenter::new(display, handle) }
+        }
+        .map_err(|e| e.to_string())?;
         Ok(Self {
-            #[cfg(target_os = "macos")]
-            _cpu_layers: cpu_layers,
-            surface,
+            presenter,
             renderer,
+            pixels_0rgb: Vec::new(),
             presented: false,
-            opaque_bits,
             startup,
             size,
             startup_color: None,
-            damage_history: std::collections::VecDeque::default(),
+            _window: window,
         })
+    }
+
+    /// Concrete native CPU presentation backend backing this window.
+    #[must_use]
+    pub fn backend(&self) -> mui_present::PresentationBackend {
+        self.presenter.backend()
+    }
+
+    /// Updates the display scale factor for Wayland viewport sizing.
+    pub fn set_scale_factor(&mut self, scale: f64) {
+        self.presenter.set_scale_factor(scale);
     }
 
     pub fn background_only(&self) -> bool {
@@ -370,10 +370,9 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         size: (u32, u32),
         overlay: Option<impl FnOnce(&mut dyn Canvas)>,
     ) -> Result<bool, String> {
-        use std::num::NonZeroU32;
-        let (Some(width), Some(height)) = (NonZeroU32::new(size.0), NonZeroU32::new(size.1)) else {
+        if size.0 == 0 || size.1 == 0 {
             return Ok(false);
-        };
+        }
         if self.size != size {
             self.invalidate();
             self.size = size;
@@ -383,12 +382,9 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
             if self.presented && self.startup_color == Some(rgb) {
                 return Ok(false);
             }
-            self.surface
-                .resize(width, height)
+            self.presenter
+                .fill_solid(rgb, size)
                 .map_err(|e| e.to_string())?;
-            let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
-            buffer.fill(self.opaque_bits | rgb);
-            buffer.present().map_err(|e| e.to_string())?;
             self.startup_color = Some(rgb);
             self.presented = true;
             return Ok(true);
@@ -408,31 +404,21 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         if !was_presented {
             damage = vec![[0, 0, size.0, size.1]];
         }
-        self.surface
-            .resize(width, height)
-            .map_err(|e| e.to_string())?;
-        let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
-        let age = usize::from(buffer.age());
-        let mut repair = damage.clone();
-        if age == 0 || age > self.damage_history.len() + 1 {
-            repair = vec![[0, 0, size.0, size.1]];
-        } else {
-            for old in self.damage_history.iter().take(age - 1) {
-                repair.extend_from_slice(old);
-            }
+        let len = size.0 as usize * size.1 as usize;
+        if self.pixels_0rgb.len() != len {
+            self.pixels_0rgb.resize(len, 0);
+            damage = vec![[0, 0, size.0, size.1]];
         }
-        for [x, y, w, h] in repair {
+        for &[x, y, w, h] in &damage {
             for row in y..y + h {
                 let start = row as usize * size.0 as usize + x as usize;
-                for (out, rgba) in buffer[start..start + w as usize].iter_mut().zip(
+                for (out, rgba) in self.pixels_0rgb[start..start + w as usize].iter_mut().zip(
                     self.renderer.pixels()[start * 4..(start + w as usize) * 4]
                         .as_chunks::<4>()
                         .0,
                 ) {
-                    *out = self.opaque_bits
-                        | (u32::from(rgba[0]) << 16)
-                        | (u32::from(rgba[1]) << 8)
-                        | u32::from(rgba[2]);
+                    *out =
+                        (u32::from(rgba[0]) << 16) | (u32::from(rgba[1]) << 8) | u32::from(rgba[2]);
                 }
             }
         }
@@ -441,18 +427,21 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
                 for row in y..y + h {
                     for col in x..x + w {
                         if col < x + 2 || row < y + 2 || col + 2 >= x + w || row + 2 >= y + h {
-                            buffer[row as usize * size.0 as usize + col as usize] =
-                                self.opaque_bits | 0x00ff0040;
+                            self.pixels_0rgb[row as usize * size.0 as usize + col as usize] =
+                                0x00ff_0040;
                         }
                     }
                 }
             }
         }
-        buffer
-            .present_with_damage(&softbuffer_rects(&damage))
+        let rects: Vec<mui_present::DamageRect> = damage
+            .iter()
+            .copied()
+            .map(mui_present::DamageRect::from_array)
+            .collect();
+        self.presenter
+            .present_full_with_damage(&self.pixels_0rgb, size, &rects)
             .map_err(|e| e.to_string())?;
-        self.damage_history.push_front(damage);
-        self.damage_history.truncate(4);
         self.presented = true;
         Ok(true)
     }
@@ -476,95 +465,57 @@ fn startup_color(scene: &ResolvedScene) -> u32 {
     (u32::from(rgb.r) << 16) | (u32::from(rgb.g) << 8) | u32::from(rgb.b)
 }
 
-/// Native dirty-bitmap transport. No scene traversal, raster or GPU work occurs
-/// here; callers submit completed pixels from an editor worker.
+/// Native dirty-bitmap transport backed by `mui-present`. No scene traversal,
+/// raster or GPU work occurs here; callers submit completed pixels from an
+/// editor worker.
 #[cfg(feature = "software-window")]
 pub struct BitmapWindow<W> {
-    surface: softbuffer::Surface<W, W>,
-    size: (u32, u32),
-    pixels: Vec<u32>,
-    history: std::collections::VecDeque<Vec<[u32; 4]>>,
-    opaque: u32,
+    presenter: mui_present::CpuPresenter,
+    /// Retained last so `presenter` always drops before the native window handle.
+    _window: W,
 }
 #[cfg(feature = "software-window")]
 impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle + Clone>
     BitmapWindow<W>
 {
     pub fn new(window: W) -> Result<Self, String> {
-        let opaque = match window.window_handle().map_err(|e| e.to_string())?.as_raw() {
-            raw_window_handle::RawWindowHandle::Xlib(_)
-            | raw_window_handle::RawWindowHandle::Xcb(_) => 0xff00_0000,
-            _ => 0,
-        };
-        let context = softbuffer::Context::new(window.clone()).map_err(|e| e.to_string())?;
-        let surface = softbuffer::Surface::new(&context, window).map_err(|e| e.to_string())?;
+        let display = window.display_handle().map_err(|e| e.to_string())?.as_raw();
+        let handle = window.window_handle().map_err(|e| e.to_string())?.as_raw();
+        #[expect(
+            unsafe_code,
+            reason = "owned CpuPresenter borrows raw handles retained by Self::_window"
+        )]
+        let presenter = {
+            // SAFETY: `window` is retained as `_window` and dropped after `presenter`.
+            unsafe { mui_present::CpuPresenter::new(display, handle) }
+        }
+        .map_err(|e| e.to_string())?;
         Ok(Self {
-            surface,
-            size: (0, 0),
-            pixels: Vec::new(),
-            history: std::collections::VecDeque::default(),
-            opaque,
+            presenter,
+            _window: window,
         })
     }
+
+    /// Concrete native CPU presentation backend backing this bitmap window.
+    #[must_use]
+    pub fn backend(&self) -> mui_present::PresentationBackend {
+        self.presenter.backend()
+    }
+
+    /// Updates the display scale factor for Wayland viewport sizing.
+    pub fn set_scale_factor(&mut self, scale: f64) {
+        self.presenter.set_scale_factor(scale);
+    }
+
     pub fn present_patch(
         &mut self,
-        rect @ [x, y, w, h]: [u32; 4],
+        rect: [u32; 4],
         pixels: &[u32],
         size: (u32, u32),
     ) -> Result<(), String> {
-        use std::num::NonZeroU32;
-        dimensions(size)?;
-        if x.checked_add(w).is_none_or(|r| r > size.0)
-            || y.checked_add(h).is_none_or(|b| b > size.1)
-            || pixels.len() != w as usize * h as usize
-        {
-            return Err("invalid bitmap patch".into());
-        }
-        if self.size != size {
-            self.pixels
-                .resize(size.0 as usize * size.1 as usize, self.opaque);
-            self.history.clear();
-            self.size = size;
-            self.surface
-                .resize(
-                    NonZeroU32::new(size.0).unwrap(),
-                    NonZeroU32::new(size.1).unwrap(),
-                )
-                .map_err(|e| e.to_string())?;
-        }
-        for row in 0..h as usize {
-            let start = (y as usize + row) * size.0 as usize + x as usize;
-            for (dst, src) in self.pixels[start..start + w as usize]
-                .iter_mut()
-                .zip(&pixels[row * w as usize..(row + 1) * w as usize])
-            {
-                *dst = self.opaque | *src;
-            }
-        }
-        let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
-        let mut repair = vec![rect];
-        let age = usize::from(buffer.age());
-        if age == 0 || age > self.history.len() + 1 {
-            repair = vec![[0, 0, size.0, size.1]];
-        } else {
-            for old in self.history.iter().take(age - 1) {
-                repair.extend_from_slice(old);
-            }
-        }
-        for [x, y, w, h] in repair {
-            for row in y..y + h {
-                let start = row as usize * size.0 as usize + x as usize;
-                buffer[start..start + w as usize]
-                    .copy_from_slice(&self.pixels[start..start + w as usize]);
-            }
-        }
-        let damage = softbuffer_rects(&[rect]);
-        buffer
-            .present_with_damage(&damage)
-            .map_err(|e| e.to_string())?;
-        self.history.push_front(vec![rect]);
-        self.history.truncate(4);
-        Ok(())
+        self.presenter
+            .present_patch(mui_present::DamageRect::from_array(rect), pixels, size)
+            .map_err(|e| e.to_string())
     }
 
     /// Present a budgeted `src_size` bitmap scaled to fill `dst_size` physical
@@ -576,58 +527,10 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         pixels: &[u32],
         dst_size: (u32, u32),
     ) -> Result<(), String> {
-        use std::num::NonZeroU32;
-        if src_size.0 == 0
-            || src_size.1 == 0
-            || dst_size.0 == 0
-            || dst_size.1 == 0
-            || pixels.len() != src_size.0 as usize * src_size.1 as usize
-        {
-            return Err("invalid scaled bitmap".into());
-        }
-        // Release the 1:1 retained copy while scaled so large surfaces stay bounded.
-        if self.size != (0, 0) {
-            self.size = (0, 0);
-            self.pixels.clear();
-            self.history.clear();
-        }
-        self.surface
-            .resize(
-                NonZeroU32::new(dst_size.0).unwrap(),
-                NonZeroU32::new(dst_size.1).unwrap(),
-            )
-            .map_err(|e| e.to_string())?;
-        let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
-        let (sw, sh) = (src_size.0 as usize, src_size.1 as usize);
-        let (dw, dh) = (dst_size.0 as usize, dst_size.1 as usize);
-        let opaque = self.opaque;
-        for dy in 0..dh {
-            let sy = (dy * sh) / dh;
-            let src_row = &pixels[sy * sw..(sy + 1) * sw];
-            let dst_row = &mut buffer[dy * dw..(dy + 1) * dw];
-            for (dx, out) in dst_row.iter_mut().enumerate() {
-                let sx = (dx * sw) / dw;
-                *out = opaque | src_row[sx];
-            }
-        }
-        buffer.present().map_err(|e| e.to_string())?;
-        Ok(())
+        self.presenter
+            .present_scaled(src_size, pixels, dst_size)
+            .map_err(|e| e.to_string())
     }
-}
-#[cfg(feature = "software-window")]
-fn softbuffer_rects(rects: &[[u32; 4]]) -> Vec<softbuffer::Rect> {
-    use std::num::NonZeroU32;
-    rects
-        .iter()
-        .filter_map(|&[x, y, w, h]| {
-            Some(softbuffer::Rect {
-                x,
-                y,
-                width: NonZeroU32::new(w)?,
-                height: NonZeroU32::new(h)?,
-            })
-        })
-        .collect()
 }
 
 fn debug_damage() -> bool {

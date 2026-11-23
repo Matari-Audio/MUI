@@ -2,23 +2,23 @@
 
 19 September 2026. Integration base: `a9cc11d232986fce8dfb1a12aa20afd7dcbb664e`.
 
-11 November 2026 (updated in Wave 1B): the GPU path is the 4-pass instanced SDF
-quad pass (`mui_vello::quad`, feature `gpu-quad`) + analytic welds
-(`effects::GpuRenderer`), currently over wgpu 30 and preserved directly for Wave
-2 (`mui-present`) and Wave 3 (`mui-hal`): no compute shaders, no storage
-buffers. Classic Vello (compute shaders) is deleted, with `effects::VelloRenderer`
-and the `vello-classic` feature; the last head-to-head numbers are in
-`BENCHMARKS.md`. Adapter selection rejects all `wgpu::DeviceType::Cpu` adapters
-(Windows DX12 WARP, Linux Vulkan Lavapipe/SwiftShader, GL llvmpipe) so software
-drivers fall back directly to dirty-rect `vello_cpu`; `MUI_FORCE_CPU=1` or
-`MUI_RENDERER=cpu` forces CPU rendering explicitly. Swapchain selection ranks
-`Mailbox` → `Fifo` → `FifoRelaxed` → `Immediate` and reconfigures after
-`Acquired::Suboptimal`.
+The GPU path uses the 4-pass instanced SDF quad renderer
+(`mui_vello::quad`, feature `gpu-quad`) and analytic welds
+(`effects::GpuRenderer`) on wgpu 30. The renderer uses raster passes with
+uniform and texture bindings. Adapter selection skips software GPU drivers
+such as WARP, Lavapipe, and llvmpipe. Set `MUI_FORCE_CPU=1` or
+`MUI_RENDERER=cpu` to select the dirty-rect CPU renderer. Swapchain selection
+ranks `Mailbox` → `Fifo` → `FifoRelaxed` → `Immediate` and reconfigures
+after `Acquired::Suboptimal`.
 
-**Status: builds, passes its tests, and runs on a physical device.** The
-workspace builds and its test suite passes (including the Naga validation test
-and the `effects_smoke` device test). The `bench` example has been run on an
-AMD RX 6600 (RADV/Vulkan). No DAW or plugin-host test has been run.
+`mui-present` owns software bitmap presentation and provides the
+DirectComposition and Vulkan swapchain hosts for the native GPU migration.
+`mui-shaders` validates the four WGSL modules during the build and emits
+SPIR-V 1.3, MSL 2.3, HLSL Shader Model 5.0, and binding layouts. The shader
+crate uses Naga only while building its artifacts.
+
+The `effects_smoke` test exercises the GPU renderer. The `bench` example
+has run on an AMD RX 6600 (RADV/Vulkan). [Benchmark results](../BENCHMARKS.md)
 
 This is cumulative with the earlier audit-hardening and CPU material-welding
 patches. The CPU baker remains an explicit reference/snapshot path. Native

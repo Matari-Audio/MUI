@@ -543,10 +543,11 @@ fn native_surface_presents_and_reopens() {
                             started.elapsed().as_secs_f64() * 1000.,
                         );
                         if replacement != 0 {
-                            // SAFETY: cx outlives gpu and the replacement surface.
-                            #[expect(unsafe_code, reason = "exercises native surface recovery")]
-                            let surface = unsafe { surface::create(gpu.instance(), &self.cx) }
-                                .ok_or("surface recreation failed")?;
+                            let (surface, _) = surface::create(
+                                gpu.instance(),
+                                self.cx.platform_handle(),
+                                (240, 200),
+                            )?;
                             gpu.try_replace_surface(surface)
                                 .map_err(|e| format!("replacement {replacement}: {e}"))?;
                             assert_eq!(gpu.generation(), replacement);

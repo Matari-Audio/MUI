@@ -10,9 +10,9 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every crate is `#![forbid(unsafe_code)]` except `mui-baseview`,
-which denies it and allows a few documented blocks: native accessibility
-attachment, the wgpu surface on the native window, and platform hooks.
+The UI, layout, and renderer crates forbid unsafe code. Native FFI for
+window attachment, accessibility, and bitmap presentation lives in the
+platform adapters.
 Every library crate compiles to `wasm32-unknown-unknown`; `mui-preview`
 and `mui-baseview`'s native window do not. The geometry, layout, style and
 motion crates stay small -- `mui-motion` has no dependencies at all -- while
@@ -50,13 +50,16 @@ alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
-Plugin and standalone windows also have an automatic software fallback:
-`vello_cpu` rasterizes dirty rectangles into native pixel buffers without
-opening a wgpu device (and `mui-vello` rejects `wgpu::DeviceType::Cpu`
-adapters such as Windows WARP and Linux Lavapipe/llvmpipe so broken or
-software GPU drivers go straight to `vello_cpu`). `MUI_FORCE_CPU=1` or
-`MUI_RENDERER=cpu` forces that path explicitly. See
-[docs/platform-notes.md](docs/platform-notes.md).
+Plugin and standalone windows fall back to `vello_cpu` and `mui-present`
+for software rendering. The presenter uploads dirty rectangles through
+retained Win32 DIBs, IOSurfaces on macOS, X11 shared memory, or a Wayland
+shared-memory child surface. Adapter selection skips software GPU drivers
+such as WARP and Lavapipe. Set `MUI_FORCE_CPU=1` or `MUI_RENDERER=cpu` to
+select software rendering explicitly. [Platform notes](docs/platform-notes.md)
+
+`mui-shaders` compiles the renderer's four WGSL modules to SPIR-V, MSL,
+and HLSL at build time for the planned native GPU backends.
+[Native GPU renderer](docs/NATIVE-GPU.md)
 
 The classic-versus-Hybrid measurements that led here (history: MUI shipped on
 `vello_hybrid` first) live in the

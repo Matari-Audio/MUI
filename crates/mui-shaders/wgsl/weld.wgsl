@@ -140,8 +140,9 @@ fn shade(p: vec2<f32>) -> vec4<f32> {
     let aa = select(select(max(derivative,pixel),pixel,u.policy.z>0.),u.policy.w,u.policy.w>0.);
     let a = coverage(d,aa);
     if a <= 0. { return vec4(0.); }
-    var labs: array<vec4<f32>,3>;
-    var borders: array<vec4<f32>,3>;
+    // Explicit values let HLSL lower these arrays without a scalar-to-array cast.
+    var labs = array(vec4(0.), vec4(0.), vec4(0.));
+    var borders = array(vec4(0.), vec4(0.), vec4(0.));
     var original = vec4(0.);
     var old_fill = vec4(0.);
     for(var i=0u; i<3u; i=i+1u) {

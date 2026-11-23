@@ -236,10 +236,11 @@ the solver knows nothing of style, so the edge points one way.
 `mui-vello`.
 
 The GPU renderer is the 4-pass instanced SDF quad pass (`mui-vello::quad`,
-feature `gpu-quad`) plus analytic welds (`effects::GpuRenderer`), preserved
-ahead of Wave 2 (`mui-present`) and Wave 3 (`mui-hal`). Classic Vello (the
-compute-shader renderer) is deleted, and `vendor/vello_cpu` is the dirty-rect
-CPU renderer and pixel reference. GPU adapter selection rejects all
+feature `gpu-quad`) plus analytic welds (`effects::GpuRenderer`).
+`mui-shaders` lowers the pipeline's WGSL to SPIR-V, MSL and HLSL during
+the build. `vendor/vello_cpu` is the dirty-rect CPU renderer and pixel
+reference. `mui-present` uploads its pixels through native bitmap presenters
+on each desktop OS. GPU adapter selection rejects all
 `wgpu::DeviceType::Cpu` adapters (Windows DX12 WARP, Linux Vulkan
 Lavapipe/SwiftShader, GL llvmpipe) so broken or software-only GPU drivers fall
 back directly to `vello_cpu`.

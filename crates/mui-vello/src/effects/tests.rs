@@ -66,57 +66,24 @@ fn sparse_dirty_ranges_are_coalesced_without_painting_everything() {
         vec![16..48, 80..96]
     );
 }
-/// This is the real WGSL parser/type/uniformity check, not a string assertion.
-/// It runs without an adapter; native pixel tests are a separate opt-in binary.
 #[test]
-fn naga_validates_the_shader_and_the_uniform_abi() {
-    let module = naga::front::wgsl::parse_str(super::WELD_SHADER)
-        .unwrap_or_else(|e| panic!("{}", e.emit_to_string(super::WELD_SHADER)));
-    naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::all(),
-    )
-    .validate(&module)
-    .expect("WGSL type/uniformity validation");
+fn weld_uniform_layout_matches_the_host() {
+    let shader = mui_shaders::ShaderId::Weld.artifact();
     for name in ["vs_main", "fs_hybrid"] {
-        assert!(module.entry_points.iter().any(|e| e.name == name));
+        assert!(shader.entry_point(name).is_some(), "missing {name}");
     }
-    let uniform = module
-        .global_variables
-        .iter()
-        .map(|(_, v)| v)
-        .find(|v| v.name.as_deref() == Some("u"))
-        .expect("u");
-    let naga::TypeInner::Struct { members, span } = &module.types[uniform.ty].inner else {
-        panic!("Params must be a struct")
-    };
-    assert_eq!(*span, PARAM_BYTES as u32);
+
+    let layout = shader.binding("u").unwrap().uniform_layout.unwrap();
+    assert_eq!(layout.size, PARAM_BYTES as u32);
     assert_eq!(
-        members.iter().map(|m| m.offset).collect::<Vec<_>>(),
+        layout.members.iter().map(|m| m.offset).collect::<Vec<_>>(),
         [0, 16, 32, 48]
     );
-    let naga::TypeInner::Array { stride, .. } = &module.types[members[3].ty].inner else {
-        panic!("sources must be an array")
-    };
-    assert_eq!(*stride, 96);
-}
+    assert_eq!(layout.members[3].array_stride, Some(96));
 
-#[test]
-fn naga_validates_crisp_boundary_uniform_stride() {
-    let m = naga::front::wgsl::parse_str(super::WELD_SHADER).expect("WGSL parse");
-    let b = m
-        .global_variables
-        .iter()
-        .map(|(_, v)| v)
-        .find(|v| v.name.as_deref() == Some("boundary"))
-        .expect("boundary binding");
-    assert_eq!(b.binding.as_ref().unwrap().binding, 1);
-    let naga::TypeInner::Struct { members, span } = &m.types[b.ty].inner else {
-        panic!("boundary struct")
-    };
-    assert_eq!(*span, mui_weld::boundary::BOUNDARY_BYTES as u32);
-    let naga::TypeInner::Array { stride, .. } = &m.types[members[0].ty].inner else {
-        panic!("edges")
-    };
-    assert_eq!(*stride, 48);
+    let boundary = shader.binding("boundary").unwrap();
+    assert_eq!(boundary.binding, 1);
+    let layout = boundary.uniform_layout.unwrap();
+    assert_eq!(layout.size, mui_weld::boundary::BOUNDARY_BYTES as u32);
+    assert_eq!(layout.members[0].array_stride, Some(48));
 }

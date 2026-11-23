@@ -12,32 +12,19 @@ use raw_window_handle::RawWindowHandle;
 #[cfg(target_os = "macos")]
 #[must_use]
 #[expect(unsafe_code, reason = "Objective-C messages to the host's views")]
-#[expect(
-    unexpected_cfgs,
-    reason = "objc 0.2's msg_send! tests the retired `cargo-clippy` feature"
-)]
 pub fn should_skip_frame(handle: RawWindowHandle) -> bool {
-    use objc::{msg_send, sel, sel_impl};
+    use objc2_app_kit::{NSView, NSWindowOcclusionState};
 
-    let view_ptr = match handle {
-        RawWindowHandle::AppKit(h) => h.ns_view.as_ptr(),
-        _ => return false,
+    let RawWindowHandle::AppKit(handle) = handle else {
+        return false;
     };
-
-    // SAFETY: `view_ptr` is baseview's live, non-null NSView; `window` and
-    // `occlusionState` are plain AppKit queries on the thread that owns it.
-    unsafe {
-        let view = view_ptr.cast::<objc::runtime::Object>();
-        let window: *mut objc::runtime::Object = msg_send![view, window];
-        if window.is_null() {
-            // Detached from any window - nothing to present into.
-            return true;
-        }
-        // `NSWindowOcclusionStateVisible` == 1 << 1. Bit clear => the
-        // window is not visible (minimized or fully covered).
-        let state: u64 = msg_send![window, occlusionState];
-        state & (1 << 1) == 0
-    }
+    // SAFETY: baseview supplies its live NSView on the main thread.
+    let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
+    view.window().is_none_or(|window| {
+        !window
+            .occlusionState()
+            .contains(NSWindowOcclusionState::Visible)
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -63,30 +50,6 @@ pub fn should_skip_frame(handle: RawWindowHandle) -> bool {
 #[must_use]
 pub fn should_skip_frame(_handle: RawWindowHandle) -> bool {
     false
-}
-
-#[cfg(target_os = "macos")]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NsPoint {
-    x: f64,
-    y: f64,
-}
-
-#[cfg(target_os = "macos")]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NsSize {
-    width: f64,
-    height: f64,
-}
-
-#[cfg(target_os = "macos")]
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct NsRect {
-    origin: NsPoint,
-    size: NsSize,
 }
 
 /// Put the pointer at `x`, `y` physical pixels from the top
@@ -160,51 +123,36 @@ pub fn warp_pointer(window: &baseview::WindowContext, x: f64, y: f64, _scale: f6
 
 #[cfg(target_os = "macos")]
 #[expect(unsafe_code, reason = "AppKit conversions and a Quartz warp")]
-#[expect(
-    unexpected_cfgs,
-    reason = "objc 0.2's msg_send! tests the retired `cargo-clippy` feature"
-)]
 pub fn warp_pointer(window: &baseview::WindowContext, x: f64, y: f64, scale: f64) {
-    use objc::runtime::Object;
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSScreen, NSView};
+    use objc2_foundation::NSPoint;
     use raw_window_handle::HasWindowHandle;
+
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
-        fn CGWarpMouseCursorPosition(point: NsPoint) -> i32;
+        fn CGWarpMouseCursorPosition(point: NSPoint) -> i32;
         fn CGAssociateMouseAndMouseCursorPosition(connected: i32) -> i32;
     }
     let Ok(RawWindowHandle::AppKit(h)) = window.window_handle().map(|h| h.as_raw()) else {
         return;
     };
-    // SAFETY: `ns_view` is baseview's live NSView; these are AppKit
-    // geometry queries on the main thread that owns it, and the warp takes
-    // a plain point.
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    // SAFETY: baseview supplies its live NSView on the main thread.
+    let view = unsafe { h.ns_view.cast::<NSView>().as_ref() };
+    let (Some(window), Some(main)) = (view.window(), NSScreen::screens(mtm).firstObject()) else {
+        return;
+    };
+    let local = NSPoint::new(x / scale, y / scale);
+    let on_screen = window.convertPointToScreen(view.convertPoint_toView(local, None));
+    // SAFETY: the position is a Core Graphics point and the warp runs on the main thread.
     unsafe {
-        let view = h.ns_view.as_ptr().cast::<Object>();
-        let ns_window: *mut Object = msg_send![view, window];
-        let screens: *mut Object = msg_send![class!(NSScreen), screens];
-        if ns_window.is_null() || screens.is_null() {
-            return;
-        }
-        let main: *mut Object = msg_send![screens, firstObject];
-        if main.is_null() {
-            return;
-        }
-        // Points in the (flipped) view, to the window, to the screen, whose
-        // origin is bottom left; Quartz counts from the main screen's top.
-        let local = NsPoint {
-            x: x / scale,
-            y: y / scale,
-        };
-        let nil: *mut Object = std::ptr::null_mut();
-        let in_window: NsPoint = msg_send![view, convertPoint: local toView: nil];
-        let on_screen: NsPoint = msg_send![ns_window, convertPointToScreen: in_window];
-        let frame: NsRect = msg_send![main, frame];
-        CGWarpMouseCursorPosition(NsPoint {
-            x: on_screen.x,
-            y: frame.size.height - on_screen.y,
-        });
-        // A warp holds the pointer still a moment unless reconnected.
+        CGWarpMouseCursorPosition(NSPoint::new(
+            on_screen.x,
+            main.frame().size.height - on_screen.y,
+        ));
         CGAssociateMouseAndMouseCursorPosition(1);
     }
 }

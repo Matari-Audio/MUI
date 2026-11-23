@@ -70,7 +70,9 @@ pub fn instance_descriptor() -> wgpu::InstanceDescriptor {
         wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL
     };
     descriptor.backend_options.dx12.shader_compiler = dx12_compiler();
-    descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromHwnd;
+    // A DirectComposition visual on the HWND: flip-model, per-pixel alpha,
+    // and no GDI redirection surface under the swapchain.
+    descriptor.backend_options.dx12.presentation_system = wgpu::Dx12SwapchainKind::DxgiFromVisual;
     descriptor.backend_options.dx12.latency_waitable_object =
         wgpu::Dx12UseFrameLatencyWaitableObject::DontWait;
     crate::diagnostics::breadcrumb(
@@ -240,19 +242,54 @@ pub fn surface_format(formats: &[wgpu::TextureFormat]) -> Option<wgpu::TextureFo
     })
 }
 
-/// Whether the environment explicitly forces CPU-only software rendering
-/// (`MUI_FORCE_CPU=1` / `true`, or `MUI_RENDERER=cpu`). Needed on drivers such
-/// as proprietary NVIDIA that ignore `LIBGL_ALWAYS_SOFTWARE=1`.
+/// Whether CPU-only software rendering is forced by either the user toggle
+/// (`mui_present::set_user_software_mode`) or the environment (`MUI_FORCE_CPU=1`
+/// / `true`, or `MUI_RENDERER=cpu`). Needed on drivers such as proprietary NVIDIA
+/// that ignore `LIBGL_ALWAYS_SOFTWARE=1`.
 pub fn force_cpu() -> bool {
-    force_cpu_from(
-        std::env::var("MUI_FORCE_CPU").ok().as_deref(),
-        std::env::var("MUI_RENDERER").ok().as_deref(),
-    )
+    mui_present::software_mode_enabled()
 }
 
+#[cfg(test)]
 fn force_cpu_from(force_cpu: Option<&str>, renderer: Option<&str>) -> bool {
     force_cpu.is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
         || renderer.is_some_and(|v| v.eq_ignore_ascii_case("cpu"))
+}
+
+/// Refuses a candidate whose driver crashed before ([`GpuStage::Sentinel`]);
+/// otherwise guards its initialization against a crash.
+fn enter_sentinel(
+    sentinel: &mui_present::CrashSentinel,
+    candidate: &mut AdapterDiagnostic,
+) -> Result<Option<mui_present::SentinelGuard>, String> {
+    let driver = driver_id(&candidate.adapter);
+    if sentinel.is_tripped(&driver) {
+        candidate.stage = GpuStage::Sentinel;
+        return Err(format!(
+            "per-driver crash sentinel tripped for {driver}; auto-falling back to CPU"
+        ));
+    }
+    Ok(sentinel.enter(&driver, "gpu_init").ok())
+}
+
+/// The graphics API of a wgpu backend.
+pub fn graphics_api(backend: wgpu::Backend) -> mui_present::GraphicsApi {
+    use mui_present::GraphicsApi as A;
+    match backend {
+        wgpu::Backend::Vulkan => A::Vulkan,
+        wgpu::Backend::Dx12 => A::D3D12,
+        wgpu::Backend::Metal => A::Metal,
+        _ => A::Software,
+    }
+}
+
+fn driver_id(info: &wgpu::AdapterInfo) -> mui_present::DriverId {
+    mui_present::DriverId::new(
+        format!("{:?}", info.backend),
+        info.vendor,
+        info.device,
+        format!("{}:{}", info.driver, info.driver_info),
+    )
 }
 
 /// Prefer Mailbox (tear-free low latency) then Fifo / FifoRelaxed, falling back
@@ -332,6 +369,8 @@ pub enum GpuStage {
     Renderer,
     /// Configuring the real window surface failed.
     Surface,
+    /// The crash sentinel quarantined this adapter's driver.
+    Sentinel,
     /// The complete candidate was installed.
     Ready,
 }
@@ -521,10 +560,12 @@ impl HostError {
         match self {
             Self::Unavailable { class, .. } => *class,
             Self::Initialization(report)
-                if report
-                    .candidates
-                    .iter()
-                    .all(|c| matches!(c.stage, GpuStage::Capabilities | GpuStage::Renderer)) =>
+                if report.candidates.iter().all(|c| {
+                    matches!(
+                        c.stage,
+                        GpuStage::Capabilities | GpuStage::Renderer | GpuStage::Sentinel
+                    )
+                }) =>
             {
                 FailureClass::Permanent
             }
@@ -532,6 +573,26 @@ impl HostError {
             // Surface loss, allocation pressure and render/driver faults can
             // clear without restarting a DAW. Retry with the existing backoff.
             _ => FailureClass::Transient,
+        }
+    }
+    /// Why the window falls back to CPU frames after this error.
+    pub fn fallback_reason(&self) -> mui_present::FallbackReason {
+        use mui_present::FallbackReason as R;
+        match self {
+            Self::Initialization(report)
+                if report
+                    .candidates
+                    .iter()
+                    .any(|c| c.stage == GpuStage::Sentinel) =>
+            {
+                R::DriverSentinelTripped
+            }
+            Self::Initialization(_) | Self::Adapter(_) | Self::Unavailable { .. } => {
+                R::AdapterUnavailable
+            }
+            Self::DeviceLost(_) => R::DeviceLost,
+            Self::Render(_) | Self::Validation => R::RenderFailed,
+            Self::Device(_) | Self::Surface(_) | Self::Configuration(_) => R::InitializationFailed,
         }
     }
     /// Candidate failures, also when this error wraps a device-loss rebuild.
@@ -642,6 +703,10 @@ impl OnDevice {
         transparency: Transparency,
         candidate: &mut AdapterDiagnostic,
     ) -> Result<Self, String> {
+        // Before the first driver call: a crash while probing formats or the
+        // surface must leave a marker, and a tripped driver is never queried.
+        let _sentinel_guard =
+            enter_sentinel(&mui_present::CrashSentinel::default_store(), candidate)?;
         candidate.supported_limits = adapter.limits();
         // The renderer needs WebGL2-class limits at the adapter's own texture
         // size (`selection::requested_limits`); an adapter below them is
@@ -897,6 +962,11 @@ impl Host {
     /// was asked for and the surface offered a way to.
     pub fn translucent(&self) -> bool {
         is_translucent(self.gpu.config.alpha_mode)
+    }
+
+    /// The graphics API of the selected adapter.
+    pub fn api(&self) -> mui_present::GraphicsApi {
+        graphics_api(self.gpu.adapter.get_info().backend)
     }
 
     /// The instance the surface came from, for making a replacement.
@@ -1523,6 +1593,48 @@ mod tests {
         );
         assert_eq!(report.candidates[2].stage, GpuStage::Ready);
         assert!(report.candidates[2].failure.is_none());
+    }
+
+    #[test]
+    fn a_quarantined_driver_reports_a_sentinel_fallback() {
+        let dir = std::env::temp_dir().join(format!("mui-vello-sentinel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let sentinel = mui_present::CrashSentinel::new(dir.clone());
+        let mut candidate = AdapterDiagnostic {
+            adapter: adapter_info(
+                "quarantined",
+                wgpu::DeviceType::DiscreteGpu,
+                wgpu::Backend::Vulkan,
+            ),
+            supported_limits: wgpu::Limits::default(),
+            requested_limits: wgpu::Limits::default(),
+            stage: GpuStage::Surface,
+            format: None,
+            alpha_mode: None,
+            failure: None,
+        };
+        assert!(enter_sentinel(&sentinel, &mut candidate).unwrap().is_some());
+        sentinel
+            .trip(&driver_id(&candidate.adapter), "test crash")
+            .unwrap();
+        let Err(error) = enter_sentinel(&sentinel, &mut candidate) else {
+            panic!("a tripped driver is refused");
+        };
+        assert_eq!(candidate.stage, GpuStage::Sentinel);
+        candidate.failure = Some(error);
+        let report = GpuDiagnostics {
+            candidates: vec![candidate],
+        };
+        let error = HostError::Initialization(report);
+        assert_eq!(
+            error.fallback_reason(),
+            mui_present::FallbackReason::DriverSentinelTripped
+        );
+        assert_eq!(error.failure_class(), FailureClass::Permanent);
+        let mut state = mui_present::PresentationState::default();
+        state.record_fallback(Some(error.fallback_reason()));
+        assert!(state.driver_sentinel_tripped);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

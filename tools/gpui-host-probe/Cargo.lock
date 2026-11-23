@@ -3158,6 +3158,26 @@ name = "mui-motion"
 version = "0.4.2"
 
 [[package]]
+name = "mui-present"
+version = "0.4.2"
+dependencies = [
+ "ash",
+ "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-io-surface",
+ "objc2-quartz-core 0.3.2",
+ "raw-window-handle",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "windows-sys",
+ "x11rb",
+]
+
+[[package]]
 name = "mui-scene"
 version = "0.4.2"
 dependencies = [
@@ -3208,6 +3228,7 @@ dependencies = [
  "glifo",
  "mach-dxcompiler-rs",
  "mui-geometry",
+ "mui-present",
  "mui-scene",
  "mui-weld",
  "rustc-hash 2.1.3",
@@ -3547,6 +3568,7 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
+ "objc2-quartz-core 0.3.2",
 ]
 
 [[package]]
@@ -3612,6 +3634,17 @@ dependencies = [
  "block2 0.6.2",
  "libc",
  "objc2 0.6.5",
+ "objc2-core-foundation",
+]
+
+[[package]]
+name = "objc2-io-surface"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "180788110936d59bab6bd83b6060ffdfffb3b922ba1396b312ae795e1de9d81d"
+dependencies = [
+ "bitflags 2.13.2",
+ "libc",
  "objc2-core-foundation",
 ]
 

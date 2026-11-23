@@ -1,0 +1,13 @@
+[package]
+name = "mui-shaders"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "MUI renderer shaders lowered at build time with binding reflection"
+
+[build-dependencies]
+naga = { version = "=30.0.1", features = ["wgsl-in", "spv-out", "msl-out", "hlsl-out", "glsl-out"] }
+
+[lints]
+workspace = true

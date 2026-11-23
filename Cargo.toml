@@ -12,6 +12,8 @@ members = [
   "crates/mui-headless",
   "crates/mui-playground",
   "crates/mui-text",
+  "crates/mui-present",
+  "crates/mui-shaders",
   "crates/mui-vello",
   "crates/mui-baseview",
   "crates/mui-input",
@@ -43,8 +45,10 @@ mui-layout = { path = "crates/mui-layout" }
 mui-material = { path = "crates/mui-material" }
 mui-motion = { path = "crates/mui-motion" }
 mui-playground = { path = "crates/mui-playground" }
+mui-present = { path = "crates/mui-present" }
 mui-preview = { path = "crates/mui-preview" }
 mui-scene = { path = "crates/mui-scene" }
+mui-shaders = { path = "crates/mui-shaders" }
 mui-style = { path = "crates/mui-style" }
 mui-symbols = { path = "crates/mui-symbols" }
 mui-text = { path = "crates/mui-text" }

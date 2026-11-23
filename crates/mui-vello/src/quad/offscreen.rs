@@ -14,7 +14,7 @@ use rustc_hash::FxHashMap;
 pub const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// The blur shader.
-pub const BLUR_SHADER: &str = include_str!("blur.wgsl");
+pub const BLUR_SHADER: &str = mui_shaders::BLUR_WGSL;
 
 /// Uniform slots are this far apart, the alignment every device allows for
 /// a dynamic offset; each binds [`SLOT_BYTES`] of it.
