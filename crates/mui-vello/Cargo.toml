@@ -13,17 +13,18 @@ reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hick
 # The GPU renderer (`effects::GpuRenderer`, `host`): the instanced SDF quad
 # pass, with no compute shaders and no storage buffers. `vello_cpu` rasterises
 # glyph masks for its atlas and the frames the pass refuses.
-gpu-quad = ["cpu", "wgpu/wgsl", "dep:pollster"]
+gpu-quad = ["cpu", "wgpu/wgsl", "dep:pollster", "dep:mui-shaders"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.
 cpu = ["dep:vello_cpu", "dep:glifo"]
 # Rasterise on a rayon pool instead of one core. Off by default: a snapshot-
 # sized pixmap loses more to thread hand-off than it gains.
 cpu-threads = ["cpu", "vello_cpu/multithreading"]
-# Native CPU presentation, independent of GPU drivers.
-software-window = ["cpu", "dep:softbuffer", "dep:raw-window-handle", "dep:objc"]
+# Native CPU presentation, independent of GPU drivers (owned `mui-present`).
+software-window = ["cpu", "dep:raw-window-handle"]
 
 [dependencies]
-softbuffer = { version = "0.4", default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"], optional = true }
+mui-present.workspace = true
+mui-shaders = { workspace = true, optional = true }
 raw-window-handle = { version = "0.6", optional = true }
 mui-scene.workspace = true
 mui-weld.workspace = true
@@ -44,7 +45,6 @@ wgpu.workspace = true
 vello_cpu = { workspace = true, optional = true }
 
 [dev-dependencies]
-naga = { version = "30", features = ["wgsl-in", "glsl-out"] }
 mui-layout.workspace = true
 mui-material.workspace = true
 epaint_default_fonts.workspace = true
@@ -55,10 +55,6 @@ png.workspace = true
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
 pollster.workspace = true
 mui.workspace = true
-
-[target.'cfg(target_os = "macos")'.dependencies]
-# Remove only softbuffer's CPU CALayer on native CPU -> Metal handover.
-objc = { version = "0.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Pin only: safe nonblocking report cancellation requires keeping this native

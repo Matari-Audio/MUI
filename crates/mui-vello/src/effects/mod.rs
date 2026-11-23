@@ -15,9 +15,9 @@ mod tests;
 
 pub use pool::{ABSENT_FRAMES, Budget, EffectStats, WeldTextures};
 pub use renderer::{Fallback, GpuRenderer};
-pub const WELD_SHADER: &str = include_str!("weld.wgsl");
+pub const WELD_SHADER: &str = mui_shaders::WELD_WGSL;
 /// The present pass: the retained frame onto the window's view.
-pub const PRESENT_SHADER: &str = include_str!("present.wgsl");
+pub const PRESENT_SHADER: &str = mui_shaders::PRESENT_WGSL;
 
 /// Run `create` (pipeline creation) one at a time per process on DX12, where
 /// concurrent shader compilation from several editors has faulted drivers;

@@ -15,6 +15,7 @@ allow-panic-abort = []
 [dependencies]
 matari-audio-drag-and-drop = { git = "https://github.com/Matari-Audio/matari-audio-drag-and-drop", rev = "cdf658f67ba5a17b7370dd0577a347ab41a88978" }
 mui = { workspace = true, features = ["gpu-quad", "software-window"] }
+mui-present.workspace = true
 baseview = { package = "moose-baseview", path = "../../vendor/moose-baseview" }
 mui-access.workspace = true
 keyboard-types = { version = "0.8", default-features = false }
@@ -25,13 +26,12 @@ raw-window-handle = "0.6"
 # and omitted to avoid pulling glow/EGL into Linux plugin binaries.
 wgpu = { workspace = true, features = ["wgsl", "vulkan", "metal", "dx12"] }
 
-# Frame skipping and view anchoring on macOS (src/platform.rs); baseview
-# already pulls it in there.
+# Frame visibility, coordinates, and window effects.
 [target.'cfg(target_os = "macos")'.dependencies]
-objc = "0.2"
 # Frosted windows (`frost`) and window levels (`sticky`).
 objc2 = { version = "0.6", default-features = false }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSColor", "NSGraphics", "NSResponder", "NSView", "NSVisualEffectView", "NSWindow"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSColor", "NSGraphics", "NSResponder", "NSScreen", "NSView", "NSVisualEffectView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSGeometry"] }
 accesskit_macos = { path = "../../vendor/accesskit_macos" }
 
 # baseview does not own an X11 selection; arboard keeps one alive.

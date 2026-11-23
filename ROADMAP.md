@@ -314,10 +314,12 @@ public function and a test behind it.
 - [x] Keyboard propagation: on `moose-baseview` a key the editor ignores goes
       to the host, and on Windows the editor takes the keyboard only while a
       text field is focused or a key filter claims the shortcut.
-- [ ] Wave 2 (`mui-present`): own native CPU/GPU presentation across all three
-      OSes (DirectComposition + retained `WM_PAINT` DIB, macOS `IOSurface` ring,
-      Linux `VkSwapchain` + direct `x11rb` MIT-SHM / `wl_shm`) and retire
-      `softbuffer`.
+- [x] Wave 2A (`mui-present`): retained `WM_PAINT` DIB on Windows, an
+      `IOSurface` ring on macOS, and X11 MIT-SHM or a Wayland `wl_shm`
+      subsurface on Linux. The crate also provides DirectComposition and
+      Vulkan swapchain hosts for the native GPU migration.
+- [x] Wave 2B shaders (`mui-shaders`): build-time SPIR-V, MSL, and HLSL
+      generation and binding reflection for quad, blur, weld, and present.
 - [ ] Wave 3 (`mui-hal`): own ~2.5k LOC thin GPU HAL (`windows-sys` D3D11,
       `objc2-metal`, `ash` Vulkan) with build-time WGSL compilation for the
       4-pass instanced SDF quad + analytic weld renderer, and retire `wgpu`.

@@ -59,7 +59,7 @@ pub use offscreen::BLUR_SHADER;
 pub use path::PATH_BUDGET;
 
 /// The WGSL of the pass, for validation and tooling.
-pub const SHADER: &str = include_str!("quad.wgsl");
+pub const SHADER: &str = mui_shaders::QUAD_WGSL;
 
 /// Why the pass cannot draw an entry yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

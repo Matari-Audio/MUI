@@ -47,7 +47,11 @@ impl Compositor {
             .spawn()
             .ok()?;
         let compositor = Self { child, socket };
-        wait(Duration::from_secs(10), || compositor.socket.exists()).then_some(compositor)
+        wait(Duration::from_secs(10), || {
+            compositor.socket.exists()
+                && std::os::unix::net::UnixStream::connect(&compositor.socket).is_ok()
+        })
+        .then_some(compositor)
     }
 }
 impl Drop for Compositor {
@@ -160,7 +164,7 @@ fn weston(closed: &Arc<AtomicUsize>) {
     let ini = dir.join("weston.ini");
     std::fs::write(
         &ini,
-        "[shell]\nbackground-color=0xff000000\npanel-position=none\n",
+        "[shell]\nbackground-color=0xff000000\npanel-position=none\nanimation=none\nstartup-animation=none\nfocus-animation=none\nclose-animation=none\n",
     )
     .expect("weston.ini");
     let name = format!("mui-frame-weston-{}", std::process::id());
@@ -180,11 +184,31 @@ fn weston(closed: &Arc<AtomicUsize>) {
         return;
     };
     let window = open(&name, closed);
-    // The frame paints on its own subsurfaces after the first configure.
-    std::thread::sleep(Duration::from_millis(500));
-    let (pixels, width, channels) = screenshot(&dir, &name);
+    // Headless weston paints the newly mapped toplevel and its fallback frame
+    // subsurfaces asynchronously after the first buffer commit; poll briefly
+    // instead of racing a fixed sleep on a loaded CI runner.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let (pixels, width, channels, bounds) = loop {
+        for entry in std::fs::read_dir(&dir)
+            .expect("screenshot dir")
+            .filter_map(Result::ok)
+        {
+            if entry.path().extension().is_some_and(|e| e == "png") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+        let (pixels, width, channels) = screenshot(&dir, &name);
+        if let Some(bounds) = find(&pixels, width, channels) {
+            break (pixels, width, channels, bounds);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the content is on screen (timed out waiting for weston to composite the mapped window)"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    };
     close(window, closed);
-    let (x, y, w, h) = find(&pixels, width, channels).expect("the content is on screen");
+    let (x, y, w, h) = bounds;
     assert_eq!(
         (w, h),
         (SIZE.0 as usize, SIZE.1 as usize),
