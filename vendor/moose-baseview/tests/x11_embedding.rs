@@ -15,6 +15,8 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use x11_dl::xlib;
 
+type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 struct Parent(u64);
 impl HasWindowHandle for Parent {
     fn window_handle(&self) -> Result<WindowHandle<'_>, HandleError> {
@@ -34,7 +36,7 @@ struct Seen {
 struct Probe(Arc<Mutex<Seen>>);
 impl WindowHandler for Probe {
     fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
-        let mut seen = self.0.lock().expect("lock poisoned");
+        let mut seen = self.0.lock().map_err(|_| std::io::Error::other("lock poisoned"))?;
         if std::mem::take(&mut seen.reject_next_resize) {
             return Err(std::io::Error::other("test rejects resize").into());
         }
@@ -42,7 +44,7 @@ impl WindowHandler for Probe {
         Ok(())
     }
     fn on_event(&self, event: Event) -> EventStatus {
-        let mut seen = self.0.lock().expect("lock poisoned");
+        let Ok(mut seen) = self.0.lock() else { panic!("lock poisoned") };
         match event {
             Event::Window(WindowEvent::Focused) => seen.focused = true,
             Event::Window(WindowEvent::ScaleFactorChanged(scale)) => seen.scales.push(scale),
@@ -59,8 +61,8 @@ struct Host {
     parent: xlib::Window,
 }
 impl Host {
-    fn new() -> Self {
-        let lib = xlib::Xlib::open().expect("libX11");
+    fn new() -> TestResult<Self> {
+        let lib = xlib::Xlib::open()?;
         // SAFETY: Xlib calls on a display this test opens and owns.
         unsafe {
             assert_ne!((lib.XInitThreads)(), 0);
@@ -70,11 +72,11 @@ impl Host {
             let parent = (lib.XCreateSimpleWindow)(display, root, 0, 0, 64, 64, 0, 0, 0);
             (lib.XMapWindow)(display, parent);
             (lib.XSync)(display, 0);
-            Self { lib, display, root, parent }
+            Ok(Self { lib, display, root, parent })
         }
     }
     fn atom(&self, name: &str) -> xlib::Atom {
-        let name = CString::new(name).expect("atom name");
+        let Ok(name) = CString::new(name) else { panic!("invalid atom name") };
         // SAFETY: live display, NUL-terminated name.
         unsafe { (self.lib.XInternAtom)(self.display, name.as_ptr(), 0) }
     }
@@ -119,8 +121,8 @@ impl Host {
             if data.is_null() {
                 return None;
             }
-            let longs = std::slice::from_raw_parts(data.cast::<std::ffi::c_ulong>(), 2);
-            let info = (count == 2).then(|| [longs[0], longs[1]]);
+            let info = (kind == atom && format == 32 && count == 2)
+                .then(|| data.cast::<[std::ffi::c_ulong; 2]>().read());
             (self.lib.XFree)(data.cast());
             info
         }
@@ -156,9 +158,9 @@ impl Drop for Host {
 }
 
 fn wait(mut done: impl FnMut() -> bool) -> bool {
-    let deadline = Instant::now().checked_add(Duration::from_secs(2)).expect("deadline");
+    let start = Instant::now();
     while !done() {
-        if Instant::now() > deadline {
+        if start.elapsed() > Duration::from_secs(2) {
             return false;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -166,7 +168,7 @@ fn wait(mut done: impl FnMut() -> bool) -> bool {
     true
 }
 
-fn open(host: &Host, seen: &Arc<Mutex<Seen>>) -> (Window, xlib::Window) {
+fn open(host: &Host, seen: &Arc<Mutex<Seen>>) -> TestResult<(Window, xlib::Window)> {
     let (tx, rx) = mpsc::channel();
     let seen = Arc::clone(seen);
     let child = Window::create(
@@ -174,25 +176,24 @@ fn open(host: &Host, seen: &Arc<Mutex<Seen>>) -> (Window, xlib::Window) {
             .with_size(moose_baseview::dpi::LogicalSize::new(64.0, 64.0))
             .with_parent(&Parent(host.parent)),
         move |cx| {
-            let RawWindowHandle::Xlib(h) = cx.window_handle().expect("handle").as_raw() else {
-                panic!("expected an Xlib window");
+            let RawWindowHandle::Xlib(h) = cx.window_handle()?.as_raw() else {
+                return Err(std::io::Error::other("expected an Xlib window").into());
             };
-            tx.send(h.window).expect("send id");
+            tx.send(h.window)?;
             Ok(Probe(seen))
         },
-    )
-    .expect("child window");
-    let id = rx.recv_timeout(Duration::from_secs(1)).expect("child id");
-    child.show().expect("show");
-    (child, id)
+    )?;
+    let id = rx.recv_timeout(Duration::from_secs(1))?;
+    child.show()?;
+    Ok((child, id))
 }
 
 #[test]
 #[ignore = "requires an isolated X11 server; run with xvfb-run"]
 fn xembed_embedder_gives_the_focus() {
-    let host = Host::new();
+    let host = Host::new().expect("open X11 host");
     let seen = Arc::new(Mutex::new(Seen::default()));
-    let (child, id) = open(&host, &seen);
+    let (child, id) = open(&host, &seen).expect("open X11 child");
     assert_eq!(host.xembed_info(id), Some([0, 1]), "version 0, mapped");
     host.xembed(id, 0, i64::try_from(host.parent).expect("window id"));
     host.xembed(id, 4, 0);
@@ -204,10 +205,10 @@ fn xembed_embedder_gives_the_focus() {
 #[test]
 #[ignore = "requires an isolated X11 server; run with xvfb-run"]
 fn xft_dpi_change_keeps_the_logical_size() {
-    let host = Host::new();
+    let host = Host::new().expect("open X11 host");
     host.set_xft_dpi(96);
     let seen = Arc::new(Mutex::new(Seen::default()));
-    let (child, _) = open(&host, &seen);
+    let (child, _) = open(&host, &seen).expect("open X11 child");
     host.set_xft_dpi(192);
     let rescaled = wait(|| {
         let seen = seen.lock().expect("lock poisoned");
@@ -222,9 +223,9 @@ fn xft_dpi_change_keeps_the_logical_size() {
 #[test]
 #[ignore = "requires an isolated X11 server; run with xvfb-run"]
 fn rejected_fallback_scale_preserves_size_and_can_be_retried() {
-    let host = Host::new();
+    let host = Host::new().expect("open X11 host");
     let seen = Arc::new(Mutex::new(Seen::default()));
-    let (child, _) = open(&host, &seen);
+    let (child, _) = open(&host, &seen).expect("open X11 child");
     let before = child.size();
     assert_eq!(before.scale_factor, 1.0);
     seen.lock().expect("lock poisoned").reject_next_resize = true;

@@ -14,6 +14,8 @@ use std::sync::{
 use std::time::{Duration, Instant};
 use x11_dl::xlib;
 
+type TestResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 struct Parent(u64);
 
 impl HasWindowHandle for Parent {
@@ -46,8 +48,8 @@ struct Host {
 }
 
 impl Host {
-    fn new() -> Self {
-        let lib = xlib::Xlib::open().unwrap();
+    fn new() -> TestResult<Self> {
+        let lib = xlib::Xlib::open()?;
         // SAFETY: initialize Xlib threading before opening our owned display.
         unsafe {
             assert_ne!((lib.XInitThreads)(), 0);
@@ -57,7 +59,7 @@ impl Host {
             let parent = (lib.XCreateSimpleWindow)(display, root, 0, 0, 64, 64, 0, 0, 0);
             assert_ne!(parent, 0);
             (lib.XSync)(display, 0);
-            Self { lib, display, root, parent }
+            Ok(Self { lib, display, root, parent })
         }
     }
     fn map_state(&self, window: xlib::Window) -> i32 {
@@ -80,8 +82,8 @@ impl Drop for Host {
     }
 }
 
-fn exercise(reparent: bool) {
-    let host = Host::new();
+fn exercise(reparent: bool) -> TestResult<()> {
+    let host = Host::new()?;
     let frames = Arc::new(AtomicU64::new(0));
     let counter = Arc::clone(&frames);
     let (tx, rx) = mpsc::channel();
@@ -90,18 +92,17 @@ fn exercise(reparent: bool) {
             .with_size(moose_baseview::dpi::LogicalSize::new(64.0, 64.0))
             .with_parent(&Parent(host.parent)),
         move |cx| {
-            let id = match cx.window_handle().unwrap().as_raw() {
+            let id = match cx.window_handle()?.as_raw() {
                 RawWindowHandle::Xlib(h) => h.window,
                 RawWindowHandle::Xcb(h) => std::num::NonZeroU64::from(h.window).get(),
-                _ => panic!("expected X11 window"),
+                _ => return Err(std::io::Error::other("expected X11 window").into()),
             };
-            tx.send(id).unwrap();
+            tx.send(id)?;
             Ok(Count(counter))
         },
-    )
-    .unwrap();
-    let child_id = rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    child.show().unwrap();
+    )?;
+    let child_id = rx.recv_timeout(Duration::from_secs(1))?;
+    child.show()?;
     std::thread::sleep(Duration::from_millis(80));
     assert_eq!(host.map_state(child_id), xlib::IsUnviewable);
     assert_eq!(frames.load(Ordering::Relaxed), 0);
@@ -118,8 +119,8 @@ fn exercise(reparent: bool) {
         }
         (host.lib.XSync)(host.display, 0);
     }
-    let deadline = Instant::now().checked_add(Duration::from_secs(2)).expect("a near deadline");
-    while frames.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+    let start = Instant::now();
+    while frames.load(Ordering::Relaxed) == 0 && start.elapsed() < Duration::from_secs(2) {
         std::thread::sleep(Duration::from_millis(5));
     }
     let map_state = host.map_state(child_id);
@@ -127,18 +128,19 @@ fn exercise(reparent: bool) {
     child.close();
     assert_eq!(map_state, xlib::IsViewable);
     assert!(callbacks > 0, "server-viewable child must receive a native frame");
+    Ok(())
 }
 
 #[test]
 #[ignore = "requires an isolated X11 server; run with xvfb-run"]
 fn late_parent_map_receives_frames() {
-    exercise(false);
+    exercise(false).expect("embedded child with late parent map");
 }
 
 #[test]
 #[ignore = "requires an isolated X11 server; run with xvfb-run"]
 fn host_reparented_into_frame_receives_frames() {
-    exercise(true);
+    exercise(true).expect("embedded child with reparented host");
 }
 
 #[test]
@@ -146,7 +148,7 @@ fn host_reparented_into_frame_receives_frames() {
 fn fallback_scale_is_published_even_without_a_physical_resize() {
     use moose_baseview::dpi::{LogicalSize, PhysicalSize};
 
-    let host = Host::new();
+    let host = Host::new().expect("open X11 host");
     let child = Window::create(
         WindowSettings::new()
             .with_size(LogicalSize::new(64.0, 64.0))

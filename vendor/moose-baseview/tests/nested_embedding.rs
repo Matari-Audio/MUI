@@ -35,6 +35,11 @@ struct Seen {
     refused: Vec<ObjectId>,
 }
 
+fn lock_seen(seen: &Mutex<Seen>) -> std::sync::MutexGuard<'_, Seen> {
+    let Ok(seen) = seen.lock() else { panic!("lock poisoned") };
+    seen
+}
+
 struct Ignore;
 impl ObjectData<()> for Ignore {
     fn request(
@@ -59,7 +64,7 @@ impl ObjectData<()> for Embedder {
             return None;
         };
         let token = token.to_string_lossy().into_owned();
-        let mut seen = self.0.lock().expect("lock poisoned");
+        let mut seen = lock_seen(&self.0);
         if token != TOKEN {
             seen.refused.push(id.clone());
         }
@@ -91,15 +96,17 @@ struct Compositor {
 }
 impl Compositor {
     /// Serves one client on the returned socket; `embedding` offers the global.
-    fn start(embedding: bool) -> (Self, UnixStream) {
+    fn start(embedding: bool) -> std::io::Result<(Self, UnixStream)> {
         use wayland_client::protocol::__interfaces::*;
-        let (ours, theirs) = UnixStream::pair().expect("socketpair");
+        let (ours, theirs) = UnixStream::pair()?;
         let seen = Arc::new(Mutex::new(Seen::default()));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let (seen, stop) = (Arc::clone(&seen), Arc::clone(&stop));
             std::thread::spawn(move || {
-                let mut backend = Backend::<()>::new().expect("server backend");
+                let Ok(mut backend) = Backend::<()>::new() else {
+                    panic!("failed to start server backend");
+                };
                 let handle = backend.handle();
                 handle.create_global(&WL_COMPOSITOR_INTERFACE, 6, Arc::new(Global(None)));
                 handle.create_global(&WL_SHM_INTERFACE, 1, Arc::new(Global(None)));
@@ -111,10 +118,13 @@ impl Compositor {
                         Arc::new(Global(Some(Arc::clone(&seen)))),
                     );
                 }
-                backend.handle().insert_client(ours, Arc::new(Client)).expect("client");
+                assert!(
+                    backend.handle().insert_client(ours, Arc::new(Client)).is_ok(),
+                    "insert client"
+                );
                 while !stop.load(Ordering::Acquire) {
                     let _ = backend.dispatch_all_clients(&mut ());
-                    let refused = std::mem::take(&mut seen.lock().expect("lock poisoned").refused);
+                    let refused = std::mem::take(&mut lock_seen(&seen).refused);
                     for id in refused {
                         let closed =
                             Message { sender_id: id, opcode: CLOSED, args: Default::default() };
@@ -125,17 +135,22 @@ impl Compositor {
                 }
             })
         };
-        (Self { seen, stop, thread: Some(thread) }, theirs)
+        Ok((Self { seen, stop, thread: Some(thread) }, theirs))
     }
     fn tokens(&self) -> Vec<String> {
-        self.seen.lock().expect("lock poisoned").tokens.clone()
+        lock_seen(&self.seen).tokens.clone()
     }
 }
 impl Drop for Compositor {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(thread) = self.thread.take() {
-            thread.join().expect("compositor thread");
+            let result = thread.join();
+            if let Err(payload) = result {
+                if !std::thread::panicking() {
+                    std::panic::resume_unwind(payload);
+                }
+            }
         }
     }
 }
@@ -155,41 +170,44 @@ fn open(socket: UnixStream, token: &str) -> Result<EmbeddedWaylandWindow, moose_
 }
 
 /// Pumps `window` as a host would, until `done` or a second passes.
-fn pump_until(window: &mut EmbeddedWaylandWindow, done: impl Fn(&EmbeddedWaylandWindow) -> bool) {
-    let deadline = Instant::now().checked_add(Duration::from_secs(1)).expect("deadline");
-    while !done(window) && Instant::now() < deadline {
-        window.dispatch().expect("dispatch");
+fn pump_until(
+    window: &mut EmbeddedWaylandWindow, done: impl Fn(&EmbeddedWaylandWindow) -> bool,
+) -> Result<(), moose_baseview::Error> {
+    let start = Instant::now();
+    while !done(window) && start.elapsed() < Duration::from_secs(1) {
+        window.dispatch()?;
         std::thread::sleep(Duration::from_millis(2));
     }
+    Ok(())
 }
 
 #[test]
 fn embeds_with_the_hosts_token() {
-    let (compositor, socket) = Compositor::start(true);
+    let (compositor, socket) = Compositor::start(true).expect("socketpair");
     let mut window = open(socket, TOKEN).expect("open");
-    pump_until(&mut window, |_| false);
+    pump_until(&mut window, |_| false).expect("dispatch");
     assert!(window.is_open());
     assert_eq!(compositor.tokens(), [TOKEN]);
 }
 
 #[test]
 fn a_refused_token_closes_the_window() {
-    let (compositor, socket) = Compositor::start(true);
+    let (compositor, socket) = Compositor::start(true).expect("socketpair");
     let mut window = open(socket, "stale").expect("open");
-    pump_until(&mut window, |w| !w.is_open());
+    pump_until(&mut window, |w| !w.is_open()).expect("dispatch");
     assert!(!window.is_open());
     assert_eq!(compositor.tokens(), ["stale"]);
 }
 
 #[test]
 fn a_token_with_a_nul_fails_open() {
-    let (compositor, socket) = Compositor::start(true);
+    let (compositor, socket) = Compositor::start(true).expect("socketpair");
     assert!(open(socket, "slot\0").is_err());
     assert!(compositor.tokens().is_empty());
 }
 
 #[test]
 fn a_compositor_without_embedding_fails_open() {
-    let (_compositor, socket) = Compositor::start(false);
+    let (_compositor, socket) = Compositor::start(false).expect("socketpair");
     assert!(open(socket, TOKEN).is_err());
 }
