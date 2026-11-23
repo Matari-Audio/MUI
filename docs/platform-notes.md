@@ -1,65 +1,88 @@
 # Native windowing: how each platform behaves, and what is unproven
 
-What the October 2026 stabilisation work (formerly five `STAB-NOTES-*.md`
-files at the root) established about the native layer: the vendored baseview
-fork (`vendor/moose-baseview`), `mui-baseview`, `mui-truce` and the GPU host in
-`mui-vello`. Branch names, commit lists and command logs from that work are in
-git history; this keeps the behaviour and the reasons.
+What the native windowing and Wave 1B consolidation work established about the
+owned native layer: `vendor/moose-baseview`, `mui-baseview`, and the GPU/CPU
+host in `mui-vello`. Legacy `mui-truce`, `mui-winit`, `accesskit_winit`, and
+the `winit` fork are retired; this documents the active behaviour and reasons.
 
 ## Shared rules
 
-- **Frame demand.** `WindowHandler::frame_demand()` returns
-  `FrameDemand::{Continuous, Idle, At(Instant)}` (default `Continuous`).
-  `Idle` arms no timer at all; `At` arms one deadline; input, resize,
-  visibility restoration, expose and `FrameRequester::request_frame()` each wake
-  one frame. Requests coalesce while a frame is queued or running; a request
-  made during a frame survives for the next. A `FrameRequester` holds only wake
-  state, never a native window or connection, and is inert after close.
-- **MUI still polls at 4 Hz when settled.** `View::changed`, plugin meters and
-  parameters and accessibility requests are polled (250 ms), GPU init at 25 ms
-  while pending, adapter retries back off from 250 ms to 8 s. Push
-  notification of model changes is the path to indefinite sleep.
+- **Frame demand & push-driven 0 Hz idle.** `WindowHandler::frame_demand()`
+  returns `FrameDemand::{Continuous, Idle, At(Instant)}` (default `Continuous`).
+  `Idle` arms no timer at all (true 0 Hz idle); `At` arms one exact deadline;
+  input, resize, visibility restoration, expose, direct AccessKit activation /
+  actions, and `FrameRequester::request_frame()` / `Requests::redraw()` each
+  wake one frame immediately. Settled `mui-baseview` windows schedule zero
+  periodic timers: exact deadlines are armed only for active animations,
+  tooltips, carets, explicit live telemetry (`Requests::set_poll_interval`),
+  pending asynchronous GPU initialization (25 ms while pending), or GPU/CPU
+  retry backoff (250 ms doubling to 8 s). Requests coalesce while a frame is
+  queued or running; a request made during a frame survives for the next. A
+  `FrameRequester` holds only wake state, never a native window or connection,
+  and is inert after close.
 - **Image pinning.** Before any detached thread, class registration or hook
   exists, the image containing baseview is pinned (`RTLD_NODELETE` / DLL pin,
   `pin.rs`). A failed pin refuses to open the editor (not the plugin). This
   keeps code mapped for the process lifetime on purpose: detached workers and
   late OS callbacks can never run unmapped code. Hot replacement of a plugin at
   the same path is not supported.
-- **Panics never cross an ABI boundary.** Every OS callback (X11 loop, WndProc,
-  hooks, COM drop targets, Objective-C IMPs, timers) runs under `catch_unwind`
-  with a safe default and one diagnostic per image. `mui-truce` and
-  `mui-baseview` refuse to build with `panic = "abort"` unless
+- **Panics never cross an ABI boundary.** Every OS callback (X11/Wayland loop,
+  WndProc, hooks, COM drop targets, Objective-C IMPs, timers) runs under
+  `catch_unwind` with a safe default and one diagnostic per image.
+  `mui-baseview` refuses to build with `panic = "abort"` unless
   `allow-panic-abort` is enabled; release profiles unwind.
-- **GPU when ready, CPU until then.** The `mui-baseview` native worker starts
-  GPU initialisation (on a `mui-gpu-init` thread) when it opens and polls it on
-  its own loop from the first frame on; until a device arrives it renders on
-  the CPU. Either way it renders to offscreen targets and hands the window
-  thread bitmap patches of what changed, so the window never owns a GPU
-  surface. The surface-based paths, `mui-baseview`'s window handler and
-  `mui-winit`, present a CPU frame first and start GPU initialisation after it
-  (`start_gpu_after_cpu_frame`); above 1 MP that first frame is background
-  only. Editors of one image share the device, queue and pipelines through
-  process-wide sessions held by strong references (separate slots where
-  needed); each editor keeps its own targets. Device loss rebuilds once and
-  the others adopt it. A submitted frame is not proof of scanout.
+- **GPU when ready, fast `vello_cpu` fallback (and `DeviceType::Cpu` rejection).**
+  `mui-vello` rejects all `wgpu::DeviceType::Cpu` adapters (Windows DX12 WARP,
+  Linux Vulkan Lavapipe/SwiftShader, GL llvmpipe) unless explicitly opted in
+  under `test-support`, so broken or CPU-only drivers go straight to our fast
+  dirty-rect `vello_cpu` software path (`MUI_FORCE_CPU=1` or `MUI_RENDERER=cpu`
+  also forces CPU rendering). Surface presentation prefers `Mailbox` → `Fifo` →
+  `FifoRelaxed` → `Immediate` and reconfigures the swapchain after
+  `Acquired::Suboptimal`. On HiDPI / 5K+ / ultrawide windows above 16 Mi
+  physical pixels, direct GPU renders at full native resolution (bounded by the
+  device texture limit), while CPU and offscreen-readback targets scale
+  proportionally within the 16 Mi pixel budget and stretch cleanly to fill the
+  window rather than ceasing to paint.
+- **Native worker & standalone presenter.** `mui-baseview::open` / `run` runs
+  the editor worker on a dedicated thread, presenting directly to the window's
+  GPU surface where available (with `MUI_PRESENT=readback` opt-in for offscreen
+  readback) and falling back to dirty-rect CPU bitmaps on startup or GPU fault.
+  `mui-baseview::Presenter` + `mui-baseview::standalone` drive single-threaded
+  standalone apps (`mui-preview`) with CPU-first startup and async GPU
+  promotion. Editors of one image share the device, queue and pipelines through
+  process-wide sessions; each editor keeps its own targets.
 - **Scale belongs to an editor**, never a process global: macOS uses AppKit's
-  backing scale, Windows the host's, X11 defaults to 1.
+  backing scale, Windows the host's, X11 uses `Xft.dpi` / override, Wayland
+  uses `wp_fractional_scale_v1` / output scale.
 
-## X11
+## X11 & Wayland (Linux)
 
-- A checked `MapWindow` only means the WM accepted the request: viewability
-  comes from a real `MapNotify`/`Expose` (the first-open black-window and
-  `GetImage BadMatch` failures).
-- Opaque non-GL windows use the root visual and depth with an owned colormap,
-  not ARGB32. Creation and reparent are checked XCB requests; zero extents
-  become 1x1. XEmbed reparent discards the old ancestry.
-- Window RPC is a one-entry `try_send` queue with a 50 ms reply timeout and a
-  fresh reply channel per request; startup has a 250 ms handshake budget, close
-  250 ms. A thread is joined only after it has finished.
-- Only GLX installs an Xlib error handler, serialised across plugin images by a
-  mutex plus `flock` on `/proc/self`. The default (non-GL) path installs none.
-- Present-extension pacing (upstream baseview #323) was read and not taken: it
-  frames continuously when idle. Pacing is a demand-aware monitor-rate timer.
+- **Level-triggered XCB fd (`Mode::Level`) + full event drain.** The X11
+  event loop watches the XCB file descriptor with `calloop::Mode::Level` and
+  drains `poll_for_event()` to exhaustion after every synchronous reply so
+  userspace-buffered events are never stranded under 0 Hz idle.
+- **No `XInitThreads()` in plugins.** Calling `XInitThreads()` after a DAW host
+  has already called Xlib is undefined behavior. `moose-baseview` calls
+  `XInitThreads()` only from `assume_standalone_in_process()` for standalone
+  apps; plugin windows use their dedicated X11 worker connection with XCB event
+  queue ownership (`XCBOwnsEventQueue`).
+- **Native Wayland.** `moose-baseview` supports standalone and floating
+  `xdg_toplevel` windows (with server-side or fallback CSD decorations,
+  `set_title`, `wp_fractional_scale_v1`, `text-input-v3`, cursor shape, and
+  data-device drag-and-drop), plus `wl_subsurface` and CLAP nested compositor
+  embedding (`mui_baseview::wayland`).
+- **X11 details.** A checked `MapWindow` only means the WM accepted the
+  request: viewability comes from a real `MapNotify`/`Expose`. Opaque non-GL
+  windows use the root visual and depth with an owned colormap, not ARGB32.
+  Creation and reparent are checked XCB requests; zero extents become 1x1.
+  XEmbed reparent discards the old ancestry. `SuggestScaleFactor` rescales from
+  the previous scale factor rather than compounding. Window titles set both
+  `WM_NAME` and UTF-8 `_NET_WM_NAME`. Window RPC is a one-entry `try_send`
+  queue with a 50 ms reply timeout and a fresh reply channel per request;
+  startup has a 250 ms handshake budget, close 250 ms. Only GLX installs an
+  Xlib error handler, serialised across plugin images by a mutex plus `flock`
+  on `/proc/self`. Present-extension pacing was not taken because it frames
+  continuously when idle; pacing is a demand-aware monitor-rate timer.
 
 ## Windows
 
@@ -116,12 +139,8 @@ calls on its own worker thread, on every OS. What each format needs:
 - **CLAP** parameter edits are queued and flushed with `request_flush`, and
   `request_resize` is thread-safe: nothing to do.
 - **AU** `AUEventListenerNotify` is thread-safe.
-
-`HostPump` (in `mui-truce`) is the truce-side equivalent. A native `MuiEditor`
-attaches and flushes it on the editor's window thread; host-thread delivery
-would need the pump attached on the host GUI thread, which on X11 is a
-different thread, so a host-thread `Editor::idle` alone cannot flush it. It
-stays off by default while the moose shim covers VST3.
+- **AAX** parameter gestures and resize requests route through `moose-aax` and
+  `moose-mui` onto `mui-baseview`.
 
 ## Open: native qualification
 

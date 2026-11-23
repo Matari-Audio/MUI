@@ -25,8 +25,8 @@ public function and a test behind it.
 - [x] `mui::Ui`: the per-frame runtime with spring-smoothed hover and press;
       `slider`, `knob`, `toggle`, `button` as compositions of flex shares.
 - [x] Preview: the gallery is one `mui` tree, sidebar included, its text
-      renders as hinted glyph runs, and winit's wheel, keys, modifiers and
-      cursor icon ride through `Input` / `Frame`.
+      renders as hinted glyph runs, and `moose-baseview`'s wheel, keys,
+      modifiers and cursor icon ride through `Input` / `Frame`.
 - [x] Scene DSL sugar: `row!`/`col!`/`stack!`/`grid!` taking anything
       `IntoEl`, `.w`/`.h`/`.square` on bare integers, `.center`/`.start`/
       `.end`/`.between`, `title`/`label`/`caption`.
@@ -56,17 +56,21 @@ public function and a test behind it.
       transitions that retarget mid-flight, and `Ui::tween`.
 - [x] Plugin parameter gestures: `Ui::edit` / `Frame::edits` bracket every
       capture, cancelled ones included.
-- [x] A native CLAP/VST3 editor host and parameter bridge: `mui-truce`'s
-      `MuiEditor` embeds a baseview + wgpu child window (host scale, resize
-      floor, focus-loss cancel, clipboard, cursors, idle skipping, GPU
-      recovery), and `Bridge::bind` turns `Ui` edits into the host's
-      begin/set/end. `examples/gain-plugin` passes pluginval's editor tests.
+- [x] Owned native windowing (`moose-baseview` + `mui-baseview`): embeds DAW
+      plugin editors (CLAP, VST3, AU, AAX via `moose-mui`) and hosts standalone
+      top-level windows (X11, native Wayland `xdg_toplevel`, Win32, macOS
+      Cocoa) with host scale, resize floor, focus-loss cancel, clipboard, IME,
+      cursors, direct AccessKit, push-driven 0 Hz settled idle, `DeviceType::Cpu`
+      rejection, budgeted >16 MP HiDPI/ultrawide rendering, and GPU recovery.
+      Legacy `mui-truce`, `mui-winit`, `accesskit_winit`, and the `winit` fork
+      are retired.
 - [x] Images: `Image::rgba` + `Fill::Image` with `Cover`/`Contain`/`Fill`,
       and `Path::from_svg_data` for an icon's `d` attribute. `vello_cpu`
       paints the pixmap; the quad pass uploads it once as a texture and
       samples it.
 - [x] AccessKit: `mui-access` turns a `ResolvedScene` into a `TreeUpdate`,
-      and the preview feeds it to an `accesskit_winit::Adapter`.
+      and `mui-baseview` publishes it directly via `accesskit_unix` /
+      `accesskit_macos` / `accesskit_windows` (no `accesskit_winit`).
 - [x] `mui_vello::PathCache` / `paint_cached`: measured at ~0.08 ms a frame
       on the bench editor, then deleted as not worth its API.
 - [x] Image eviction: the renderer-owned `mui_vello::Cache` holds a `Weak`
@@ -118,9 +122,9 @@ public function and a test behind it.
       line still overflows at a char, not a grapheme cluster.
 - [x] Real semantic roles: `.a11y(A11y::..)` / `.named(..)` on any node, set
       by every widget, so `mui-access` reports a named button and a slider
-      with its range instead of a pile of groups, and the preview keeps an
-      `accesskit_winit::Adapter` that publishes after each frame and serves
-      Focus and Click action requests.
+      with its range instead of a pile of groups, and `mui-baseview` publishes
+      directly to native AccessKit providers after each frame and serves
+      Focus, Click, SetValue, Increment/Decrement and SetTextSelection requests.
 - [x] Presets that merge instead of clobbering: `Style::over`, `.preset(&s)`
       / `.base(&s)` / `.apply(f)`, `Paints` implemented for a bare `Style`,
       `.on(State::Hover, |s| ..)` resolved by the runtime, `.full()`,
@@ -160,8 +164,8 @@ public function and a test behind it.
       and `drag_axis()`, and Shift is the fine drag every parameter wants
       (`Ui::drag` applies `FINE_DRAG`). A click is `clicked_with(button)`, so
       a secondary click resets a control instead of toggling it. The preview
-      feeds winit's three buttons and its modifiers; the Pointer gestures
-      scene is the proof.
+      feeds `moose-baseview`'s three buttons and its modifiers; the Pointer
+      gestures scene is the proof.
 
 - [x] Canvas hit shapes: a `Draw` carries a `tag`, and a tagged draw is the
       canvas node's hit geometry instead of its frame -- `Draw::hit` is the
@@ -273,7 +277,7 @@ public function and a test behind it.
       (`fill_cell`), shared knob looks (`Knob::smooth`/`k`/`drama`/`buffr`,
       `Control::look`, `Pointer`), icon buttons
       (`.icon`, `.icon_end`, `icon_button`), typed entry in units
-      (`Domain::format`/`parse`, filled by mui-truce from truce metadata) and
+      (`Domain::format`/`parse`, filled by host parameter bridges) and
       readout alignment (`value_align`).
 
 ## Missing
@@ -290,39 +294,33 @@ public function and a test behind it.
       diameter (needs a second pass or container-relative text); a theme-level
       default `Knob`; KURV, BUFFR and DRAMA painting `Knob` presets instead of
       their own knobs (KURV can, with `Control::modulation`; BUFFR needs a dot
-      outline and hover glow, DRAMA an arc wider than its track); upstream a default truce `parse_value` so the bridge's
-      unit-text fallback can go.
+      outline and hover glow, DRAMA an arc wider than its track).
 - [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
       run rather than breaking again, because the swap deliberately does no
       layout. Re-breaking needs the measure pass it is avoiding.
 - [ ] A pin whose anchor is itself inside another pinned float reads that
       float's first-pass position; a dependency-ordered pin pass is the fix.
-- [ ] `mui-truce` in a real DAW: the editor passes pluginval's editor tests
-      and clap-validator on Linux, but nobody has yet opened it by hand in
-      Bitwig, Reaper or Ableton, on any OS. macOS and Windows are only
-      compiled for, never run.
-- [x] `mui-truce` forwards native composition and candidate-window state
-      through the pinned baseview patch: Cocoa text services, Windows IMM32,
-      and X11 XIM. Ordered preedit, commit and selection events share the
-      editable field's shaped geometry. See `vendor/moose-baseview/README-MUI.md`.
+- [x] `mui-baseview` forwards native composition and candidate-window state
+      through `moose-baseview`: Cocoa text services, Windows IMM32, Wayland
+      text-input-v3, and X11 XIM. Ordered preedit, commit and selection events
+      share the editable field's shaped geometry. See `vendor/moose-baseview/README-MUI.md`.
 - [ ] Native IME acceptance in real DAW editors on Linux, Windows and macOS:
       cross-compilation and protocol regressions do not establish CJK input,
       candidate positioning, focus changes or close/reopen behavior in a host.
-- [x] Standalone native windows: `mui-winit` owns independent windows with
-      native Wayland/X11, Windows and macOS backends, clipboard, AccessKit,
-      IME and typed open/resize/redraw/close commands. Linux presentation has
-      been exercised on X11 and Wayland; Windows/macOS runtime acceptance
-      remains open. Native Wayland DAW embedding needs a separate host contract.
-- [ ] `mui-truce` has no AU or AAX: truce builds them, but only CLAP and VST3
-      are wired and validated.
-- [x] `mui-truce` swallowed every key while focused. On moose-baseview a key
-      the editor ignores goes to the host, and on Windows the editor takes
-      the keyboard only while a text field is focused.
-- [ ] The gain plugin fails three clap-validator state tests and Steinberg's
-      `vst3 validator`: truce-clap 6.3 never requests a value rescan after a
-      state load, and truce-vst3 6.3 declares the wrong
-      `IProcessContextRequirements` IID. Both are one-line upstream fixes
-      (a downstream plugin vendors them); see `crates/mui-truce/README.md`.
+- [x] Standalone native windows: `moose-baseview` + `mui-baseview::standalone`
+      own independent top-level windows across X11, native Wayland
+      (`xdg_toplevel`), Windows, and macOS with clipboard, direct AccessKit,
+      IME, dynamic titles, and push-driven 0 Hz idle scheduling.
+- [x] Keyboard propagation: on `moose-baseview` a key the editor ignores goes
+      to the host, and on Windows the editor takes the keyboard only while a
+      text field is focused or a key filter claims the shortcut.
+- [ ] Wave 2 (`mui-present`): own native CPU/GPU presentation across all three
+      OSes (DirectComposition + retained `WM_PAINT` DIB, macOS `IOSurface` ring,
+      Linux `VkSwapchain` + direct `x11rb` MIT-SHM / `wl_shm`) and retire
+      `softbuffer`.
+- [ ] Wave 3 (`mui-hal`): own ~2.5k LOC thin GPU HAL (`windows-sys` D3D11,
+      `objc2-metal`, `ash` Vulkan) with build-time WGSL compilation for the
+      4-pass instanced SDF quad + analytic weld renderer, and retire `wgpu`.
 - [x] Keyboard value stepping: a focused slider or knob steps on the arrow,
       Page and Home/End keys, bracketed as one edit.
 - [ ] The text cache keeps exactly what the last resolve used, with no byte

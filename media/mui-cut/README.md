@@ -609,7 +609,7 @@ included, is only read.
 
 | Framework | What it finds | Needs in the plugin |
 |---|---|---|
-| moose, truce | `moose::plugin!` / `truce::plugin!` (its `crate::Plugin`); `editor()` opens a `MuiEditor` | nothing |
+| moose | `moose::plugin!` (its `crate::Plugin`); `editor()` opens a `MuiEditor` | nothing |
 | nice-plug | the type `nice_export_clap!(T)` names | `T` public at the crate root (`pub use …::T;`) |
 | plain MUI | `pub fn mui_editor() -> (Ui, (u32, u32), impl mui::host::View + Send + 'static)` | that one function; for sound, `pub fn mui_audio(sample_rate: f32) -> impl FnMut(&[(u8, u8)], &mut [[f32; 2]]) + Send + 'static` (a span's notes, `(key, velocity)` with velocity 0 a note off, at its start; it fills stereo frames) |
 
@@ -618,7 +618,7 @@ which hands the view to a claiming headless host instead. A library that
 is not `rlib`, a missing `plugin!`, a private nice-plug type or a missing
 `mui_editor` is reported as the exact line to add. Params are `set` by
 parameter id or name, `field` `norm` (0..1) or `value` (plain units). The
-plugin's DSP runs as a host runs it (moose and truce `process`, nice-plug
+plugin's DSP runs as a host runs it (moose `process`, nice-plug
 `activate` then `process`, a plain crate's `mui_audio`), on the manual
 clock, so every generated adapter sounds. A layer's `preset` (a moose
 host state, or a plugin preset file wrapping one)
@@ -1277,7 +1277,7 @@ same reason.
   a translucent capture in linear light, so its soft edges read slightly
   brighter than in 2D.
 - Sound: a generated adapter's patch reads modulation routes only from
-  `<X> Source` / `<X> Target` / `<X> Amount` parameters (moose, truce);
+  `<X> Source` / `<X> Target` / `<X> Amount` parameters (moose);
   routes a plugin keeps in its private state are not visible to a
   host, and nice-plug and plain crates report none. `preset` is moose
   only. A plugin's keyboard does not light the notes the host plays unless

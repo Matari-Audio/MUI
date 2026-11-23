@@ -122,7 +122,11 @@ impl EventLoop {
                 Generic::new_with_error(
                     Arc::clone(&window.connection.conn),
                     Interest::READ,
-                    Mode::Edge,
+                    // Level-triggered: synchronous XCB replies can pull
+                    // unrelated events into XCB's userspace queue while
+                    // draining the kernel socket, which would strand events
+                    // under EPOLLET once settled windows run at 0 Hz idle.
+                    Mode::Level,
                 ),
                 |_, _, e| e.handle_connection_event_ready(),
             )
@@ -398,17 +402,29 @@ impl EventLoop {
                 Ok(())
             }
             WindowThreadRequest::SuggestScaleFactor(scale) => {
+                let Some(scale) = crate::settings::sanitize_scale_factor(Some(scale)) else {
+                    return Ok(());
+                };
+                let old_scale = self.window.scale_factor();
+                let old_suggestion = self.window.scaling_factor.suggested();
                 // If the scaling factor is already provided by the system, do nothing
                 if !self.window.scaling_factor.suggest(scale) {
                     return Ok(());
                 };
 
-                let current_logical_size = self.window.get_size().to_logical::<f64>(1.0);
-                let new_physical_size = current_logical_size.to_physical(scale);
+                let new_scale = self.window.scale_factor();
+                self.window.main_thread_shared.set_scaling_factor(new_scale);
+                let old_size = self.window.get_size();
+                let new_physical_size = rescale_physical_size(old_size, old_scale, new_scale);
+                let result = self.window.resize_immediately(new_physical_size, &*self.handler);
 
-                self.window.resize_immediately(new_physical_size, &*self.handler)?;
-
-                Ok(())
+                // A rejected handler resize restores the previous physical size.
+                // Restore its scale too so retrying the suggestion still resizes.
+                if result.is_err() && self.window.get_size() == old_size {
+                    self.window.scaling_factor.restore_suggestion(old_suggestion);
+                    self.window.main_thread_shared.set_scaling_factor(old_scale);
+                }
+                result
             }
             WindowThreadRequest::SetScaleFactorOverride(scale_factor) => {
                 self.window.set_scale_factor_override(scale_factor)
@@ -418,6 +434,7 @@ impl EventLoop {
 
                 Ok(())
             }
+            WindowThreadRequest::SetTitle(title) => self.window.set_title(&title),
             WindowThreadRequest::Show => {
                 if let Some(dock) = self.window.dock.borrow_mut().as_mut() {
                     dock.sync(true)?;
@@ -480,7 +497,10 @@ impl EventLoop {
         // Only take_frame_request at the beginning of an idle pass clears the
         // latch. A producer racing demand query/timer re-arm keeps its request
         // pending. Re-notify here; a later producer sends its own notification.
-        if self.window.main_thread_shared.has_frame_request() {
+        // Scheduling (e.g. a RandR reply or the handler's frame_demand)
+        // can read events into XCB after the redraw loop's last drain.
+        // Run another idle pass for any coalesced work those events produced.
+        if self.drain_xcb_events()? || self.window.main_thread_shared.has_frame_request() {
             self.loop_signal.wakeup();
         }
 
@@ -488,7 +508,10 @@ impl EventLoop {
     }
 
     pub fn run(mut self, mut inner: calloop::EventLoop<Self>) -> Result<(), PlatformError> {
-        self.drain_xcb_events()?;
+        if self.drain_xcb_events()? {
+            // Startup replies can likewise leave work before the first dispatch.
+            self.loop_signal.wakeup();
+        }
         if !self.window.xcb_window.is_destroyed()
             && !self.window.main_thread_shared.callbacks_revoked()
             && !self.window.main_thread_shared.is_stop_host_requested()
@@ -1146,6 +1169,14 @@ fn is_auto_repeat_pair(release: &KeyReleaseEvent, press: &KeyPressEvent) -> bool
     release.detail == press.detail && release.time == press.time && release.event == press.event
 }
 
+fn rescale_physical_size(
+    current: PhysicalSize<u16>, old_scale: f64, new_scale: f64,
+) -> PhysicalSize<u16> {
+    let old_scale = if old_scale.is_finite() && old_scale > 0.0 { old_scale } else { 1.0 };
+    let new_scale = if new_scale.is_finite() && new_scale > 0.0 { new_scale } else { old_scale };
+    current.to_logical::<f64>(old_scale).to_physical(new_scale)
+}
+
 fn mouse_id(id: u8) -> MouseButton {
     match id {
         1 => MouseButton::Left,
@@ -1232,5 +1263,23 @@ mod tests {
         assert_eq!(double, Some(50.0));
         assert_eq!(mode_refresh_hz(&mode(100, 1, 1, ModeFlag::INTERLACE)), Some(200.0));
         assert_eq!(mode_refresh_hz(&mode(100, 0, 0, ModeFlag::from(0u32))), None);
+    }
+
+    #[test]
+    fn suggest_scale_factor_rescales_from_previous_scale_without_compounding() {
+        use super::rescale_physical_size;
+        use crate::dpi::PhysicalSize;
+
+        // Logical 400x300 at 1.0 -> 2.0 becomes 800x600.
+        let s1 = rescale_physical_size(PhysicalSize::new(400, 300), 1.0, 2.0);
+        assert_eq!(s1, PhysicalSize::new(800, 600));
+        // Repeating 2.0 stays 800x600 instead of compounding to 1600x1200.
+        let s2 = rescale_physical_size(s1, 2.0, 2.0);
+        assert_eq!(s2, PhysicalSize::new(800, 600));
+        // Stepping 2.0 -> 1.5 becomes 600x450, then back to 1.0 returns to 400x300.
+        let s3 = rescale_physical_size(s2, 2.0, 1.5);
+        assert_eq!(s3, PhysicalSize::new(600, 450));
+        let s4 = rescale_physical_size(s3, 1.5, 1.0);
+        assert_eq!(s4, PhysicalSize::new(400, 300));
     }
 }

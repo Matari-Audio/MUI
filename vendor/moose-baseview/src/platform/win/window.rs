@@ -153,6 +153,28 @@ impl WindowHandle {
         }
     }
 
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        if !self.state.is_alive.get() {
+            return Ok(());
+        }
+        match self.hwnd.get() {
+            Some(hwnd) => {
+                let wide = HSTRING::from(title);
+                // SAFETY: `hwnd` is live on this owning thread and `wide` is NUL-terminated UTF-16.
+                unsafe {
+                    SetWindowTextW(hwnd.as_raw(), wide.as_ptr());
+                }
+            }
+            None => {
+                if let Some(mut init) = self.init.take() {
+                    init.settings.title = title.to_owned();
+                    self.init.set(Some(init));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn suggest_scale_factor(&self, scale_factor: f64) -> Result<()> {
         if !self.state.is_alive.get() {
             return Ok(());

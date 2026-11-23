@@ -156,6 +156,21 @@ impl WindowHandle {
         WindowSize::from_logical(self.state.size.get(), self.state.scale_factor.get())
     }
 
+    pub fn set_title(&self, title: &str) -> Result<()> {
+        if self.state.closed.get() {
+            return Ok(());
+        }
+        objc2::rc::autoreleasepool(|_| {
+            let Some(view) = self.view.load() else {
+                return Ok(());
+            };
+            if let Some(view) = view.inner_ref() {
+                BaseviewView::set_title(view, title);
+            }
+            Ok(())
+        })
+    }
+
     pub fn resize(&self, size: Size) -> Result<()> {
         objc2::rc::autoreleasepool(|_| {
             let Some(view) = self.view.load() else {

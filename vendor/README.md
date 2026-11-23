@@ -6,14 +6,13 @@ row says what to watch for.
 
 | Crate | Base | Why it is patched | Drop when |
 |---|---|---|---|
-| `moose-baseview` | RustAudio/baseview 0.4.1 (`8c6e6ba`) | MUI's owned window layer: plugin-lifetime, IME and host fixes, frame pacing, damage, timers, desktop dock surfaces. Diverged API; see `UPSTREAM.md` there. | Not planned: this is MUI's windowing, not a temporary patch. |
+| `moose-baseview` | RustAudio/baseview 0.4.1 (`8c6e6ba`) | MUI's owned window layer (embedded DAW + standalone top-level X11 / native Wayland `xdg_toplevel` / Win32 / macOS Cocoa): plugin-lifetime, IME, host fixes, dynamic titles, level-triggered XCB drain, push-driven 0 Hz idle frame pacing, damage, timers, desktop dock surfaces. Diverged API; see `UPSTREAM.md` there. | Not planned: this is MUI's owned windowing layer (path to `mui-window`). |
 | `xim-rs` | zed-xim 0.4.0 | X11 input method: keys serialized through protocol acknowledgements so typed text is not reordered or lost (`3d713d7c`). | zed-xim or xim-rs takes acknowledgement-ordered key forwarding. |
 | `accesskit_macos` | 0.26.3 | ObjC classes named per binary image, so two MUI plugins in one host process don't collide on `AccessKitSubclassOf…` (`fd8a83c5`); `image-probe` feature for the test. | AccessKit names its runtime classes per image (or stops subclassing). |
 | `accesskit_unix` | 0.22.1 | Provider worker threads owned and joined on drop, so unloading a plugin leaves no thread running in unmapped code (`78a80acc`; check: `tools/ci/check-linux-accesskit-images.py`). | AccessKit joins its Unix workers on adapter drop. |
-| `accesskit_winit` | 0.33.2 | Unpatched; path-depends on the two forks above so they are the ones linked. | Both of those are dropped. |
-| `glifo` | 0.4.0 | A run whose glyphs are all in the atlas parses no font tables: the outline, colour and bitmap collections are built by the first miss, and a cached hinting instance is found without building outlines (`MUI-PATCHES.md` there). Text was ~30% of a redrawn frame, two thirds of it this per-run setup. | glifo builds those collections lazily (0.5.0 still does not). |
+| `glifo` | 0.4.0 | A run whose glyphs are all in the atlas parses no font tables: the outline, colour and bitmap collections are built by the first miss, and a cached hinting instance is found without building outlines (`MUI-PATCHES.md` there); aligned to `skrifa 0.46` / `read-fonts 0.43` to deduplicate with `mui-text` and `harfrust`. | glifo builds those collections lazily and matches MUI's `skrifa` version. |
 | `vello_cpu` | 0.3.0 | Single-threaded dirty-region render: the existing nonzero-origin bucketer exposed for `RasterizerSettings::viewport` (`MUI-PATCHES.md` there). | vello_cpu gains a viewport/dirty-rect render. |
 
 Upstreaming the five small patches (xim, the two AccessKit ones, vello_cpu, glifo)
 is what shrinks this directory; MUI's tests for each stay as the regression
-check after the swap.
+check after the swap. `vendor/accesskit_winit` and the `winit` fork are retired.

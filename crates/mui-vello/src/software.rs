@@ -566,6 +566,53 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         self.history.truncate(4);
         Ok(())
     }
+
+    /// Present a budgeted `src_size` bitmap scaled to fill `dst_size` physical
+    /// pixels (used when a HiDPI / ultrawide window exceeds the 16 Mi pixel
+    /// 1:1 CPU target budget so painting never stops).
+    pub fn present_scaled(
+        &mut self,
+        src_size: (u32, u32),
+        pixels: &[u32],
+        dst_size: (u32, u32),
+    ) -> Result<(), String> {
+        use std::num::NonZeroU32;
+        if src_size.0 == 0
+            || src_size.1 == 0
+            || dst_size.0 == 0
+            || dst_size.1 == 0
+            || pixels.len() != src_size.0 as usize * src_size.1 as usize
+        {
+            return Err("invalid scaled bitmap".into());
+        }
+        // Release the 1:1 retained copy while scaled so large surfaces stay bounded.
+        if self.size != (0, 0) {
+            self.size = (0, 0);
+            self.pixels.clear();
+            self.history.clear();
+        }
+        self.surface
+            .resize(
+                NonZeroU32::new(dst_size.0).unwrap(),
+                NonZeroU32::new(dst_size.1).unwrap(),
+            )
+            .map_err(|e| e.to_string())?;
+        let mut buffer = self.surface.buffer_mut().map_err(|e| e.to_string())?;
+        let (sw, sh) = (src_size.0 as usize, src_size.1 as usize);
+        let (dw, dh) = (dst_size.0 as usize, dst_size.1 as usize);
+        let opaque = self.opaque;
+        for dy in 0..dh {
+            let sy = (dy * sh) / dh;
+            let src_row = &pixels[sy * sw..(sy + 1) * sw];
+            let dst_row = &mut buffer[dy * dw..(dy + 1) * dw];
+            for (dx, out) in dst_row.iter_mut().enumerate() {
+                let sx = (dx * sw) / dw;
+                *out = opaque | src_row[sx];
+            }
+        }
+        buffer.present().map_err(|e| e.to_string())?;
+        Ok(())
+    }
 }
 #[cfg(feature = "software-window")]
 fn softbuffer_rects(rects: &[[u32; 4]]) -> Vec<softbuffer::Rect> {

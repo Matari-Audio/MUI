@@ -56,6 +56,12 @@ impl WindowContext {
         Ok(())
     }
 
+    /// Updates the title of a detached top-level window.
+    pub fn set_title(&self, title: &str) -> Result<(), Error> {
+        self.inner.set_title(title)?;
+        Ok(())
+    }
+
     /// Requests the window to be closed.
     ///
     /// This request is not immediate. When exactly it will be closed is platform-dependent.

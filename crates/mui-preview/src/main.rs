@@ -2,8 +2,9 @@
 //! on screen through the same `mui::Ui` a plugin would use.
 //!
 //! The whole window, sidebar included, is one styled tree resolved once a
-//! frame. winit and wgpu are this binary's own, standing in for the plugin
-//! wrapper that owns the window in a real host.
+//! frame, hosted directly on our owned `moose-baseview` + `mui-baseview`
+//! standalone window layer (X11, native Wayland `xdg_toplevel`, Win32, macOS
+//! Cocoa) with direct AccessKit accessibility and zero `winit`.
 //!
 //! Run: `cargo run -p mui-preview`
 #![forbid(unsafe_code)]
@@ -14,16 +15,24 @@ mod scenes;
 mod skin;
 mod tester;
 
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-use accesskit_winit::{Adapter, Event as AccessEvent, WindowEvent as AccessWindowEvent};
 use host::Gpu;
+use mui::Clipboard as _;
 use mui::geometry::{Point, Vec2};
+use mui::host::NativeKey;
 use mui::prelude::*;
 use mui::vello::kurbo::{Affine, Rect, Shape as _, Stroke};
-use mui_access::accesskit::{Action as AccessAction, NodeId};
+use mui_baseview::baseview::dpi::{PhysicalPosition, PhysicalSize};
+use mui_baseview::baseview::{
+    DamageArea, Event, EventStatus, FrameDemand, HandlerError, ImeConfiguration, MouseCursor,
+    MouseEvent, ScrollDelta, WindowContext, WindowEvent, WindowHandler, WindowSize,
+};
+use mui_baseview::native::{ime_event, key_event, mods, mouse_button, native_cursor};
+use mui_baseview::standalone::StandaloneAccessibility;
 use scenes::PreviewScene;
 
 /// Material Symbols, the playground's 52-icon subset (`save`, `lock`, ...).
@@ -31,11 +40,6 @@ static ICONS: std::sync::LazyLock<Font> = std::sync::LazyLock::new(|| {
     Font::new(&include_bytes!("../../mui-playground/fonts/MaterialSymbolsOutlined-ui.ttf")[..])
         .expect("the bundled icon font parses")
 });
-use winit::application::ApplicationHandler;
-use winit::event::{ElementState, Ime as WinitIme, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
-use winit::keyboard::{Key as WinitKey, NamedKey};
-use winit::window::{CursorIcon, Window, WindowId};
 
 const SIDEBAR: f64 = 240.0;
 /// How often `MUI_PREVIEW_THEME` is stat'd, and how many frames the title bar
@@ -45,29 +49,8 @@ const TITLE_EVERY: u32 = 30;
 /// The inspector's own label, in pixels. Not the theme's text size: this is
 /// developer chrome and must not move when the theme does.
 const LABEL: f64 = 12.0;
-/// One wheel line in logical pixels. winit reports lines, MUI scrolls pixels.
+/// One wheel line in logical pixels. baseview reports lines, MUI scrolls pixels.
 const LINE: f64 = 40.0;
-
-/// What the hovered surface asks for, in winit's vocabulary.
-fn icon(c: Cursor) -> CursorIcon {
-    match c {
-        Cursor::Arrow => CursorIcon::Default,
-        Cursor::Hand => CursorIcon::Pointer,
-        Cursor::Grab => CursorIcon::Grab,
-        Cursor::Grabbing => CursorIcon::Grabbing,
-        Cursor::Text => CursorIcon::Text,
-        Cursor::ResizeH => CursorIcon::EwResize,
-        Cursor::ResizeV => CursorIcon::NsResize,
-        Cursor::Crosshair => CursorIcon::Crosshair,
-        Cursor::Forbidden => CursorIcon::NotAllowed,
-    }
-}
-
-/// The named keys MUI has a word for; everything else is the host's business.
-fn named(k: NamedKey) -> Option<mui::prelude::Key> {
-    // winit's variants carry the W3C names `Key::from_name` reads.
-    mui::prelude::Key::from_fmt(format_args!("{k:?}"))
-}
 
 /// A theme file: `key = value` a line, `#` starts a comment, everything
 /// unstated stays [`skin::SKIN`]'s. Returns what failed to parse so the caller
@@ -149,8 +132,7 @@ fn inspect(
         canvas.stroke_path(&outline(s.frame));
     }
     // `keys` is tree order, which is z-order, so the last frame containing the
-    // pointer is the one on top. ponytail: rectangles, not the rounded
-    // outlines `mui_input::Hit` tests -- close enough to point at a widget.
+    // pointer is the one on top.
     let Some(s) = pointer.and_then(|p| {
         scene.surfaces().rev().find(|s| {
             let f = s.frame;
@@ -216,9 +198,7 @@ struct App {
     paint_s: f64,
     counted: u32,
     counted_at: Instant,
-    /// Pointer samples since the last frame, in physical pixels. winit
-    /// dispatches every queued event and then one redraw, so a press and
-    /// release in one batch must both be seen to make a click.
+    /// Pointer samples since the last frame, in physical pixels.
     events: Vec<PointerInput>,
     pointer: PointerInput,
     /// Everything non-pointer collected since the last frame: it rides on the
@@ -227,29 +207,25 @@ struct App {
     keys: Vec<KeyPress>,
     text: String,
     ime: Vec<Ime>,
-    /// Where the focused field wants the candidate window, and whether the
-    /// window has been told to allow an input method at all. Toggling
-    /// `set_ime_allowed` on an unchanged state can drop a composition, so it
-    /// is only called on the edge.
+    /// Where the focused field wants the candidate window.
     ime_area: Option<(Point, mui::scene::Size)>,
-    ime_on: bool,
+    applied_ime: Option<Option<ImeConfiguration>>,
+    applied_cursor: Option<MouseCursor>,
     mods: Mods,
     cursor: Cursor,
     typed: Option<char>,
-    /// The preview is its own clipboard: a copy comes back on
-    /// `Frame::clipboard` and rides back in on the next `Input`. ponytail:
-    /// no OS clipboard, add `arboard` here if cross-app paste matters.
+    /// In-process clipboard mirror (also synced with the OS clipboard when a
+    /// native window is attached).
     clipboard: String,
+    os_clipboard: mui_baseview::Clipboard,
     last: Instant,
     repaint_at: Option<Instant>,
+    paint_retry_at: Option<Instant>,
+    dirty: bool,
+    animating: bool,
     visible: bool,
     gpu: Option<Gpu>,
-    /// The screen reader's adapter, and the proxy it posts requests through.
-    /// Both are `None` in a test: no event loop, no window, no adapter.
-    proxy: Option<EventLoopProxy<AccessEvent>>,
-    access: Option<Adapter>,
-    /// Skips the tree when a frame did not change it.
-    published: mui_access::Publisher,
+    access: Option<StandaloneAccessibility>,
 }
 
 impl App {
@@ -291,18 +267,21 @@ impl App {
             text: String::new(),
             ime: Vec::new(),
             ime_area: None,
-            ime_on: false,
+            applied_ime: None,
+            applied_cursor: None,
             mods: Mods::default(),
             cursor: Cursor::Arrow,
             typed: None,
             clipboard: String::new(),
+            os_clipboard: mui_baseview::Clipboard::default(),
             last: Instant::now(),
             repaint_at: None,
+            paint_retry_at: None,
+            dirty: true,
+            animating: false,
             visible: true,
             gpu: None,
-            proxy: None,
             access: None,
-            published: mui_access::Publisher::default(),
         }
     }
 
@@ -427,7 +406,14 @@ impl App {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64();
         self.last = now;
-        input.clipboard = Some(self.clipboard.clone());
+        let clipboard = if self.gpu.is_some() {
+            self.os_clipboard
+                .get()
+                .unwrap_or_else(|| self.clipboard.clone())
+        } else {
+            self.clipboard.clone()
+        };
+        input.clipboard = Some(clipboard);
         self.ui.set_scale(Some(scale));
         if let Some(gpu) = &mut self.gpu {
             gpu.update();
@@ -444,6 +430,9 @@ impl App {
                 self.repaint_at = f.repaint_after.and_then(|delay| now.checked_add(delay));
                 if let Some(s) = copied {
                     self.scenes[self.selected].clipboard(&s);
+                    if self.gpu.is_some() {
+                        self.os_clipboard.set(&s);
+                    }
                     self.clipboard = s;
                 }
                 (animating, cursor)
@@ -459,24 +448,26 @@ impl App {
     }
 
     /// Allow an input method while a field is focused, and keep the
-    /// candidate window under its caret.
+    /// candidate window under its caret. Only calls baseview on change so an
+    /// active composition is never dropped.
     fn apply_ime(&mut self, scale: f64) {
-        if self.gpu.is_none() {
-            // No window, so no edge is burned: the state is untouched and the
-            // next frame with a window still makes the call.
+        let Some(gpu) = self.gpu.as_ref() else {
             return;
-        }
-        let (area, on) = (self.ime_area, self.ime_area.is_some());
-        let edge = std::mem::replace(&mut self.ime_on, on) != on;
-        let window = self.gpu.as_ref().expect("checked above").window();
-        if edge {
-            window.set_ime_allowed(on);
-        }
-        if let Some((at, size)) = area {
-            window.set_ime_cursor_area(
-                winit::dpi::PhysicalPosition::new(at.x * scale, at.y * scale),
-                winit::dpi::PhysicalSize::new(size.width * scale, size.height * scale),
-            );
+        };
+        let config = self.ime_area.and_then(|(at, size)| {
+            let state = self.ui.text_input_state()?;
+            Some(ImeConfiguration {
+                id: state.id,
+                position: PhysicalPosition::new(at.x * scale, at.y * scale),
+                size: PhysicalSize::new(size.width * scale, size.height * scale),
+                text: state.text,
+                selection: state.selection,
+                marked: state.marked,
+            })
+        });
+        if self.applied_ime.as_ref() != Some(&config) {
+            gpu.window().set_ime_configuration(config.clone());
+            self.applied_ime = Some(config);
         }
     }
 
@@ -556,7 +547,7 @@ impl App {
         let n = f64::from(self.counted);
         let fps = n / self.counted_at.elapsed().as_secs_f64().max(1e-9);
         if let Some(gpu) = &self.gpu {
-            gpu.window().set_title(&format!(
+            gpu.set_title(&format!(
                 "mui preview \u{2014} {:.1} ms resolve, {:.1} ms paint, {fps:.0} fps",
                 self.resolve_s / n * 1e3,
                 self.paint_s / n * 1e3
@@ -569,31 +560,16 @@ impl App {
     /// Hand the screen reader this frame's tree. Nothing is built when
     /// nothing is listening.
     fn publish(&mut self) {
-        let (Some(a), Some(scene)) = (&mut self.access, self.ui.scene()) else {
-            return;
-        };
-        let (focus, scale) = (self.ui.focus_key(), self.ui.scale().unwrap_or(1.0));
-        let published = &mut self.published;
-        a.update_if_active(|| published.update(scene, focus, scale));
-    }
-
-    /// The surface behind an accesskit node id.
-    fn key_of(&self, target: NodeId) -> Option<String> {
-        let scene = self.ui.scene()?;
-        mui_access::surface_of(scene, target).map(|s| s.key.to_string())
-    }
-
-    /// A semantic activation targets the requested control, even when its
-    /// bounding-box centre is a hole or is covered by another surface.
-    fn press(&mut self, key: &str) {
-        self.ui.request_action(SemanticAction::activate(key));
+        if let Some(access) = self.access.as_mut() {
+            access.publish(&self.ui);
+        }
     }
 
     fn draw(&mut self) -> Result<Option<mui::vello::effects::EffectStats>, String> {
         let Some(gpu) = &mut self.gpu else {
             return Ok(None);
         };
-        let scale = gpu.window().scale_factor();
+        let scale = gpu.scale_factor();
         let height = f64::from(gpu.size().1) / scale;
         let Some(scene) = self.ui.scene() else {
             return Ok(None);
@@ -643,287 +619,292 @@ impl App {
     }
 }
 
-impl ApplicationHandler<AccessEvent> for App {
-    /// A screen reader asked for the tree, or asked to act on a node.
-    fn user_event(&mut self, _: &ActiveEventLoop, event: AccessEvent) {
-        match event.window_event {
-            // Activation can land before the first frame, when `publish` has
-            // no scene yet; the redraw is what gets the reader a real tree.
-            AccessWindowEvent::InitialTreeRequested => {
-                self.published.reset();
-                self.publish();
-            }
-            AccessWindowEvent::ActionRequested(r) => {
-                if let Some(key) = self.key_of(r.target_node) {
-                    match r.action {
-                        AccessAction::Focus => {
-                            self.ui.request_action(SemanticAction::focus(key));
-                        }
-                        AccessAction::Click => self.press(&key),
-                        AccessAction::SetValue => {
-                            if let Some(mui_access::accesskit::ActionData::NumericValue(value)) =
-                                r.data
-                            {
-                                self.ui
-                                    .request_action(SemanticAction::set_value(key, value));
-                            }
-                        }
-                        AccessAction::Increment => {
-                            self.ui.request_action(SemanticAction::increment(key));
-                        }
-                        AccessAction::Decrement => {
-                            self.ui.request_action(SemanticAction::decrement(key));
-                        }
-                        AccessAction::SetTextSelection => {
-                            if let Some(mui_access::accesskit::ActionData::SetTextSelection(s)) =
-                                r.data
-                                && let Some((anchor, caret, upstream)) =
-                                    self.ui.scene().and_then(|scene| {
-                                        let (anchor, caret) =
-                                            mui_access::selection_of(scene, r.target_node, &s)?;
-                                        Some((
-                                            anchor,
-                                            caret,
-                                            mui_access::selection_is_upstream(
-                                                scene,
-                                                r.target_node,
-                                                &s.focus,
-                                            )?,
-                                        ))
-                                    })
-                                && self.ui.request_action(SemanticAction::set_selection(
-                                    key.clone(),
-                                    anchor,
-                                    caret,
-                                ))
-                            {
-                                self.ui.set_text_selection_affinity(key, upstream);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            AccessWindowEvent::AccessibilityDeactivated => return,
-        }
-        if let Some(gpu) = &self.gpu {
-            gpu.window().request_redraw();
-        }
-    }
+struct PreviewHandler {
+    app: RefCell<App>,
+    cx: WindowContext,
+    outcome: Arc<Mutex<Result<(), String>>>,
+    finalized: Cell<bool>,
+}
 
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.gpu.is_some() {
+impl PreviewHandler {
+    fn finish_and_teardown(&self) {
+        let Ok(mut app) = self.app.try_borrow_mut() else {
+            return;
+        };
+        if self.finalized.replace(true) {
             return;
         }
-        // The adapter has to exist before the window is first shown.
-        let attrs = Window::default_attributes()
-            .with_title("MUI preview")
-            .with_visible(false)
-            .with_inner_size(winit::dpi::LogicalSize::new(1000, 680));
-        let window = Arc::new(event_loop.create_window(attrs).expect("window"));
-        if let Some(proxy) = self.proxy.clone() {
-            self.access = Some(Adapter::with_event_loop_proxy(event_loop, &window, proxy));
-        }
-        window.set_visible(true);
-        window.request_redraw();
-        let display = Box::new(event_loop.owned_display_handle());
-        match Gpu::try_new(window, display) {
-            Ok(gpu) => self.gpu = Some(gpu),
-            Err(error) => {
-                self.frame_error = Some(error);
-                event_loop.exit();
-            }
-        }
+        // Drop native accessibility and GPU surfaces before the window closes.
+        drop(app.access.take());
+        drop(app.gpu.take());
+        let result = if let Some(error) = app.frame_error.take() {
+            Err(error)
+        } else {
+            app.tester.as_mut().map_or(Ok(()), tester::Tester::finish)
+        };
+        *self
+            .outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = result;
     }
+}
 
-    /// Theme reload, animation and renderer initialization/retry deadlines.
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if !self.visible {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
+impl Drop for PreviewHandler {
+    fn drop(&mut self) {
+        self.finish_and_teardown();
+    }
+}
+
+impl WindowHandler for PreviewHandler {
+    fn frame_demand(&self) -> FrameDemand {
+        let Ok(app) = self.app.try_borrow() else {
+            return FrameDemand::Continuous;
+        };
+        if !app.visible {
+            return FrameDemand::Idle;
         }
         let now = Instant::now();
-        if self.repaint_at.is_some_and(|at| at <= now) {
-            self.repaint_at = None;
-            if let Some(gpu) = &self.gpu {
-                gpu.window().request_redraw();
+        if let Some(tester) = &app.tester {
+            if tester.waiting_capture() {
+                return app.repaint_at.map_or(
+                    FrameDemand::At(now + Duration::from_millis(25)),
+                    FrameDemand::At,
+                );
             }
+            return FrameDemand::At(now);
         }
-        if self.reload()
-            && let Some(gpu) = &self.gpu
+        if app.animating {
+            return FrameDemand::Continuous;
+        }
+        if app.dirty
+            || app
+                .access
+                .as_ref()
+                .is_some_and(StandaloneAccessibility::wants_tree)
         {
-            gpu.window().request_redraw();
+            return FrameDemand::At(now);
         }
-        let theme = self
+        let theme = app
             .theme_path
             .as_ref()
-            .and_then(|_| self.theme_at.checked_add(POLL));
-        let renderer = self.gpu.as_ref().and_then(|gpu| gpu.next_wake(now));
-        if renderer.is_some_and(|at| at <= now)
-            && let Some(gpu) = &self.gpu
-        {
-            gpu.window().request_redraw();
-        }
-        let next = [self.repaint_at, theme, renderer]
+            .and_then(|_| app.theme_at.checked_add(POLL));
+        let renderer = app.gpu.as_ref().and_then(|gpu| gpu.next_wake(now));
+        [app.repaint_at, app.paint_retry_at, theme, renderer]
             .into_iter()
             .flatten()
             .min()
-            .map(|at| {
-                if at <= now {
-                    now + std::time::Duration::from_millis(16)
-                } else {
-                    at
-                }
-            });
-        event_loop.set_control_flow(next.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
+            .map_or(FrameDemand::Idle, FrameDemand::At)
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
-        if let (Some(a), Some(gpu)) = (&mut self.access, &self.gpu) {
-            a.process_event(gpu.window(), &event);
+    fn on_frame(&self) -> Result<(), HandlerError> {
+        let mut app = self.app.borrow_mut();
+        if let Some(access) = app.access.as_mut() {
+            access.update_bounds(&self.cx);
         }
+        let mut a11y_dirty = false;
+        if let Some(mut access) = app.access.take() {
+            if access.apply(&mut app.ui) || access.wants_tree() {
+                a11y_dirty = true;
+            }
+            app.access = Some(access);
+        }
+        if a11y_dirty {
+            app.dirty = true;
+        }
+        if app.reload() {
+            app.dirty = true;
+        }
+        if let Some(mut tester) = app.tester.take() {
+            tester.draw(&mut app, &self.cx);
+            app.tester = Some(tester);
+            return Ok(());
+        }
+        if !app.visible {
+            return Ok(());
+        }
+        let now = Instant::now();
+        if app.repaint_at.is_some_and(|at| at <= now) {
+            app.repaint_at = None;
+            app.dirty = true;
+        }
+        if let Some(gpu) = &mut app.gpu {
+            gpu.update();
+        }
+        let Some(gpu) = &app.gpu else {
+            return Ok(());
+        };
+        let (size, scale) = (gpu.size(), gpu.scale_factor());
+        app.dirty = false;
+        let start = Instant::now();
+        let animating = app.replay(size, scale);
+        app.animating = animating;
+        let resolved = Instant::now();
+        if app.paint_retry_at.is_none_or(|at| now >= at) {
+            app.paint_retry_at = match app.draw() {
+                Ok(_) => None,
+                Err(error) => {
+                    eprintln!("Preview paint: {error}");
+                    if let Some(gpu) = &mut app.gpu {
+                        gpu.invalidate();
+                    }
+                    Some(Instant::now() + Duration::from_millis(100))
+                }
+            };
+        }
+        app.title(
+            resolved.duration_since(start).as_secs_f64(),
+            resolved.elapsed().as_secs_f64(),
+        );
+        app.publish();
+        let cursor = native_cursor(app.cursor);
+        if app.applied_cursor != Some(cursor) {
+            let _ = self.cx.set_mouse_cursor(cursor);
+            app.applied_cursor = Some(cursor);
+        }
+        app.apply_ime(scale);
+        if animating {
+            self.cx.request_redraw();
+        }
+        Ok(())
+    }
+
+    fn damage(&self, _: DamageArea<'_>) {
+        if let Ok(mut app) = self.app.try_borrow_mut() {
+            if let Some(gpu) = &mut app.gpu {
+                gpu.invalidate();
+            }
+            app.dirty = true;
+        }
+    }
+
+    fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+        let mut app = self.app.borrow_mut();
+        app.visible = size.physical.width > 0 && size.physical.height > 0;
+        if let Some(gpu) = &mut app.gpu {
+            gpu.resize(size.physical.width, size.physical.height);
+        }
+        app.dirty = true;
+        self.cx.request_redraw();
+        Ok(())
+    }
+
+    fn on_event(&self, event: Event) -> EventStatus {
+        let mut app = self.app.borrow_mut();
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
-            WindowEvent::Resized(size) => {
-                self.visible = size.width > 0 && size.height > 0;
-                if let Some(gpu) = &mut self.gpu {
-                    gpu.resize(size.width, size.height);
+            Event::Window(WindowEvent::WillClose) => {
+                drop(app);
+                self.finish_and_teardown();
+                return EventStatus::Captured;
+            }
+            Event::Window(WindowEvent::Focused) => {
+                if let Some(access) = app.access.as_mut() {
+                    access.focus(true);
                 }
             }
-            WindowEvent::ScaleFactorChanged { .. } => {
-                if let Some(gpu) = &mut self.gpu {
-                    let size = gpu.window().inner_size();
-                    gpu.resize(size.width, size.height);
+            Event::Window(WindowEvent::Unfocused) => {
+                if let Some(access) = app.access.as_mut() {
+                    access.focus(false);
                 }
+                app.cancel();
             }
-            WindowEvent::CursorMoved { position, .. } => {
-                self.queue(Some(Some(Point::new(position.x, position.y))), None);
-            }
-            WindowEvent::CursorLeft { .. } => self.queue(Some(None), None),
-            WindowEvent::Focused(false) => self.cancel(),
-            WindowEvent::MouseInput { state, button, .. } => {
-                let b = match button {
-                    MouseButton::Left => Button::Primary,
-                    MouseButton::Right => Button::Secondary,
-                    MouseButton::Middle => Button::Middle,
-                    // Back, forward and the rest are not gestures MUI knows.
-                    _ => return,
-                };
-                self.queue(None, Some((b, state == ElementState::Pressed)));
-            }
-            WindowEvent::Ime(e) => {
-                self.ime.push(match e {
-                    WinitIme::Enabled => Ime::Enabled,
-                    WinitIme::Preedit(text, cursor) => Ime::Preedit { text, cursor },
-                    WinitIme::Commit(s) => Ime::Commit(s),
-                    WinitIme::Disabled => Ime::Disabled,
-                });
-            }
-            WindowEvent::ModifiersChanged(m) => {
-                let s = m.state();
-                self.mods = Mods {
-                    shift: s.shift_key(),
-                    ctrl: s.control_key(),
-                    alt: s.alt_key(),
-                    cmd: s.super_key(),
-                };
-                // A modifier pressed without moving the pointer still changes
-                // the gesture in flight.
-                self.pointer.mods = self.mods;
-            }
-            WindowEvent::MouseWheel { delta, .. } => {
-                // winit points the wheel at the viewer; a scroll offset points
-                // at the content, so both axes flip.
-                let d = match delta {
-                    MouseScrollDelta::LineDelta(x, y) => {
-                        Point::new(f64::from(x) * -LINE, f64::from(y) * -LINE)
-                    }
-                    MouseScrollDelta::PixelDelta(p) => Point::new(-p.x, -p.y),
-                };
-                self.wheel = Vec2::new(self.wheel.x + d.x, self.wheel.y + d.y);
-            }
-            WindowEvent::KeyboardInput { ref event, .. } if event.state.is_pressed() => {
-                let mods = self.mods;
-                match &event.logical_key {
-                    // The inspector is the host's, not the UI's: it never
-                    // reaches a widget.
-                    WinitKey::Named(NamedKey::F12) => self.frames = !self.frames,
-                    WinitKey::Named(n) => {
-                        if let Some(key) = named(*n) {
-                            // Escape is the UI's while it has a focus to drop;
-                            // only an idle Escape closes the gallery.
-                            if key == mui::prelude::Key::Escape && !self.any_focus() {
-                                event_loop.exit();
-                                return;
-                            }
-                            self.keys.push(KeyPress { key, mods });
-                        }
-                    }
-                    // A shortcut reaches widgets as keys; plain typing reaches
-                    // them as text below. Sending both would type every
-                    // character twice.
-                    WinitKey::Character(s) if mods.ctrl || mods.cmd => {
-                        self.keys.extend(s.chars().map(|c| KeyPress {
-                            key: mui::prelude::Key::Char(c),
-                            mods,
-                        }));
-                    }
-                    _ => {}
-                }
-                if !mods.ctrl
-                    && !mods.cmd
-                    && let Some(t) = event.text.as_ref()
-                {
-                    self.text.extend(t.chars().filter(|c| !c.is_control()));
-                    self.typed = t.chars().find(|c| !c.is_control());
-                }
-            }
-            WindowEvent::Occluded(hidden) => {
-                self.visible = !hidden;
-                if hidden {
-                    self.repaint_at = None;
-                    self.cancel();
-                }
-            }
-            WindowEvent::RedrawRequested => {
-                if let Some(gpu) = &mut self.gpu {
+            Event::Window(WindowEvent::RedrawRequested) => {
+                if let Some(gpu) = &mut app.gpu {
                     gpu.invalidate();
                 }
-                if let Some(mut tester) = self.tester.take() {
-                    tester.draw(self, event_loop);
-                    self.tester = Some(tester);
-                    return;
-                }
-                if !self.visible {
-                    return;
-                }
-                let Some(gpu) = &self.gpu else { return };
-                let (size, scale) = (gpu.size(), gpu.window().scale_factor());
-                let start = Instant::now();
-                let animating = self.replay(size, scale);
-                let resolved = Instant::now();
-                if let Err(error) = self.draw() {
-                    eprintln!("GPU paint: {error}");
-                }
-                self.title(
-                    resolved.duration_since(start).as_secs_f64(),
-                    resolved.elapsed().as_secs_f64(),
-                );
-                self.publish();
-                if let Some(gpu) = &self.gpu {
-                    gpu.window().set_cursor(icon(self.cursor));
-                }
-                self.apply_ime(scale);
-                if animating && let Some(gpu) = &self.gpu {
-                    gpu.window().request_redraw();
-                }
-                return;
             }
-            _ => {}
+            Event::Window(WindowEvent::ScaleFactorChanged(_)) => {
+                let size = self.cx.size().physical;
+                if let Some(gpu) = &mut app.gpu {
+                    gpu.resize(size.width, size.height);
+                }
+            }
+            Event::Mouse(MouseEvent::CursorMoved {
+                position,
+                modifiers,
+            }) => {
+                app.mods = mods(modifiers);
+                app.queue(Some(Some(Point::new(position.x, position.y))), None);
+            }
+            Event::Mouse(MouseEvent::CursorLeft) => {
+                app.queue(Some(None), None);
+            }
+            Event::Mouse(MouseEvent::ButtonPressed { button, modifiers }) => {
+                app.mods = mods(modifiers);
+                if let Some(b) = mouse_button(button) {
+                    app.queue(None, Some((b, true)));
+                } else {
+                    return EventStatus::Ignored;
+                }
+            }
+            Event::Mouse(MouseEvent::ButtonReleased { button, modifiers }) => {
+                app.mods = mods(modifiers);
+                if let Some(b) = mouse_button(button) {
+                    app.queue(None, Some((b, false)));
+                } else {
+                    return EventStatus::Ignored;
+                }
+            }
+            Event::Mouse(MouseEvent::WheelScrolled { delta, modifiers }) => {
+                app.mods = mods(modifiers);
+                app.pointer.mods = app.mods;
+                // baseview points the wheel at the viewer; a scroll offset
+                // points at the content, so both axes flip.
+                let d = match delta {
+                    ScrollDelta::Lines { x, y } => {
+                        Point::new(f64::from(x) * -LINE, f64::from(y) * -LINE)
+                    }
+                    ScrollDelta::Pixels { x, y } => Point::new(-f64::from(x), -f64::from(y)),
+                };
+                app.wheel = Vec2::new(app.wheel.x + d.x, app.wheel.y + d.y);
+            }
+            Event::Ime(e) => {
+                app.ime.push(ime_event(&e));
+            }
+            Event::Keyboard(key) => {
+                let translated = key_event(&key);
+                app.mods = translated.mods;
+                app.pointer.mods = app.mods;
+                if translated.down {
+                    // The inspector is the host's, not the UI's: it never
+                    // reaches a widget.
+                    if format!("{:?}", key.key) == "Named(F12)" {
+                        app.frames = !app.frames;
+                    } else {
+                        match translated.key {
+                            NativeKey::Named(k) => {
+                                // Escape is the UI's while it has a focus to drop;
+                                // only an idle Escape closes the gallery.
+                                if k == mui::prelude::Key::Escape && !app.any_focus() {
+                                    self.cx.request_close();
+                                    return EventStatus::Captured;
+                                }
+                                app.keys.push(KeyPress {
+                                    key: k,
+                                    mods: translated.mods,
+                                });
+                            }
+                            NativeKey::Text(ref s)
+                                if translated.mods.ctrl || translated.mods.cmd =>
+                            {
+                                app.keys.extend(s.chars().map(|c| KeyPress {
+                                    key: mui::prelude::Key::Char(c),
+                                    mods: translated.mods,
+                                }));
+                            }
+                            NativeKey::Text(ref s) => {
+                                app.text.extend(s.chars().filter(|c| !c.is_control()));
+                                app.typed = s.chars().find(|c| !c.is_control());
+                            }
+                            NativeKey::Modifier(_) | NativeKey::Other => {}
+                        }
+                    }
+                }
+            }
+            _ => return EventStatus::Ignored,
         }
-        if let Some(gpu) = &self.gpu {
-            gpu.window().request_redraw();
-        }
+        app.dirty = true;
+        self.cx.request_redraw();
+        EventStatus::Captured
     }
 }
 
@@ -937,23 +918,31 @@ fn main() -> Result<(), String> {
         .any(|arg| arg == "--test-ui")
         .then(tester::Tester::new)
         .transpose()?;
-    let event_loop = EventLoop::<AccessEvent>::with_user_event()
-        .build()
-        .expect("event loop");
-    event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = App::new();
-    app.tester = tester;
-    app.proxy = Some(event_loop.create_proxy());
-    event_loop.run_app(&mut app).expect("run");
-    // Test completion includes native teardown, so a destroy-time fault fails CI.
-    if app.tester.is_some() {
-        drop(app.access.take());
-        drop(app.gpu.take());
-    }
-    if let Some(error) = app.frame_error {
-        return Err(error);
-    }
-    app.tester.as_mut().map_or(Ok(()), tester::Tester::finish)
+    let outcome = Arc::new(Mutex::new(Ok(())));
+    let run_outcome = Arc::clone(&outcome);
+    let settings = mui_baseview::standalone::settings("MUI preview", (1000, 680));
+    mui_baseview::standalone::run_window(settings, move |cx| {
+        let mut app = App::new();
+        app.tester = tester;
+        app.access = StandaloneAccessibility::attach(&cx);
+        match Gpu::try_new(cx.clone()) {
+            Ok(gpu) => app.gpu = Some(gpu),
+            Err(error) => {
+                app.frame_error = Some(error);
+                cx.request_close();
+            }
+        }
+        Ok(PreviewHandler {
+            app: RefCell::new(app),
+            cx,
+            outcome: run_outcome,
+            finalized: Cell::new(false),
+        })
+    })?;
+    outcome
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 #[cfg(test)]

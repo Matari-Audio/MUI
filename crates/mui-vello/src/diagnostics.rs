@@ -190,7 +190,7 @@ pub fn breadcrumb(component: &str, stage: &str, message: &str) {
 
 /// Persist a MUI error and, when a `Reporter` is retained, enqueue it for support.
 /// Pass MUI-owned errors, not arbitrary host crashes or user content.
-/// Use component `mui`, `mui-vello`, `mui-baseview` or `mui-winit` and a short
+/// Use component `mui`, `mui-vello`, or `mui-baseview` and a short
 /// snake_case stage matching the support protocol.
 pub fn error(component: &str, stage: &str, message: &str) {
     record(component, stage, message, true, None);

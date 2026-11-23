@@ -10,15 +10,14 @@ a slider thumb sits where two flex weights put it; explicit offsets are availabl
 strings**: there is no `.class("btn btn-sm")` and there will not be one --
 every value in the DSL is a Rust expression the compiler already checks.
 
-Every crate is `#![forbid(unsafe_code)]` except `mui-baseview` and
-`mui-truce`, which deny it and allow a few blocks: the wgpu surface on the
-native window, `Send` for the window handle and the host's parent handle.
-Every library crate compiles to `wasm32-unknown-unknown`; the native preview
-host, `mui-baseview`'s window and the example plugin do not. The
-geometry, layout, style and motion crates stay small -- `mui-motion` has no
-dependencies at all -- but the renderer, text and accessibility stack does
-not: Vello, wgpu, harfrust, accesskit and truce put about 440 packages in
-`Cargo.lock`.
+Every crate is `#![forbid(unsafe_code)]` except `mui-baseview`,
+which denies it and allows a few documented blocks: native accessibility
+attachment, the wgpu surface on the native window, and platform hooks.
+Every library crate compiles to `wasm32-unknown-unknown`; `mui-preview`
+and `mui-baseview`'s native window do not. The geometry, layout, style and
+motion crates stay small -- `mui-motion` has no dependencies at all -- while
+the renderer, text and accessibility stack brings in `vello_cpu`, `wgpu`,
+`harfrust`, and `accesskit`.
 
 ## Start here
 
@@ -51,10 +50,13 @@ alive between frames to benefit from its caches. An unchanged
 frame into the view they presented last records no GPU pass; a swapchain hands
 out a new view per frame, so there the host saves the pass by not asking.
 
-Plugin windows also have an automatic software fallback: Vello CPU rasterizes
-into native pixel buffers without opening a wgpu device. `MUI_RENDERER=cpu`
-forces that path for diagnostics. It retains unchanged frames and uses one CPU
-thread; changed frames repaint fully. See the [plugin host contract](crates/mui-truce/README.md).
+Plugin and standalone windows also have an automatic software fallback:
+`vello_cpu` rasterizes dirty rectangles into native pixel buffers without
+opening a wgpu device (and `mui-vello` rejects `wgpu::DeviceType::Cpu`
+adapters such as Windows WARP and Linux Lavapipe/llvmpipe so broken or
+software GPU drivers go straight to `vello_cpu`). `MUI_FORCE_CPU=1` or
+`MUI_RENDERER=cpu` forces that path explicitly. See
+[docs/platform-notes.md](docs/platform-notes.md).
 
 The classic-versus-Hybrid measurements that led here (history: MUI shipped on
 `vello_hybrid` first) live in the
@@ -334,51 +336,31 @@ The gallery's **Responsive editor** scene is this tree with knobs on it, and
 `scenes::tests` resolves it at 240x600, 800x500 and 2000x300 asserting that
 no child ever leaves its parent.
 
-## Plugins
+## Plugins & Hosts
 
-`mui-truce` puts a MUI tree in a CLAP or VST3 plugin built with
-[truce](https://crates.io/crates/truce). `MuiEditor` is truce's `Editor`: a
-baseview child window in the host's window, a wgpu surface on it, and one
-`Ui::frame` per native event. `Bridge::bind` connects a widget id to a truce
-parameter. A drag becomes the host's begin/perform/end, and host automation
-is the value the next tree reads:
+MUI windows run on our owned `moose-baseview` + `mui-baseview` layer across
+X11, native Wayland (`xdg_toplevel` / `wl_subsurface`), Win32, and macOS
+Cocoa, with push-driven 0 Hz settled idle wakeups and direct AccessKit
+integration (`accesskit_unix` / `accesskit_macos` / `accesskit_windows`):
 
-```rust,ignore
-fn editor(params: Arc<GainParams>) -> Box<dyn Editor> {
-    MuiEditor::new(params, Ui::default(), (300, 200), |ui, bridge| {
-        let gain = bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0));
-        col![gain, title(bridge.text(P::Gain))].pad(L).fill(Role::Surface)
-    })
-    .resizable((260, 180))
-    .into_editor()
-}
-```
-
-`examples/gain-plugin` is a complete plugin: a gain knob, a bypass toggle and
-an output meter. [crates/mui-truce/README.md](crates/mui-truce/README.md) has
-the build commands and the clap-validator and pluginval results.
-
-Both `--release` and `--profile plugin` use `panic = "unwind"` here. The final
-plugin workspace controls the panic strategy: downstream plugins must also
-set `[profile.release] panic = "unwind"`. `mui-truce` rejects abort builds by
-default, because an editor panic would otherwise terminate the DAW.
-The explicit `allow-panic-abort` feature removes that protection; it is not
-for shipping DAW plugins. See the [shipping checklist](crates/mui-truce/README.md#shipping-a-mui-plugin-safely)
-and the remaining Linux host-thread integration limitation there.
-
-## Hosts
-
-- `mui-baseview`: the native window, for apps (`run`) and for any plugin
-  framework (`open`, parented under the host's window). A `View` trait, the
-  event queue, the GPU surface, clipboard and AT-SPI.
-  `cargo run --example app -p mui-baseview` is a knob in a window.
-- `mui-truce`: truce's `Editor` over that window, plus the `Bridge` from widget
-  ids to truce parameters.
-- `mui-vello::host`: bring your own window and surface; `Host` presents a
-  resolved scene to it. `Host::with_transparency(.., Transparency::Translucent)`
+- **`mui-baseview`**: the native window layer, for embedded plugin editors
+  (`open`, parented under the host's window, used by `moose-mui` for CLAP,
+  VST3, AU, and AAX plugins) and standalone apps (`run`, `standalone`, used by
+  `mui-preview`). Provides `View`, `Requests`, `Presenter`, clipboard, IME,
+  native drag-and-drop, and direct AccessKit accessibility.
+- **`mui-vello::host`**: bring your own window and surface; `Host` presents a
+  resolved scene to it using the 4-pass instanced SDF quad + analytic weld
+  renderer (`mui-vello::quad`). `Host::with_transparency(.., Transparency::Translucent)`
   composites with alpha where the surface offers it (`Host::translucent` says
   whether it did): paint a faded root, `Role::Surface.alpha(0.7)`, over an OS
   blur for frosted glass.
+
+Both `--release` and `--profile plugin` use `panic = "unwind"` here. The final
+plugin workspace controls the panic strategy: downstream plugins must also
+set `[profile.release] panic = "unwind"`. `mui-baseview` rejects abort builds
+by default, because an editor panic would otherwise terminate the DAW.
+The explicit `allow-panic-abort` feature removes that protection; it is not
+for shipping DAW plugins. See [docs/platform-notes.md](docs/platform-notes.md).
 
 `mui-baseview::Requests::drag_out` and `drag_out_with_preview` return a
 `Result<(), DragQueueError>`. A successful call admits one owned file export for
@@ -504,8 +486,9 @@ label is named by its id (a group with none stays unnamed). A `text_input` repor
 as a `TextRun` with each character's position and its selection, so a reader
 follows the caret, and a reader's `SetTextSelection` comes back as
 `SemanticAction::set_selection`. The
-widgets in `mui` already describe themselves, so the preview just hands the
-update to its `accesskit_winit::Adapter` after each frame.
+widgets in `mui` already describe themselves, so `mui-baseview` publishes the
+update directly through `accesskit_unix` / `accesskit_macos` / `accesskit_windows`
+after each frame.
 
 ## Colour
 
@@ -561,7 +544,7 @@ window is open. F12 outlines every surface and names the one under the
 pointer, and the title bar reads the resolve and paint cost of the last
 thirty frames.
 
-winit's wheel, keys and modifiers ride into `Input` with the last pointer
+`moose-baseview`'s wheel, keys and modifiers ride into `Input` with the last pointer
 sample of each batch, so `Ui::scroll`, `Ui::focus` and `text_input` work in
 the window: the Scroll, Text, Tooltip, Canvas, Drag, Image, Wrap, Motion,
 Grid, Select and Responsive editor scenes are there to prove it -- one per
@@ -611,11 +594,9 @@ same command gives byte-identical PNGs and JSON. Look at pixels and trees instea
 of guessing. Flags follow Rune's agent tooling.
 
 ```sh
-cargo run -p mui-gain-plugin --example headless -- --snap out.png --scale 2 --theme light   # pixels
-cargo run -p mui-gain-plugin --example headless -- --tree tree.json                          # ids, roles, rects, state
-cargo run -p mui-gain-plugin --example headless -- --script examples/scripts/gain-knob-drag.json --at mark:end --snap after.png
-cargo run -p mui-gain-plugin --example headless -- --script s.json --trace run.jsonl --strip strip.png --frames 24 --every 3
-cargo run -p mui-preview -- --list-scenes && cargo run -p mui-preview -- --scene widgets --snap w.png   # the gallery
+cargo run -p mui-preview -- --list-scenes
+cargo run -p mui-preview -- --scene widgets --snap w.png --scale 2 --theme light
+cargo run -p mui-preview -- --scene widgets --tree tree.json
 ```
 
 Scripts are `[{"t": 0.4, "type": "click", "key": "bypass"}, ...]` (`move down up click

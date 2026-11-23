@@ -1288,6 +1288,51 @@ fn live_poll_interval_is_set_and_cleared_without_a_wake() {
 }
 
 #[test]
+fn settled_adapter_schedules_no_periodic_timer_while_deadlines_and_redraw_wake_promptly() {
+    let now = Instant::now();
+    // Settled window (GPU ready or permanent CPU, no animation, no redraw, no poll_interval): Idle.
+    assert_eq!(
+        adapter_frame_demand(now, None, None, false, false, false, false, now, false),
+        baseview::FrameDemand::Idle
+    );
+    assert_eq!(
+        adapter_frame_demand(now, None, None, false, false, false, true, now, false),
+        baseview::FrameDemand::Idle
+    );
+    // External redraw wakes immediately.
+    assert_eq!(
+        adapter_frame_demand(now, None, None, false, true, false, false, now, false),
+        baseview::FrameDemand::At(now)
+    );
+    // Exact animation/tooltip/caret deadline fires on time.
+    let deadline = now + Duration::from_millis(400);
+    assert_eq!(
+        adapter_frame_demand(
+            now,
+            Some(deadline),
+            None,
+            false,
+            false,
+            false,
+            false,
+            now,
+            false
+        ),
+        baseview::FrameDemand::At(deadline)
+    );
+    // Active GPU init polls at 25 ms; GPU retry backoff schedules exact deadline.
+    assert_eq!(
+        adapter_frame_demand(now, None, None, false, false, false, true, now, true),
+        baseview::FrameDemand::At(now + Duration::from_millis(25))
+    );
+    let backoff = now + Duration::from_secs(2);
+    assert_eq!(
+        adapter_frame_demand(now, None, None, false, false, false, true, backoff, false),
+        baseview::FrameDemand::At(backoff)
+    );
+}
+
+#[test]
 fn queued_motion_coalesces_only_adjacent_equal_modifier_samples_and_preserves_barriers() {
     let mut queue = VecDeque::new();
     let movement = |x, modifiers| {

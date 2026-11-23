@@ -63,7 +63,7 @@ name = "moose-au"
 version = "7.0.0"
 source = "git+https://github.com/Matari-Audio/moose?rev={MOOSE}#{MOOSE}"
 [[package]]
-name = "mui-winit"
+name = "mui-baseview"
 version = "0.4.0"
 source = "git+https://github.com/Matari-Audio/MUI?rev={MUI}#{MUI}"
 ''')

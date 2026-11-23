@@ -127,5 +127,5 @@ impl Display for ParentWindowHandleError {
 
 #[inline]
 pub fn assume_standalone_in_process() {
-    // No-op on X11
+    crate::wrappers::xlib::XlibConnection::init_threads_for_standalone();
 }

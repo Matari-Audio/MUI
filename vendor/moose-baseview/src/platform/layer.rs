@@ -600,9 +600,7 @@ impl Runtime {
         match command {
             Command::Close => self.exit = true,
             Command::Title(title) => {
-                if let Role::Toplevel(window) = &cx.role {
-                    window.set_title(title);
-                }
+                let _ = cx.set_title(&title);
             }
             Command::Resize(size) => {
                 let _ = cx.resize(size);

@@ -1,12 +1,16 @@
-//! A native MUI window over baseview: [`open`] parents it under a plugin
-//! host's window (mui-truce's `MuiEditor` is one consumer; any other
-//! framework's adapter opens the same window with its own [`View`]), and
-//! [`run`] is the same window as a standalone app.
+//! A native MUI window over our owned `moose-baseview` layer: [`open`]
+//! parents it under a plugin host's window (Moose's `moose-mui` is one
+//! consumer; any host adapter opens the same window with its own [`View`]),
+//! [`run`] is the same window as a standalone app, and [`standalone`] hosts
+//! custom standalone top-level windows (X11, native Wayland `xdg_toplevel`,
+//! Win32, macOS Cocoa) with direct AccessKit accessibility.
 //!
 //! Native callbacks queue ordered input to an editor worker. The worker owns
-//! [`mui::host::Driver`], builds and rasters into persistent offscreen targets,
-//! then returns changed bitmap regions for native presentation. Baseview's
-//! display source paces demand; idle content submits no rendering work.
+//! [`mui::host::Driver`], builds and rasters into persistent surfaces/targets,
+//! then presents directly or returns changed bitmap regions. Baseview's
+//! display source paces demand; settled idle windows schedule zero periodic
+//! timers (true 0 Hz idle) and wake only on input, external notifications, or
+//! exact animation/tooltip/caret/recovery deadlines.
 // wgpu-core's storage types nest past the default limit when proving `Send`.
 #![recursion_limit = "256"]
 #![deny(unsafe_code)]
@@ -47,6 +51,9 @@ pub use presenter::{Presenter, PresenterStats, Transition};
     expect(unsafe_code, reason = "Win32 DWM and AppKit view calls")
 )]
 pub mod frost;
+/// Safe standalone top-level window and direct AccessKit helpers over
+/// `moose-baseview` (X11, native Wayland `xdg_toplevel`, Win32, macOS Cocoa).
+pub mod standalone;
 #[cfg_attr(
     any(target_os = "windows", target_os = "macos"),
     expect(unsafe_code, reason = "Win32 and AppKit window-level calls")
@@ -131,7 +138,7 @@ pub struct Requests {
     focus: AtomicBool,
     #[cfg(target_os = "linux")]
     wayland_open: AtomicBool,
-    /// Microseconds; 0 is the default model heartbeat.
+    /// Microseconds; 0 disables telemetry polling.
     poll: AtomicU64,
     keys: Mutex<Option<KeyHook>>,
     key_filter: Mutex<Option<KeyFilter>>,
@@ -513,9 +520,10 @@ impl Requests {
         }
     }
     /// Poll [`View::changed`] at least this often while `Some` (live meters,
-    /// pitch, scopes); `None` returns to the idle heartbeat. One relaxed
-    /// atomic store, no wake, no lock: safe to call from the audio thread
-    /// when telemetry starts and stops. Takes effect from the next tick.
+    /// pitch, scopes); `None` allows the window to go idle. This setter
+    /// performs only an atomic store and is safe to call from the audio
+    /// thread. An idle render worker checks for changes within 250 ms
+    /// without requesting frames while the interval stays unchanged.
     pub fn set_poll_interval(&self, interval: Option<Duration>) {
         let micros = interval.map_or(0, |d| d.as_micros().clamp(1, u64::MAX.into()) as u64);
         self.poll.store(micros, Ordering::Relaxed);
@@ -637,7 +645,8 @@ pub fn run<V: View + Send + 'static>(
         baseview::assume_standalone_in_process();
     }
     let sink = Arc::clone(&shared);
-    let window = Window::create(settings(title, size), build(shared, requests, false));
+    let settings = standalone::settings(title, size);
+    let window = Window::create(settings, build(shared, requests, false));
     if let Err(e) = window.and_then(Window::run_until_closed) {
         log(&sink, &format!("mui-baseview: window failed ({e})"));
     }
@@ -763,8 +772,7 @@ impl<V: View> Handler<V> {
             cpu_retry: Retry::default(),
             presenter_reason: "CPU startup",
             software: None,
-            software_only: std::env::var("MUI_RENDERER")
-                .is_ok_and(|v| v.eq_ignore_ascii_case("cpu")),
+            software_only: mui::vello::host::force_cpu(),
             gpu_retry_at: Instant::now(),
             applied_cursor: None,
             unpainted: true,
@@ -1431,6 +1439,56 @@ fn guard<V: View, R>(h: &mut Handler<V>, f: impl FnOnce(&mut Handler<V>) -> R) -
     }
 }
 
+/// Push-driven schedule for the synchronous [`Adapter`]: settled windows return
+/// [`baseview::FrameDemand::Idle`] (0 Hz) with zero periodic polling, waking
+/// only on input/redraw requests, active animation/tooltip/caret deadlines,
+/// explicit telemetry [`Requests::set_poll_interval`], active drags, or
+/// pending GPU init/retry backoff.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pure scheduler inputs kept explicit for deterministic unit testing"
+)]
+fn adapter_frame_demand(
+    now: Instant,
+    driver_wake: Option<Instant>,
+    poll_interval: Option<Duration>,
+    drag_active: bool,
+    redraw_pending: bool,
+    unpainted: bool,
+    gpu_missing: bool,
+    gpu_retry_at: Instant,
+    gpu_init_pending: bool,
+) -> baseview::FrameDemand {
+    const RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(25);
+    if redraw_pending {
+        return baseview::FrameDemand::At(now);
+    }
+    let recovery_poll = now.checked_add(RECOVERY_POLL_INTERVAL).unwrap_or(now);
+    let mut at: Option<Instant> = None;
+    let mut sooner = |candidate: Instant| {
+        at = Some(match at {
+            Some(existing) => existing.min(candidate),
+            None => candidate,
+        });
+    };
+    if let Some(wake) = driver_wake {
+        sooner(wake);
+    }
+    if let Some(poll) = poll_interval {
+        sooner(now.checked_add(poll).unwrap_or(now));
+    }
+    if drag_active {
+        sooner(now + Duration::from_millis(10));
+    }
+    if unpainted || (gpu_missing && gpu_retry_at > now) {
+        sooner(gpu_retry_at.max(recovery_poll));
+    }
+    if gpu_init_pending {
+        sooner(recovery_poll);
+    }
+    at.map_or(baseview::FrameDemand::Idle, baseview::FrameDemand::At)
+}
+
 impl<V: View + 'static> WindowHandler for Adapter<V> {
     fn captures_key(&self, key: &KeyboardEvent) -> bool {
         let Ok(h) = self.handler.try_borrow() else {
@@ -1441,37 +1499,20 @@ impl<V: View + 'static> WindowHandler for Adapter<V> {
     }
 
     fn frame_demand(&self) -> baseview::FrameDemand {
-        // ponytail: View::changed, plugin meters and a11y requests are polled.
-        // Push-based change notifications would remove this idle heartbeat.
-        const MODEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
-        const RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(25);
         let Ok(h) = self.handler.try_borrow() else {
             return baseview::FrameDemand::Continuous;
         };
-        let now = Instant::now();
-        let mut at = now.checked_add(MODEL_POLL_INTERVAL).unwrap_or(now);
-        let recovery_poll = now.checked_add(RECOVERY_POLL_INTERVAL).unwrap_or(now);
-        if let Some(wake) = h.driver.next_wake() {
-            at = at.min(wake);
-        }
-        if let Some(poll) = h.requests.poll_interval() {
-            at = at.min(now.checked_add(poll).unwrap_or(now));
-        }
-        if h.requests.drag_active() {
-            at = at.min(now + Duration::from_millis(10));
-        }
-        if h.requests.redraw.load(Ordering::Acquire) {
-            at = now;
-        }
-        if h.unpainted || (h.gpu.is_none() && h.gpu_retry_at > now) {
-            at = at.min(h.gpu_retry_at.max(recovery_poll));
-        }
-        // CPU presentation does not mean asynchronous GPU recovery is idle:
-        // a pending background init is polled, its backoff lives in gpu_retry_at.
-        if h.gpu_init.as_ref().is_some_and(GpuInit::pending) {
-            at = at.min(recovery_poll);
-        }
-        baseview::FrameDemand::At(at)
+        adapter_frame_demand(
+            Instant::now(),
+            h.driver.next_wake(),
+            h.requests.poll_interval(),
+            h.requests.drag_active(),
+            h.requests.redraw.load(Ordering::Acquire),
+            h.unpainted,
+            h.gpu.is_none(),
+            h.gpu_retry_at,
+            h.gpu_init.as_ref().is_some_and(GpuInit::pending),
+        )
     }
 
     fn on_frame(&self) -> Result<(), HandlerError> {

@@ -62,15 +62,12 @@ cargo clippy --manifest-path vendor/moose-baseview/Cargo.toml --all-features --a
 cargo clippy -p mui-vello --no-default-features --all-targets --locked --offline -- -D warnings
 cargo clippy -p mui-vello --no-default-features --features cpu --all-targets --locked --offline -- -D warnings
 cargo clippy -p mui-vello --no-default-features --features gpu-quad --all-targets --locked --offline -- -D warnings
-# mui-preview is a native dev host: it owns a winit event loop and a wgpu
+# mui-preview is a native dev host: it owns a moose-baseview window and a wgpu
 # surface, neither of which this gate can build for wasm. The wasm claim is
 # about the library crates; drop the --exclude once the preview grows a
 # `spawn_app` entry point and is served from a canvas.
-# mui-gain-plugin is a CLAP/VST3 cdylib: truce-vst3 compiles a C++ shim and
-# truce-clap wants a native parent window, so it has no wasm build at all.
-# mui-baseview is a native window (baseview + a wgpu surface): no wasm either.
-# mui-truce itself stays in: its window/GPU half is cfg'd out on wasm32.
-cargo check --workspace --all-features --exclude mui-preview --exclude mui-gain-plugin --exclude mui-baseview --exclude mui-winit --target wasm32-unknown-unknown --locked --offline
+# mui-baseview is a native window (moose-baseview + a wgpu surface): no wasm either.
+cargo check --workspace --all-features --exclude mui-preview --exclude mui-baseview --target wasm32-unknown-unknown --locked --offline
 fi
 
 # ---------------------------------------------------------------------------

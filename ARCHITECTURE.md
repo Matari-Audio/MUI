@@ -195,8 +195,9 @@ gesture; a `.union` joins sharp frames before it
 fillets; a clip is a layer pair in the paint list, not a state flag, so a
 renderer that ignores it still draws something sane; a float keeps its
 declaration slot in frame order but its paint slot at the end. Everything
-above the paint list is renderer-independent and wasm-clean; `mui-preview` is
-the only crate that owns a window.
+above the paint list is renderer-independent and wasm-clean; `mui-baseview`
+(over `vendor/moose-baseview`) owns native windowing for both embedded plugin
+editors and standalone apps (`mui-preview`).
 
 ## Crates
 
@@ -204,14 +205,17 @@ The pipeline above is cut into crates along the same lines. Every edge points
 down; nothing below knows what is above it.
 
 ```text
-mui-preview          window, wgpu surface, the gallery as one tree
-mui-truce            plugin editor: baseview child window + wgpu (`window`),
-   |                 truce `Editor` + parameter `Bridge` (over truce)
+mui-preview          standalone gallery over mui-baseview (`moose-baseview`)
+mui-baseview         owned native windowing (X11, native Wayland xdg_toplevel,
+   |                 Win32, macOS Cocoa), direct AccessKit, GPU/CPU presentation,
+   |                 push-driven 0 Hz idle runtime; embedded DAW hosts (`moose-mui`)
+   |                 and standalone apps (`mui-preview`) share this layer
    v
 mui                  Ui runtime, Frame, Edit, prelude, re-exports, and
    |                 the controls and presets (`mui::widgets`), which
    |                 read last frame's state straight off `&mut Ui`
-   +--> mui-vello    Canvas, paint, Cache          +--> mui-access
+   +--> mui-vello    4-pass instanced SDF quad + analytic weld GPU renderer,
+   |                 CPU `vello_cpu` reference/fallback, Cache     +--> mui-access
    +--> mui-input    hit testing, gestures (over mui-vello's paths)
    |
    v
@@ -231,10 +235,14 @@ the solver knows nothing of style, so the edge points one way.
 `mui-playground` is the browser playground's DSL, straight over `mui-scene` and
 `mui-vello`.
 
-The GPU renderer is the quad pass (`mui-vello`'s `gpu-quad` feature). Classic
-Vello, the compute-shader renderer MUI used before it, is gone: `vendor/vello`
-and `vendor/vello_encoding` are deleted, and `vendor/vello_cpu` is the CPU
-renderer and the pixel reference the quad pass is tested against.
+The GPU renderer is the 4-pass instanced SDF quad pass (`mui-vello::quad`,
+feature `gpu-quad`) plus analytic welds (`effects::GpuRenderer`), preserved
+ahead of Wave 2 (`mui-present`) and Wave 3 (`mui-hal`). Classic Vello (the
+compute-shader renderer) is deleted, and `vendor/vello_cpu` is the dirty-rect
+CPU renderer and pixel reference. GPU adapter selection rejects all
+`wgpu::DeviceType::Cpu` adapters (Windows DX12 WARP, Linux Vulkan
+Lavapipe/SwiftShader, GL llvmpipe) so broken or software-only GPU drivers fall
+back directly to `vello_cpu`.
 
 ### media/: a second workspace
 
@@ -254,17 +262,14 @@ media/mui-motion-bridge   a live editor as browser-transformable surfaces,
                           for `tools/film` (over mui, mui-vello `cpu`)
 media/mui-cut             keyframe motion editor: a *.cut.json project, a pure
                           evaluator, a render/still CLI and a WASM web editor
-                          (over mui-scene, mui-vello `cpu`; its GPU engine is
-                          `vello_gpu`; mui-reel's shutter)
+                          (over mui-scene, mui-vello `cpu`; mui-reel's shutter)
 ```
 
 `tools/film` is the JS/Python film pipeline driving `mui-motion-bridge`; it is
 unrelated to the `mui-motion` spring crate.
 
-`mui-truce` is two halves. `window` knows no plugin framework: a `View`
-trait (build a tree, report outside changes, ask for a size), the native
-event queue, and the GPU surface painted with `GpuRenderer`. `MuiEditor`
-and `Bridge` are the truce half: a `View` whose model is truce's parameter
-store, and truce's `Editor` around the window. An adapter for another
-framework (nih-plug, say) is another `View` plus that framework's editor
-trait; it does not touch `window`. `examples/gain-plugin` is the consumer.
+`mui-baseview` is MUI's single owned native window host (over
+`vendor/moose-baseview`): it knows no plugin framework and serves both embedded
+DAW editors (through `moose-mui` in `frameworks/moose`) and standalone top-level
+apps (`mui-baseview::run`, `mui-baseview::standalone`, `mui-preview`). Legacy
+`mui-truce`, `mui-winit`, `accesskit_winit`, and the `winit` fork are retired.

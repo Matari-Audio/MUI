@@ -522,31 +522,6 @@ fn a_plain_mui_crate_plays_its_tone() {
     plays_its_tone("plain-tone", "plain", &json!({}), 660., 0.4);
 }
 
-/// A truce plugin plays through its `process`, and its patch lists the
-/// route its `Mod 1` parameters hold.
-#[test]
-fn a_truce_plugin_plays_its_tone_and_reports_its_routes() {
-    let set = |id: &str, value: f64| json!({"id": id, "field": "value", "value": value});
-    let params = json!({"params": [set("Pitch", 880.), set("Mod 1 Source", 1.), set("Mod 1 Target", 1.), set("Mod 1 Amount", 0.5)]});
-    let project = plays_its_tone("truce-tone", "truce-tone", &params, 880., 0.5);
-    let patch = capture(&project, 0.5).patch;
-    assert_eq!(
-        patch["routes"],
-        json!([{"source": "Lfo", "target": "Pitch", "depth": 0.5}])
-    );
-    let pitch = patch["params"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|p| p["name"] == "Pitch")
-        .cloned();
-    assert_eq!(
-        pitch.map(|p| p["modulated"].clone()),
-        Some(json!(true)),
-        "{patch}"
-    );
-}
-
 /// `still` of a plugin built from source runs inside its adapter: the
 /// editor draws from its paint (no capture written), plays the same
 /// soundtrack, and looks as its capture does.

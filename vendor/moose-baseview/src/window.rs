@@ -194,6 +194,13 @@ impl Window {
         Ok(())
     }
 
+    /// Updates the title of a detached top-level window.
+    #[inline]
+    pub fn set_title(&self, title: &str) -> Result<(), Error> {
+        self.inner.set_title(title)?;
+        Ok(())
+    }
+
     /// Suggests a fallback scale factor, if Baseview couldn't get one from the platform.
     ///
     /// If the platform does already provide an accurate scaling factor, this doesn't do anything.
@@ -391,7 +398,7 @@ impl ThreadedWindow {
         Ok(())
     }
 
-    /// Retitles a native Wayland toplevel; an X11 window keeps its creation title.
+    /// Updates the title of a detached top-level window (Wayland or X11).
     pub fn set_title(&self, title: &str) -> Result<(), Error> {
         self.inner.set_title(title)?;
         Ok(())

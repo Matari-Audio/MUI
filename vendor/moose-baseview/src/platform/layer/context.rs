@@ -307,6 +307,16 @@ impl Context {
         self.signal.wakeup();
         Ok(())
     }
+    pub fn set_title(&self, title: &str) -> linux::Result<()> {
+        if let Role::Toplevel(window) = &self.role {
+            window.set_title(title.to_owned());
+            if let Some(frame) = self.frame.borrow_mut().as_mut() {
+                frame.set_title(title.to_owned());
+            }
+            let _ = self.conn.flush();
+        }
+        Ok(())
+    }
     pub fn request_close(&self) {
         self.shared.open.store(false, Ordering::Release);
         self.signal.wakeup();

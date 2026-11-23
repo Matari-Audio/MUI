@@ -21,7 +21,9 @@ keyboard-types = { version = "0.8", default-features = false }
 # baseview's handles; the same 0.6 wgpu takes.
 raw-window-handle = "0.6"
 # mui-vello picks no backend; the window that owns the device does.
-wgpu = { workspace = true, features = ["wgsl", "vulkan", "gles", "metal", "dx12"] }
+# Native primary APIs only (Vulkan/Metal/DX12); GLES is unreachable in GpuInit
+# and omitted to avoid pulling glow/EGL into Linux plugin binaries.
+wgpu = { workspace = true, features = ["wgsl", "vulkan", "metal", "dx12"] }
 
 # Frame skipping and view anchoring on macOS (src/platform.rs); baseview
 # already pulls it in there.

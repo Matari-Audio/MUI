@@ -13,16 +13,13 @@ members = [
   "crates/mui-playground",
   "crates/mui-text",
   "crates/mui-vello",
-  "crates/mui-truce",
   "crates/mui-baseview",
-  "crates/mui-winit",
   "crates/mui-input",
   "crates/mui-access",
   "crates/mui-native-dialog",
   "crates/mui-symbols",
-  "examples/gain-plugin",
 ]
-exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_winit", "vendor/accesskit_unix", "vendor/vello_cpu", "vendor/glifo"]
+exclude = ["vendor/moose-baseview", "vendor/xim-rs", "vendor/accesskit_macos", "vendor/accesskit_unix", "vendor/vello_cpu", "vendor/glifo"]
 resolver = "2"
 # The trailer/film crates (mui-stage, mui-reel, mui-motion-bridge) live in
 # media/, their own workspace: `cargo test --manifest-path media/Cargo.toml`.
@@ -39,7 +36,6 @@ mui = { path = "crates/mui" }
 mui-access = { path = "crates/mui-access" }
 mui-native-dialog = { path = "crates/mui-native-dialog" }
 mui-baseview = { path = "crates/mui-baseview" }
-mui-winit = { path = "crates/mui-winit" }
 mui-geometry = { path = "crates/mui-geometry" }
 mui-headless = { path = "crates/mui-headless" }
 mui-input = { path = "crates/mui-input" }
@@ -52,7 +48,6 @@ mui-scene = { path = "crates/mui-scene" }
 mui-style = { path = "crates/mui-style" }
 mui-symbols = { path = "crates/mui-symbols" }
 mui-text = { path = "crates/mui-text" }
-mui-truce = { path = "crates/mui-truce" }
 mui-vello = { path = "crates/mui-vello" }
 mui-weld = { path = "crates/mui-weld" }
 
@@ -71,7 +66,6 @@ epaint_default_fonts = "0.36"
 ttf-inter = { version = "0.1", default-features = false, features = ["v"] }
 vello_cpu = { version = "0.3", path = "vendor/vello_cpu", default-features = false, features = ["std", "u8_pipeline", "text", "png"] }
 unicode-segmentation = "1.13"
-truce = { version = "6.3", default-features = false }
 
 # Every member opts in with `[lints] workspace = true`. Pedantic is a curated slice: the lints that catch a real
 # mistake or a real simplification, not the ones that argue about taste.
@@ -120,7 +114,7 @@ strip = "symbols"
 
 # Release also unwinds: the default bundle build must protect its host.
 # Keep the plugin profile as an explicit, compatible shipping command.
-# mui-truce enforces unwind even in downstream workspaces.
+# mui-baseview enforces unwind even in downstream workspaces.
 [profile.plugin]
 inherits = "release"
 panic = "unwind"
@@ -136,8 +130,3 @@ opt-level = 3
 # geometry inner loops stop being a slideshow.
 [profile.dev]
 opt-level = 1
-
-# One Window type, including the registry-winit AccessKit dependency. Consumers
-# enabling mui-winit/external-xdnd must mirror this immutable workspace patch.
-[patch.crates-io]
-winit = { git = "https://github.com/DerpcatMusic/winit", rev = "9e75824b11ac05b0d28be772b91e4df25a260708" }

@@ -245,6 +245,20 @@ impl BaseviewView {
         Ok((view, state))
     }
 
+    pub fn set_title(this: ViewRef<Self>, title: &str) {
+        let Ok(parent) = this.parenting.try_borrow() else {
+            return;
+        };
+        let window = match &*parent {
+            ViewParentingType::Windowed { owned_window } => owned_window.load(),
+            _ => None,
+        };
+        drop(parent);
+        if let Some(window) = window {
+            window.setTitle(&objc2_foundation::NSString::from_str(title));
+        }
+    }
+
     pub fn show(this: ViewRef<Self>) {
         if this.state.closed.get() {
             return;

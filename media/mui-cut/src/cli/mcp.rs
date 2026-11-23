@@ -610,7 +610,7 @@ fn tools() -> Vec<Value> {
         ),
         tool::<PluginAdd>(
             "plugin_add",
-            "Onboard a MUI plugin with no code in it: detects its crate, framework (moose, truce, nice-plug or plain MUI), MUI crates and editor, adds it to `sources`, builds a generic adapter for its real editor against this MUI (the plugin's checkout and Cargo.lock untouched) and captures it. Returns that report with the discovered part tree (ids for `show` and `parts.<id>.x`); if the plugin lacks something, the error says exactly what to add.",
+            "Onboard a MUI plugin with no code in it: detects its crate, framework (moose, nice-plug or plain MUI), MUI crates and editor, adds it to `sources`, builds a generic adapter for its real editor against this MUI (the plugin's checkout and Cargo.lock untouched) and captures it. Returns that report with the discovered part tree (ids for `show` and `parts.<id>.x`); if the plugin lacks something, the error says exactly what to add.",
         ),
         tool::<LayerParent>(
             "layer_parent",

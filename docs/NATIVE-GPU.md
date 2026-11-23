@@ -2,12 +2,18 @@
 
 19 September 2026. Integration base: `a9cc11d232986fce8dfb1a12aa20afd7dcbb664e`.
 
-11 November 2026: the GPU path is the instanced SDF quad pass
-(`mui_vello::quad`, feature `gpu-quad`) on wgpu 30, behind the one retained
-renderer, `effects::GpuRenderer`: no compute shaders, no storage buffers.
-Classic Vello (compute shaders) is deleted, with `effects::VelloRenderer` and
-the `vello-classic` feature; the last head-to-head numbers are in
-`BENCHMARKS.md`.
+11 November 2026 (updated in Wave 1B): the GPU path is the 4-pass instanced SDF
+quad pass (`mui_vello::quad`, feature `gpu-quad`) + analytic welds
+(`effects::GpuRenderer`), currently over wgpu 30 and preserved directly for Wave
+2 (`mui-present`) and Wave 3 (`mui-hal`): no compute shaders, no storage
+buffers. Classic Vello (compute shaders) is deleted, with `effects::VelloRenderer`
+and the `vello-classic` feature; the last head-to-head numbers are in
+`BENCHMARKS.md`. Adapter selection rejects all `wgpu::DeviceType::Cpu` adapters
+(Windows DX12 WARP, Linux Vulkan Lavapipe/SwiftShader, GL llvmpipe) so software
+drivers fall back directly to dirty-rect `vello_cpu`; `MUI_FORCE_CPU=1` or
+`MUI_RENDERER=cpu` forces CPU rendering explicitly. Swapchain selection ranks
+`Mailbox` → `Fifo` → `FifoRelaxed` → `Immediate` and reconfigures after
+`Acquired::Suboptimal`.
 
 **Status: builds, passes its tests, and runs on a physical device.** The
 workspace builds and its test suite passes (including the Naga validation test
@@ -173,9 +179,10 @@ Its effect texture contains premultiplied sRGB-encoded values, written by the
 single `fs_hybrid` entry point. Do not assume an sRGB attachment works
 without further changes.
 
-The native window host is winit, NOT a completed CLAP/VST3/AU parent-window host.
-No downstream plugin source or real-time audio transport was changed. Parley
-restoration from the initial audit remains separate unfinished work.
+The standalone gallery (`mui-preview`) and `gpu_welding` example run directly
+on our owned `moose-baseview` / `mui-baseview` standalone window layer (zero
+`winit`), sharing `mui-baseview::Presenter` and `mui-vello::host` with embedded
+plugin editors (`moose-mui`). No real-time audio transport was changed.
 
 ## Run the native checks
 

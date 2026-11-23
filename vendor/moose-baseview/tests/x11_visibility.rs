@@ -140,3 +140,33 @@ fn late_parent_map_receives_frames() {
 fn host_reparented_into_frame_receives_frames() {
     exercise(true);
 }
+
+#[test]
+#[ignore = "requires an isolated X11 server; run with xvfb-run"]
+fn fallback_scale_is_published_even_without_a_physical_resize() {
+    use moose_baseview::dpi::{LogicalSize, PhysicalSize};
+
+    let host = Host::new();
+    let child = Window::create(
+        WindowSettings::new()
+            .with_size(LogicalSize::new(64.0, 64.0))
+            .with_parent(&Parent(host.parent)),
+        |_| Ok(Count(Arc::default())),
+    )
+    .unwrap();
+
+    child.suggest_fallback_scale_factor(2.0).unwrap();
+    let size = child.size();
+    assert_eq!(size.scale_factor, 2.0);
+    assert_eq!(size.logical, LogicalSize::new(64.0, 64.0));
+    assert_eq!(size.physical, PhysicalSize::new(128, 128));
+
+    child.suggest_fallback_scale_factor(2.0001).unwrap();
+    let rounded_size = child.size();
+    assert_eq!(rounded_size.scale_factor, 2.0001);
+    assert_eq!(rounded_size.physical, size.physical);
+
+    child.suggest_fallback_scale_factor(f64::NAN).unwrap();
+    assert_eq!(child.size().scale_factor, 2.0001);
+    child.close();
+}
