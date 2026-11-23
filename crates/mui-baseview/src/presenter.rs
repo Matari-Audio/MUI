@@ -132,8 +132,11 @@ impl Presenter {
         if self.gpu.is_some() || self.software_only {
             return None;
         }
-        let init = self.init.as_ref()?;
-        if let Some(deadline) = init.deadline() {
+        let Some(init) = self.init.as_ref() else {
+            // Bootstrap the first GPU attempt after the initial CPU frame.
+            return self.cpu_presented.then_some(now);
+        };
+        if let Some(deadline) = init.deadline().filter(|at| *at > now) {
             return Some(deadline);
         }
         init.pending().then(|| now + Duration::from_millis(25))

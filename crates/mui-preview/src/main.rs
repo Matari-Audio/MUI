@@ -929,14 +929,8 @@ fn main() -> Result<(), String> {
     mui_baseview::standalone::run_window(settings, move |cx| {
         let mut app = App::new();
         app.tester = tester;
+        app.gpu = Some(Gpu::try_new(cx.clone()).map_err(std::io::Error::other)?);
         app.access = StandaloneAccessibility::attach(&cx);
-        match Gpu::try_new(cx.clone()) {
-            Ok(gpu) => app.gpu = Some(gpu),
-            Err(error) => {
-                app.frame_error = Some(error);
-                cx.request_close();
-            }
-        }
         Ok(PreviewHandler {
             app: RefCell::new(app),
             cx,

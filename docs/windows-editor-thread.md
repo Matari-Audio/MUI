@@ -129,7 +129,7 @@ full-image upload on every patch. Direct wgpu-surface clients still need to rest
 a newly acquired swapchain image from retained pixels; wgpu does not expose
 Present1 dirty rectangles. Their scene rasterization is incremental, but that
 surface restoration is not a claim of platform dirty-present support. Floating
-Wayland layer-shell editors continue to run through `mui-baseview::open_floating_threaded`.
+Wayland editors float as xdg toplevels through `mui_baseview::wayland::open`.
 
 Set `MUI_DEBUG_DAMAGE=1` before launching the host to flash damage borders. Native
 Windows/X11 restore clean retained pixels after the diagnostic flash without scene

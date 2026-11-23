@@ -522,6 +522,7 @@ impl NativeAdapter {
         let mut bitmap = self.bitmap.borrow_mut();
         let blitting = std::time::Instant::now();
         let scaled = output.render_size != output.size;
+        let mut remaining = output.patches.len();
         let submitted = submit_patches(
             &self.requests,
             output.size,
@@ -534,9 +535,11 @@ impl NativeAdapter {
                     *bitmap = None;
                     return self.blit_raw(patch.rect, &patch.pixels);
                 }
+                remaining -= 1;
                 if patch.rect == [0, 0, output.render_size.0, output.render_size.1] {
                     let success = if scaled {
-                        self.blit_scaled(output.render_size, &patch.pixels, output.size)
+                        remaining != 0
+                            || self.blit_scaled(output.render_size, &patch.pixels, output.size)
                     } else {
                         self.blit(patch.rect, &patch.pixels)
                     };
@@ -557,7 +560,8 @@ impl NativeAdapter {
                         .copy_from_slice(&patch.pixels[source..source + w as usize]);
                 }
                 if scaled {
-                    self.blit_scaled(output.render_size, &bitmap.pixels, output.size)
+                    remaining != 0
+                        || self.blit_scaled(output.render_size, &bitmap.pixels, output.size)
                 } else {
                     self.blit(patch.rect, &patch.pixels)
                 }
@@ -1384,18 +1388,7 @@ fn worker_frame_demand(
     } else if unpainted {
         sooner(now + Duration::from_millis(16));
     }
-    match at {
-        Some(deadline) => {
-            let deadline = match retry_deadline {
-                Some(min_retry) if driver_wake.is_none() && poll_interval.is_none() => {
-                    deadline.max(min_retry)
-                }
-                _ => deadline,
-            };
-            baseview::FrameDemand::At(deadline)
-        }
-        None => baseview::FrameDemand::Idle,
-    }
+    at.map_or(baseview::FrameDemand::Idle, baseview::FrameDemand::At)
 }
 
 /// Whether the worker presents to the window's own surface. macOS keeps the
@@ -1852,6 +1845,24 @@ mod gpu_recovery_tests {
         assert_eq!(
             worker_frame_demand(now, None, None, false, false, Some(backoff), None, false),
             baseview::FrameDemand::At(backoff)
+        );
+        // CPU recovery must not postpone a pending GPU initialization poll.
+        assert_eq!(
+            worker_frame_demand(now, None, None, false, true, None, Some(backoff), true),
+            baseview::FrameDemand::At(now + Duration::from_millis(25))
+        );
+        assert_eq!(
+            worker_frame_demand(
+                now,
+                None,
+                None,
+                false,
+                false,
+                Some(caret),
+                Some(backoff),
+                true
+            ),
+            baseview::FrameDemand::At(caret)
         );
         // A CPU retry still matters in software mode but must not keep
         // a settled GPU window awake after promotion.

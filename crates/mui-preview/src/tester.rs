@@ -235,6 +235,17 @@ impl Tester {
         let start = Instant::now();
         let stats = app.draw()?;
         let submit_ms = start.elapsed().as_secs_f64() * 1000.;
+        if std::env::var("MUI_TEST_RENDERER").as_deref() == Ok("gpu")
+            && let Some(gpu) = &app.gpu
+            && gpu.rendering_mode() != "gpu"
+        {
+            return Err(format!(
+                "required gallery GPU unavailable during case {} step {}: {}",
+                self.case,
+                self.step,
+                gpu.gpu_error().unwrap_or("fell back to CPU")
+            ));
+        }
         let current = app.gpu.as_ref().is_some_and(Gpu::frame_was_current);
         if stats.is_none() && !current {
             return Ok(None);

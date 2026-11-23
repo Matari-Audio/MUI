@@ -4,7 +4,7 @@
 //! Space: animate; arrows: morph; 1/2/3: all/body/border; C: crisp/organic;
 //! R: reset placement; drag anywhere to move the second plate.
 use std::cell::RefCell;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mui::host::NativeKey;
 use mui::prelude::*;
@@ -24,6 +24,7 @@ struct Lab {
     cx: WindowContext,
     ui: Ui,
     dirty: bool,
+    paint_retry_at: Option<Instant>,
     gpu_welding_available: Option<bool>,
     visible: bool,
     morph: f64,
@@ -47,6 +48,7 @@ impl Lab {
                 .gpu_welding()
                 .font(Font::new(epaint_default_fonts::HACK_REGULAR).unwrap()),
             dirty: true,
+            paint_retry_at: None,
             gpu_welding_available: None,
             visible: true,
             morph: 1.,
@@ -96,7 +98,7 @@ impl Lab {
     }
 
     fn draw(&mut self) {
-        if !self.visible {
+        if !self.visible || self.paint_retry_at.is_some_and(|at| Instant::now() < at) {
             return;
         }
         let Some(gpu) = self.gpu.as_mut() else {
@@ -139,6 +141,7 @@ impl Lab {
             return;
         };
         let gpu = self.gpu.as_mut().expect("initialized above");
+        self.paint_retry_at = None;
         match gpu.present(scene, Affine::scale(scale)) {
             Ok(Some(s)) => gpu.set_title(&format!(
                 "MUI {} | morph {:.2} | measure/arrange {}/{} | uniforms/boundary {}/{} B | effect {} | encodes {}",
@@ -153,7 +156,7 @@ impl Lab {
             )),
             Ok(None) => {}
             Err(e) => {
-                self.dirty = true;
+                self.paint_retry_at = Some(Instant::now() + Duration::from_millis(100));
                 eprintln!("render: {e}");
             }
         }
@@ -169,6 +172,9 @@ impl WindowHandler for LabHandler {
         };
         if !lab.visible {
             return FrameDemand::Idle;
+        }
+        if let Some(at) = lab.paint_retry_at {
+            return FrameDemand::At(at);
         }
         if lab.animate {
             return FrameDemand::Continuous;

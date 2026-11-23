@@ -588,7 +588,7 @@ impl<W: raw_window_handle::HasDisplayHandle + raw_window_handle::HasWindowHandle
         // Release the 1:1 retained copy while scaled so large surfaces stay bounded.
         if self.size != (0, 0) {
             self.size = (0, 0);
-            self.pixels.clear();
+            self.pixels = Vec::new();
             self.history.clear();
         }
         self.surface

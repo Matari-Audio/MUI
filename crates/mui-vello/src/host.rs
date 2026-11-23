@@ -1444,15 +1444,22 @@ mod tests {
         let info = adapter_info("GL", wgpu::DeviceType::DiscreteGpu, wgpu::Backend::Gl);
         let downlevel = wgpu::Limits::downlevel_webgl2_defaults();
         let requested = requested_limits(&downlevel);
-        assert!(validate_renderer_requirements(&info, &requested, &downlevel).is_ok());
+        assert!(
+            selection::validate_renderer_requirements_with_cpu_adapter(
+                &info, &requested, &downlevel, false
+            )
+            .is_ok()
+        );
         let short = wgpu::Limits {
             max_vertex_attributes: 8,
             ..downlevel
         };
         assert!(
-            validate_renderer_requirements(&info, &requested, &short)
-                .unwrap_err()
-                .contains("renderer limits")
+            selection::validate_renderer_requirements_with_cpu_adapter(
+                &info, &requested, &short, false
+            )
+            .unwrap_err()
+            .contains("renderer limits")
         );
     }
 

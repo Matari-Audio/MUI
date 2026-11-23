@@ -435,6 +435,7 @@ struct Runtime {
     defer_close: bool,
     modifiers: keyboard_types::Modifiers,
     ready: bool,
+    frame_demand: Option<FrameDemand>,
     /// A frame callback has fired since the last map: the compositor shows us.
     /// Before that a callback may never come (nothing attached yet), so frames
     /// are not gated on it.
@@ -481,6 +482,7 @@ impl Runtime {
             defer_close: settings.defer_user_close,
             modifiers: keyboard_types::Modifiers::empty(),
             ready: true,
+            frame_demand: None,
             mapped: false,
             resize_sync: ResizeSync::Idle,
             committed: Instant::now(),
@@ -658,12 +660,14 @@ impl Runtime {
         }
         let now = Instant::now();
         let requested = self.shared.redraw.swap(false, Ordering::AcqRel);
-        let due = match handler.frame_demand() {
+        let demand = self.frame_demand.get_or_insert_with(|| handler.frame_demand());
+        let due = match *demand {
             FrameDemand::Idle => false,
             FrameDemand::At(at) => now >= at,
             _ => true,
         };
         if requested || due {
+            self.frame_demand = None;
             self.ready = !self.mapped;
             self.committed = now;
             if let (ResizeSync::Armed, Role::Subsurface(subsurface, _)) =
@@ -677,6 +681,7 @@ impl Runtime {
             }
             cx.surface().frame(&cx.qh, FrameCallbackData(cx.surface().clone()));
             handler.on_frame().map_err(failure)?;
+            self.frame_demand = Some(handler.frame_demand());
             if let Some(frame) = cx.frame.borrow_mut().as_mut() {
                 if frame.is_dirty() && !frame.is_hidden() {
                     frame.draw();
@@ -720,22 +725,17 @@ impl Runtime {
     }
     fn deadline(&self) -> Option<Duration> {
         let frame = self.frame_deadline();
-        match (frame, self.resize_sync_deadline()) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let transfer = self.data.has_transfers().then_some(Duration::from_millis(2));
+        [frame, transfer, self.resize_sync_deadline()].into_iter().flatten().min()
     }
     fn frame_deadline(&self) -> Option<Duration> {
-        if self.data.has_transfers() {
-            return Some(Duration::from_millis(2));
-        }
         if !self.ready && self.shared.redraw.load(Ordering::Acquire) {
             return Some(Self::CALLBACK_GRACE.saturating_sub(self.committed.elapsed()));
         }
         if !self.ready || !self.configured || !self.shared.visible.load(Ordering::Acquire) {
             return None;
         }
-        let demand = self.handler.as_ref().map(|h| h.frame_demand()).unwrap_or(FrameDemand::Idle);
+        let demand = self.frame_demand.unwrap_or(FrameDemand::Idle);
         match demand {
             FrameDemand::Idle => None,
             FrameDemand::At(at) => Some(at.saturating_duration_since(Instant::now())),
@@ -949,6 +949,52 @@ mod tests {
         }
         fn on_event(&self, _: Event) -> EventStatus {
             EventStatus::Ignored
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a running Wayland compositor"]
+    fn relative_frame_demand_survives_the_event_loop_wait() {
+        struct PollingPainter(BufferPainter, mpsc::Sender<Instant>);
+        impl WindowHandler for PollingPainter {
+            fn frame_demand(&self) -> FrameDemand {
+                FrameDemand::At(Instant::now() + Duration::from_millis(60))
+            }
+            fn resized(&self, size: WindowSize) -> Result<(), HandlerError> {
+                self.0.resized(size)
+            }
+            fn on_frame(&self) -> Result<(), HandlerError> {
+                self.0.on_frame()?;
+                let _ = self.1.send(Instant::now());
+                Ok(())
+            }
+            fn on_event(&self, _: Event) -> EventStatus {
+                EventStatus::Ignored
+            }
+        }
+        let (sent, frames) = mpsc::channel();
+        let window = crate::ThreadedWindow::create(
+            WindowSettings::new().with_size(LogicalSize::new(300., 200.)).with_wayland(true),
+            move |cx| Ok(PollingPainter(BufferPainter::new(cx)?, sent)),
+        )
+        .expect("Wayland toplevel");
+        window.show().expect("show window");
+
+        // Initial configure and expose can produce draws independently of demand.
+        let started = Instant::now();
+        let mut last = None;
+        let mut polls = 0;
+        while polls < 3 {
+            let left = Duration::from_secs(3).saturating_sub(started.elapsed());
+            let at = frames.recv_timeout(left).expect("relative frame deadline was lost");
+            if let Some(previous) = last {
+                if at.duration_since(previous) >= Duration::from_millis(55) {
+                    polls += 1;
+                } else {
+                    polls = 0;
+                }
+            }
+            last = Some(at);
         }
     }
 

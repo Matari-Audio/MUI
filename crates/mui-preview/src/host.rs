@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use mui::scene::ResolvedScene;
 use mui::vello::effects::EffectStats;
-use mui::vello::host::{Frame, GpuDiagnostics, Transparency};
+use mui::vello::host::{FailureClass, Frame, GpuDiagnostics, Retry, Transparency};
 use mui::vello::kurbo::Affine;
 use mui_baseview::Presenter;
 use mui_baseview::baseview::WindowContext;
@@ -14,6 +14,7 @@ pub struct Gpu {
     presenter: Presenter,
     cx: WindowContext,
     current: bool,
+    paint_retry: Retry,
 }
 
 impl Gpu {
@@ -25,6 +26,7 @@ impl Gpu {
             presenter,
             cx,
             current: false,
+            paint_retry: Retry::default(),
         })
     }
 
@@ -51,7 +53,11 @@ impl Gpu {
     }
 
     pub fn next_wake(&self, now: Instant) -> Option<Instant> {
-        self.presenter.next_wake(now)
+        self.presenter
+            .next_wake(now)
+            .into_iter()
+            .chain(self.paint_retry.deadline())
+            .min()
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -94,7 +100,7 @@ impl Gpu {
     ) -> Result<Option<EffectStats>, String> {
         self.update();
         let size = self.presenter.size();
-        if size.0 == 0 || size.1 == 0 {
+        if size.0 == 0 || size.1 == 0 || !self.paint_retry.ready(Instant::now()) {
             self.current = false;
             return Ok(None);
         }
@@ -110,7 +116,7 @@ impl Gpu {
     ) -> Result<Option<EffectStats>, String> {
         self.update();
         let size = self.presenter.size();
-        if size.0 == 0 || size.1 == 0 {
+        if size.0 == 0 || size.1 == 0 || !self.paint_retry.ready(Instant::now()) {
             self.current = false;
             return Ok(None);
         }
@@ -123,9 +129,21 @@ impl Gpu {
     fn after(&mut self, frame: &Frame) -> Option<EffectStats> {
         self.current = matches!(frame, Frame::Current);
         match frame {
-            Frame::Presented(stats) => Some(*stats),
-            Frame::Current => None,
+            Frame::Presented(stats) => {
+                self.paint_retry.reset();
+                Some(*stats)
+            }
+            Frame::Current => {
+                self.paint_retry.reset();
+                None
+            }
+            Frame::Skipped if self.presenter.using_gpu() => {
+                self.paint_retry
+                    .fail(Instant::now(), FailureClass::Transient);
+                None
+            }
             Frame::Skipped | Frame::SurfaceLost => {
+                self.paint_retry.reset();
                 self.cx.request_redraw();
                 None
             }

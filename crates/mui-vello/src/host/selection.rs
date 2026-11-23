@@ -67,7 +67,7 @@ pub(super) fn validate_renderer_requirements(
     )
 }
 
-fn validate_renderer_requirements_with_cpu_adapter(
+pub(super) fn validate_renderer_requirements_with_cpu_adapter(
     info: &wgpu::AdapterInfo,
     requested: &wgpu::Limits,
     supported: &wgpu::Limits,
@@ -258,7 +258,10 @@ mod tests {
         let info = wgpu::AdapterInfo::new(wgpu::DeviceType::IntegratedGpu, wgpu::Backend::Gl);
         let webgl2 = wgpu::Limits::downlevel_webgl2_defaults();
         let requested = requested_limits(&webgl2);
-        assert!(validate_renderer_requirements(&info, &requested, &webgl2).is_ok());
+        assert!(
+            validate_renderer_requirements_with_cpu_adapter(&info, &requested, &webgl2, false)
+                .is_ok()
+        );
         assert_eq!(requested.max_storage_buffers_per_shader_stage, 0);
         assert_eq!(requested.max_compute_invocations_per_workgroup, 0);
         for field in [
@@ -277,9 +280,13 @@ mod tests {
                 "max_uniform_buffer_binding_size" => supported.max_uniform_buffer_binding_size -= 1,
                 _ => unreachable!(),
             }
-            let error =
-                validate_renderer_requirements(&info, &requested_limits(&supported), &supported)
-                    .unwrap_err();
+            let error = validate_renderer_requirements_with_cpu_adapter(
+                &info,
+                &requested_limits(&supported),
+                &supported,
+                false,
+            )
+            .unwrap_err();
             assert!(error.contains(field), "{error}");
         }
     }
