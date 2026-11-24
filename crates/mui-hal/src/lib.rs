@@ -13,10 +13,9 @@
 //! An [`Instance`] opens the native backends it can and asks wgpu for the
 //! rest; `MUI_HAL_BACKEND=wgpu` sends everything through wgpu (A/B runs).
 //!
-//! Object creation does not fail the way wgpu's does (into an error scope):
-//! a Vulkan object the driver refuses (out of memory, device lost) panics
-//! with the driver's error. `ponytail:` callers already contain renderer
-//! panics; return `Result`s when one needs to recover in place.
+//! Object creation and submission failures on native backends are reported to
+//! per-thread error scopes (or the device's uncaptured error handler) like
+//! wgpu, returning invalid placeholder handles that fail cleanly if used later.
 
 #![deny(unsafe_code)]
 // wgpu-core's nesting overflows the default when proving `DeviceShared: Send`.
@@ -145,15 +144,6 @@ pub fn validation_errors() -> usize {
     #[cfg(not(target_os = "linux"))]
     {
         0
-    }
-}
-
-#[cfg(target_os = "linux")]
-#[track_caller]
-fn made<T, E: std::fmt::Display>(r: Result<T, E>) -> T {
-    match r {
-        Ok(v) => v,
-        Err(e) => panic!("mui-hal: {e}"),
     }
 }
 
@@ -643,12 +633,77 @@ enum DeviceInner {
 
 type UncapturedHandler = Arc<dyn Fn(Error) + Send + Sync>;
 
-struct DeviceShared {
-    inner: DeviceInner,
-    info: AdapterInfo,
+/// Per-device native error scopes and uncaptured handler, shared with native
+/// resources without forming a reference cycle back to `DeviceShared`.
+pub(crate) struct ErrorSink {
     /// Native error scopes, innermost last.
     scopes: std::sync::Mutex<Vec<Scope>>,
     uncaptured: std::sync::Mutex<Option<UncapturedHandler>>,
+}
+
+impl ErrorSink {
+    pub(crate) fn new() -> Self {
+        Self {
+            scopes: std::sync::Mutex::new(Vec::new()),
+            uncaptured: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Reports `e` to the innermost native scope that filters it, else the
+    /// uncaptured handler.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code, reason = "native only"))]
+    pub(crate) fn report(&self, e: Error) {
+        let filter = match &e {
+            Error::OutOfMemory { .. } => ErrorFilter::OutOfMemory,
+            Error::Validation { .. } => ErrorFilter::Validation,
+            Error::Internal { .. } => ErrorFilter::Internal,
+        };
+        {
+            let mut scopes = lock(&self.scopes);
+            let thread = std::thread::current().id();
+            if let Some(scope) = scopes
+                .iter_mut()
+                .rev()
+                .find(|s| s.thread == thread && s.filter == filter)
+            {
+                scope.caught.get_or_insert(e);
+                return;
+            }
+        }
+        let handler = lock(&self.uncaptured).clone();
+        match handler {
+            Some(h) => h(e),
+            None => eprintln!("mui-hal: uncaptured GPU error: {e}"),
+        }
+    }
+
+    fn push_scope(&self, filter: ErrorFilter) -> u64 {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        lock(&self.scopes).push(Scope {
+            id,
+            thread: std::thread::current().id(),
+            filter,
+            caught: None,
+        });
+        id
+    }
+
+    fn take_scope(&self, id: u64) -> Option<Scope> {
+        let mut scopes = lock(&self.scopes);
+        let at = scopes.iter().position(|s| s.id == id)?;
+        Some(scopes.remove(at))
+    }
+
+    fn set_uncaptured(&self, handler: UncapturedHandler) {
+        *lock(&self.uncaptured) = Some(handler);
+    }
+}
+
+struct DeviceShared {
+    inner: DeviceInner,
+    info: AdapterInfo,
+    errors: Arc<ErrorSink>,
 }
 
 /// A device. Cheap to clone; equal when it is the same device.
@@ -693,15 +748,13 @@ struct Scope {
 
 /// A pushed native scope; it leaves the stack when popped or dropped.
 struct NativeScope {
-    device: Device,
+    errors: Arc<ErrorSink>,
     id: u64,
 }
 
 impl NativeScope {
     fn take(&self) -> Option<Scope> {
-        let mut scopes = lock(&self.device.0.scopes);
-        let at = scopes.iter().position(|s| s.id == self.id)?;
-        Some(scopes.remove(at))
+        self.errors.take_scope(self.id)
     }
 }
 
@@ -738,11 +791,16 @@ impl ErrorScopeGuard {
 
 impl Device {
     fn new(inner: DeviceInner, info: AdapterInfo) -> (Self, Queue) {
+        let errors = match &inner {
+            #[cfg(target_os = "linux")]
+            DeviceInner::Vulkan(o) => o.0.errors().clone(),
+            #[cfg(feature = "wgpu")]
+            DeviceInner::Wgpu(..) => Arc::new(ErrorSink::new()),
+        };
         let shared = Arc::new(DeviceShared {
             inner,
             info,
-            scopes: std::sync::Mutex::new(Vec::new()),
-            uncaptured: std::sync::Mutex::new(None),
+            errors,
         });
         (Self(shared.clone()), Queue(shared))
     }
@@ -800,47 +858,19 @@ impl Device {
     /// uncaptured handler.
     #[cfg_attr(not(target_os = "linux"), expect(dead_code, reason = "native only"))]
     fn report(&self, e: Error) {
-        let filter = match &e {
-            Error::OutOfMemory { .. } => ErrorFilter::OutOfMemory,
-            Error::Validation { .. } => ErrorFilter::Validation,
-            Error::Internal { .. } => ErrorFilter::Internal,
-        };
-        {
-            let mut scopes = lock(&self.0.scopes);
-            let thread = std::thread::current().id();
-            if let Some(scope) = scopes
-                .iter_mut()
-                .rev()
-                .find(|s| s.thread == thread && s.filter == filter)
-            {
-                scope.caught.get_or_insert(e);
-                return;
-            }
-        }
-        let handler = lock(&self.0.uncaptured).clone();
-        match handler {
-            Some(h) => h(e),
-            None => eprintln!("mui-hal: uncaptured GPU error: {e}"),
-        }
+        self.0.errors.report(e);
     }
 
     pub fn push_error_scope(&self, filter: ErrorFilter) -> ErrorScopeGuard {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         #[cfg(feature = "wgpu")]
         if let DeviceInner::Wgpu(d, _) = &self.0.inner {
             return ErrorScopeGuard(ScopeInner::Wgpu(
                 d.push_error_scope(wg::error_filter(filter)),
             ));
         }
-        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        lock(&self.0.scopes).push(Scope {
-            id,
-            thread: std::thread::current().id(),
-            filter,
-            caught: None,
-        });
+        let id = self.0.errors.push_scope(filter);
         ErrorScopeGuard(ScopeInner::Native(NativeScope {
-            device: self.clone(),
+            errors: self.0.errors.clone(),
             id,
         }))
     }
@@ -851,7 +881,7 @@ impl Device {
             let h = handler.clone();
             d.on_uncaptured_error(Arc::new(move |e| h(wg::error(e))));
         }
-        *lock(&self.0.uncaptured) = Some(handler);
+        self.0.errors.set_uncaptured(handler);
     }
 
     pub fn set_device_lost_callback(
@@ -903,6 +933,19 @@ impl Device {
         }
     }
 
+    /// Unwraps a native Vulkan creation result, reporting any error to per-thread
+    /// error scopes (or the uncaptured handler) and returning `invalid`.
+    #[cfg(target_os = "linux")]
+    fn or_invalid<T>(&self, r: Result<T, vk::Error>, invalid: impl FnOnce() -> T) -> T {
+        match r {
+            Ok(v) => v,
+            Err(e) => {
+                self.report(e.into_hal());
+                invalid()
+            }
+        }
+    }
+
     pub fn create_buffer(&self, desc: &BufferDescriptor<'_>) -> Buffer {
         assert!(
             !desc.mapped_at_creation,
@@ -910,7 +953,11 @@ impl Device {
         );
         Buffer(match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => BufferInner::Vulkan(made(vk::Buffer::new(&o.0, desc))),
+            DeviceInner::Vulkan(o) => {
+                BufferInner::Vulkan(self.or_invalid(vk::Buffer::new(&o.0, desc), || {
+                    vk::Buffer::invalid(&o.0, desc)
+                }))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 BufferInner::Wgpu(d.create_buffer(&wgpu::BufferDescriptor {
@@ -926,7 +973,11 @@ impl Device {
     pub fn create_texture(&self, desc: &TextureDescriptor<'_>) -> Texture {
         Texture(match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => TextureInner::Vulkan(made(vk::Texture::new(&o.0, desc))),
+            DeviceInner::Vulkan(o) => {
+                TextureInner::Vulkan(self.or_invalid(vk::Texture::new(&o.0, desc), || {
+                    vk::Texture::invalid(&o.0, desc)
+                }))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 let formats: Vec<_> = desc.view_formats.iter().copied().map(wg::format).collect();
@@ -947,7 +998,9 @@ impl Device {
     pub fn create_sampler(&self, desc: &SamplerDescriptor<'_>) -> Sampler {
         Sampler(match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => SamplerInner::Vulkan(made(vk::Sampler::new(&o.0, desc))),
+            DeviceInner::Vulkan(o) => SamplerInner::Vulkan(
+                self.or_invalid(vk::Sampler::new(&o.0, desc), || vk::Sampler::invalid(&o.0)),
+            ),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 SamplerInner::Wgpu(d.create_sampler(&wgpu::SamplerDescriptor {
@@ -966,9 +1019,11 @@ impl Device {
     ) -> BindGroupLayout {
         BindGroupLayout(match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => {
-                LayoutInner::Vulkan(made(vk::BindGroupLayout::new(&o.0, desc.entries)))
-            }
+            DeviceInner::Vulkan(o) => LayoutInner::Vulkan(
+                self.or_invalid(vk::BindGroupLayout::new(&o.0, desc.entries), || {
+                    vk::BindGroupLayout::invalid(&o.0)
+                }),
+            ),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 let entries: Vec<_> = desc.entries.iter().map(wg::layout_entry).collect();
@@ -1003,7 +1058,11 @@ impl Device {
                         (e.binding, bound)
                     })
                     .collect();
-                GroupInner::Vulkan(made(vk::BindGroup::new(&o.0, layout, entries)))
+                GroupInner::Vulkan(
+                    self.or_invalid(vk::BindGroup::new(&o.0, layout, entries), || {
+                        vk::BindGroup::invalid(layout)
+                    }),
+                )
             }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
@@ -1037,20 +1096,34 @@ impl Device {
     }
 
     pub fn create_pipeline_layout(&self, desc: &PipelineLayoutDescriptor<'_>) -> PipelineLayout {
-        let layouts = desc
-            .bind_group_layouts
-            .iter()
-            .map(|l| l.expect("mui-hal pipeline layouts bind every group"));
         PipelineLayout(match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => {
-                let sets: Vec<vk::BindGroupLayout> = layouts.map(|l| l.vk().clone()).collect();
-                PipelineLayoutInner::Vulkan(made(vk::PipelineLayout::new(&o.0, &sets)))
+                let sets: Option<Vec<vk::BindGroupLayout>> = desc
+                    .bind_group_layouts
+                    .iter()
+                    .map(|l| l.map(|g| g.vk().clone()))
+                    .collect();
+                if let Some(sets) = sets {
+                    PipelineLayoutInner::Vulkan(
+                        self.or_invalid(vk::PipelineLayout::new(&o.0, &sets), || {
+                            vk::PipelineLayout::invalid(&o.0)
+                        }),
+                    )
+                } else {
+                    self.report(Error::Validation {
+                        description: "mui-hal pipeline layouts must bind every group".into(),
+                    });
+                    PipelineLayoutInner::Vulkan(vk::PipelineLayout::invalid(&o.0))
+                }
             }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
-                let sets: Vec<Option<&wgpu::BindGroupLayout>> =
-                    layouts.map(|l| Some(l.wg())).collect();
+                let sets: Vec<Option<&wgpu::BindGroupLayout>> = desc
+                    .bind_group_layouts
+                    .iter()
+                    .map(|l| l.map(BindGroupLayout::wg))
+                    .collect();
                 PipelineLayoutInner::Wgpu(d.create_pipeline_layout(
                     &wgpu::PipelineLayoutDescriptor {
                         label: desc.label,
@@ -1066,7 +1139,11 @@ impl Device {
         let ShaderSource::Mui(id) = desc.source;
         let inner = match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => ModuleInner::Vulkan(made(vk::ShaderModule::new(&o.0, id))),
+            DeviceInner::Vulkan(o) => {
+                ModuleInner::Vulkan(self.or_invalid(vk::ShaderModule::new(&o.0, id), || {
+                    vk::ShaderModule::invalid(&o.0)
+                }))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 ModuleInner::Wgpu(d.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -1079,57 +1156,129 @@ impl Device {
     }
 
     pub fn create_render_pipeline(&self, desc: &RenderPipelineDescriptor<'_>) -> RenderPipeline {
-        let fragment = desc
-            .fragment
-            .as_ref()
-            .expect("mui-hal pipelines have a fragment stage");
-        let [Some(target)] = fragment.targets else {
-            panic!("mui-hal pipelines have exactly one colour target");
-        };
         let buffers: Vec<VertexBufferLayout<'_>> =
             desc.vertex.buffers.iter().flatten().cloned().collect();
-        let entry = |module: &ShaderModule, name: Option<&str>, stage| {
-            name.map_or_else(
-                || {
-                    module
-                        .id
-                        .artifact()
-                        .entry_points
-                        .iter()
-                        .find(|e| e.stage == stage)
-                        .map(|e| e.name.to_owned())
-                        .expect("the shader has an entry point for the stage")
-                },
-                str::to_owned,
-            )
-        };
-        let vs = entry(
-            desc.vertex.module,
-            desc.vertex.entry_point,
-            mui_shaders::Stage::Vertex,
-        );
-        let fs = entry(
-            fragment.module,
-            fragment.entry_point,
-            mui_shaders::Stage::Fragment,
-        );
-        let layout = desc.layout.expect("mui-hal pipelines name their layout");
-        RenderPipeline(match &self.0.inner {
+        match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => PipelineInner::Vulkan(made(vk::RenderPipeline::new(
-                &o.0,
-                &vk::PipelineDesc {
-                    layout: layout.vk(),
-                    vertex: (desc.vertex.module.vk(), &vs),
-                    fragment: (fragment.module.vk(), &fs),
-                    buffers: &buffers,
-                    topology: desc.primitive.topology,
-                    target: *target,
-                    cache: desc.cache.map(PipelineCache::vk),
-                },
-            ))),
+            DeviceInner::Vulkan(o) => {
+                let fail = |e: Error| {
+                    self.report(e);
+                    RenderPipeline(PipelineInner::Vulkan(vk::RenderPipeline::invalid(
+                        &o.0,
+                        &vk::PipelineLayout::invalid(&o.0),
+                    )))
+                };
+                let Some(fragment) = desc.fragment.as_ref() else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require a fragment stage".into(),
+                    });
+                };
+                let [Some(target)] = fragment.targets else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require exactly one colour target".into(),
+                    });
+                };
+                let Some(layout) = desc.layout else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require an explicit layout".into(),
+                    });
+                };
+                let resolve_entry =
+                    |module: &ShaderModule, name: Option<&str>, stage| -> Result<String, Error> {
+                        let entries = module.id.artifact().entry_points;
+                        match name {
+                            Some(n) => {
+                                if entries.iter().any(|e| e.stage == stage && e.name == n) {
+                                    Ok(n.to_owned())
+                                } else {
+                                    Err(Error::Validation {
+                                        description: format!(
+                                            "shader {:?} has no {stage:?} entry point named `{n}`",
+                                            module.id
+                                        ),
+                                    })
+                                }
+                            }
+                            None => entries
+                                .iter()
+                                .find(|e| e.stage == stage)
+                                .map(|e| e.name.to_owned())
+                                .ok_or_else(|| Error::Validation {
+                                    description: format!(
+                                        "shader {:?} has no {stage:?} entry point",
+                                        module.id
+                                    ),
+                                }),
+                        }
+                    };
+                let vs = match resolve_entry(
+                    desc.vertex.module,
+                    desc.vertex.entry_point,
+                    mui_shaders::Stage::Vertex,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => return fail(e),
+                };
+                let fs = match resolve_entry(
+                    fragment.module,
+                    fragment.entry_point,
+                    mui_shaders::Stage::Fragment,
+                ) {
+                    Ok(s) => s,
+                    Err(e) => return fail(e),
+                };
+                let pipe = self.or_invalid(
+                    vk::RenderPipeline::new(
+                        &o.0,
+                        &vk::PipelineDesc {
+                            layout: layout.vk(),
+                            vertex: (desc.vertex.module.vk(), &vs),
+                            fragment: (fragment.module.vk(), &fs),
+                            buffers: &buffers,
+                            topology: desc.primitive.topology,
+                            target: *target,
+                            cache: desc.cache.map(PipelineCache::vk),
+                        },
+                    ),
+                    || vk::RenderPipeline::invalid(&o.0, layout.vk()),
+                );
+                RenderPipeline(PipelineInner::Vulkan(pipe))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
+                let fragment = desc
+                    .fragment
+                    .as_ref()
+                    .expect("mui-hal pipelines have a fragment stage");
+                let [Some(target)] = fragment.targets else {
+                    panic!("mui-hal pipelines have exactly one colour target");
+                };
+                let entry = |module: &ShaderModule, name: Option<&str>, stage| {
+                    name.map_or_else(
+                        || {
+                            module
+                                .id
+                                .artifact()
+                                .entry_points
+                                .iter()
+                                .find(|e| e.stage == stage)
+                                .map(|e| e.name.to_owned())
+                                .expect("the shader has an entry point for the stage")
+                        },
+                        str::to_owned,
+                    )
+                };
+                let vs = entry(
+                    desc.vertex.module,
+                    desc.vertex.entry_point,
+                    mui_shaders::Stage::Vertex,
+                );
+                let fs = entry(
+                    fragment.module,
+                    fragment.entry_point,
+                    mui_shaders::Stage::Fragment,
+                );
+                let layout = desc.layout.expect("mui-hal pipelines name their layout");
                 let attributes: Vec<Vec<wgpu::VertexAttribute>> = buffers
                     .iter()
                     .map(|b| b.attributes.iter().map(wg::attribute).collect())
@@ -1146,32 +1295,34 @@ impl Device {
                     })
                     .collect();
                 let targets = [Some(wg::target(target))];
-                PipelineInner::Wgpu(d.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: desc.label,
-                    layout: Some(layout.wg()),
-                    vertex: wgpu::VertexState {
-                        module: desc.vertex.module.wg(),
-                        entry_point: Some(&vs),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        buffers: &layouts,
+                RenderPipeline(PipelineInner::Wgpu(d.create_render_pipeline(
+                    &wgpu::RenderPipelineDescriptor {
+                        label: desc.label,
+                        layout: Some(layout.wg()),
+                        vertex: wgpu::VertexState {
+                            module: desc.vertex.module.wg(),
+                            entry_point: Some(&vs),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            buffers: &layouts,
+                        },
+                        primitive: wgpu::PrimitiveState {
+                            topology: wg::topology(desc.primitive.topology),
+                            ..Default::default()
+                        },
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                        fragment: Some(wgpu::FragmentState {
+                            module: fragment.module.wg(),
+                            entry_point: Some(&fs),
+                            compilation_options: wgpu::PipelineCompilationOptions::default(),
+                            targets: &targets,
+                        }),
+                        multiview_mask: None,
+                        cache: desc.cache.map(PipelineCache::wg),
                     },
-                    primitive: wgpu::PrimitiveState {
-                        topology: wg::topology(desc.primitive.topology),
-                        ..Default::default()
-                    },
-                    depth_stencil: None,
-                    multisample: wgpu::MultisampleState::default(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: fragment.module.wg(),
-                        entry_point: Some(&fs),
-                        compilation_options: wgpu::PipelineCompilationOptions::default(),
-                        targets: &targets,
-                    }),
-                    multiview_mask: None,
-                    cache: desc.cache.map(PipelineCache::wg),
-                }))
+                )))
             }
-        })
+        }
     }
 
     pub fn create_command_encoder(&self, desc: &CommandEncoderDescriptor<'_>) -> CommandEncoder {
@@ -1189,7 +1340,11 @@ impl Device {
     pub fn create_query_set(&self, desc: &QuerySetDescriptor<'_>) -> QuerySet {
         QuerySet(match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => QueryInner::Vulkan(made(vk::QuerySet::new(&o.0, desc))),
+            DeviceInner::Vulkan(o) => {
+                QueryInner::Vulkan(self.or_invalid(vk::QuerySet::new(&o.0, desc), || {
+                    vk::QuerySet::invalid(&o.0)
+                }))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 QueryInner::Wgpu(d.create_query_set(&wgpu::QuerySetDescriptor {
@@ -1213,9 +1368,11 @@ impl Device {
     ) -> PipelineCache {
         PipelineCache(match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => {
-                CacheInner::Vulkan(made(vk::PipelineCache::new(&o.0, desc.data)))
-            }
+            DeviceInner::Vulkan(o) => CacheInner::Vulkan(
+                self.or_invalid(vk::PipelineCache::new(&o.0, desc.data), || {
+                    vk::PipelineCache::invalid(&o.0)
+                }),
+            ),
             #[cfg(feature = "wgpu")]
             // SAFETY: forwarded from this function's contract.
             DeviceInner::Wgpu(d, _) => CacheInner::Wgpu(unsafe {
@@ -1279,19 +1436,10 @@ impl Queue {
             return;
         }
         #[cfg(target_os = "linux")]
-        if let Some(d) = self.vk() {
-            let dst = buffer.vk().clone();
-            made(d.stage(
-                data.len() as u64,
-                |m| m.copy_from_slice(data),
-                |src, src_offset| vk::Cmd::CopyBuffer {
-                    src,
-                    src_offset,
-                    dst,
-                    dst_offset: offset,
-                    size: data.len() as u64,
-                },
-            ));
+        if let Some(d) = self.vk()
+            && let Err(e) = d.stage_buffer_write(buffer.vk(), offset, data)
+        {
+            self.0.errors.report(e.into_hal());
         }
     }
 
@@ -1318,20 +1466,46 @@ impl Queue {
             );
             return;
         }
-        let block = dest.texture.format().block_size() as usize;
-        let row = size.width as usize * block;
-        let bytes_per_row = layout.bytes_per_row.map_or(row, |b| b as usize);
-        let rows_per_image = layout.rows_per_image.unwrap_or(size.height) as usize;
-        let layers = size.depth_or_array_layers.max(1) as usize;
-        let len = row * size.height as usize * layers;
-        if len == 0 {
-            return;
-        }
         #[cfg(target_os = "linux")]
         if let Some(d) = self.vk() {
-            let dst = dest.single_mip().clone();
+            if dest.mip_level != 0 {
+                self.0.errors.report(Error::Validation {
+                    description: "native textures have one mip level".into(),
+                });
+                return;
+            }
+            let dst = dest.texture.vk().clone();
+            if dst.is_retired_swapchain() {
+                self.0.errors.report(Error::Validation {
+                    description: "cannot write to a retired swapchain image".into(),
+                });
+                return;
+            }
+            if !dst.is_valid() {
+                self.0.errors.report(Error::Validation {
+                    description: "cannot write to an invalid texture".into(),
+                });
+                return;
+            }
+            // Native swapchain images are render attachments only. Reject
+            // uploads before they can queue a copy to an image that may retire.
+            if !dst.usage().contains(TextureUsages::COPY_DST) {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture requires COPY_DST usage".into(),
+                });
+                return;
+            }
+            let block = dst.format().block_size() as usize;
+            let row = size.width as usize * block;
+            let bytes_per_row = layout.bytes_per_row.map_or(row, |b| b as usize);
+            let rows_per_image = layout.rows_per_image.unwrap_or(size.height) as usize;
+            let layers = size.depth_or_array_layers.max(1) as usize;
+            let len = row * size.height as usize * layers;
+            if len == 0 {
+                return;
+            }
             let origin = dest.origin;
-            made(d.stage(
+            if let Err(e) = d.stage(
                 len as u64,
                 |m| {
                     let mut at = 0;
@@ -1351,9 +1525,11 @@ impl Queue {
                     origin,
                     size,
                 },
-            ));
+            ) {
+                self.0.errors.report(e.into_hal());
+            }
         }
-        let _ = (data, bytes_per_row, rows_per_image, dest);
+        let _ = (data, layout, size, dest);
     }
 
     pub fn submit(&self, buffers: impl IntoIterator<Item = CommandBuffer>) -> SubmissionIndex {
@@ -1371,9 +1547,7 @@ impl Queue {
                 match o.0.submit(lists) {
                     Ok(v) => SubmissionIndex(v),
                     Err(e) => {
-                        Device(self.0.clone()).report(Error::Internal {
-                            description: e.to_string(),
-                        });
+                        self.0.errors.report(e.into_hal());
                         SubmissionIndex(o.0.submitted())
                     }
                 }
@@ -1395,10 +1569,8 @@ impl Queue {
         match frame.inner {
             #[cfg(target_os = "linux")]
             SurfaceTextureInner::Vulkan(surface, f) => {
-                if let Err(e) = surface.present(&f) {
-                    Device(self.0.clone()).report(Error::Internal {
-                        description: e.to_string(),
-                    });
+                if let Err(e) = surface.present(f) {
+                    self.0.errors.report(e.into_hal());
                 }
             }
             #[cfg(feature = "wgpu")]
@@ -1415,7 +1587,7 @@ impl Queue {
     pub fn on_submitted_work_done(&self, f: impl FnOnce() + Send + 'static) {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
-            DeviceInner::Vulkan(o) => o.0.on_idle(Box::new(move |_| f())),
+            DeviceInner::Vulkan(o) => o.0.on_submitted_work_done(Box::new(f)),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(_, q) => q.on_submitted_work_done(f),
         }
@@ -1575,16 +1747,20 @@ impl Buffer {
     }
 
     pub fn unmap(&self) {
-        #[cfg(feature = "wgpu")]
-        if let BufferInner::Wgpu(b) = &self.0 {
-            b.unmap();
+        match &self.0 {
+            #[cfg(target_os = "linux")]
+            BufferInner::Vulkan(b) => b.unmap(),
+            #[cfg(feature = "wgpu")]
+            BufferInner::Wgpu(b) => b.unmap(),
         }
     }
 
     pub fn destroy(&self) {
-        #[cfg(feature = "wgpu")]
-        if let BufferInner::Wgpu(b) = &self.0 {
-            b.destroy();
+        match &self.0 {
+            #[cfg(target_os = "linux")]
+            BufferInner::Vulkan(b) => b.unmap(),
+            #[cfg(feature = "wgpu")]
+            BufferInner::Wgpu(b) => b.destroy(),
         }
     }
 }
@@ -1609,14 +1785,10 @@ impl<'a> BufferSlice<'a> {
         mode: MapMode,
         callback: impl FnOnce(Result<(), BufferAsyncError>) + Send + 'static,
     ) {
-        assert!(
-            self.buffer.usage().contains(BufferUsages::MAP_READ),
-            "map_async needs MAP_READ"
-        );
         let _ = mode;
         match &self.buffer.0 {
             #[cfg(target_os = "linux")]
-            BufferInner::Vulkan(b) => b.device().on_idle(Box::new(callback)),
+            BufferInner::Vulkan(b) => b.map_async(self.offset, self.size, Box::new(callback)),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(_) => self.wg().map_async(wgpu::MapMode::Read, move |r| {
                 callback(r.map_err(|_| BufferAsyncError));
@@ -1627,14 +1799,9 @@ impl<'a> BufferSlice<'a> {
     pub fn get_mapped_range(&self) -> Result<BufferView<'a>, BufferAsyncError> {
         match &self.buffer.0 {
             #[cfg(target_os = "linux")]
-            // Copied out: the mapping is persistent, so a later submission
-            // could write it while the view is read. wgpu forbids that.
-            BufferInner::Vulkan(b) => Ok(BufferView(
-                ViewBytes::Owned(
-                    b.mapped()[self.offset as usize..(self.offset + self.size) as usize].to_vec(),
-                ),
-                std::marker::PhantomData,
-            )),
+            BufferInner::Vulkan(b) => b
+                .copy_mapped_range(self.offset, self.size)
+                .map(|bytes| BufferView(ViewBytes::Owned(bytes), std::marker::PhantomData)),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(_) => self
                 .wg()
@@ -1701,7 +1868,13 @@ impl Texture {
     pub fn create_view(&self, desc: &TextureViewDescriptor<'_>) -> TextureView {
         TextureView(match &self.0 {
             #[cfg(target_os = "linux")]
-            TextureInner::Vulkan(t) => ViewInner::Vulkan(made(t.create_view(desc.dimension))),
+            TextureInner::Vulkan(t) => ViewInner::Vulkan(match t.create_view(desc.dimension) {
+                Ok(v) => v,
+                Err(e) => {
+                    t.device().errors().report(e.into_hal());
+                    vk::TextureView::invalid(t.clone())
+                }
+            }),
             #[cfg(feature = "wgpu")]
             TextureInner::Wgpu(t) => ViewInner::Wgpu(t.create_view(&wgpu::TextureViewDescriptor {
                 label: desc.label,
@@ -2062,7 +2235,7 @@ impl CommandEncoder {
                 src_offset,
                 dst: dst.vk().clone(),
                 dst_offset,
-                size: size.unwrap_or(src.size() - src_offset),
+                size: size.unwrap_or_else(|| src.size().saturating_sub(src_offset)),
             }),
             #[cfg(feature = "wgpu")]
             EncoderInner::Wgpu(e) => {

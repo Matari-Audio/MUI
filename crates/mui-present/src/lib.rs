@@ -158,6 +158,8 @@ pub enum PresentError {
     UnsupportedHandle(&'static str),
     /// Swapchain or native surface is no longer valid and must be recreated.
     SurfaceLost,
+    /// The native graphics device was lost.
+    DeviceLost,
     /// Swapchain extent/transform is out of date and needs reconfiguration.
     OutOfDate,
     /// No image became available within the timeout; try again next frame.
@@ -174,6 +176,7 @@ impl fmt::Display for PresentError {
             Self::InvalidSize((w, h)) => write!(f, "invalid presentation surface size {w}x{h}"),
             Self::InvalidPatch => f.write_str("invalid bitmap patch geometry or pixel count"),
             Self::UnsupportedHandle(msg) => write!(f, "unsupported native handle: {msg}"),
+            Self::DeviceLost => f.write_str("native presentation device lost"),
             Self::SurfaceLost => f.write_str("native presentation surface lost"),
             Self::OutOfDate => f.write_str("native swapchain out of date"),
             Self::Timeout => f.write_str("no swapchain image became available in time"),

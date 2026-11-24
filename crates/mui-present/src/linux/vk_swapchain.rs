@@ -379,6 +379,7 @@ impl VkSwapchain {
             Err(vk::Result::TIMEOUT | vk::Result::NOT_READY) => Err(PresentError::Timeout),
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(PresentError::OutOfDate),
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => Err(PresentError::SurfaceLost),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(PresentError::DeviceLost),
             Err(e) => Err(PresentError::Platform(format!(
                 "vkAcquireNextImageKHR failed: {e}"
             ))),
@@ -420,6 +421,7 @@ impl VkSwapchain {
             Ok(suboptimal) => Ok(suboptimal),
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => Err(PresentError::OutOfDate),
             Err(vk::Result::ERROR_SURFACE_LOST_KHR) => Err(PresentError::SurfaceLost),
+            Err(vk::Result::ERROR_DEVICE_LOST) => Err(PresentError::DeviceLost),
             Err(e) => Err(PresentError::Platform(format!(
                 "vkQueuePresentKHR failed: {e}"
             ))),

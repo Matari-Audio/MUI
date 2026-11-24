@@ -7,7 +7,7 @@
 
 use ash::vk;
 
-use super::{BindGroup, Buffer, QuerySet, RenderPipeline, Texture, TextureView};
+use super::{BindGroup, Buffer, Error, QuerySet, RenderPipeline, Texture, TextureView};
 use crate::types::{Extent3d, Origin3d};
 
 pub enum Cmd {
@@ -81,6 +81,151 @@ pub enum PassCmd {
         vertices: std::ops::Range<u32>,
         instances: std::ops::Range<u32>,
     },
+}
+
+fn check_texture(t: &Texture) -> Result<(), Error> {
+    if t.is_retired_swapchain() {
+        return Err(Error::validation(
+            "cannot submit commands targeting a retired swapchain image",
+        ));
+    }
+    if !t.is_valid() {
+        return Err(Error::validation(
+            "cannot submit commands referencing an invalid texture",
+        ));
+    }
+    Ok(())
+}
+
+fn check_view(v: &TextureView) -> Result<(), Error> {
+    if v.is_retired_swapchain() {
+        return Err(Error::validation(
+            "cannot submit commands targeting a retired swapchain image",
+        ));
+    }
+    if !v.is_valid() {
+        return Err(Error::validation(
+            "cannot submit commands referencing an invalid texture view",
+        ));
+    }
+    Ok(())
+}
+
+fn check_buffer_write(dst: &Buffer) -> Result<(), Error> {
+    if !dst.is_valid() {
+        return Err(Error::validation(
+            "cannot submit commands referencing an invalid buffer",
+        ));
+    }
+    if dst.is_mapped_or_pending() {
+        return Err(Error::validation(
+            "cannot write to a buffer while it is mapped",
+        ));
+    }
+    Ok(())
+}
+
+/// Validates every resource a command references before it reaches Vulkan.
+pub(super) fn validate_cmd(cmd: &Cmd) -> Result<(), Error> {
+    match cmd {
+        Cmd::Init(t) | Cmd::Acquire(t) | Cmd::Release(t) => check_texture(t)?,
+        Cmd::CopyBuffer {
+            src,
+            src_offset,
+            dst,
+            dst_offset,
+            size,
+        } => {
+            if !src.is_valid() {
+                return Err(Error::validation(
+                    "cannot submit commands referencing an invalid buffer",
+                ));
+            }
+            check_buffer_write(dst)?;
+            if src_offset
+                .checked_add(*size)
+                .is_none_or(|end| end > src.size())
+                || dst_offset
+                    .checked_add(*size)
+                    .is_none_or(|end| end > dst.size())
+            {
+                return Err(Error::validation("copy range exceeds buffer size"));
+            }
+        }
+        Cmd::BufferToTexture { src, dst, .. } => {
+            if !src.is_valid() {
+                return Err(Error::validation(
+                    "cannot submit commands referencing an invalid buffer",
+                ));
+            }
+            check_texture(dst)?;
+        }
+        Cmd::TextureToBuffer { src, dst, .. } => {
+            check_texture(src)?;
+            check_buffer_write(dst)?;
+        }
+        Cmd::TextureToTexture { src, dst, .. } => {
+            check_texture(src)?;
+            check_texture(dst)?;
+        }
+        Cmd::Timestamp(set, _) => {
+            if !set.is_valid() {
+                return Err(Error::validation(
+                    "cannot submit commands referencing an invalid query set",
+                ));
+            }
+        }
+        Cmd::Resolve { set, dst, .. } => {
+            if !set.is_valid() {
+                return Err(Error::validation(
+                    "cannot submit commands referencing an invalid query set",
+                ));
+            }
+            check_buffer_write(dst)?;
+        }
+        Cmd::Pass(pass) => {
+            check_view(&pass.target)?;
+            if let Some((set, _, _)) = &pass.timestamps
+                && !set.is_valid()
+            {
+                return Err(Error::validation(
+                    "cannot submit commands referencing an invalid query set",
+                ));
+            }
+            for pc in &pass.cmds {
+                match pc {
+                    PassCmd::Pipeline(p) => {
+                        if !p.is_valid() {
+                            return Err(Error::validation(
+                                "cannot submit commands referencing an invalid render pipeline",
+                            ));
+                        }
+                    }
+                    PassCmd::Group(_, g, _) => {
+                        if g.has_retired_swapchain() {
+                            return Err(Error::validation(
+                                "cannot submit commands targeting a retired swapchain image",
+                            ));
+                        }
+                        if !g.is_valid() {
+                            return Err(Error::validation(
+                                "cannot submit commands referencing an invalid bind group",
+                            ));
+                        }
+                    }
+                    PassCmd::Vertex(_, b, _) => {
+                        if !b.is_valid() {
+                            return Err(Error::validation(
+                                "cannot submit commands referencing an invalid vertex buffer",
+                            ));
+                        }
+                    }
+                    PassCmd::Viewport(_) | PassCmd::Scissor(_) | PassCmd::Draw { .. } => {}
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 pub(super) struct Recorder<'a> {
@@ -197,6 +342,9 @@ impl<'a> Recorder<'a> {
                 dst_offset,
                 size,
             } => {
+                if *size == 0 {
+                    return;
+                }
                 let region = [vk::BufferCopy {
                     src_offset: *src_offset,
                     dst_offset: *dst_offset,

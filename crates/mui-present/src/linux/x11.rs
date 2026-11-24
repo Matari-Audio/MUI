@@ -572,36 +572,89 @@ mod tests {
         assert_eq!(covers(DamageRect::from_array([0, 0, 2, 2]), 1).len(), 4);
     }
 
-    /// A private Xvfb server, killed on drop.
+    /// Serialize Xvfb tests within this process so concurrent `Xvfb -displayfd`
+    /// launches and process-wide `/proc/sysvipc/shm` (`own_segments()`) counts
+    /// cannot race against each other.
+    static XVFB_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A private Xvfb server, terminated cleanly on drop.
     struct Xvfb(std::process::Child, String);
 
     impl Xvfb {
-        fn start(depth: u8) -> Option<Self> {
-            use std::io::{BufRead, BufReader};
-            let mut child = std::process::Command::new("Xvfb")
-                .args([
-                    "-displayfd",
-                    "1",
-                    "-screen",
-                    "0",
-                    &format!("320x240x{depth}"),
-                    "-nolisten",
-                    "tcp",
-                ])
-                .stdout(std::process::Stdio::piped())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-                .ok()?;
-            let mut line = String::new();
-            BufReader::new(child.stdout.take()?)
-                .read_line(&mut line)
-                .ok()?;
-            Some(Self(child, format!(":{}", line.trim())))
+        fn start_and_connect(depth: u8) -> Option<(Self, RustConnection, usize)> {
+            use std::io::{BufRead, BufReader, ErrorKind};
+
+            const ATTEMPTS: usize = 5;
+            let mut last_err = String::new();
+            for attempt in 0..ATTEMPTS {
+                let mut child = match std::process::Command::new("Xvfb")
+                    .args([
+                        "-displayfd",
+                        "1",
+                        "-screen",
+                        "0",
+                        &format!("320x240x{depth}"),
+                        "-nolisten",
+                        "tcp",
+                    ])
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    Ok(child) => child,
+                    Err(err) if err.kind() == ErrorKind::NotFound => return None,
+                    Err(err) => {
+                        last_err = format!("spawn Xvfb: {err}");
+                        continue;
+                    }
+                };
+                let mut line = String::new();
+                let read_ok = child
+                    .stdout
+                    .take()
+                    .and_then(|out| BufReader::new(out).read_line(&mut line).ok())
+                    .is_some();
+                let display_num = line.trim().parse::<u32>().ok();
+                let server = Self(child, format!(":{}", line.trim()));
+                if !read_ok || display_num.is_none() {
+                    last_err = format!("Xvfb wrote invalid displayfd {:?}", line.trim());
+                    drop(server);
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    continue;
+                }
+                match RustConnection::connect(Some(&server.1)) {
+                    Ok((conn, screen)) => return Some((server, conn, screen)),
+                    Err(err) => {
+                        last_err = format!(
+                            "connect to Xvfb {} (attempt {}): {err}",
+                            server.1,
+                            attempt + 1
+                        );
+                        drop(server);
+                        std::thread::sleep(std::time::Duration::from_millis(20));
+                    }
+                }
+            }
+            panic!("failed to start and connect to Xvfb after {ATTEMPTS} attempts: {last_err}");
         }
     }
 
     impl Drop for Xvfb {
         fn drop(&mut self) {
+            // Prefer SIGTERM so Xvfb unlinks its /tmp/.X*-lock and
+            // /tmp/.X11-unix/X* socket instead of leaving stale sockets behind
+            // for subsequent displayfd allocations.
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &self.0.id().to_string()])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+            for _ in 0..20 {
+                if matches!(self.0.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
             let _ = self.0.kill();
             let _ = self.0.wait();
         }
@@ -652,21 +705,24 @@ mod tests {
 
     #[test]
     fn xvfb_rejects_foreign_layouts_and_reports_request_errors() {
-        let Some(server) = Xvfb::start(16) else {
-            eprintln!("skipped: Xvfb is not available");
-            return;
-        };
-        let (conn, screen) = RustConnection::connect(Some(&server.1)).unwrap();
-        let window = test_window(&conn, screen);
-        assert!(
-            X11Presenter::new(window, Some(&server.1)).is_err(),
-            "depth-16 drawable must be rejected"
-        );
+        let _xvfb_guard = XVFB_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        {
+            let Some((server, conn, screen)) = Xvfb::start_and_connect(16) else {
+                eprintln!("skipped: Xvfb is not available");
+                return;
+            };
+            let window = test_window(&conn, screen);
+            assert!(
+                X11Presenter::new(window, Some(&server.1)).is_err(),
+                "depth-16 drawable must be rejected"
+            );
+        }
 
-        let Some(server) = Xvfb::start(24) else {
+        let Some((server, conn, screen)) = Xvfb::start_and_connect(24) else {
             return;
         };
-        let (conn, screen) = RustConnection::connect(Some(&server.1)).unwrap();
         let window = test_window(&conn, screen);
         let mut presenter = X11Presenter::new(window, Some(&server.1)).unwrap();
         let pixels = vec![0; 64 * 48];
@@ -688,11 +744,13 @@ mod tests {
 
     #[test]
     fn xvfb_shm_slots_rotate_without_tearing_or_leaking() {
-        let Some(server) = Xvfb::start(24) else {
+        let _xvfb_guard = XVFB_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some((server, conn, screen)) = Xvfb::start_and_connect(24) else {
             eprintln!("skipped: Xvfb is not available");
             return;
         };
-        let (conn, screen) = RustConnection::connect(Some(&server.1)).unwrap();
         let window = test_window(&conn, screen);
 
         let before = own_segments();
