@@ -30,6 +30,7 @@ pub struct Domain {
     origin: Option<f64>,
     format: Option<Format>,
     parse: Option<Parse>,
+    instant: bool,
 }
 /// A value in the domain's units, as text.
 type Format = Arc<dyn Fn(f64) -> String + Send + Sync>;
@@ -44,6 +45,7 @@ impl std::fmt::Debug for Domain {
             .field("origin", &self.origin)
             .field("format", &self.format.is_some())
             .field("parse", &self.parse.is_some())
+            .field("instant", &self.instant)
             .finish()
     }
 }
@@ -55,7 +57,21 @@ impl Domain {
             origin: None,
             format: None,
             parse: None,
+            instant: false,
         }
+    }
+    /// Draw the thumb or pointer exactly at this frame's value, with no
+    /// glide toward a value set from outside (a preset, automation).
+    ///
+    /// ```
+    /// use mui::prelude::*;
+    /// let mut ui = Ui::default();
+    /// let mut v = 0.0;
+    /// let _ = knob(&mut ui, "k", "K", &mut v, Domain::new(0.0..=1.0).instant());
+    /// ```
+    pub fn instant(mut self) -> Self {
+        self.instant = true;
+        self
     }
     /// The value a double click restores.
     pub fn default(mut self, value: f64) -> Self {
@@ -576,7 +592,11 @@ impl Reading {
         }
         // Fast enough that a drag still feels direct, slow enough that a
         // preset change is a glide. The value and readout stay exact.
-        let t = ui.tween_with(id, unit(*value, range), Spring::new(0.12, 1.0));
+        let t = if domain.instant {
+            unit(*value, range)
+        } else {
+            ui.tween_with(id, unit(*value, range), Spring::new(0.12, 1.0))
+        };
         let mut dial = Self::of(*value, range, t, ui.state(id).hover);
         dial.origin = domain.origin_t();
         dial
