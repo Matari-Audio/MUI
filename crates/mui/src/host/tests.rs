@@ -928,3 +928,24 @@ fn queued_clicks_after_idle_use_host_time_not_the_last_events_animation_delta() 
     }
     assert_eq!(rig.s.view.0, [false, false, true, false, true]);
 }
+
+#[test]
+fn notch_lines_is_three_and_driver_wheel_scales_lines_by_theme_text_once() {
+    assert_eq!(NOTCH_LINES, 3.0);
+    let mut r = Rig::new(Pad, (400, 300), 1.0);
+    assert!(r.step());
+    let line = r.s.ui.theme().text;
+    assert!(line > 0.0);
+
+    r.d.wheel(Wheel::Lines(0.0, 1.0), none());
+    assert_eq!(
+        inputs(&r.d).last().expect("single line wheel input").wheel,
+        Vec2::new(0.0, -line)
+    );
+
+    r.d.wheel(Wheel::Lines(0.5, NOTCH_LINES), none());
+    assert_eq!(
+        inputs(&r.d).last().expect("notch wheel input").wheel,
+        Vec2::new(0.5 * line, -(NOTCH_LINES * line))
+    );
+}

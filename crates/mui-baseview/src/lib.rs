@@ -87,6 +87,7 @@ use mui::vello::host::{FailureClass, Frame, GpuInit, Host, Retry, target_size};
 use mui::vello::kurbo::Affine;
 use native::{key_event, mods, mouse_button, native_cursor, native_ime};
 use native_worker::build;
+use policies::WheelState;
 pub use policies::{WheelAcceleration, WheelPolicy};
 #[cfg(target_os = "linux")]
 use raw_window_handle::HasDisplayHandle;
@@ -781,6 +782,8 @@ pub struct Handler<V> {
     /// The queue and the frame schedule.
     pub driver: Driver,
     key_routes: KeyRoutes,
+    wheel: WheelState,
+    wheel_policy: WheelPolicy,
     #[cfg(target_os = "linux")]
     x11_window: u32,
     /// Outbound drag sessions, and whether the window is a host's child.
@@ -820,6 +823,10 @@ impl<V: View> Handler<V> {
         scale: f64,
     ) -> Self {
         lock(&shared).ui.set_gpu_welding_available(false);
+        let wheel_policy = *requests
+            .wheel
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let drag = drag::Host::new(&requests);
         let mut driver = Driver::new(size, scale, Box::new(Clipboard::default()));
         let frame_log = mui::profiling::FrameLog::from_env();
@@ -848,6 +855,8 @@ impl<V: View> Handler<V> {
             applied_ime: None,
             driver,
             key_routes: KeyRoutes::new(),
+            wheel: WheelState::default(),
+            wheel_policy,
             #[cfg(target_os = "linux")]
             x11_window: 0,
             drag,
@@ -1256,6 +1265,12 @@ impl<V: View> Handler<V> {
 
     /// One native event, as baseview delivers it.
     pub fn on_event_inner(&mut self, event: &Event) -> EventStatus {
+        self.on_event_at(event, Instant::now())
+    }
+
+    /// [`Self::on_event_inner`] with the event's arrival time supplied, so
+    /// time-dependent policies (wheel acceleration) are deterministic in tests.
+    pub fn on_event_at(&mut self, event: &Event, now: Instant) -> EventStatus {
         if let Event::Window(WindowEvent::ScaleFactorChanged(_)) = event {
             self.os_rescale = true;
         }
@@ -1329,6 +1344,7 @@ impl<V: View> Handler<V> {
                     }
                 }
                 MouseEvent::WheelScrolled { delta, modifiers } => {
+                    let delta = self.wheel.apply(delta, self.wheel_policy, now);
                     let wheel = match delta {
                         ScrollDelta::Lines { x, y } => Wheel::Lines(f64::from(x), f64::from(y)),
                         ScrollDelta::Pixels { x, y } => Wheel::Pixels(f64::from(x), f64::from(y)),
