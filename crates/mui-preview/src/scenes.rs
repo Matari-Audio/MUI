@@ -345,15 +345,15 @@ impl PreviewScene for Widgets {
             .gap(S)
             .align(Align::Center),
             // Dials that fill their cells: weights 2 and 1 give a hero dial
-            // twice the small one: SMOOTH's look and DRAMA's.
+            // twice the small one: the clean look and the gradient ring.
             row([
                 knob(ui, "depth", "Depth", &mut self.depth, 0.0..=1.0)
-                    .look(Knob::smooth())
+                    .look(Knob::clean())
                     .fill_cell()
                     .flex(2)
                     .into_el(),
                 knob(ui, "mix", "Mix", &mut self.mix, 0.0..=1.0)
-                    .look(Knob::drama())
+                    .look(Knob::gradient_ring())
                     .fill_cell()
                     .flex(1)
                     .into_el(),

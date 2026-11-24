@@ -198,7 +198,7 @@ impl Dock {
                 ABN_POSCHANGED => self.sync(),
                 ABN_FULLSCREENAPP => {
                     // SAFETY: only this dock's z-order is changed; fullscreen
-                    // applications may cover it without being resized by BUFFR.
+                    // applications may cover it without being resized by the dock's owner.
                     unsafe {
                         SetWindowPos(
                             self.hwnd,

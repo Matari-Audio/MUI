@@ -716,7 +716,7 @@ impl OnDevice {
         // The renderer needs WebGL2-class limits at the adapter's own texture
         // size (`selection::requested_limits`); an adapter below them is
         // refused. The device then asks for everything the adapter offers:
-        // an app that borrows it (BUFFR's spectrogram) runs compute and
+        // an app that borrows it (e.g. a spectrogram host) runs compute and
         // storage work the quad pass does not, and an adapter always grants
         // its own limits.
         validate_renderer_requirements(

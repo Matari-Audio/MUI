@@ -8,11 +8,11 @@ description = "MUI's owned render-only GPU HAL: Vulkan (ash), Metal (objc2-metal
 
 [features]
 default = []
-# Passthrough backend for web/wasm, media and BUFFR, and for macOS/Windows
+# Passthrough backend for web/wasm, media and wgpu-sharing plugins, and for macOS/Windows
 # plugin builds until the Metal and D3D11 backends land.
 wgpu = ["dep:wgpu"]
 # Open every device through wgpu, never natively: for a plugin that shares
-# the renderer's device with its own wgpu work (BUFFR's compute). Per build,
+# the renderer's device with its own wgpu work (e.g. compute). Per build,
 # unlike MUI_HAL_BACKEND, so other plugins in the same process keep Vulkan.
 wgpu-only = ["wgpu"]
 

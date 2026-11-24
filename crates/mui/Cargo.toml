@@ -15,7 +15,7 @@ cpu = ["mui-vello/cpu"]
 cpu-threads = ["mui-vello/cpu-threads"]
 software-window = ["mui-vello/software-window"]
 # Bundle Material Symbols as the default `icon(..)` face: Rounded (~15 MB,
-# SMOOTH's look) or Outlined (~11 MB). `icons` is Rounded. A theme's
+# the default look) or Outlined (~11 MB). `icons` is Rounded. A theme's
 # `icon_font` still wins; see mui-symbols' docs to ship a subset instead.
 icons = ["icons-rounded"]
 icons-rounded = ["mui-scene/symbols-rounded"]

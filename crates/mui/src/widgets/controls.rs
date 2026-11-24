@@ -259,18 +259,17 @@ struct Look {
 /// roles by default, so it follows the theme. Set it per control with
 /// [`Control::look`]; a bipolar arc comes from the domain's `origin`.
 ///
-/// The presets are the Matari plugins' knobs, so they can share them:
-/// [`Knob::smooth`] (the default), [`Knob::k`] (KURV and KONTRA),
-/// [`Knob::drama`] and [`Knob::buffr`].
+/// Presets: [`Knob::clean`] (the default), [`Knob::domed`],
+/// [`Knob::gradient_ring`] and [`Knob::sunken_dot`].
 ///
 /// ```
 /// use mui::prelude::*;
 /// let mut ui = Ui::default();
 /// let mut v = 0.5;
-/// let k = knob(&mut ui, "depth", "Depth", &mut v, 0.0..=1.0).look(Knob::k());
+/// let k = knob(&mut ui, "depth", "Depth", &mut v, 0.0..=1.0).look(Knob::domed());
 /// // Or any part of a preset.
-/// let thin = Knob { width: 0.08, ..Knob::smooth() };
-/// assert_eq!(Knob::default(), Knob::smooth());
+/// let thin = Knob { width: 0.08, ..Knob::clean() };
+/// assert_eq!(Knob::default(), Knob::clean());
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Knob {
@@ -305,9 +304,9 @@ pub struct Knob {
 ///
 /// ```
 /// use mui::prelude::*;
-/// // BUFFR's dot riding the ring.
+/// // A dot riding the ring.
 /// let dot = Pointer { from: 0.86, to: 0.86, width: 0.0, dot: 0.13, fill: None };
-/// let k = Knob { pointer: Some(dot), ..Knob::smooth() };
+/// let k = Knob { pointer: Some(dot), ..Knob::clean() };
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct Pointer {
@@ -320,9 +319,9 @@ pub struct Pointer {
 }
 
 impl Knob {
-    /// SMOOTH's knob, MUI's default: a thick square-cut track at the edge,
-    /// an ink arc, and a raised face sitting on the ring with a soft shadow.
-    pub fn smooth() -> Self {
+    /// MUI's default: a thick square-cut track at the edge, an ink arc, and
+    /// a raised face sitting on the ring with a soft shadow.
+    pub fn clean() -> Self {
         Self {
             ring: 0.92,
             width: 0.14,
@@ -335,9 +334,9 @@ impl Knob {
             pointer: None,
         }
     }
-    /// The K knob (KURV, KONTRA): a solid track, the role's arc, a domed
-    /// face lit from above, and an ink pointer line.
-    pub fn k() -> Self {
+    /// A solid track, the role's arc, a domed face lit from above, and an
+    /// ink pointer line.
+    pub fn domed() -> Self {
         Self {
             ring: 0.755,
             width: 0.105,
@@ -356,9 +355,9 @@ impl Knob {
             }),
         }
     }
-    /// DRAMA's knob: a faint hairline track and an ink arc that brightens
-    /// along its sweep, with no face, so an icon or reading sits bare.
-    pub fn drama() -> Self {
+    /// A faint hairline track and an ink arc that brightens along its sweep,
+    /// with no face, so an icon or reading sits bare.
+    pub fn gradient_ring() -> Self {
         Self {
             ring: 0.885,
             width: 0.16,
@@ -377,9 +376,9 @@ impl Knob {
             pointer: None,
         }
     }
-    /// BUFFR's knob: a sunken face, a soft track, the role's arc and a dot
-    /// riding the ring at the value.
-    pub fn buffr() -> Self {
+    /// A sunken face, a soft track, the role's arc and a dot riding the ring
+    /// at the value.
+    pub fn sunken_dot() -> Self {
         Self {
             ring: 0.86,
             width: 0.13,
@@ -398,10 +397,17 @@ impl Knob {
             }),
         }
     }
+    /// Old name of [`Knob::domed`].
+    // TODO(visibility-guard): delete once plugins/kontra/crates/app/ui/src/kit.rs
+    // calls `Knob::domed()` (it was leased when the presets were renamed).
+    #[doc(hidden)]
+    pub fn k() -> Self {
+        Self::domed()
+    }
 }
 impl Default for Knob {
     fn default() -> Self {
-        Self::smooth()
+        Self::clean()
     }
 }
 
@@ -426,7 +432,7 @@ impl Look {
             description: None,
             step: None,
             format: None,
-            knob: Knob::smooth(),
+            knob: Knob::clean(),
             flat: false,
             fill_cell: false,
             icons: [None; 2],
@@ -762,14 +768,14 @@ impl Control {
         self.look.accent = Some(fill.into());
         self
     }
-    /// How a knob is painted: [`Knob::smooth`] unless told, or another
-    /// preset such as [`Knob::drama`]. Other controls ignore it.
+    /// How a knob is painted: [`Knob::clean`] unless told, or another
+    /// preset such as [`Knob::gradient_ring`]. Other controls ignore it.
     ///
     /// ```
     /// use mui::prelude::*;
     /// let mut ui = Ui::default();
     /// let mut v = 0.5;
-    /// let k = knob(&mut ui, "mix", "Mix", &mut v, 0.0..=1.0).look(Knob::drama());
+    /// let k = knob(&mut ui, "mix", "Mix", &mut v, 0.0..=1.0).look(Knob::gradient_ring());
     /// ```
     pub fn look(mut self, knob: Knob) -> Self {
         self.look.knob = knob;

@@ -21,7 +21,7 @@ pub enum DialogKind {
     PickFolder { multiple: bool },
 }
 
-/// File extensions without a leading dot, e.g. `wav`, `kurvy`, or `*`.
+/// File extensions without a leading dot, e.g. `wav`, `json`, or `*`.
 /// An empty extension list offers no filter; these are not MIME types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DialogFilter {

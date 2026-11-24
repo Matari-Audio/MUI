@@ -32,8 +32,8 @@ API:
   on macOS). It does not resize the window; call `resize(logical)` after it.
 - `WindowEvent::ScaleFactorChanged(f64)`: the platform scale changed.
 - `Window::set_keyboard_capture` / `WindowContext::set_keyboard_capture`
-  (KURV K23): Windows only; with capture off, keys stay in the host's pump.
-- `pin_current_image_for_detached_work()` (KURV K24/K27): pins the plugin
+  (K23): Windows only; with capture off, keys stay in the host's pump.
+- `pin_current_image_for_detached_work()` (K24/K27): pins the plugin
   binary so a detached render thread can never outlive its code.
 
 Behaviour:
@@ -50,8 +50,8 @@ Behaviour:
   forwarded keys never reach the host as note-off/note-on pairs; without
   XKB, core auto-repeat pairs become one repeated key-down (MOOSE X01);
   ignored key events are forwarded to the embed parent, with synthesized
-  key-ups on focus loss and close (KURV K26); `Xft.dpi` clamped to 0.5-4
-  (KURV K25); override and fallback scale honoured at creation.
+  key-ups on focus loss and close (K26); `Xft.dpi` clamped to 0.5-4
+  (K25); override and fallback scale honoured at creation.
 - macOS: the backing scale is re-read when the view moves into a window, so a
   view created before the host attached it gets its real scale.
 

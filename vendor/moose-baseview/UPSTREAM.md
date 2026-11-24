@@ -39,7 +39,7 @@ configuration or change other platforms. Renderers must still request alpha
 presentation, and compositor blur remains an application/platform concern.
 
 The default remains `FrameDemand::Continuous` and `draw` calls legacy `on_frame`.
-This preserves existing BUFFR polling of background preferences, meters and GPU
+This preserves existing host polling of background preferences, meters and GPU
 initialization. Handlers implementing current draw-only logic may override demand
 to `Idle` and wake explicitly. Existing input callbacks still trigger a frame,
 including for Idle handlers: that is the fork's input-barrier compatibility

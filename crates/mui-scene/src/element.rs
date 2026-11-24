@@ -826,7 +826,7 @@ pub fn spacer() -> El {
 ///
 /// ```
 /// use mui_scene::prelude::*;
-/// let b = bar("Filter", title("KURV"), row![text("A"), text("B")]);
+/// let b = bar("Filter", title("Synth"), row![text("A"), text("B")]);
 /// assert_eq!(b.children().len(), 3);
 /// ```
 pub fn bar(start: impl IntoEl, middle: impl IntoEl, end: impl IntoEl) -> El {

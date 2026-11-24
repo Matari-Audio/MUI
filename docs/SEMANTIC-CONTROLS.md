@@ -111,10 +111,10 @@ a linear plain-value control. `Bridge::toggle` has the same 0/1 contract as
 use mui::prelude::*;
 let mut ui = Ui::default();
 let (mut depth, mut mix, mut hz) = (0.5, 0.5, 440.0);
-// Knobs sized by their cells: 2:1, in DRAMA's look.
+// Knobs sized by their cells: 2:1, in the gradient-ring look.
 let dials = col![
-    knob(&mut ui, "depth", "Depth", &mut depth, 0.0..=1.0).look(Knob::drama()).fill_cell().grow(2),
-    knob(&mut ui, "mix", "Mix", &mut mix, 0.0..=1.0).look(Knob::drama()).fill_cell().grow(1),
+    knob(&mut ui, "depth", "Depth", &mut depth, 0.0..=1.0).look(Knob::gradient_ring()).fill_cell().grow(2),
+    knob(&mut ui, "mix", "Mix", &mut mix, 0.0..=1.0).look(Knob::gradient_ring()).fill_cell().grow(1),
 ]
 .h(320);
 // Icon buttons: the label is the accessible name and the tooltip.
