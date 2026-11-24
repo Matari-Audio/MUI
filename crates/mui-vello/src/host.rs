@@ -281,6 +281,7 @@ pub fn graphics_api(backend: mui_hal::Backend) -> mui_present::GraphicsApi {
     use mui_present::GraphicsApi as A;
     match backend {
         mui_hal::Backend::Vulkan => A::Vulkan,
+        mui_hal::Backend::D3d11 => A::D3D11,
         mui_hal::Backend::Dx12 => A::D3D12,
         mui_hal::Backend::Metal => A::Metal,
         _ => A::Software,

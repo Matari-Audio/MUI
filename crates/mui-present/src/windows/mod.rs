@@ -1,7 +1,11 @@
-//! Windows native CPU presentation: a retained `WM_PAINT` `CreateDIBSection`
-//! presenter. GPU frames go through wgpu's DirectComposition visual
-//! (`Dx12SwapchainKind::DxgiFromVisual`) on the same `HWND`.
+//! Windows native presentation:
+//!
+//! - [`DibWmPaintPresenter`]: retained `WM_PAINT` `CreateDIBSection` CPU presenter.
+//! - [`DirectCompositionPresenter`]: owned DirectComposition visual + flip-model
+//!   DXGI 1.2 swapchain (`CreateSwapChainForComposition`) for D3D11 GPU frames.
 
+pub mod dcomp;
 pub mod dib;
 
+pub use dcomp::DirectCompositionPresenter;
 pub use dib::DibWmPaintPresenter;

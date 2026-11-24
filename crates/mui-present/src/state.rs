@@ -17,7 +17,7 @@ pub enum PresentationMode {
 /// Concrete OS presentation mechanism backing a surface.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PresentationBackend {
-    /// Windows DirectComposition visual + flip-model DXGI swapchain (D3D12).
+    /// Windows DirectComposition visual + flip-model DXGI swapchain (D3D11/D3D12).
     WinDirectComposition,
     /// Windows Vulkan `VkSwapchainKHR` on the `HWND` (when D3D12 is unavailable).
     WinVkSwapchain,
@@ -62,7 +62,9 @@ impl PresentationBackend {
             GraphicsApi::Metal | GraphicsApi::Vulkan if cfg!(target_os = "macos") => {
                 Self::MacMetalLayer
             }
-            GraphicsApi::D3D12 if cfg!(target_os = "windows") => Self::WinDirectComposition,
+            GraphicsApi::D3D11 | GraphicsApi::D3D12 if cfg!(target_os = "windows") => {
+                Self::WinDirectComposition
+            }
             GraphicsApi::Vulkan if cfg!(target_os = "windows") => Self::WinVkSwapchain,
             GraphicsApi::Vulkan if cfg!(target_os = "linux") => Self::LinuxVkSwapchain,
             _ => Self::Offscreen,
@@ -91,6 +93,8 @@ pub enum GraphicsApi {
     Software,
     /// Vulkan.
     Vulkan,
+    /// Direct3D 11.
+    D3D11,
     /// Direct3D 12.
     D3D12,
     /// Metal.
@@ -240,6 +244,21 @@ mod tests {
             assert_eq!(
                 PresentationBackend::for_gpu(GraphicsApi::D3D12),
                 PresentationBackend::Offscreen
+            );
+            assert_eq!(
+                PresentationBackend::for_gpu(GraphicsApi::D3D11),
+                PresentationBackend::Offscreen
+            );
+        }
+        #[cfg(target_os = "windows")]
+        {
+            assert_eq!(
+                PresentationBackend::for_gpu(GraphicsApi::D3D11),
+                PresentationBackend::WinDirectComposition
+            );
+            assert_eq!(
+                PresentationBackend::for_gpu(GraphicsApi::D3D12),
+                PresentationBackend::WinDirectComposition
             );
         }
     }

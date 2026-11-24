@@ -1550,8 +1550,15 @@ dependencies = [
  "bitflags",
  "mui-present",
  "mui-shaders",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "objc2-metal",
+ "objc2-quartz-core",
  "raw-window-handle",
  "wgpu",
+ "windows",
 ]
 
 [[package]]
@@ -1614,6 +1621,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
+ "windows",
  "windows-sys 0.61.2",
  "x11rb",
 ]
