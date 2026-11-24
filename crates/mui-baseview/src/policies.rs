@@ -19,7 +19,7 @@ pub struct WheelPolicy {
 impl Default for WheelPolicy {
     fn default() -> Self {
         Self {
-            lines_per_notch: 1.0,
+            lines_per_notch: mui::host::NOTCH_LINES as f32,
             acceleration: WheelAcceleration::Disabled,
         }
     }

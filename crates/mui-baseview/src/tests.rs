@@ -1744,3 +1744,111 @@ fn an_os_rescale_tells_the_view_its_logical_size_once() {
     handler.resized(size(1.5));
     assert_eq!(lock(&shared).view.0, [(1.5, (200, 100))]);
 }
+
+#[test]
+fn direct_handler_applies_wheel_policy_for_lines_fling_and_pixel_passthrough() {
+    use mui::prelude::Vec2;
+
+    #[derive(Default)]
+    struct WheelRecorder(Vec<Vec2>);
+    impl View for WheelRecorder {
+        fn build(&mut self, _: &mut Ui, input: &Input) -> El {
+            if input.wheel != Vec2::ZERO {
+                self.0.push(input.wheel);
+            }
+            mui::prelude::block(200., 200.)
+        }
+        fn changed(&mut self) -> bool {
+            false
+        }
+        fn request_resize(&mut self, _: u32, _: u32) -> bool {
+            false
+        }
+    }
+
+    let make_handler = |policy: Option<WheelPolicy>| {
+        let shared = Arc::new(Mutex::new(Shared {
+            ui: Ui::default(),
+            view: WheelRecorder::default(),
+        }));
+        let requests = Arc::new(Requests::default());
+        if let Some(policy) = policy {
+            requests.set_wheel_policy(policy);
+        }
+        let mut h = Handler::new(Arc::clone(&shared), requests, (200, 200), 1.0);
+        assert!(h.step(), "initial layout frame");
+        let line = lock(&shared).ui.theme().text;
+        (h, shared, line)
+    };
+
+    let wheel_lines = |x: f32, y: f32| {
+        Event::Mouse(MouseEvent::WheelScrolled {
+            delta: ScrollDelta::Lines { x, y },
+            modifiers: Modifiers::empty(),
+        })
+    };
+    let wheel_pixels = |x: f32, y: f32| {
+        Event::Mouse(MouseEvent::WheelScrolled {
+            delta: ScrollDelta::Pixels { x, y },
+            modifiers: Modifiers::empty(),
+        })
+    };
+
+    // The default policy scrolls one notch NOTCH_LINES text rows, exactly once.
+    let notch = mui::host::NOTCH_LINES;
+    let (mut default_h, default_shared, line) = make_handler(None);
+    default_h.on_event_inner(&wheel_lines(0.0, 1.0));
+    default_h.on_event_inner(&wheel_pixels(2.5, -7.5));
+    assert!(default_h.step());
+    assert_eq!(
+        lock(&default_shared).view.0,
+        [Vec2::new(0.0, -(notch * line)), Vec2::new(2.5, 7.5)]
+    );
+
+    // Linear NOTCH_LINES policy scales line notches and leaves pixels exact.
+    let linear_policy =
+        WheelPolicy::new(notch as f32, WheelAcceleration::Disabled).expect("valid linear policy");
+    let (mut linear_h, linear_shared, line) = make_handler(Some(linear_policy));
+    linear_h.on_event_inner(&wheel_lines(0.0, 1.0));
+    linear_h.on_event_inner(&wheel_lines(0.0, 1.0));
+    linear_h.on_event_inner(&wheel_pixels(1.5, -4.0));
+    assert!(linear_h.step());
+    assert_eq!(
+        lock(&linear_shared).view.0,
+        [
+            Vec2::new(0.0, -(notch * line)),
+            Vec2::new(0.0, -(notch * line)),
+            Vec2::new(1.5, 4.0),
+        ]
+    );
+
+    // Fling policy accelerates rapid same-direction notches, resets on reversal,
+    // and passes pixel deltas through untouched.
+    let fling_policy =
+        WheelPolicy::new(notch as f32, WheelAcceleration::Fling).expect("valid fling policy");
+    // Event times are supplied, so scheduler pauses cannot reset the run.
+    let (mut fling_h, fling_shared, line) = make_handler(Some(fling_policy));
+    let t0 = Instant::now();
+    let at = |ms: u64| t0 + Duration::from_millis(ms);
+    fling_h.on_event_at(&wheel_lines(0.0, 1.0), at(0));
+    fling_h.on_event_at(&wheel_lines(0.0, 1.0), at(10));
+    fling_h.on_event_at(&wheel_lines(0.0, 1.0), at(20));
+    fling_h.on_event_at(&wheel_lines(0.0, -1.0), at(30));
+    fling_h.on_event_at(&wheel_pixels(-3.0, 6.0), at(40));
+    // A pause of 90 ms or more ends the run.
+    fling_h.on_event_at(&wheel_lines(0.0, -1.0), at(50));
+    fling_h.on_event_at(&wheel_lines(0.0, -1.0), at(140));
+    assert!(fling_h.step());
+    assert_eq!(
+        lock(&fling_shared).view.0,
+        [
+            Vec2::new(0.0, -(notch * 1.0 * line)),
+            Vec2::new(0.0, -(notch * 1.25 * line)),
+            Vec2::new(0.0, -(notch * 1.5 * line)),
+            Vec2::new(0.0, notch * 1.0 * line),
+            Vec2::new(-3.0, -6.0),
+            Vec2::new(0.0, notch * 1.25 * line),
+            Vec2::new(0.0, notch * 1.0 * line),
+        ]
+    );
+}
