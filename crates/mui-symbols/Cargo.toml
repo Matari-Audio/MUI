@@ -11,7 +11,7 @@ workspace = true
 
 [features]
 # The full upstream Material Symbols variable fonts, as `font::ROUNDED` /
-# `font::OUTLINED` (about 15 and 11 MB). `font` is Rounded, SMOOTH's look.
+# `font::OUTLINED` (about 15 and 11 MB). `font` is Rounded, the default look.
 font = ["font-rounded"]
 font-rounded = []
 font-outlined = []

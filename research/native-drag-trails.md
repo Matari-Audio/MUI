@@ -17,9 +17,9 @@ The regression was reproduced against merged main
 `55f6739080002af2ac8d72eec4e5c93126bd6091`. A six-point curved stroke spanning two
 drains, with its press already delivered, reached the actual Driver/view consumer
 as only `(35,20), (75,30)`. The fixed adapter retains all six points. The matching
-BUFFR `NativeInputs` regression was run from its real source module through a
+host plugin's `NativeInputs` regression was run from its real source module through a
 temporary test-only inclusion in this crate; that inclusion was removed before
-committing. BUFFR's spectral paint uses this same Driver trail contract.
+committing. That plugin's spectral paint uses this same Driver trail contract.
 
 Local validation uses Rust 1.98.1, jobs 2, debug information off, and incremental
 compilation off:
@@ -30,7 +30,7 @@ compilation off:
 - Native CPU presentation/reopen fixture: passed with GPU backends unavailable.
 - Strict all-feature/all-target adapter Clippy: passed. Existing dependency-capped
   `zed-xim` lifetime warnings remain unchanged.
-- BUFFR module tests: 6 passed, including 1,000 held samples, multiple buttons,
+- Host plugin module tests: 6 passed, including 1,000 held samples, multiple buttons,
   unfocus/close resets, 100,000-sample hover/resize bursts, and edge barriers;
   strict lib/test Clippy passed with the temporary inclusion.
 - Root and media locked/offline metadata, six MUI pin-guard tests, the verify

@@ -1067,7 +1067,7 @@ impl EventLoop {
 
     /// Hands a key event the handler ignored to the embed parent, so host
     /// shortcuts (transport, undo, ...) keep working while the editor has
-    /// focus. Ported from KURV (K26).
+    /// focus. Ported from a host plugin (K26).
     fn forward_key_event(&mut self, mut event: KeyPressEvent) {
         let Some(parent) = self.window.visibility_state.parent_id() else {
             return;

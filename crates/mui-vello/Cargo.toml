@@ -14,7 +14,7 @@ reporting = ["dep:baseview", "dep:serde_json", "dep:sha2", "dep:ureq", "dep:hick
 # pass, with no compute shaders and no storage buffers. `vello_cpu` rasterises
 # glyph masks for its atlas and the frames the pass refuses.
 gpu-quad = ["cpu", "dep:pollster", "dep:mui-shaders"]
-# Also open devices through wgpu (`mui-hal`'s passthrough): media, BUFFR and
+# Also open devices through wgpu (`mui-hal`'s passthrough): media, wgpu-sharing plugins and
 # the web, which share the device with their own wgpu work.
 wgpu = ["mui-hal/wgpu"]
 # A CPU rasteriser: snapshot tests, thumbnails, hosts with no GPU.

@@ -11,7 +11,7 @@
 //! - D3D11 (`windows`, Windows): HLSL SM 5.0 / precompiled DXBC from
 //!   `mui-shaders`, presentation through `mui-present`'s DirectComposition
 //!   swapchain.
-//! - wgpu (feature `wgpu`): passthrough for web, media and BUFFR, and interim
+//! - wgpu (feature `wgpu`): passthrough for web, media and wgpu-sharing plugins, and interim
 //!   default on macOS and Windows while OS-CI parity is pending. It also wraps
 //!   a device a host made itself (`Device::from_wgpu`).
 //!

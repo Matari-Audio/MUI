@@ -263,7 +263,7 @@ public function and a test behind it.
       lens and grain, and subframe motion blur averaged in linear light
       (`gain_reel --stage`). Layers are mipmapped, premultiplied linear
       light, so distant fine detail averages instead of shimmering.
-- [x] Intrinsic gaps a plug-in editor (SMOOTH) hit: per-axis token
+- [x] Intrinsic gaps a plug-in editor hit: per-axis token
       padding `.pad((S, Xs))`; `.at_pct(x, y)` placement at a share of the
       parent; `.turn(Turn::Ccw)` quarter turns that keep layout intrinsic
       (gallery "Rails and ticks"); pinned floats measured at their content
@@ -274,7 +274,7 @@ public function and a test behind it.
       Material Symbols face behind `icons*` with `tools/subset_symbols.py`;
       `select` returning a restylable `Select`; `Ui::set_tips(TipPolicy)`.
 - [x] Controls from the same pass: knobs that fill their cell
-      (`fill_cell`), shared knob looks (`Knob::smooth`/`k`/`drama`/`buffr`,
+      (`fill_cell`), shared knob looks (`Knob::clean`/`domed`/`gradient_ring`/`sunken_dot`,
       `Control::look`, `Pointer`), icon buttons
       (`.icon`, `.icon_end`, `icon_button`), typed entry in units
       (`Domain::format`/`parse`, filled by host parameter bridges) and
@@ -282,7 +282,7 @@ public function and a test behind it.
 
 ## Missing
 
-- [ ] Follow-ups from the SMOOTH gaps: `aspect` read through a turn by
+- [ ] Follow-ups from the knob-look gaps: `aspect` read through a turn by
       its parent and a tested turned root; `at_pct`/`turn` forwarded on widget
       `Response`s; an element shadow cast from a canvas's tagged draws (today
       `.outline(f)` or `Draw::shadow`); round caps on the GPU pass differ from
@@ -292,9 +292,9 @@ public function and a test behind it.
       bundled symbol fonts; drop the now-redundant Start/Start anchors in the
       overlay popover and tooltip; scale a filling knob's reading with its
       diameter (needs a second pass or container-relative text); a theme-level
-      default `Knob`; KURV, BUFFR and DRAMA painting `Knob` presets instead of
-      their own knobs (KURV can, with `Control::modulation`; BUFFR needs a dot
-      outline and hover glow, DRAMA an arc wider than its track).
+      default `Knob`; plugins painting `Knob` presets instead of their own knobs
+      (some can now, with `Control::modulation`; others need a dot outline and
+      hover glow, or an arc wider than its track).
 - [ ] `Ui::set_text` swaps one line: a wrapped label re-shapes to a single
       run rather than breaking again, because the swap deliberately does no
       layout. Re-breaking needs the measure pass it is avoiding.

@@ -19,12 +19,8 @@ jobs:
       matrix:
         repo:
           - Matari-Audio/drop-recorder
-          - Matari-Audio/KORREKT
-          - Matari-Audio/KURV
-          - Matari-Audio/pitch-tracker
           - Matari-Audio/relay
           - DerpcatMusic/KONTRA
-          - DerpcatMusic/DIFFUSE
     steps:
       - if: env.TOKEN != ''
         run: gh api "repos/${{ matrix.repo }}/dispatches" -f event_type=mui-main

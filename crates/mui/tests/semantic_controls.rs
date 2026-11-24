@@ -720,9 +720,9 @@ fn a_knob_look_change_repaints_a_still_knob() {
             .map(|p| Arc::clone(&p.path))
             .collect::<Vec<_>>()
     };
-    let a = paths(&mut ui, Knob::smooth());
-    let b = paths(&mut ui, Knob::k());
-    let c = paths(&mut ui, Knob::k());
+    let a = paths(&mut ui, Knob::clean());
+    let b = paths(&mut ui, Knob::domed());
+    let c = paths(&mut ui, Knob::domed());
     assert!(
         !Arc::ptr_eq(&a[0], &b[0]),
         "a new style must not reuse the old paths"
@@ -752,12 +752,12 @@ fn each_knob_preset_paints_its_parts() {
     let smooth = draws(&mut ui, Knob::default());
     assert_eq!(smooth.len(), 4, "track, arc, face shadow, face: {smooth:?}");
     assert!(smooth[..2].iter().all(|c| *c == Cap::Butt), "square-cut");
-    let k = draws(&mut ui, Knob::k());
+    let k = draws(&mut ui, Knob::domed());
     assert_eq!(k.len(), 4, "track, arc, face, pointer line: {k:?}");
     assert!(k.iter().all(|c| *c == Cap::Round));
-    assert_eq!(draws(&mut ui, Knob::buffr()).len(), 4, "the dot");
+    assert_eq!(draws(&mut ui, Knob::sunken_dot()).len(), 4, "the dot");
     assert!(
-        draws(&mut ui, Knob::drama()).len() <= 3,
+        draws(&mut ui, Knob::gradient_ring()).len() <= 3,
         "no shadow, no pointer"
     );
 }

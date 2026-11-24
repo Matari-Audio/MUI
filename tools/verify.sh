@@ -25,7 +25,24 @@ cargo test "${scope[@]}" --all-features --locked --offline
 fi
 # A workflow that does not parse fails on every push without running a job.
 if ! git diff --quiet "$base"...HEAD -- .github tools/ci; then
-"${ACTIONLINT:-actionlint}" -shellcheck= .github/workflows/*.yml
+# actionlint resolves reusable `./.github/workflows/...` paths against the
+# enclosing `.git` root; isolate `.github` when running inside a monorepo.
+if [ "$(git rev-parse --show-toplevel 2>/dev/null || true)" != "$ROOT" ]; then
+  al_tmp="$(mktemp -d)"
+  mkdir -p "$al_tmp/.git"
+  ln -s "$ROOT/.github" "$al_tmp/.github"
+  al_bin="${ACTIONLINT:-actionlint}"
+  # Resolve before leaving ROOT: a bare name via PATH (which may hold relative
+  # entries), then any relative result against ROOT, the current directory.
+  if [[ $al_bin != */* ]]; then al_bin="$(command -v "$al_bin" || printf %s "$al_bin")"; fi
+  if [[ $al_bin == */* && $al_bin != /* ]]; then al_bin="$ROOT/$al_bin"; fi
+  al_rc=0
+  (cd "$al_tmp" && "$al_bin" -shellcheck= .github/workflows/*.yml) || al_rc=$?
+  rm -rf "$al_tmp"
+  if [ "$al_rc" -ne 0 ]; then exit "$al_rc"; fi
+else
+  "${ACTIONLINT:-actionlint}" -shellcheck= .github/workflows/*.yml
+fi
 python3 -m unittest discover -s tools/ci
 fi
 if ! git diff --quiet "$base"...HEAD -- media; then

@@ -1,4 +1,4 @@
-//! MOOSE addition (KURV K24/K27): keep the plug-in image mapped for detached work.
+//! MOOSE addition (K24/K27): keep the plug-in image mapped for detached work.
 
 /// Permanently pins the executable image (DLL / dylib / shared object) that contains
 /// baseview, so that a thread which outlives the plug-in instance (for example a render

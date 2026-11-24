@@ -4,7 +4,7 @@ Every entry is `old -> new`. Crates are listed in dependency order.
 
 ## Unreleased
 
-### Intrinsic gaps found by SMOOTH (`mui/intrinsic-gaps`)
+### Intrinsic gaps found by a plug-in editor (`mui/intrinsic-gaps`)
 
 Additive unless marked **breaking**.
 
@@ -78,11 +78,12 @@ Additive unless marked **breaking**.
   `ring`, `width`, `inset` (shares of the radius), `track`, `arc`, `face`
   (fills, roles by default), `cap`, `shadow: Option<(blur share, Fill)>` and
   `pointer: Option<Pointer { from, to, width, dot, fill }>` (a line and/or dot
-  at the value's angle; `fill: None` takes the arc's colour). Presets are the
-  plugins' knobs: `Knob::smooth()` (the default), `Knob::k()` (KURV, KONTRA),
-  `Knob::drama()` (gradient arc, no face), `Knob::buffr()` (dot on the ring).
+  at the value's angle; `fill: None` takes the arc's colour). Presets:
+  `Knob::clean()` (the default), `Knob::domed()` (domed face, pointer line),
+  `Knob::gradient_ring()` (gradient arc, no face), `Knob::sunken_dot()` (dot
+  on the ring).
   They are `fn`s, not `const`s, because a gradient fill boxes.
-  **Breaking:** the default knob is now SMOOTH's (square-cut thick track, ink
+  **Breaking:** the default knob is now `Knob::clean()` (square-cut thick track, ink
   arc, raised shadowed face); `Dial`, `Dial::DEFAULT`, `Dial::RING` and
   `Control::dial` are gone (`Knob { .. }`, `Control::look`), and
   `Control::dial_color` is `Control::accent`. A bipolar arc still comes from
@@ -137,7 +138,7 @@ no blit. Closing waits (at most 500 ms) for the worker to drop the surface.
 macOS keeps the readback transport for now; `MUI_PRESENT=readback` asks for
 it anywhere. `mui_baseview::{Presenter, frost, sticky}` are new: a direct
 presenter for hosts whose model runs on the window thread, blur-behind and
-keep-above window policies (moved from BUFFR).
+keep-above window policies (moved from a host plugin).
 
 GPU crash guard removed. Every editor or window open tries the GPU; a failed
 adapter, device or surface puts that window on the CPU and the next open tries
@@ -263,9 +264,9 @@ GPU) and this one; a plugin that reaches MUI only through `mui` widgets,
 Checked by: the diff of `crates/*` since `0c865588` outside `mui-vello` is
 the `Cargo.toml` feature lines above and nothing else; the `mui-vello` public
 diff is the items above (`git diff 0c865588 HEAD -- crates/mui-vello/src`,
-`pub` lines). A grep of KURV, BUFFR, KONTRA, KORREKT and relay for `Classic`,
+`pub` lines). A grep of the in-tree plugins for `Classic`,
 `GpuRenderer`, `present_with_overlay`, `render_with_overlay`, `set_texture` and
-`mui::vello::vello`, and for who names `gpu-effects` (BUFFR, and moose's
+`mui::vello::vello`, and for who names `gpu-effects` (one plugin, and moose's
 `crates/moose-mui`), was done by an earlier worker on this branch and not
 repeated here; Polaar was not found on that machine and is unchecked.
 
