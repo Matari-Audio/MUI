@@ -303,3 +303,33 @@ fn a_toggle_and_a_drag_value_are_named_by_their_label() {
     let unnamed = toggle(&mut ui, "sw2", "", &mut on).el.el();
     assert_eq!(name(unnamed), None, "an empty label names nothing");
 }
+
+/// An instant domain draws the value of this frame: a value set from
+/// outside lands at once and nothing is left animating.
+#[test]
+fn an_instant_slider_thumb_lands_on_the_value_in_one_frame() {
+    let mut ui = Ui::default();
+    let frame = |ui: &mut Ui, mut v: f64| {
+        let r = slider(ui, "s", "S", &mut v, Domain::new(0.0..=1.0).instant());
+        let tree = col([r.el.el()]).w(400.);
+        let animating = ui
+            .frame(tree, None, Input::default(), 0.016)
+            .unwrap()
+            .animating;
+        let scene = ui.scene().unwrap();
+        let lane = scene.surface("s").unwrap().frame;
+        let grip = lane.size.height * 0.35 / 0.45;
+        let thumb = scene
+            .surfaces()
+            .find(|s| (s.frame.size.width - grip).abs() < 1e-6 && s.frame.y >= lane.y)
+            .expect("the thumb")
+            .frame;
+        ((thumb.x - lane.x) / (lane.size.width - grip), animating)
+    };
+    assert_eq!(frame(&mut ui, 0.0).0, 0.0);
+    let (t, animating) = frame(&mut ui, 1.0);
+    assert!(
+        (t - 1.0).abs() < 1e-9 && !animating,
+        "at {t}, animating {animating}"
+    );
+}
