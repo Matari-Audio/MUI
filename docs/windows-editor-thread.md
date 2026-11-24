@@ -121,15 +121,18 @@ or an error. Native expose/WM_PAINT repairs retained bitmap regions without a ne
 scene build/raster. Buffer-age restoration may copy old retained pixels into a
 fresh native transport buffer; that is distinct from repainting the scene.
 
-Native Windows blits only changed rectangles. X11 uses softbuffer damage and
-buffer-age repair. AppKit uses a retained CoreAnimation bitmap mosaic: new dirty
-images replace/split overlapping cropped layers; unchanged layers retain their
-CGImages. No AppKit view leaves its native thread. This avoids softbuffer's AppKit
-full-image upload on every patch. Direct wgpu-surface clients still need to restore
-a newly acquired swapchain image from retained pixels; wgpu does not expose
-Present1 dirty rectangles. Their scene rasterization is incremental, but that
-surface restoration is not a claim of platform dirty-present support. Floating
-Wayland layer-shell editors continue to run through `mui-baseview::open_floating_threaded`.
+Native Windows blits only changed rectangles via `mui-present`. X11 uses
+`mui-present`'s owned damage-aware CPU blitter and buffer-age repair. AppKit uses
+a retained CoreAnimation bitmap mosaic: new dirty images replace/split overlapping
+cropped layers; unchanged layers retain their CGImages. No AppKit view leaves its
+native thread, avoiding full-image AppKit uploads on every patch (without any
+`softbuffer` dependency). Direct GPU-surface clients (`mui-hal` / `mui-present` on
+Linux Vulkan; `wgpu` fallback on macOS/Windows until native HAL backends land)
+still need to restore a newly acquired swapchain image from retained pixels;
+swapchain presentation does not expose Present1 dirty rectangles. Their scene
+rasterization is incremental, but that surface restoration is not a claim of
+platform dirty-present support. Floating Wayland layer-shell editors continue to
+run through `mui-baseview::open_floating_threaded`.
 
 Set `MUI_DEBUG_DAMAGE=1` before launching the host to flash damage borders. Native
 Windows/X11 restore clean retained pixels after the diagnostic flash without scene
@@ -187,10 +190,10 @@ and adapter owner, with a thin moose shim. No moose files are edited here.
    Pin `mui`/`mui-baseview` together to the tested MUI revision in moose-mui.
 2. Move MUI's vendored backend and `mui-baseview` into MUI's future `crates/mui-host`,
    with a compatibility re-export during adoption. Change moose's window imports
-   to this one runtime. Delete moose-gui, moose-gpu, moose-cpu, moose-gui-types,
-   moose-gui-utils and moose-font as their consumers move to MUI; route standalone
-   through the same MUI runtime. Port then remove moose-gui's old WindowHandler
-   resize/frame policies and moose-egui's separate editor renderer.
+   to this one runtime. (Status: legacy `moose-gui`, `moose-gpu`, `moose-cpu`,
+   `moose-gui-types`, `moose-gui-utils`, `moose-font`, and `moose-egui` have
+   since been retired and deleted; plugin and standalone editors run on
+   `mui-baseview`, `mui-present`, and `mui-hal`.)
 3. Port moose-mui `src/editor.rs` open/close/state_changed/Drop to the Requests
    native-start/render-lifecycle/render-work hooks: host/native callbacks must
    not acquire Shared while a worker can hold it. Bind a host pump before worker
@@ -304,4 +307,3 @@ remain separate migrations.
 * [Microsoft: SendMessage blocks until the receiver processes it](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendmessage).
 * [Microsoft: DestroyWindow destroys child windows](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-destroywindow).
 * [wgpu DX12 compiler policy](https://wgpu.rs/doc/src/wgpu_types/backend.rs.html).
-* [softbuffer damage presentation contract](https://docs.rs/softbuffer/0.4.8/softbuffer/struct.Buffer.html#method.present_with_damage).

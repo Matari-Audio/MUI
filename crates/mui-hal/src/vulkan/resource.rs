@@ -4,11 +4,12 @@
 //! descriptor pool per bind group: MUI holds hundreds, not thousands.
 
 use std::ffi::CString;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
-use super::{Cmd, Device, DeviceShared, Error, err};
+use super::{Cmd, Device, DeviceShared, Error, MapCallback, err, lock, vk_err};
 use crate::types::{
     BindingType, BlendFactor, BlendState, BufferDescriptor, BufferUsages, ColorWrites, FilterMode,
     PrimitiveTopology, QuerySetDescriptor, SamplerDescriptor, ShaderStages, TextureDescriptor,
@@ -52,13 +53,13 @@ fn allocate(
 ) -> Result<Memory, Error> {
     let index = device
         .memory_type(req.memory_type_bits, want, prefer)
-        .ok_or_else(|| Error(format!("no memory type with {want:?}")))?;
+        .ok_or_else(|| Error::internal(format!("no memory type with {want:?}")))?;
     let info = vk::MemoryAllocateInfo::default()
         .allocation_size(req.size)
         .memory_type_index(index);
     // SAFETY: a plain allocation on a live device.
     let raw = unsafe { device.0.raw.allocate_memory(&info, None) }
-        .map_err(|e| err("vkAllocateMemory", e))?;
+        .map_err(|e| vk_err("vkAllocateMemory", e))?;
     let mapped = if want.contains(vk::MemoryPropertyFlags::HOST_VISIBLE) {
         // SAFETY: `raw` is host-visible and mapped once for its lifetime.
         match unsafe {
@@ -71,7 +72,7 @@ fn allocate(
             Err(e) => {
                 // SAFETY: `raw` was just allocated and is unused.
                 unsafe { device.0.raw.free_memory(raw, None) };
-                return Err(err("vkMapMemory", e));
+                return Err(vk_err("vkMapMemory", e));
             }
         }
     } else {
@@ -80,16 +81,25 @@ fn allocate(
     Ok(Memory { raw, mapped })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MapState {
+    Unmapped,
+    Pending { token: u64, start: u64, end: u64 },
+    Mapped { start: u64, end: u64 },
+}
+
 pub(crate) struct BufferInner {
     device: Arc<DeviceShared>,
     pub raw: vk::Buffer,
     memory: Memory,
     size: u64,
     pub usage: BufferUsages,
+    map_state: Mutex<MapState>,
 }
 
 // SAFETY: `memory.mapped` points at memory this buffer owns; access is
-// ordered by the map protocol (reads after the GPU's writes complete).
+// ordered by the map protocol (reads after the GPU's writes complete, and
+// writes are rejected while mapped or pending).
 unsafe impl Send for BufferInner {}
 // SAFETY: as above.
 unsafe impl Sync for BufferInner {}
@@ -98,8 +108,12 @@ impl Drop for BufferInner {
     fn drop(&mut self) {
         // SAFETY: no submission still holds this buffer (it would hold an Arc).
         unsafe {
-            self.device.raw.destroy_buffer(self.raw, None);
-            self.device.raw.free_memory(self.memory.raw, None);
+            if self.raw != vk::Buffer::null() {
+                self.device.raw.destroy_buffer(self.raw, None);
+            }
+            if self.memory.raw != vk::DeviceMemory::null() {
+                self.device.raw.free_memory(self.memory.raw, None);
+            }
         }
     }
 }
@@ -109,6 +123,16 @@ pub struct Buffer(pub(crate) Arc<BufferInner>);
 
 impl Buffer {
     pub fn new(device: &Device, desc: &BufferDescriptor<'_>) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
+        let max_size = device.limits().max_buffer_size;
+        if desc.size > max_size {
+            return Err(Error::validation(format!(
+                "buffer size {} exceeds max_buffer_size {max_size}",
+                desc.size
+            )));
+        }
         let u = desc.usage;
         let mut usage = vk::BufferUsageFlags::TRANSFER_DST;
         if u.contains(BufferUsages::VERTEX) {
@@ -124,8 +148,25 @@ impl Buffer {
         Self::with(device, desc.size, usage, host, u)
     }
 
+    pub(crate) fn invalid(device: &Device, desc: &BufferDescriptor<'_>) -> Self {
+        Self(Arc::new(BufferInner {
+            device: device.0.clone(),
+            raw: vk::Buffer::null(),
+            memory: Memory {
+                raw: vk::DeviceMemory::null(),
+                mapped: std::ptr::null_mut(),
+            },
+            size: desc.size,
+            usage: desc.usage,
+            map_state: Mutex::new(MapState::Unmapped),
+        }))
+    }
+
     /// A host-visible upload chunk.
     pub(crate) fn staging(device: &Device, size: u64) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         Self::with(
             device,
             size,
@@ -148,7 +189,8 @@ impl Buffer {
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
         // SAFETY: a plain object creation on a live device.
-        let raw = unsafe { d.create_buffer(&info, None) }.map_err(|e| err("vkCreateBuffer", e))?;
+        let raw =
+            unsafe { d.create_buffer(&info, None) }.map_err(|e| vk_err("vkCreateBuffer", e))?;
         // SAFETY: `raw` is a live buffer.
         let req = unsafe { d.get_buffer_memory_requirements(raw) };
         let (want, prefer) = if host {
@@ -177,7 +219,7 @@ impl Buffer {
                 d.destroy_buffer(raw, None);
                 d.free_memory(memory.raw, None);
             }
-            return Err(err("vkBindBufferMemory", e));
+            return Err(vk_err("vkBindBufferMemory", e));
         }
         if !memory.mapped.is_null() {
             // Like wgpu, a buffer starts zeroed: `mapped` exposes all of it,
@@ -192,7 +234,120 @@ impl Buffer {
             memory,
             size,
             usage: hal,
+            map_state: Mutex::new(MapState::Unmapped),
         })))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::Buffer::null()
+    }
+
+    pub fn is_mapped_or_pending(&self) -> bool {
+        *lock(&self.0.map_state) != MapState::Unmapped
+    }
+
+    /// Checks that this buffer is mapped and copies `offset..offset + size`
+    /// while holding the map lock, preventing a concurrent `unmap()` + GPU
+    /// write from racing with the host read.
+    pub fn copy_mapped_range(
+        &self,
+        offset: u64,
+        size: u64,
+    ) -> Result<Vec<u8>, crate::BufferAsyncError> {
+        let state = lock(&self.0.map_state);
+        let MapState::Mapped { start, end } = *state else {
+            return Err(crate::BufferAsyncError);
+        };
+        let read_end = offset.checked_add(size).ok_or(crate::BufferAsyncError)?;
+        if offset < start || read_end > end {
+            return Err(crate::BufferAsyncError);
+        }
+        let start = usize::try_from(offset).map_err(|_| crate::BufferAsyncError)?;
+        let end = usize::try_from(read_end).map_err(|_| crate::BufferAsyncError)?;
+        let bytes = self
+            .mapped()
+            .get(start..end)
+            .ok_or(crate::BufferAsyncError)?;
+        Ok(bytes.to_vec())
+    }
+
+    pub(crate) fn map_async(&self, start: u64, size: u64, callback: MapCallback) {
+        static NEXT_MAP: AtomicU64 = AtomicU64::new(1);
+        let device = self.device();
+        let end = start.checked_add(size).filter(|end| *end <= self.size());
+        let invalid = if !self.is_valid() {
+            Some("cannot map an invalid buffer")
+        } else if !self.0.usage.contains(BufferUsages::MAP_READ) {
+            Some("map_async needs MAP_READ")
+        } else if end.is_none() {
+            Some("map range exceeds buffer size")
+        } else {
+            None
+        };
+        if let Some(description) = invalid {
+            device.defer_rejected_map(callback);
+            device.errors().report(crate::Error::Validation {
+                description: description.into(),
+            });
+            return;
+        }
+        let end = end.expect("map range was validated");
+        let mut callback = Some(callback);
+        let buffer = self.clone();
+        let registered = self.device().register_buffer_map(
+            self,
+            |buf| {
+                let mut state = lock(&buf.0.map_state);
+                if *state != MapState::Unmapped {
+                    return Err(crate::Error::Validation {
+                        description: "buffer is already mapped or has a pending map".into(),
+                    });
+                }
+                let token = NEXT_MAP.fetch_add(1, Ordering::Relaxed);
+                *state = MapState::Pending { token, start, end };
+                Ok(token)
+            },
+            |token| {
+                let cb = callback.take().expect("map callback created once");
+                Box::new(move |res| {
+                    let outcome = {
+                        let mut state = lock(&buffer.0.map_state);
+                        match (*state, res) {
+                            (
+                                MapState::Pending {
+                                    token: t,
+                                    start,
+                                    end,
+                                },
+                                Ok(()),
+                            ) if t == token => {
+                                *state = MapState::Mapped { start, end };
+                                Ok(())
+                            }
+                            (MapState::Pending { token: t, .. }, Err(e)) if t == token => {
+                                *state = MapState::Unmapped;
+                                Err(e)
+                            }
+                            // `unmap()` ran before this pending map completed.
+                            _ => Err(crate::BufferAsyncError),
+                        }
+                    };
+                    cb(outcome);
+                })
+            },
+        );
+        if let Err(err) = registered {
+            if let Some(cb) = callback.take() {
+                device.defer_rejected_map(cb);
+            }
+            if let Some(err) = err {
+                device.errors().report(err);
+            }
+        }
+    }
+
+    pub fn unmap(&self) {
+        *lock(&self.0.map_state) = MapState::Unmapped;
     }
 
     pub fn size(&self) -> u64 {
@@ -234,8 +389,11 @@ impl Buffer {
 pub(crate) struct TextureInner {
     device: Arc<DeviceShared>,
     pub raw: vk::Image,
-    /// `None` for a swapchain image, owned by its swapchain.
+    /// `None` for a swapchain image (owned by its swapchain) or an invalid placeholder.
     memory: Option<vk::DeviceMemory>,
+    /// Present for swapchain images; flipped to `false` under the device queue
+    /// lock when the swapchain is reconfigured or released.
+    swapchain_live: Option<Arc<AtomicBool>>,
     pub format: TextureFormat,
     pub width: u32,
     pub height: u32,
@@ -248,7 +406,9 @@ impl Drop for TextureInner {
         if let Some(memory) = self.memory {
             // SAFETY: no submission still holds this image.
             unsafe {
-                self.device.raw.destroy_image(self.raw, None);
+                if self.raw != vk::Image::null() {
+                    self.device.raw.destroy_image(self.raw, None);
+                }
                 self.device.raw.free_memory(memory, None);
             }
         }
@@ -260,9 +420,47 @@ pub struct Texture(pub(crate) Arc<TextureInner>);
 
 impl Texture {
     pub fn new(device: &Device, desc: &TextureDescriptor<'_>) -> Result<Self, Error> {
+        Self::new_inner(device, desc, None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_with_liveness(
+        device: &Device,
+        desc: &TextureDescriptor<'_>,
+        live: Arc<AtomicBool>,
+    ) -> Result<Self, Error> {
+        Self::new_inner(device, desc, Some(live))
+    }
+
+    fn new_inner(
+        device: &Device,
+        desc: &TextureDescriptor<'_>,
+        swapchain_live: Option<Arc<AtomicBool>>,
+    ) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let d = &device.0.raw;
         let s = desc.size;
         let u = desc.usage;
+        if desc.mip_level_count != 1 {
+            return Err(Error::validation("native textures have one mip level"));
+        }
+        if desc.sample_count != 1 {
+            return Err(Error::validation(
+                "native textures do not support multisampling",
+            ));
+        }
+        if u.is_empty() {
+            return Err(Error::validation("texture usage must not be empty"));
+        }
+        let limits = device.limits();
+        if s.width > limits.max_texture_dimension_2d
+            || s.height > limits.max_texture_dimension_2d
+            || s.depth_or_array_layers > limits.max_texture_array_layers
+        {
+            return Err(Error::validation("texture dimensions exceed device limits"));
+        }
         let mut usage = vk::ImageUsageFlags::empty();
         if u.contains(TextureUsages::COPY_SRC) {
             usage |= vk::ImageUsageFlags::TRANSFER_SRC;
@@ -275,9 +473,6 @@ impl Texture {
         }
         if u.contains(TextureUsages::RENDER_ATTACHMENT) {
             usage |= vk::ImageUsageFlags::COLOR_ATTACHMENT;
-        }
-        if desc.mip_level_count > 1 {
-            return Err(Error("native textures have one mip level".into()));
         }
         let layers = s.depth_or_array_layers.max(1);
         let info = vk::ImageCreateInfo::default()
@@ -296,7 +491,7 @@ impl Texture {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .initial_layout(vk::ImageLayout::UNDEFINED);
         // SAFETY: a plain object creation on a live device.
-        let raw = unsafe { d.create_image(&info, None) }.map_err(|e| err("vkCreateImage", e))?;
+        let raw = unsafe { d.create_image(&info, None) }.map_err(|e| vk_err("vkCreateImage", e))?;
         // SAFETY: `raw` is a live image.
         let req = unsafe { d.get_image_memory_requirements(raw) };
         let memory = match allocate(
@@ -319,12 +514,13 @@ impl Texture {
                 d.destroy_image(raw, None);
                 d.free_memory(memory, None);
             }
-            return Err(err("vkBindImageMemory", e));
+            return Err(vk_err("vkBindImageMemory", e));
         }
         let texture = Self(Arc::new(TextureInner {
             device: device.0.clone(),
             raw,
             memory: Some(memory),
+            swapchain_live,
             format: desc.format,
             width: s.width.max(1),
             height: s.height.max(1),
@@ -336,23 +532,54 @@ impl Texture {
         Ok(texture)
     }
 
+    pub(crate) fn invalid(device: &Device, desc: &TextureDescriptor<'_>) -> Self {
+        Self(Arc::new(TextureInner {
+            device: device.0.clone(),
+            raw: vk::Image::null(),
+            memory: None,
+            swapchain_live: None,
+            format: desc.format,
+            width: desc.size.width,
+            height: desc.size.height,
+            layers: desc.size.depth_or_array_layers.max(1),
+            usage: desc.usage,
+        }))
+    }
+
     /// A swapchain image: not owned, never destroyed here.
     pub(crate) fn external(
         device: &Device,
         raw: vk::Image,
         format: TextureFormat,
         (width, height): (u32, u32),
+        live: Arc<AtomicBool>,
     ) -> Self {
         Self(Arc::new(TextureInner {
             device: device.0.clone(),
             raw,
             memory: None,
+            swapchain_live: Some(live),
             format,
             width,
             height,
             layers: 1,
             usage: TextureUsages::RENDER_ATTACHMENT,
         }))
+    }
+
+    pub(crate) fn device(&self) -> Device {
+        Device(self.0.device.clone())
+    }
+
+    pub fn is_retired_swapchain(&self) -> bool {
+        self.0
+            .swapchain_live
+            .as_ref()
+            .is_some_and(|live| !live.load(Ordering::Acquire))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::Image::null() && !self.is_retired_swapchain()
     }
 
     pub fn format(&self) -> TextureFormat {
@@ -380,6 +607,23 @@ impl Texture {
         dimension: Option<TextureViewDimension>,
     ) -> Result<TextureView, Error> {
         let t = &self.0;
+        // Hold the device queue lock across the retirement check and
+        // `vkCreateImageView` for swapchain images so `Swap::quiesce` cannot
+        // retire and destroy the underlying swapchain image between them.
+        let _queue_guard = t.swapchain_live.is_some().then(|| lock(&t.device.queue));
+        if self.is_retired_swapchain() {
+            return Err(Error::validation(
+                "cannot create view of a retired swapchain image",
+            ));
+        }
+        if t.raw == vk::Image::null() {
+            return Err(Error::validation(
+                "cannot create view of an invalid texture",
+            ));
+        }
+        if self.device().is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let dimension = dimension.unwrap_or(if t.layers > 1 {
             TextureViewDimension::D2Array
         } else {
@@ -400,9 +644,10 @@ impl Texture {
                 base_array_layer: 0,
                 layer_count: count,
             });
-        // SAFETY: `t.raw` is a live image of a matching format.
+        // SAFETY: `t.raw` is a live image of a matching format; for swapchain
+        // images `_queue_guard` serializes against `Swap::quiesce`.
         let raw = unsafe { t.device.raw.create_image_view(&info, None) }
-            .map_err(|e| err("vkCreateImageView", e))?;
+            .map_err(|e| vk_err("vkCreateImageView", e))?;
         Ok(TextureView(Arc::new(ViewInner {
             texture: self.clone(),
             raw,
@@ -417,8 +662,10 @@ pub(crate) struct ViewInner {
 
 impl Drop for ViewInner {
     fn drop(&mut self) {
-        // SAFETY: no submission still holds this view.
-        unsafe { self.texture.0.device.raw.destroy_image_view(self.raw, None) };
+        if self.raw != vk::ImageView::null() {
+            // SAFETY: no submission still holds this view.
+            unsafe { self.texture.0.device.raw.destroy_image_view(self.raw, None) };
+        }
     }
 }
 
@@ -426,6 +673,21 @@ impl Drop for ViewInner {
 pub struct TextureView(pub(crate) Arc<ViewInner>);
 
 impl TextureView {
+    pub(crate) fn invalid(texture: Texture) -> Self {
+        Self(Arc::new(ViewInner {
+            texture,
+            raw: vk::ImageView::null(),
+        }))
+    }
+
+    pub fn is_retired_swapchain(&self) -> bool {
+        self.0.texture.is_retired_swapchain()
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::ImageView::null() && self.0.texture.is_valid()
+    }
+
     pub fn texture(&self) -> &Texture {
         &self.0.texture
     }
@@ -438,8 +700,10 @@ pub(crate) struct SamplerInner {
 
 impl Drop for SamplerInner {
     fn drop(&mut self) {
-        // SAFETY: no submission still holds this sampler.
-        unsafe { self.device.raw.destroy_sampler(self.raw, None) };
+        if self.raw != vk::Sampler::null() {
+            // SAFETY: no submission still holds this sampler.
+            unsafe { self.device.raw.destroy_sampler(self.raw, None) };
+        }
     }
 }
 
@@ -448,6 +712,9 @@ pub struct Sampler(pub(crate) Arc<SamplerInner>);
 
 impl Sampler {
     pub fn new(device: &Device, desc: &SamplerDescriptor<'_>) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let filter = |f| match f {
             FilterMode::Nearest => vk::Filter::NEAREST,
             FilterMode::Linear => vk::Filter::LINEAR,
@@ -462,11 +729,22 @@ impl Sampler {
             .max_lod(0.25);
         // SAFETY: a plain object creation on a live device.
         let raw = unsafe { device.0.raw.create_sampler(&info, None) }
-            .map_err(|e| err("vkCreateSampler", e))?;
+            .map_err(|e| vk_err("vkCreateSampler", e))?;
         Ok(Self(Arc::new(SamplerInner {
             device: device.0.clone(),
             raw,
         })))
+    }
+
+    pub(crate) fn invalid(device: &Device) -> Self {
+        Self(Arc::new(SamplerInner {
+            device: device.0.clone(),
+            raw: vk::Sampler::null(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::Sampler::null()
     }
 }
 
@@ -491,12 +769,14 @@ pub(crate) struct LayoutInner {
 
 impl Drop for LayoutInner {
     fn drop(&mut self) {
-        // SAFETY: groups and pipeline layouts built on it hold this Arc.
-        unsafe {
-            self.device
-                .raw
-                .destroy_descriptor_set_layout(self.raw, None);
-        };
+        if self.raw != vk::DescriptorSetLayout::null() {
+            // SAFETY: groups and pipeline layouts built on it hold this Arc.
+            unsafe {
+                self.device
+                    .raw
+                    .destroy_descriptor_set_layout(self.raw, None);
+            };
+        }
     }
 }
 
@@ -508,6 +788,9 @@ impl BindGroupLayout {
         device: &Device,
         entries: &[crate::types::BindGroupLayoutEntry],
     ) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let bindings: Vec<_> = entries
             .iter()
             .map(|e| {
@@ -521,7 +804,7 @@ impl BindGroupLayout {
         let info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
         // SAFETY: a plain object creation on a live device.
         let raw = unsafe { device.0.raw.create_descriptor_set_layout(&info, None) }
-            .map_err(|e| err("vkCreateDescriptorSetLayout", e))?;
+            .map_err(|e| vk_err("vkCreateDescriptorSetLayout", e))?;
         Ok(Self(Arc::new(LayoutInner {
             device: device.0.clone(),
             raw,
@@ -530,6 +813,18 @@ impl BindGroupLayout {
                 .map(|e| (e.binding, descriptor_type(&e.ty)))
                 .collect(),
         })))
+    }
+
+    pub(crate) fn invalid(device: &Device) -> Self {
+        Self(Arc::new(LayoutInner {
+            device: device.0.clone(),
+            raw: vk::DescriptorSetLayout::null(),
+            entries: Vec::new(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::DescriptorSetLayout::null()
     }
 }
 
@@ -553,13 +848,15 @@ pub(crate) struct GroupInner {
 
 impl Drop for GroupInner {
     fn drop(&mut self) {
-        // SAFETY: no submission still holds this group; freeing the pool frees the set.
-        unsafe {
-            self._layout
-                .0
-                .device
-                .raw
-                .destroy_descriptor_pool(self.pool, None);
+        if self.pool != vk::DescriptorPool::null() {
+            // SAFETY: no submission still holds this group; freeing the pool frees the set.
+            unsafe {
+                self._layout
+                    .0
+                    .device
+                    .raw
+                    .destroy_descriptor_pool(self.pool, None);
+            }
         }
     }
 }
@@ -573,6 +870,35 @@ impl BindGroup {
         layout: &BindGroupLayout,
         entries: Vec<(u32, Bound)>,
     ) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
+        if !layout.is_valid() {
+            return Err(Error::validation("bind group layout is invalid"));
+        }
+        for (_, bound) in &entries {
+            match bound {
+                Bound::Buffer { buffer, .. } if !buffer.is_valid() => {
+                    return Err(Error::validation("bind group references an invalid buffer"));
+                }
+                Bound::View(view) if view.is_retired_swapchain() => {
+                    return Err(Error::validation(
+                        "bind group references a retired swapchain image",
+                    ));
+                }
+                Bound::View(view) if !view.is_valid() => {
+                    return Err(Error::validation(
+                        "bind group references an invalid texture view",
+                    ));
+                }
+                Bound::Sampler(sampler) if !sampler.is_valid() => {
+                    return Err(Error::validation(
+                        "bind group references an invalid sampler",
+                    ));
+                }
+                _ => {}
+            }
+        }
         let d = &device.0.raw;
         let mut sizes: Vec<vk::DescriptorPoolSize> = Vec::new();
         for (_, ty) in &layout.0.entries {
@@ -589,7 +915,7 @@ impl BindGroup {
             .pool_sizes(&sizes);
         // SAFETY: a plain object creation on a live device.
         let pool = unsafe { d.create_descriptor_pool(&info, None) }
-            .map_err(|e| err("vkCreateDescriptorPool", e))?;
+            .map_err(|e| vk_err("vkCreateDescriptorPool", e))?;
         let layouts = [layout.0.raw];
         let alloc = vk::DescriptorSetAllocateInfo::default()
             .descriptor_pool(pool)
@@ -600,7 +926,7 @@ impl BindGroup {
             Err(e) => {
                 // SAFETY: `pool` is unused.
                 unsafe { d.destroy_descriptor_pool(pool, None) };
-                return Err(err("vkAllocateDescriptorSets", e));
+                return Err(vk_err("vkAllocateDescriptorSets", e));
             }
         };
         let mut buffers = Vec::with_capacity(entries.len());
@@ -663,6 +989,31 @@ impl BindGroup {
             _bound: entries.into_iter().map(|(_, b)| b).collect(),
         })))
     }
+
+    pub(crate) fn invalid(layout: &BindGroupLayout) -> Self {
+        Self(Arc::new(GroupInner {
+            _layout: layout.clone(),
+            pool: vk::DescriptorPool::null(),
+            set: vk::DescriptorSet::null(),
+            _bound: Vec::new(),
+        }))
+    }
+
+    pub fn has_retired_swapchain(&self) -> bool {
+        self.0
+            ._bound
+            .iter()
+            .any(|b| matches!(b, Bound::View(v) if v.is_retired_swapchain()))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.set != vk::DescriptorSet::null()
+            && self.0._bound.iter().all(|b| match b {
+                Bound::Buffer { buffer, .. } => buffer.is_valid(),
+                Bound::View(v) => v.is_valid(),
+                Bound::Sampler(s) => s.is_valid(),
+            })
+    }
 }
 
 pub(crate) struct PipelineLayoutInner {
@@ -673,8 +1024,10 @@ pub(crate) struct PipelineLayoutInner {
 
 impl Drop for PipelineLayoutInner {
     fn drop(&mut self) {
-        // SAFETY: pipelines built on it hold this Arc.
-        unsafe { self.device.raw.destroy_pipeline_layout(self.raw, None) };
+        if self.raw != vk::PipelineLayout::null() {
+            // SAFETY: pipelines built on it hold this Arc.
+            unsafe { self.device.raw.destroy_pipeline_layout(self.raw, None) };
+        }
     }
 }
 
@@ -683,16 +1036,36 @@ pub struct PipelineLayout(pub(crate) Arc<PipelineLayoutInner>);
 
 impl PipelineLayout {
     pub fn new(device: &Device, sets: &[BindGroupLayout]) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
+        if sets.iter().any(|s| !s.is_valid()) {
+            return Err(Error::validation(
+                "pipeline layout references an invalid bind group layout",
+            ));
+        }
         let raws: Vec<_> = sets.iter().map(|s| s.0.raw).collect();
         let info = vk::PipelineLayoutCreateInfo::default().set_layouts(&raws);
         // SAFETY: a plain object creation on a live device.
         let raw = unsafe { device.0.raw.create_pipeline_layout(&info, None) }
-            .map_err(|e| err("vkCreatePipelineLayout", e))?;
+            .map_err(|e| vk_err("vkCreatePipelineLayout", e))?;
         Ok(Self(Arc::new(PipelineLayoutInner {
             device: device.0.clone(),
             raw,
             sets: sets.to_vec(),
         })))
+    }
+
+    pub(crate) fn invalid(device: &Device) -> Self {
+        Self(Arc::new(PipelineLayoutInner {
+            device: device.0.clone(),
+            raw: vk::PipelineLayout::null(),
+            sets: Vec::new(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::PipelineLayout::null()
     }
 }
 
@@ -703,8 +1076,10 @@ pub(crate) struct ModuleInner {
 
 impl Drop for ModuleInner {
     fn drop(&mut self) {
-        // SAFETY: pipelines keep no reference to a module once created.
-        unsafe { self.device.raw.destroy_shader_module(self.raw, None) };
+        if self.raw != vk::ShaderModule::null() {
+            // SAFETY: pipelines keep no reference to a module once created.
+            unsafe { self.device.raw.destroy_shader_module(self.raw, None) };
+        }
     }
 }
 
@@ -713,14 +1088,28 @@ pub struct ShaderModule(pub(crate) Arc<ModuleInner>);
 
 impl ShaderModule {
     pub fn new(device: &Device, shader: mui_shaders::ShaderId) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let info = vk::ShaderModuleCreateInfo::default().code(shader.artifact().spirv);
         // SAFETY: the words are SPIR-V naga emitted for Vulkan 1.1+.
         let raw = unsafe { device.0.raw.create_shader_module(&info, None) }
-            .map_err(|e| err("vkCreateShaderModule", e))?;
+            .map_err(|e| vk_err("vkCreateShaderModule", e))?;
         Ok(Self(Arc::new(ModuleInner {
             device: device.0.clone(),
             raw,
         })))
+    }
+
+    pub(crate) fn invalid(device: &Device) -> Self {
+        Self(Arc::new(ModuleInner {
+            device: device.0.clone(),
+            raw: vk::ShaderModule::null(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::ShaderModule::null()
     }
 }
 
@@ -731,8 +1120,10 @@ pub(crate) struct CacheInner {
 
 impl Drop for CacheInner {
     fn drop(&mut self) {
-        // SAFETY: pipeline creation holds no cache past its call.
-        unsafe { self.device.raw.destroy_pipeline_cache(self.raw, None) };
+        if self.raw != vk::PipelineCache::null() {
+            // SAFETY: pipeline creation holds no cache past its call.
+            unsafe { self.device.raw.destroy_pipeline_cache(self.raw, None) };
+        }
     }
 }
 
@@ -743,6 +1134,9 @@ impl PipelineCache {
     /// A cache primed with `data` when the driver accepts it (it checks the
     /// header), else empty.
     pub fn new(device: &Device, data: Option<&[u8]>) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let d = &device.0.raw;
         let make = |bytes: &[u8]| {
             let info = vk::PipelineCacheCreateInfo::default().initial_data(bytes);
@@ -751,7 +1145,7 @@ impl PipelineCache {
         };
         let raw = match data.map(make) {
             Some(Ok(raw)) => raw,
-            _ => make(&[]).map_err(|e| err("vkCreatePipelineCache", e))?,
+            _ => make(&[]).map_err(|e| vk_err("vkCreatePipelineCache", e))?,
         };
         Ok(Self(Arc::new(CacheInner {
             device: device.0.clone(),
@@ -759,7 +1153,21 @@ impl PipelineCache {
         })))
     }
 
+    pub(crate) fn invalid(device: &Device) -> Self {
+        Self(Arc::new(CacheInner {
+            device: device.0.clone(),
+            raw: vk::PipelineCache::null(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::PipelineCache::null()
+    }
+
     pub fn get_data(&self) -> Option<Vec<u8>> {
+        if !self.is_valid() {
+            return None;
+        }
         // SAFETY: a plain query on a live cache.
         unsafe { self.0.device.raw.get_pipeline_cache_data(self.0.raw).ok() }
     }
@@ -773,8 +1181,10 @@ pub(crate) struct PipelineInner {
 
 impl Drop for PipelineInner {
     fn drop(&mut self) {
-        // SAFETY: no submission still holds this pipeline.
-        unsafe { self.device.raw.destroy_pipeline(self.raw, None) };
+        if self.raw != vk::Pipeline::null() {
+            // SAFETY: no submission still holds this pipeline.
+            unsafe { self.device.raw.destroy_pipeline(self.raw, None) };
+        }
     }
 }
 
@@ -821,7 +1231,27 @@ fn blend(state: Option<BlendState>, mask: ColorWrites) -> vk::PipelineColorBlend
 
 impl RenderPipeline {
     pub fn new(device: &Device, desc: &PipelineDesc<'_>) -> Result<Self, Error> {
-        let name = |s: &str| CString::new(s).map_err(|e| err("entry point name", e));
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
+        if !desc.layout.is_valid() {
+            return Err(Error::validation("render pipeline layout is invalid"));
+        }
+        if !desc.vertex.0.is_valid() || !desc.fragment.0.is_valid() {
+            return Err(Error::validation(
+                "render pipeline references an invalid shader module",
+            ));
+        }
+        if let Some(cache) = desc.cache
+            && !cache.is_valid()
+        {
+            return Err(Error::validation(
+                "render pipeline references an invalid pipeline cache",
+            ));
+        }
+        let name = |s: &str| {
+            CString::new(s).map_err(|e| Error::validation(err("entry point name", e).to_string()))
+        };
         let (vs, fs) = (name(desc.vertex.1)?, name(desc.fragment.1)?);
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
@@ -898,12 +1328,24 @@ impl RenderPipeline {
         // SAFETY: every handle and array `info` points at outlives the call;
         // dynamic rendering is enabled on the device.
         let raw = unsafe { device.0.raw.create_graphics_pipelines(cache, &[info], None) }
-            .map_err(|(_, e)| err("vkCreateGraphicsPipelines", e))?[0];
+            .map_err(|(_, e)| vk_err("vkCreateGraphicsPipelines", e))?[0];
         Ok(Self(Arc::new(PipelineInner {
             device: device.0.clone(),
             raw,
             layout: desc.layout.clone(),
         })))
+    }
+
+    pub(crate) fn invalid(device: &Device, layout: &PipelineLayout) -> Self {
+        Self(Arc::new(PipelineInner {
+            device: device.0.clone(),
+            raw: vk::Pipeline::null(),
+            layout: layout.clone(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::Pipeline::null()
     }
 }
 
@@ -914,8 +1356,10 @@ pub(crate) struct QueryInner {
 
 impl Drop for QueryInner {
     fn drop(&mut self) {
-        // SAFETY: no submission still holds this pool.
-        unsafe { self.device.raw.destroy_query_pool(self.raw, None) };
+        if self.raw != vk::QueryPool::null() {
+            // SAFETY: no submission still holds this pool.
+            unsafe { self.device.raw.destroy_query_pool(self.raw, None) };
+        }
     }
 }
 
@@ -924,15 +1368,29 @@ pub struct QuerySet(pub(crate) Arc<QueryInner>);
 
 impl QuerySet {
     pub fn new(device: &Device, desc: &QuerySetDescriptor<'_>) -> Result<Self, Error> {
+        if device.is_lost() {
+            return Err(Error::internal("the device is lost"));
+        }
         let info = vk::QueryPoolCreateInfo::default()
             .query_type(vk::QueryType::TIMESTAMP)
             .query_count(desc.count.max(1));
         // SAFETY: a plain object creation on a live device.
         let raw = unsafe { device.0.raw.create_query_pool(&info, None) }
-            .map_err(|e| err("vkCreateQueryPool", e))?;
+            .map_err(|e| vk_err("vkCreateQueryPool", e))?;
         Ok(Self(Arc::new(QueryInner {
             device: device.0.clone(),
             raw,
         })))
+    }
+
+    pub(crate) fn invalid(device: &Device) -> Self {
+        Self(Arc::new(QueryInner {
+            device: device.0.clone(),
+            raw: vk::QueryPool::null(),
+        }))
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.0.raw != vk::QueryPool::null()
     }
 }

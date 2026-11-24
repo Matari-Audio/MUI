@@ -209,9 +209,9 @@ become option structs or builder methods. `Ui::state` returns
 `Interaction { hover, press }`. `bins` and `curve` agree on one mutation
 model (`&mut` value in, `changed` out).
 
-`mui-truce::Bridge::bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))`
-— the id is derived from the parameter and handed to the closure, so it
-cannot be typed twice. `bind_bool` exists for toggles.
+`bridge.bind(ui, P::Gain, |ui, id, v| knob(ui, id, "Gain", v, 0.0..=1.0))` (on a
+mutable `moose_mui::Bridge`) — the id is derived from the parameter and handed
+to the closure, so it cannot be typed twice. `bind_bool` exists for toggles.
 
 ## Structure changes
 

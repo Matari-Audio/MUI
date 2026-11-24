@@ -32,7 +32,7 @@ the `winit` fork are retired; this documents the active behaviour and reasons.
   `mui-baseview` refuses to build with `panic = "abort"` unless
   `allow-panic-abort` is enabled; release profiles unwind.
 - **GPU when ready, fast `vello_cpu` fallback (and `DeviceType::Cpu` rejection).**
-  `mui-vello` rejects all `wgpu::DeviceType::Cpu` adapters (Windows DX12 WARP,
+  `mui-vello` rejects all `mui_hal::DeviceType::Cpu` adapters (Windows DX12 WARP,
   Linux Vulkan Lavapipe/SwiftShader, GL llvmpipe) unless explicitly opted in
   under `test-support`, so broken or CPU-only drivers go straight to our fast
   dirty-rect `vello_cpu` software path (`MUI_FORCE_CPU=1` or `MUI_RENDERER=cpu`
@@ -122,7 +122,7 @@ the `winit` fork are retired; this documents the active behaviour and reasons.
   setting. Pacing: display link on macOS 14+, a run-loop timer before.
 - Native top anchoring handles flipped children; the old per-tick MUI
   re-anchor was removed because it undid that behavior on flipped parents.
-  The surface-based handler removes Softbuffer's CPU sublayer when switching
+  The surface-based handler removes `mui-present`'s CPU sublayer when switching
   to GPU.
 
 ## Host threading
