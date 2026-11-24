@@ -1758,9 +1758,16 @@ dependencies = [
  "libc",
  "mui-present",
  "mui-shaders",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-metal 0.3.2",
+ "objc2-quartz-core 0.3.2",
  "pollster",
  "raw-window-handle",
  "wgpu",
+ "windows",
 ]
 
 [[package]]
@@ -1849,6 +1856,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
+ "windows",
  "windows-sys 0.61.2",
  "x11rb",
 ]

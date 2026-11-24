@@ -6,12 +6,19 @@
 //!
 //! - Vulkan (`ash`, Linux): Vulkan 1.3 dynamic rendering, SPIR-V from
 //!   `mui-shaders`, presentation through `mui-present`'s `VkSwapchain`.
-//! - wgpu (feature `wgpu`): passthrough for web, media and BUFFR, and for
-//!   macOS and Windows until their Metal and D3D11 backends land. It also
-//!   wraps a device a host made itself (`Device::from_wgpu`).
+//! - Metal (`objc2-metal`, macOS): MSL 2.3 from `mui-shaders`, presentation
+//!   through `CAMetalLayer`.
+//! - D3D11 (`windows`, Windows): HLSL SM 5.0 / precompiled DXBC from
+//!   `mui-shaders`, presentation through `mui-present`'s DirectComposition
+//!   swapchain.
+//! - wgpu (feature `wgpu`): passthrough for web, media and BUFFR, and interim
+//!   default on macOS and Windows while OS-CI parity is pending. It also wraps
+//!   a device a host made itself (`Device::from_wgpu`).
 //!
 //! An [`Instance`] opens the native backends it can and asks wgpu for the
-//! rest; `MUI_HAL_BACKEND=wgpu` sends everything through wgpu (A/B runs).
+//! rest; `MUI_HAL_BACKEND=wgpu` sends everything through wgpu (A/B runs), and
+//! `MUI_HAL_BACKEND=metal` / `MUI_HAL_BACKEND=d3d11` / `MUI_HAL_BACKEND=native`
+//! selects the native backend on macOS/Windows even when `wgpu` is enabled.
 //!
 //! Object creation and submission failures on native backends are reported to
 //! per-thread error scopes (or the device's uncaptured error handler) like
@@ -20,11 +27,14 @@
 #![deny(unsafe_code)]
 // wgpu-core's nesting overflows the default when proving `DeviceShared: Send`.
 #![recursion_limit = "256"]
-// Off Linux only the wgpu arm exists until Metal and D3D11 land, so every
-// backend match degenerates to one variant.
+// On single-backend builds (wasm with wgpu only, or native targets without wgpu)
+// enum matches degenerate to one variant.
 #![cfg_attr(
-    not(target_os = "linux"),
-    expect(
+    not(all(
+        any(target_os = "linux", target_os = "macos", target_os = "windows"),
+        feature = "wgpu"
+    )),
+    allow(
         irrefutable_let_patterns,
         unused_mut,
         unused_variables,
@@ -34,6 +44,11 @@
     )
 )]
 
+pub(crate) mod binding;
+#[cfg(target_os = "windows")]
+pub mod d3d11;
+#[cfg(target_os = "macos")]
+pub mod metal;
 mod types;
 #[cfg(target_os = "linux")]
 pub mod vulkan;
@@ -51,12 +66,21 @@ pub use types::*;
 #[cfg(feature = "wgpu")]
 pub use wgpu;
 
+#[cfg(target_os = "windows")]
+use d3d11 as d3d;
+#[cfg(target_os = "macos")]
+use metal as mtl;
 #[cfg(target_os = "linux")]
 use vulkan as vk;
 #[cfg(feature = "wgpu")]
 use wgpu_backend as wg;
 
-#[cfg(not(any(target_os = "linux", feature = "wgpu")))]
+#[cfg(not(any(
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows",
+    feature = "wgpu"
+)))]
 compile_error!("mui-hal has no backend for this target: enable its `wgpu` feature");
 
 /// Device-level errors: what an error scope or the uncaptured handler sees.
@@ -203,19 +227,30 @@ pub struct InstanceDescriptor {
 impl InstanceDescriptor {
     /// The backends `WGPU_BACKEND` lists (as wgpu reads it), else every one;
     /// validation when `MUI_HAL_VALIDATION=1`; everything through wgpu when
-    /// `MUI_HAL_BACKEND=wgpu` or with the `wgpu-only` feature.
+    /// `MUI_HAL_BACKEND=wgpu` or with the `wgpu-only` feature. On macOS and
+    /// Windows when `wgpu` is compiled in, `wgpu` stays default until OS-CI
+    /// parity passes, while `MUI_HAL_BACKEND=metal|d3d11|native` (or
+    /// `WGPU_BACKEND=d3d11`) opts into the native backend.
     pub fn from_env() -> Self {
         let validation = std::env::var_os("MUI_HAL_VALIDATION").is_some_and(|v| v == "1");
-        let wgpu = std::env::var_os("MUI_HAL_BACKEND").is_some_and(|v| v == "wgpu");
+        let env_backend = std::env::var("MUI_HAL_BACKEND").ok();
+        let backends = std::env::var("WGPU_BACKEND")
+            .map_or_else(|_| Backends::all(), |v| Backends::from_comma_list(&v));
+        let native = binding::resolve_native_selection(
+            env_backend.as_deref(),
+            backends,
+            cfg!(feature = "wgpu"),
+            cfg!(feature = "wgpu-only"),
+            cfg!(target_os = "linux"),
+        );
         Self {
-            backends: std::env::var("WGPU_BACKEND")
-                .map_or_else(|_| Backends::all(), |v| Backends::from_comma_list(&v)),
+            backends,
             flags: if validation {
                 InstanceFlags::VALIDATION | InstanceFlags::DEBUG
             } else {
                 InstanceFlags::empty()
             },
-            native: !(wgpu || cfg!(feature = "wgpu-only")) || !cfg!(feature = "wgpu"),
+            native,
             #[cfg(feature = "wgpu")]
             backend_options: wgpu::BackendOptions::from_env_or_default(),
         }
@@ -237,6 +272,10 @@ impl Default for InstanceDescriptor {
 pub fn native_backends() -> Backends {
     if cfg!(target_os = "linux") {
         Backends::VULKAN
+    } else if cfg!(target_os = "macos") {
+        Backends::METAL
+    } else if cfg!(target_os = "windows") {
+        Backends::D3D11
     } else {
         Backends::empty()
     }
@@ -246,6 +285,10 @@ pub fn native_backends() -> Backends {
 enum InstanceInner {
     #[cfg(target_os = "linux")]
     Vulkan(Result<vk::Instance, vk::Error>),
+    #[cfg(target_os = "macos")]
+    Metal(Result<mtl::Instance, mtl::Error>),
+    #[cfg(target_os = "windows")]
+    D3d11(Result<d3d::Instance, d3d::Error>),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::Instance, Backends),
 }
@@ -349,6 +392,22 @@ impl Instance {
             }
             inner.push(InstanceInner::Vulkan(vulkan));
         }
+        #[cfg(target_os = "macos")]
+        if desc.native && !cfg!(feature = "wgpu-only") && desc.backends.contains(Backends::METAL) {
+            let metal = mtl::Instance::new();
+            if metal.is_ok() {
+                rest -= Backends::METAL;
+            }
+            inner.push(InstanceInner::Metal(metal));
+        }
+        #[cfg(target_os = "windows")]
+        if desc.native && !cfg!(feature = "wgpu-only") && desc.backends.contains(Backends::D3D11) {
+            let d3d11 = d3d::Instance::new(desc.flags.contains(InstanceFlags::VALIDATION));
+            if d3d11.is_ok() {
+                rest -= Backends::D3D11;
+            }
+            inner.push(InstanceInner::D3d11(d3d11));
+        }
         #[cfg(feature = "wgpu")]
         if !rest.is_empty() {
             let mut d = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
@@ -392,6 +451,10 @@ impl Instance {
             InstanceInner::Wgpu(w, _) => Some(w),
             #[cfg(target_os = "linux")]
             InstanceInner::Vulkan(_) => None,
+            #[cfg(target_os = "macos")]
+            InstanceInner::Metal(_) => None,
+            #[cfg(target_os = "windows")]
+            InstanceInner::D3d11(_) => None,
         })
     }
 
@@ -402,6 +465,10 @@ impl Instance {
             .filter_map(|i| match i {
                 #[cfg(target_os = "linux")]
                 InstanceInner::Vulkan(r) => r.as_ref().err().map(ToString::to_string),
+                #[cfg(target_os = "macos")]
+                InstanceInner::Metal(r) => r.as_ref().err().map(ToString::to_string),
+                #[cfg(target_os = "windows")]
+                InstanceInner::D3d11(r) => r.as_ref().err().map(ToString::to_string),
                 #[cfg(feature = "wgpu")]
                 InstanceInner::Wgpu(..) => None,
             })
@@ -423,6 +490,28 @@ impl Instance {
                 }
                 #[cfg(target_os = "linux")]
                 InstanceInner::Vulkan(_) => {}
+                #[cfg(target_os = "macos")]
+                InstanceInner::Metal(Ok(instance)) if backends.contains(Backends::METAL) => {
+                    out.extend(
+                        instance
+                            .enumerate_adapters()
+                            .into_iter()
+                            .map(|a| Adapter(AdapterInner::Metal(a))),
+                    );
+                }
+                #[cfg(target_os = "macos")]
+                InstanceInner::Metal(_) => {}
+                #[cfg(target_os = "windows")]
+                InstanceInner::D3d11(Ok(instance)) if backends.contains(Backends::D3D11) => {
+                    out.extend(
+                        instance
+                            .enumerate_adapters()
+                            .into_iter()
+                            .map(|a| Adapter(AdapterInner::D3d11(a))),
+                    );
+                }
+                #[cfg(target_os = "windows")]
+                InstanceInner::D3d11(_) => {}
                 #[cfg(feature = "wgpu")]
                 InstanceInner::Wgpu(w, covered) => {
                     let wanted = wg::backends(backends & *covered);
@@ -471,6 +560,36 @@ impl Instance {
                 _target: Some(Box::new(target)),
             });
         }
+        #[cfg(target_os = "macos")]
+        if self.metal().is_some() {
+            let handle = |e: raw_window_handle::HandleError| CreateSurfaceError(e.to_string());
+            let window = target.window_handle().map_err(handle)?.as_raw();
+            let display = target.display_handle().map_err(handle)?.as_raw();
+            // SAFETY: `target` owns the NSView and lives inside the surface,
+            // which detaches its CAMetalLayer before `_target` drops.
+            #[expect(unsafe_code, reason = "raw handles kept alive by `target`")]
+            let surface = unsafe { mtl::Surface::new(display, window) }
+                .map_err(|e| CreateSurfaceError(e.to_string()))?;
+            return Ok(Surface {
+                inner: SurfaceInner::Metal(Arc::new(surface)),
+                _target: Some(Box::new(target)),
+            });
+        }
+        #[cfg(target_os = "windows")]
+        if self.d3d11().is_some() {
+            let handle = |e: raw_window_handle::HandleError| CreateSurfaceError(e.to_string());
+            let window = target.window_handle().map_err(handle)?.as_raw();
+            let display = target.display_handle().map_err(handle)?.as_raw();
+            // SAFETY: `target` owns the HWND and lives inside the surface,
+            // which releases its DirectComposition presenter before `_target` drops.
+            #[expect(unsafe_code, reason = "raw handles kept alive by `target`")]
+            let surface = unsafe { d3d::Surface::new(display, window) }
+                .map_err(|e| CreateSurfaceError(e.to_string()))?;
+            return Ok(Surface {
+                inner: SurfaceInner::D3d11(Arc::new(surface)),
+                _target: Some(Box::new(target)),
+            });
+        }
         #[cfg(feature = "wgpu")]
         if let Some(instance) = self.as_wgpu() {
             let surface = instance
@@ -492,12 +611,34 @@ impl Instance {
             _ => None,
         })
     }
+
+    /// The Metal instance, when the Metal backend started.
+    #[cfg(target_os = "macos")]
+    pub fn metal(&self) -> Option<&mtl::Instance> {
+        self.inner.iter().find_map(|i| match i {
+            InstanceInner::Metal(Ok(m)) => Some(m),
+            _ => None,
+        })
+    }
+
+    /// The D3D11 instance, when the D3D11 backend started.
+    #[cfg(target_os = "windows")]
+    pub fn d3d11(&self) -> Option<&d3d::Instance> {
+        self.inner.iter().find_map(|i| match i {
+            InstanceInner::D3d11(Ok(d)) => Some(d),
+            _ => None,
+        })
+    }
 }
 
 #[derive(Clone)]
 enum AdapterInner {
     #[cfg(target_os = "linux")]
     Vulkan(vk::Adapter),
+    #[cfg(target_os = "macos")]
+    Metal(mtl::Adapter),
+    #[cfg(target_os = "windows")]
+    D3d11(d3d::Adapter),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::Adapter),
 }
@@ -518,6 +659,10 @@ impl Adapter {
         match &self.0 {
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(a) => a.get_info(),
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(a) => a.get_info(),
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(a) => a.get_info(),
             #[cfg(feature = "wgpu")]
             AdapterInner::Wgpu(a) => wg::adapter_info(&a.get_info()),
         }
@@ -527,6 +672,10 @@ impl Adapter {
         match &self.0 {
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(a) => a.limits(),
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(a) => a.limits(),
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(a) => a.limits(),
             #[cfg(feature = "wgpu")]
             AdapterInner::Wgpu(a) => wg::limits(&a.limits()),
         }
@@ -536,6 +685,10 @@ impl Adapter {
         match &self.0 {
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(a) => a.features(),
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(a) => a.features(),
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(a) => a.features(),
             #[cfg(feature = "wgpu")]
             AdapterInner::Wgpu(a) => wg::features(a.features()),
         }
@@ -544,10 +697,28 @@ impl Adapter {
     /// The usages `format` allows on this adapter.
     pub fn get_texture_format_features(&self, format: TextureFormat) -> TextureFormatFeatures {
         match &self.0 {
-            // Vulkan 1.3 makes every format MUI names mandatory for sampling,
-            // copies and (bar the float ones) colour attachments.
+            // Vulkan 1.3, Metal, and D3D11 make every format MUI names mandatory
+            // for sampling, copies and (bar Rgba32Float) colour attachments.
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(_) => TextureFormatFeatures {
+                allowed_usages: match format {
+                    TextureFormat::Rgba32Float => {
+                        TextureUsages::all() - TextureUsages::RENDER_ATTACHMENT
+                    }
+                    _ => TextureUsages::all(),
+                },
+            },
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(_) => TextureFormatFeatures {
+                allowed_usages: match format {
+                    TextureFormat::Rgba32Float => {
+                        TextureUsages::all() - TextureUsages::RENDER_ATTACHMENT
+                    }
+                    _ => TextureUsages::all(),
+                },
+            },
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(_) => TextureFormatFeatures {
                 allowed_usages: match format {
                     TextureFormat::Rgba32Float => {
                         TextureUsages::all() - TextureUsages::RENDER_ATTACHMENT
@@ -576,6 +747,18 @@ impl Adapter {
                     .map(|d| Device::new(DeviceInner::Vulkan(vk::Owner(d)), a.get_info()))
                     .map_err(|e| RequestDeviceError(e.to_string())),
             ),
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(a) => Pending::ready(
+                a.request_device(desc)
+                    .map(|d| Device::new(DeviceInner::Metal(mtl::Owner(d)), a.get_info()))
+                    .map_err(|e| RequestDeviceError(e.to_string())),
+            ),
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(a) => Pending::ready(
+                a.request_device(desc)
+                    .map(|d| Device::new(DeviceInner::D3d11(d3d::Owner(d)), a.get_info()))
+                    .map_err(|e| RequestDeviceError(e.to_string())),
+            ),
             #[cfg(feature = "wgpu")]
             AdapterInner::Wgpu(a) => {
                 let info = wg::adapter_info(&a.get_info());
@@ -600,6 +783,10 @@ impl Adapter {
         match &self.0 {
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(_) => true,
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(_) => true,
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(_) => true,
             #[cfg(feature = "wgpu")]
             AdapterInner::Wgpu(_) => false,
         }
@@ -614,12 +801,34 @@ impl Adapter {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    pub fn as_metal(&self) -> Option<&mtl::Adapter> {
+        match &self.0 {
+            AdapterInner::Metal(a) => Some(a),
+            #[cfg(feature = "wgpu")]
+            AdapterInner::Wgpu(_) => None,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    pub fn as_d3d11(&self) -> Option<&d3d::Adapter> {
+        match &self.0 {
+            AdapterInner::D3d11(a) => Some(a),
+            #[cfg(feature = "wgpu")]
+            AdapterInner::Wgpu(_) => None,
+        }
+    }
+
     #[cfg(feature = "wgpu")]
     pub fn as_wgpu(&self) -> Option<&wgpu::Adapter> {
         match &self.0 {
             AdapterInner::Wgpu(a) => Some(a),
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(_) => None,
+            #[cfg(target_os = "macos")]
+            AdapterInner::Metal(_) => None,
+            #[cfg(target_os = "windows")]
+            AdapterInner::D3d11(_) => None,
         }
     }
 }
@@ -627,6 +836,10 @@ impl Adapter {
 enum DeviceInner {
     #[cfg(target_os = "linux")]
     Vulkan(vk::Owner),
+    #[cfg(target_os = "macos")]
+    Metal(mtl::Owner),
+    #[cfg(target_os = "windows")]
+    D3d11(d3d::Owner),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::Device, wgpu::Queue),
 }
@@ -651,7 +864,10 @@ impl ErrorSink {
 
     /// Reports `e` to the innermost native scope that filters it, else the
     /// uncaptured handler.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code, reason = "native only"))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+        expect(dead_code, reason = "native only")
+    )]
     pub(crate) fn report(&self, e: Error) {
         let filter = match &e {
             Error::OutOfMemory { .. } => ErrorFilter::OutOfMemory,
@@ -794,6 +1010,10 @@ impl Device {
         let errors = match &inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.errors().clone(),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.errors().clone(),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.errors().clone(),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(..) => Arc::new(ErrorSink::new()),
         };
@@ -819,6 +1039,10 @@ impl Device {
             DeviceInner::Wgpu(d, q) => Some((d, q)),
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(_) => None,
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(_) => None,
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(_) => None,
         }
     }
 
@@ -832,6 +1056,26 @@ impl Device {
         }
     }
 
+    /// The Metal device, on the Metal backend.
+    #[cfg(target_os = "macos")]
+    pub fn as_metal(&self) -> Option<&mtl::Device> {
+        match &self.0.inner {
+            DeviceInner::Metal(o) => Some(&o.0),
+            #[cfg(feature = "wgpu")]
+            DeviceInner::Wgpu(..) => None,
+        }
+    }
+
+    /// The D3D11 device, on the D3D11 backend.
+    #[cfg(target_os = "windows")]
+    pub fn as_d3d11(&self) -> Option<&d3d::Device> {
+        match &self.0.inner {
+            DeviceInner::D3d11(o) => Some(&o.0),
+            #[cfg(feature = "wgpu")]
+            DeviceInner::Wgpu(..) => None,
+        }
+    }
+
     pub fn adapter_info(&self) -> AdapterInfo {
         self.0.info.clone()
     }
@@ -840,6 +1084,10 @@ impl Device {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.features(),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.features(),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.features(),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => wg::features(d.features()),
         }
@@ -849,6 +1097,10 @@ impl Device {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.limits(),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.limits(),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.limits(),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => wg::limits(&d.limits()),
         }
@@ -856,7 +1108,10 @@ impl Device {
 
     /// Reports `e` to the innermost native scope that filters it, else the
     /// uncaptured handler.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code, reason = "native only"))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+        expect(dead_code, reason = "native only")
+    )]
     fn report(&self, e: Error) {
         self.0.errors.report(e);
     }
@@ -891,6 +1146,10 @@ impl Device {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.set_device_lost_callback(f),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.set_device_lost_callback(f),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.set_device_lost_callback(f),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => d.set_device_lost_callback(move |reason, message| {
                 let reason = match reason {
@@ -911,6 +1170,16 @@ impl Device {
                 o.0.poll(poll == PollType::Wait)
                     .map_err(|e| PollError(e.to_string()))
             }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                o.0.poll(poll == PollType::Wait)
+                    .map_err(|e| PollError(e.to_string()))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                o.0.poll(poll == PollType::Wait)
+                    .map_err(|e| PollError(e.to_string()))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => d
                 .poll(match poll {
@@ -928,15 +1197,41 @@ impl Device {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.destroy(),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.destroy(),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.destroy(),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => d.destroy(),
         }
     }
 
-    /// Unwraps a native Vulkan creation result, reporting any error to per-thread
+    /// Unwraps a native creation result, reporting any error to per-thread
     /// error scopes (or the uncaptured handler) and returning `invalid`.
     #[cfg(target_os = "linux")]
     fn or_invalid<T>(&self, r: Result<T, vk::Error>, invalid: impl FnOnce() -> T) -> T {
+        match r {
+            Ok(v) => v,
+            Err(e) => {
+                self.report(e.into_hal());
+                invalid()
+            }
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn or_invalid_mtl<T>(&self, r: Result<T, mtl::Error>, invalid: impl FnOnce() -> T) -> T {
+        match r {
+            Ok(v) => v,
+            Err(e) => {
+                self.report(e.into_hal());
+                invalid()
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn or_invalid_d3d<T>(&self, r: Result<T, d3d::Error>, invalid: impl FnOnce() -> T) -> T {
         match r {
             Ok(v) => v,
             Err(e) => {
@@ -958,6 +1253,18 @@ impl Device {
                     vk::Buffer::invalid(&o.0, desc)
                 }))
             }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                BufferInner::Metal(self.or_invalid_mtl(mtl::Buffer::new(&o.0, desc), || {
+                    mtl::Buffer::invalid(&o.0, desc)
+                }))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                BufferInner::D3d11(self.or_invalid_d3d(d3d::Buffer::new(&o.0, desc), || {
+                    d3d::Buffer::invalid(&o.0, desc)
+                }))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 BufferInner::Wgpu(d.create_buffer(&wgpu::BufferDescriptor {
@@ -976,6 +1283,18 @@ impl Device {
             DeviceInner::Vulkan(o) => {
                 TextureInner::Vulkan(self.or_invalid(vk::Texture::new(&o.0, desc), || {
                     vk::Texture::invalid(&o.0, desc)
+                }))
+            }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                TextureInner::Metal(self.or_invalid_mtl(mtl::Texture::new(&o.0, desc), || {
+                    mtl::Texture::invalid(&o.0, desc)
+                }))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                TextureInner::D3d11(self.or_invalid_d3d(d3d::Texture::new(&o.0, desc), || {
+                    d3d::Texture::invalid(&o.0, desc)
                 }))
             }
             #[cfg(feature = "wgpu")]
@@ -1001,6 +1320,18 @@ impl Device {
             DeviceInner::Vulkan(o) => SamplerInner::Vulkan(
                 self.or_invalid(vk::Sampler::new(&o.0, desc), || vk::Sampler::invalid(&o.0)),
             ),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                SamplerInner::Metal(self.or_invalid_mtl(mtl::Sampler::new(&o.0, desc), || {
+                    mtl::Sampler::invalid(&o.0)
+                }))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                SamplerInner::D3d11(self.or_invalid_d3d(d3d::Sampler::new(&o.0, desc), || {
+                    d3d::Sampler::invalid(&o.0)
+                }))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 SamplerInner::Wgpu(d.create_sampler(&wgpu::SamplerDescriptor {
@@ -1022,6 +1353,18 @@ impl Device {
             DeviceInner::Vulkan(o) => LayoutInner::Vulkan(
                 self.or_invalid(vk::BindGroupLayout::new(&o.0, desc.entries), || {
                     vk::BindGroupLayout::invalid(&o.0)
+                }),
+            ),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => LayoutInner::Metal(
+                self.or_invalid_mtl(mtl::BindGroupLayout::new(&o.0, desc.entries), || {
+                    mtl::BindGroupLayout::invalid(&o.0)
+                }),
+            ),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => LayoutInner::D3d11(
+                self.or_invalid_d3d(d3d::BindGroupLayout::new(&o.0, desc.entries), || {
+                    d3d::BindGroupLayout::invalid(&o.0)
                 }),
             ),
             #[cfg(feature = "wgpu")]
@@ -1061,6 +1404,56 @@ impl Device {
                 GroupInner::Vulkan(
                     self.or_invalid(vk::BindGroup::new(&o.0, layout, entries), || {
                         vk::BindGroup::invalid(layout)
+                    }),
+                )
+            }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                let layout = desc.layout.mtl();
+                let entries = desc
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        let bound = match &e.resource {
+                            BindingResource::Buffer(b) => mtl::Bound::Buffer {
+                                buffer: b.buffer.mtl().clone(),
+                                offset: b.offset,
+                                size: b.size.map(std::num::NonZeroU64::get),
+                            },
+                            BindingResource::TextureView(v) => mtl::Bound::View(v.mtl().clone()),
+                            BindingResource::Sampler(s) => mtl::Bound::Sampler(s.mtl().clone()),
+                        };
+                        (e.binding, bound)
+                    })
+                    .collect();
+                GroupInner::Metal(
+                    self.or_invalid_mtl(mtl::BindGroup::new(&o.0, layout, entries), || {
+                        mtl::BindGroup::invalid(layout)
+                    }),
+                )
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                let layout = desc.layout.d3d();
+                let entries = desc
+                    .entries
+                    .iter()
+                    .map(|e| {
+                        let bound = match &e.resource {
+                            BindingResource::Buffer(b) => d3d::Bound::Buffer {
+                                buffer: b.buffer.d3d().clone(),
+                                offset: b.offset,
+                                size: b.size.map(std::num::NonZeroU64::get),
+                            },
+                            BindingResource::TextureView(v) => d3d::Bound::View(v.d3d().clone()),
+                            BindingResource::Sampler(s) => d3d::Bound::Sampler(s.d3d().clone()),
+                        };
+                        (e.binding, bound)
+                    })
+                    .collect();
+                GroupInner::D3d11(
+                    self.or_invalid_d3d(d3d::BindGroup::new(&o.0, layout, entries), || {
+                        d3d::BindGroup::invalid(layout)
                     }),
                 )
             }
@@ -1117,6 +1510,46 @@ impl Device {
                     PipelineLayoutInner::Vulkan(vk::PipelineLayout::invalid(&o.0))
                 }
             }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                let sets: Option<Vec<mtl::BindGroupLayout>> = desc
+                    .bind_group_layouts
+                    .iter()
+                    .map(|l| l.map(|g| g.mtl().clone()))
+                    .collect();
+                if let Some(sets) = sets {
+                    PipelineLayoutInner::Metal(
+                        self.or_invalid_mtl(mtl::PipelineLayout::new(&o.0, &sets), || {
+                            mtl::PipelineLayout::invalid(&o.0)
+                        }),
+                    )
+                } else {
+                    self.report(Error::Validation {
+                        description: "mui-hal pipeline layouts must bind every group".into(),
+                    });
+                    PipelineLayoutInner::Metal(mtl::PipelineLayout::invalid(&o.0))
+                }
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                let sets: Option<Vec<d3d::BindGroupLayout>> = desc
+                    .bind_group_layouts
+                    .iter()
+                    .map(|l| l.map(|g| g.d3d().clone()))
+                    .collect();
+                if let Some(sets) = sets {
+                    PipelineLayoutInner::D3d11(
+                        self.or_invalid_d3d(d3d::PipelineLayout::new(&o.0, &sets), || {
+                            d3d::PipelineLayout::invalid(&o.0)
+                        }),
+                    )
+                } else {
+                    self.report(Error::Validation {
+                        description: "mui-hal pipeline layouts must bind every group".into(),
+                    });
+                    PipelineLayoutInner::D3d11(d3d::PipelineLayout::invalid(&o.0))
+                }
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 let sets: Vec<Option<&wgpu::BindGroupLayout>> = desc
@@ -1142,6 +1575,18 @@ impl Device {
             DeviceInner::Vulkan(o) => {
                 ModuleInner::Vulkan(self.or_invalid(vk::ShaderModule::new(&o.0, id), || {
                     vk::ShaderModule::invalid(&o.0)
+                }))
+            }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                ModuleInner::Metal(self.or_invalid_mtl(mtl::ShaderModule::new(&o.0, id), || {
+                    mtl::ShaderModule::invalid(&o.0, id)
+                }))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                ModuleInner::D3d11(self.or_invalid_d3d(d3d::ShaderModule::new(&o.0, id), || {
+                    d3d::ShaderModule::invalid(&o.0, id)
                 }))
             }
             #[cfg(feature = "wgpu")]
@@ -1244,6 +1689,80 @@ impl Device {
                 );
                 RenderPipeline(PipelineInner::Vulkan(pipe))
             }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                let fail = |e: Error| {
+                    self.report(e);
+                    RenderPipeline(PipelineInner::Metal(mtl::RenderPipeline::invalid(&o.0)))
+                };
+                let Some(fragment) = desc.fragment.as_ref() else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require a fragment stage".into(),
+                    });
+                };
+                let [Some(target)] = fragment.targets else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require exactly one colour target".into(),
+                    });
+                };
+                let Some(layout) = desc.layout else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require an explicit layout".into(),
+                    });
+                };
+                let pipe = self.or_invalid_mtl(
+                    mtl::RenderPipeline::new(
+                        &o.0,
+                        &mtl::PipelineDesc {
+                            layout: layout.mtl(),
+                            vertex: (desc.vertex.module.mtl(), desc.vertex.entry_point),
+                            fragment: (fragment.module.mtl(), fragment.entry_point),
+                            buffers: &buffers,
+                            topology: desc.primitive.topology,
+                            target: *target,
+                        },
+                    ),
+                    || mtl::RenderPipeline::invalid(&o.0),
+                );
+                RenderPipeline(PipelineInner::Metal(pipe))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                let fail = |e: Error| {
+                    self.report(e);
+                    RenderPipeline(PipelineInner::D3d11(d3d::RenderPipeline::invalid(&o.0)))
+                };
+                let Some(fragment) = desc.fragment.as_ref() else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require a fragment stage".into(),
+                    });
+                };
+                let [Some(target)] = fragment.targets else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require exactly one colour target".into(),
+                    });
+                };
+                let Some(layout) = desc.layout else {
+                    return fail(Error::Validation {
+                        description: "mui-hal pipelines require an explicit layout".into(),
+                    });
+                };
+                let pipe = self.or_invalid_d3d(
+                    d3d::RenderPipeline::new(
+                        &o.0,
+                        &d3d::PipelineDesc {
+                            layout: layout.d3d(),
+                            vertex: (desc.vertex.module.d3d(), desc.vertex.entry_point),
+                            fragment: (fragment.module.d3d(), fragment.entry_point),
+                            buffers: &buffers,
+                            topology: desc.primitive.topology,
+                            target: *target,
+                        },
+                    ),
+                    || d3d::RenderPipeline::invalid(&o.0),
+                );
+                RenderPipeline(PipelineInner::D3d11(pipe))
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => {
                 let fragment = desc
@@ -1330,6 +1849,10 @@ impl Device {
         CommandEncoder(match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(_) => EncoderInner::Vulkan(Vec::new()),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(_) => EncoderInner::Metal(Vec::new()),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(_) => EncoderInner::D3d11(Vec::new()),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(d, _) => EncoderInner::Wgpu(
                 d.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: desc.label }),
@@ -1343,6 +1866,18 @@ impl Device {
             DeviceInner::Vulkan(o) => {
                 QueryInner::Vulkan(self.or_invalid(vk::QuerySet::new(&o.0, desc), || {
                     vk::QuerySet::invalid(&o.0)
+                }))
+            }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                QueryInner::Metal(self.or_invalid_mtl(mtl::QuerySet::new(&o.0, desc), || {
+                    mtl::QuerySet::invalid(&o.0)
+                }))
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                QueryInner::D3d11(self.or_invalid_d3d(d3d::QuerySet::new(&o.0, desc), || {
+                    d3d::QuerySet::invalid(&o.0)
                 }))
             }
             #[cfg(feature = "wgpu")]
@@ -1371,6 +1906,18 @@ impl Device {
             DeviceInner::Vulkan(o) => CacheInner::Vulkan(
                 self.or_invalid(vk::PipelineCache::new(&o.0, desc.data), || {
                     vk::PipelineCache::invalid(&o.0)
+                }),
+            ),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => CacheInner::Metal(
+                self.or_invalid_mtl(mtl::PipelineCache::new(&o.0, desc.data), || {
+                    mtl::PipelineCache::invalid(&o.0)
+                }),
+            ),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => CacheInner::D3d11(
+                self.or_invalid_d3d(d3d::PipelineCache::new(&o.0, desc.data), || {
+                    d3d::PipelineCache::invalid(&o.0)
                 }),
             ),
             #[cfg(feature = "wgpu")]
@@ -1416,12 +1963,34 @@ impl Queue {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn mtl(&self) -> Option<&mtl::Device> {
+        match &self.0.inner {
+            DeviceInner::Metal(o) => Some(&o.0),
+            #[cfg(feature = "wgpu")]
+            DeviceInner::Wgpu(..) => None,
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn d3d(&self) -> Option<&d3d::Device> {
+        match &self.0.inner {
+            DeviceInner::D3d11(o) => Some(&o.0),
+            #[cfg(feature = "wgpu")]
+            DeviceInner::Wgpu(..) => None,
+        }
+    }
+
     #[cfg(feature = "wgpu")]
     fn wg(&self) -> Option<&wgpu::Queue> {
         match &self.0.inner {
             DeviceInner::Wgpu(_, q) => Some(q),
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(_) => None,
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(_) => None,
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(_) => None,
         }
     }
 
@@ -1438,6 +2007,18 @@ impl Queue {
         #[cfg(target_os = "linux")]
         if let Some(d) = self.vk()
             && let Err(e) = d.stage_buffer_write(buffer.vk(), offset, data)
+        {
+            self.0.errors.report(e.into_hal());
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(d) = self.mtl()
+            && let Err(e) = d.stage_buffer_write(buffer.mtl(), offset, data)
+        {
+            self.0.errors.report(e.into_hal());
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(d) = self.d3d()
+            && let Err(e) = d.stage_buffer_write(buffer.d3d(), offset, data)
         {
             self.0.errors.report(e.into_hal());
         }
@@ -1529,6 +2110,198 @@ impl Queue {
                 self.0.errors.report(e.into_hal());
             }
         }
+        #[cfg(target_os = "macos")]
+        if let Some(d) = self.mtl() {
+            if dest.mip_level != 0 {
+                self.0.errors.report(Error::Validation {
+                    description: "native textures have one mip level".into(),
+                });
+                return;
+            }
+            if size.width == 0 || size.height == 0 {
+                return;
+            }
+            let dst = dest.texture.mtl();
+            let layers_u32 = size.depth_or_array_layers.max(1);
+            if dest
+                .origin
+                .x
+                .checked_add(size.width)
+                .is_none_or(|x| x > dst.width())
+                || dest
+                    .origin
+                    .y
+                    .checked_add(size.height)
+                    .is_none_or(|y| y > dst.height())
+                || dest
+                    .origin
+                    .z
+                    .checked_add(layers_u32)
+                    .is_none_or(|z| z > dst.layers())
+            {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture destination region exceeds texture bounds".into(),
+                });
+                return;
+            }
+            let block = dst.format().block_size() as usize;
+            let Some(row) = (size.width as usize).checked_mul(block) else {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture row stride overflows usize".into(),
+                });
+                return;
+            };
+            let bytes_per_row = layout.bytes_per_row.map_or(row, |b| b as usize);
+            let rows_per_image = layout.rows_per_image.unwrap_or(size.height) as usize;
+            if bytes_per_row < row || rows_per_image < size.height as usize {
+                self.0.errors.report(Error::Validation {
+                    description:
+                        "write_texture layout bytes_per_row or rows_per_image is too small".into(),
+                });
+                return;
+            }
+            let layers = layers_u32 as usize;
+            let Some(len) = row
+                .checked_mul(size.height as usize)
+                .and_then(|n| n.checked_mul(layers))
+            else {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture byte length overflows usize".into(),
+                });
+                return;
+            };
+            let Ok(base_off) = usize::try_from(layout.offset) else {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture source offset overflows usize".into(),
+                });
+                return;
+            };
+            let mut packed = vec![0u8; len];
+            let mut at = 0;
+            for z in 0..layers {
+                for y in 0..size.height as usize {
+                    let from = z
+                        .checked_mul(rows_per_image)
+                        .and_then(|r| r.checked_add(y))
+                        .and_then(|r| r.checked_mul(bytes_per_row))
+                        .and_then(|off| base_off.checked_add(off));
+                    let end = from.and_then(|f| f.checked_add(row));
+                    let (Some(from), Some(end)) = (from, end) else {
+                        self.0.errors.report(Error::Validation {
+                            description: "write_texture source offset overflows usize".into(),
+                        });
+                        return;
+                    };
+                    if end > data.len() {
+                        self.0.errors.report(Error::Validation {
+                            description: "write_texture source slice out of bounds".into(),
+                        });
+                        return;
+                    }
+                    packed[at..at + row].copy_from_slice(&data[from..end]);
+                    at += row;
+                }
+            }
+            if let Err(e) = d.stage_texture_write(dst, dest.origin, size, &packed) {
+                self.0.errors.report(e.into_hal());
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(d) = self.d3d() {
+            if dest.mip_level != 0 {
+                self.0.errors.report(Error::Validation {
+                    description: "native textures have one mip level".into(),
+                });
+                return;
+            }
+            if size.width == 0 || size.height == 0 {
+                return;
+            }
+            let dst = dest.texture.d3d();
+            let layers_u32 = size.depth_or_array_layers.max(1);
+            if dest
+                .origin
+                .x
+                .checked_add(size.width)
+                .is_none_or(|x| x > dst.width())
+                || dest
+                    .origin
+                    .y
+                    .checked_add(size.height)
+                    .is_none_or(|y| y > dst.height())
+                || dest
+                    .origin
+                    .z
+                    .checked_add(layers_u32)
+                    .is_none_or(|z| z > dst.layers())
+            {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture destination region exceeds texture bounds".into(),
+                });
+                return;
+            }
+            let block = dst.format().block_size() as usize;
+            let Some(row) = (size.width as usize).checked_mul(block) else {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture row stride overflows usize".into(),
+                });
+                return;
+            };
+            let bytes_per_row = layout.bytes_per_row.map_or(row, |b| b as usize);
+            let rows_per_image = layout.rows_per_image.unwrap_or(size.height) as usize;
+            if bytes_per_row < row || rows_per_image < size.height as usize {
+                self.0.errors.report(Error::Validation {
+                    description:
+                        "write_texture layout bytes_per_row or rows_per_image is too small".into(),
+                });
+                return;
+            }
+            let layers = layers_u32 as usize;
+            let Some(len) = row
+                .checked_mul(size.height as usize)
+                .and_then(|n| n.checked_mul(layers))
+            else {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture byte length overflows usize".into(),
+                });
+                return;
+            };
+            let Ok(base_off) = usize::try_from(layout.offset) else {
+                self.0.errors.report(Error::Validation {
+                    description: "write_texture source offset overflows usize".into(),
+                });
+                return;
+            };
+            let mut packed = vec![0u8; len];
+            let mut at = 0;
+            for z in 0..layers {
+                for y in 0..size.height as usize {
+                    let from = z
+                        .checked_mul(rows_per_image)
+                        .and_then(|r| r.checked_add(y))
+                        .and_then(|r| r.checked_mul(bytes_per_row))
+                        .and_then(|off| base_off.checked_add(off));
+                    let end = from.and_then(|f| f.checked_add(row));
+                    let (Some(from), Some(end)) = (from, end) else {
+                        self.0.errors.report(Error::Validation {
+                            description: "write_texture source offset overflows usize".into(),
+                        });
+                        return;
+                    };
+                    if end > data.len() {
+                        self.0.errors.report(Error::Validation {
+                            description: "write_texture source slice out of bounds".into(),
+                        });
+                        return;
+                    }
+                    packed[at..at + row].copy_from_slice(&data[from..end]);
+                    at += row;
+                }
+            }
+            if let Err(e) = d.stage_texture_write(dst, dest.origin, size, packed) {
+                self.0.errors.report(e.into_hal());
+            }
+        }
         let _ = (data, layout, size, dest);
     }
 
@@ -1552,12 +2325,52 @@ impl Queue {
                     }
                 }
             }
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => {
+                let lists = buffers
+                    .into_iter()
+                    .map(|b| match b.0 {
+                        EncoderInner::Metal(cmds) => cmds,
+                        #[cfg(feature = "wgpu")]
+                        EncoderInner::Wgpu(_) => panic!("a wgpu encoder on a Metal queue"),
+                    })
+                    .collect();
+                match o.0.submit(lists) {
+                    Ok(v) => SubmissionIndex(v),
+                    Err(e) => {
+                        self.0.errors.report(e.into_hal());
+                        SubmissionIndex(o.0.submitted())
+                    }
+                }
+            }
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => {
+                let lists = buffers
+                    .into_iter()
+                    .map(|b| match b.0 {
+                        EncoderInner::D3d11(cmds) => cmds,
+                        #[cfg(feature = "wgpu")]
+                        EncoderInner::Wgpu(_) => panic!("a wgpu encoder on a D3D11 queue"),
+                    })
+                    .collect();
+                match o.0.submit(lists) {
+                    Ok(v) => SubmissionIndex(v),
+                    Err(e) => {
+                        self.0.errors.report(e.into_hal());
+                        SubmissionIndex(o.0.submitted())
+                    }
+                }
+            }
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(_, q) => {
                 q.submit(buffers.into_iter().map(|b| match b.0 {
                     EncoderInner::Wgpu(e) => e.finish(),
                     #[cfg(target_os = "linux")]
                     EncoderInner::Vulkan(_) => panic!("a Vulkan encoder on a wgpu queue"),
+                    #[cfg(target_os = "macos")]
+                    EncoderInner::Metal(_) => panic!("a Metal encoder on a wgpu queue"),
+                    #[cfg(target_os = "windows")]
+                    EncoderInner::D3d11(_) => panic!("a D3D11 encoder on a wgpu queue"),
                 }));
                 SubmissionIndex(0)
             }
@@ -1569,6 +2382,18 @@ impl Queue {
         match frame.inner {
             #[cfg(target_os = "linux")]
             SurfaceTextureInner::Vulkan(surface, f) => {
+                if let Err(e) = surface.present(f) {
+                    self.0.errors.report(e.into_hal());
+                }
+            }
+            #[cfg(target_os = "macos")]
+            SurfaceTextureInner::Metal(surface, f) => {
+                if let Err(e) = surface.present(&f) {
+                    self.0.errors.report(e.into_hal());
+                }
+            }
+            #[cfg(target_os = "windows")]
+            SurfaceTextureInner::D3d11(surface, f) => {
                 if let Err(e) = surface.present(f) {
                     self.0.errors.report(e.into_hal());
                 }
@@ -1588,6 +2413,10 @@ impl Queue {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.on_submitted_work_done(Box::new(f)),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.on_submitted_work_done(Box::new(f)),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.on_submitted_work_done(Box::new(f)),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(_, q) => q.on_submitted_work_done(f),
         }
@@ -1598,6 +2427,10 @@ impl Queue {
         match &self.0.inner {
             #[cfg(target_os = "linux")]
             DeviceInner::Vulkan(o) => o.0.timestamp_period(),
+            #[cfg(target_os = "macos")]
+            DeviceInner::Metal(o) => o.0.timestamp_period(),
+            #[cfg(target_os = "windows")]
+            DeviceInner::D3d11(o) => o.0.timestamp_period(),
             #[cfg(feature = "wgpu")]
             DeviceInner::Wgpu(_, q) => q.get_timestamp_period(),
         }
@@ -1608,13 +2441,17 @@ impl Queue {
 pub struct SubmissionIndex(pub u64);
 
 /// Declares a handle: an enum over backends wrapped in a public struct,
-/// with `vk()`/`wg()` accessors.
+/// with `vk()`/`mtl()`/`d3d()`/`wg()` accessors.
 macro_rules! handle {
     ($name:ident, $inner:ident, $vk:ident, $wg:ident) => {
         #[derive(Clone)]
         enum $inner {
             #[cfg(target_os = "linux")]
             Vulkan(vk::$vk),
+            #[cfg(target_os = "macos")]
+            Metal(mtl::$vk),
+            #[cfg(target_os = "windows")]
+            D3d11(d3d::$vk),
             #[cfg(feature = "wgpu")]
             Wgpu(wgpu::$wg),
         }
@@ -1644,6 +2481,26 @@ macro_rules! handle {
                 }
             }
 
+            #[cfg(target_os = "macos")]
+            #[track_caller]
+            fn mtl(&self) -> &mtl::$vk {
+                match &self.0 {
+                    $inner::Metal(x) => x,
+                    #[cfg(feature = "wgpu")]
+                    $inner::Wgpu(_) => panic!(concat!("a wgpu ", stringify!($name), " on Metal")),
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            #[track_caller]
+            fn d3d(&self) -> &d3d::$vk {
+                match &self.0 {
+                    $inner::D3d11(x) => x,
+                    #[cfg(feature = "wgpu")]
+                    $inner::Wgpu(_) => panic!(concat!("a wgpu ", stringify!($name), " on D3D11")),
+                }
+            }
+
             #[cfg(feature = "wgpu")]
             #[track_caller]
             fn wg(&self) -> &wgpu::$wg {
@@ -1652,6 +2509,14 @@ macro_rules! handle {
                     #[cfg(target_os = "linux")]
                     $inner::Vulkan(_) => {
                         panic!(concat!("a Vulkan ", stringify!($name), " on wgpu"))
+                    }
+                    #[cfg(target_os = "macos")]
+                    $inner::Metal(_) => {
+                        panic!(concat!("a Metal ", stringify!($name), " on wgpu"))
+                    }
+                    #[cfg(target_os = "windows")]
+                    $inner::D3d11(_) => {
+                        panic!(concat!("a D3D11 ", stringify!($name), " on wgpu"))
                     }
                 }
             }
@@ -1663,6 +2528,10 @@ macro_rules! handle {
                     $inner::Wgpu(x) => Some(x),
                     #[cfg(target_os = "linux")]
                     $inner::Vulkan(_) => None,
+                    #[cfg(target_os = "macos")]
+                    $inner::Metal(_) => None,
+                    #[cfg(target_os = "windows")]
+                    $inner::D3d11(_) => None,
                 }
             }
 
@@ -1706,6 +2575,10 @@ impl Buffer {
         match &self.0 {
             #[cfg(target_os = "linux")]
             BufferInner::Vulkan(b) => b.size(),
+            #[cfg(target_os = "macos")]
+            BufferInner::Metal(b) => b.size(),
+            #[cfg(target_os = "windows")]
+            BufferInner::D3d11(b) => b.size(),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(b) => b.size(),
         }
@@ -1715,6 +2588,10 @@ impl Buffer {
         match &self.0 {
             #[cfg(target_os = "linux")]
             BufferInner::Vulkan(b) => b.usage(),
+            #[cfg(target_os = "macos")]
+            BufferInner::Metal(b) => b.usage(),
+            #[cfg(target_os = "windows")]
+            BufferInner::D3d11(b) => b.usage(),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(b) => wg::from_buffer_usages(b.usage()),
         }
@@ -1750,6 +2627,10 @@ impl Buffer {
         match &self.0 {
             #[cfg(target_os = "linux")]
             BufferInner::Vulkan(b) => b.unmap(),
+            #[cfg(target_os = "macos")]
+            BufferInner::Metal(b) => b.unmap(),
+            #[cfg(target_os = "windows")]
+            BufferInner::D3d11(b) => b.unmap(),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(b) => b.unmap(),
         }
@@ -1759,6 +2640,10 @@ impl Buffer {
         match &self.0 {
             #[cfg(target_os = "linux")]
             BufferInner::Vulkan(b) => b.unmap(),
+            #[cfg(target_os = "macos")]
+            BufferInner::Metal(b) => b.unmap(),
+            #[cfg(target_os = "windows")]
+            BufferInner::D3d11(b) => b.unmap(),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(b) => b.destroy(),
         }
@@ -1789,6 +2674,10 @@ impl<'a> BufferSlice<'a> {
         match &self.buffer.0 {
             #[cfg(target_os = "linux")]
             BufferInner::Vulkan(b) => b.map_async(self.offset, self.size, Box::new(callback)),
+            #[cfg(target_os = "macos")]
+            BufferInner::Metal(b) => b.map_async(self.offset, self.size, Box::new(callback)),
+            #[cfg(target_os = "windows")]
+            BufferInner::D3d11(b) => b.map_async(self.offset, self.size, Box::new(callback)),
             #[cfg(feature = "wgpu")]
             BufferInner::Wgpu(_) => self.wg().map_async(wgpu::MapMode::Read, move |r| {
                 callback(r.map_err(|_| BufferAsyncError));
@@ -1800,6 +2689,14 @@ impl<'a> BufferSlice<'a> {
         match &self.buffer.0 {
             #[cfg(target_os = "linux")]
             BufferInner::Vulkan(b) => b
+                .copy_mapped_range(self.offset, self.size)
+                .map(|bytes| BufferView(ViewBytes::Owned(bytes), std::marker::PhantomData)),
+            #[cfg(target_os = "macos")]
+            BufferInner::Metal(b) => b
+                .copy_mapped_range(self.offset, self.size)
+                .map(|bytes| BufferView(ViewBytes::Owned(bytes), std::marker::PhantomData)),
+            #[cfg(target_os = "windows")]
+            BufferInner::D3d11(b) => b
                 .copy_mapped_range(self.offset, self.size)
                 .map(|bytes| BufferView(ViewBytes::Owned(bytes), std::marker::PhantomData)),
             #[cfg(feature = "wgpu")]
@@ -1816,7 +2713,10 @@ impl<'a> BufferSlice<'a> {
 pub struct BufferView<'a>(ViewBytes, std::marker::PhantomData<&'a [u8]>);
 
 enum ViewBytes {
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code, reason = "native only"))]
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
+        expect(dead_code, reason = "native only")
+    )]
     Owned(Vec<u8>),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::BufferView),
@@ -1843,9 +2743,16 @@ impl PartialEq for TextureView {
         match (&self.0, &other.0) {
             #[cfg(target_os = "linux")]
             (ViewInner::Vulkan(a), ViewInner::Vulkan(b)) => Arc::ptr_eq(&a.0, &b.0),
+            #[cfg(target_os = "macos")]
+            (ViewInner::Metal(a), ViewInner::Metal(b)) => Arc::ptr_eq(&a.0, &b.0),
+            #[cfg(target_os = "windows")]
+            (ViewInner::D3d11(a), ViewInner::D3d11(b)) => Arc::ptr_eq(&a.0, &b.0),
             #[cfg(feature = "wgpu")]
             (ViewInner::Wgpu(a), ViewInner::Wgpu(b)) => a == b,
-            #[cfg(all(target_os = "linux", feature = "wgpu"))]
+            #[cfg(all(
+                any(target_os = "linux", target_os = "macos", target_os = "windows"),
+                feature = "wgpu"
+            ))]
             _ => false,
         }
     }
@@ -1856,9 +2763,16 @@ impl PartialEq for Texture {
         match (&self.0, &other.0) {
             #[cfg(target_os = "linux")]
             (TextureInner::Vulkan(a), TextureInner::Vulkan(b)) => Arc::ptr_eq(&a.0, &b.0),
+            #[cfg(target_os = "macos")]
+            (TextureInner::Metal(a), TextureInner::Metal(b)) => Arc::ptr_eq(&a.0, &b.0),
+            #[cfg(target_os = "windows")]
+            (TextureInner::D3d11(a), TextureInner::D3d11(b)) => Arc::ptr_eq(&a.0, &b.0),
             #[cfg(feature = "wgpu")]
             (TextureInner::Wgpu(a), TextureInner::Wgpu(b)) => a == b,
-            #[cfg(all(target_os = "linux", feature = "wgpu"))]
+            #[cfg(all(
+                any(target_os = "linux", target_os = "macos", target_os = "windows"),
+                feature = "wgpu"
+            ))]
             _ => false,
         }
     }
@@ -1873,6 +2787,22 @@ impl Texture {
                 Err(e) => {
                     t.device().errors().report(e.into_hal());
                     vk::TextureView::invalid(t.clone())
+                }
+            }),
+            #[cfg(target_os = "macos")]
+            TextureInner::Metal(t) => ViewInner::Metal(match t.create_view(desc.dimension) {
+                Ok(v) => v,
+                Err(e) => {
+                    t.device().errors().report(e.into_hal());
+                    mtl::TextureView::invalid(t.clone())
+                }
+            }),
+            #[cfg(target_os = "windows")]
+            TextureInner::D3d11(t) => ViewInner::D3d11(match t.create_view(desc.dimension) {
+                Ok(v) => v,
+                Err(e) => {
+                    t.device().errors().report(e.into_hal());
+                    d3d::TextureView::invalid(t.clone())
                 }
             }),
             #[cfg(feature = "wgpu")]
@@ -1896,6 +2826,10 @@ impl Texture {
         match &self.0 {
             #[cfg(target_os = "linux")]
             TextureInner::Vulkan(t) => t.width(),
+            #[cfg(target_os = "macos")]
+            TextureInner::Metal(t) => t.width(),
+            #[cfg(target_os = "windows")]
+            TextureInner::D3d11(t) => t.width(),
             #[cfg(feature = "wgpu")]
             TextureInner::Wgpu(t) => t.width(),
         }
@@ -1905,6 +2839,10 @@ impl Texture {
         match &self.0 {
             #[cfg(target_os = "linux")]
             TextureInner::Vulkan(t) => t.height(),
+            #[cfg(target_os = "macos")]
+            TextureInner::Metal(t) => t.height(),
+            #[cfg(target_os = "windows")]
+            TextureInner::D3d11(t) => t.height(),
             #[cfg(feature = "wgpu")]
             TextureInner::Wgpu(t) => t.height(),
         }
@@ -1914,6 +2852,10 @@ impl Texture {
         match &self.0 {
             #[cfg(target_os = "linux")]
             TextureInner::Vulkan(t) => t.layers(),
+            #[cfg(target_os = "macos")]
+            TextureInner::Metal(t) => t.layers(),
+            #[cfg(target_os = "windows")]
+            TextureInner::D3d11(t) => t.layers(),
             #[cfg(feature = "wgpu")]
             TextureInner::Wgpu(t) => t.depth_or_array_layers(),
         }
@@ -1923,6 +2865,10 @@ impl Texture {
         match &self.0 {
             #[cfg(target_os = "linux")]
             TextureInner::Vulkan(t) => t.format(),
+            #[cfg(target_os = "macos")]
+            TextureInner::Metal(t) => t.format(),
+            #[cfg(target_os = "windows")]
+            TextureInner::D3d11(t) => t.format(),
             #[cfg(feature = "wgpu")]
             TextureInner::Wgpu(t) => {
                 wg::from_format(t.format()).expect("a texture mui-hal can name")
@@ -1934,6 +2880,10 @@ impl Texture {
         match &self.0 {
             #[cfg(target_os = "linux")]
             TextureInner::Vulkan(t) => t.usage(),
+            #[cfg(target_os = "macos")]
+            TextureInner::Metal(t) => t.usage(),
+            #[cfg(target_os = "windows")]
+            TextureInner::D3d11(t) => t.usage(),
             #[cfg(feature = "wgpu")]
             TextureInner::Wgpu(t) => wg::from_texture_usages(t.usage()),
         }
@@ -1961,6 +2911,10 @@ impl PipelineCache {
         match &self.0 {
             #[cfg(target_os = "linux")]
             CacheInner::Vulkan(c) => c.get_data(),
+            #[cfg(target_os = "macos")]
+            CacheInner::Metal(c) => c.get_data(),
+            #[cfg(target_os = "windows")]
+            CacheInner::D3d11(c) => c.get_data(),
             #[cfg(feature = "wgpu")]
             CacheInner::Wgpu(c) => c.get_data(),
         }
@@ -1971,6 +2925,10 @@ impl PipelineCache {
 enum ModuleInner {
     #[cfg(target_os = "linux")]
     Vulkan(vk::ShaderModule),
+    #[cfg(target_os = "macos")]
+    Metal(mtl::ShaderModule),
+    #[cfg(target_os = "windows")]
+    D3d11(d3d::ShaderModule),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::ShaderModule),
 }
@@ -1999,12 +2957,34 @@ impl ShaderModule {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    fn mtl(&self) -> &mtl::ShaderModule {
+        match &self.inner {
+            ModuleInner::Metal(m) => m,
+            #[cfg(feature = "wgpu")]
+            ModuleInner::Wgpu(_) => panic!("a wgpu shader module on Metal"),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    fn d3d(&self) -> &d3d::ShaderModule {
+        match &self.inner {
+            ModuleInner::D3d11(m) => m,
+            #[cfg(feature = "wgpu")]
+            ModuleInner::Wgpu(_) => panic!("a wgpu shader module on D3D11"),
+        }
+    }
+
     #[cfg(feature = "wgpu")]
     fn wg(&self) -> &wgpu::ShaderModule {
         match &self.inner {
             ModuleInner::Wgpu(m) => m,
             #[cfg(target_os = "linux")]
             ModuleInner::Vulkan(_) => panic!("a Vulkan shader module on wgpu"),
+            #[cfg(target_os = "macos")]
+            ModuleInner::Metal(_) => panic!("a Metal shader module on wgpu"),
+            #[cfg(target_os = "windows")]
+            ModuleInner::D3d11(_) => panic!("a D3D11 shader module on wgpu"),
         }
     }
 }
@@ -2148,6 +3128,10 @@ pub struct RenderPassDescriptor<'a> {
 enum EncoderInner {
     #[cfg(target_os = "linux")]
     Vulkan(Vec<vk::Cmd>),
+    #[cfg(target_os = "macos")]
+    Metal(Vec<mtl::Cmd>),
+    #[cfg(target_os = "windows")]
+    D3d11(Vec<d3d::Cmd>),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::CommandEncoder),
 }
@@ -2177,6 +3161,38 @@ impl CommandEncoder {
                 timestamps: desc.timestamp_writes.as_ref().map(|t| {
                     (
                         t.query_set.vk().clone(),
+                        t.beginning_of_pass_write_index,
+                        t.end_of_pass_write_index,
+                    )
+                }),
+                cmds: Vec::new(),
+            }),
+            #[cfg(target_os = "macos")]
+            EncoderInner::Metal(_) => PassInner::Metal(mtl::PassRecord {
+                target: attachment.view.mtl().clone(),
+                clear: match attachment.ops.load {
+                    LoadOp::Clear(c) => Some([c.r as f32, c.g as f32, c.b as f32, c.a as f32]),
+                    LoadOp::Load => None,
+                },
+                timestamps: desc.timestamp_writes.as_ref().map(|t| {
+                    (
+                        t.query_set.mtl().clone(),
+                        t.beginning_of_pass_write_index,
+                        t.end_of_pass_write_index,
+                    )
+                }),
+                cmds: Vec::new(),
+            }),
+            #[cfg(target_os = "windows")]
+            EncoderInner::D3d11(_) => PassInner::D3d11(d3d::PassRecord {
+                target: attachment.view.d3d().clone(),
+                clear: match attachment.ops.load {
+                    LoadOp::Clear(c) => Some([c.r as f32, c.g as f32, c.b as f32, c.a as f32]),
+                    LoadOp::Load => None,
+                },
+                timestamps: desc.timestamp_writes.as_ref().map(|t| {
+                    (
+                        t.query_set.d3d().clone(),
                         t.beginning_of_pass_write_index,
                         t.end_of_pass_write_index,
                     )
@@ -2237,6 +3253,22 @@ impl CommandEncoder {
                 dst_offset,
                 size: size.unwrap_or_else(|| src.size().saturating_sub(src_offset)),
             }),
+            #[cfg(target_os = "macos")]
+            EncoderInner::Metal(c) => c.push(mtl::Cmd::CopyBuffer {
+                src: src.mtl().clone(),
+                src_offset,
+                dst: dst.mtl().clone(),
+                dst_offset,
+                size: size.unwrap_or_else(|| src.size().saturating_sub(src_offset)),
+            }),
+            #[cfg(target_os = "windows")]
+            EncoderInner::D3d11(c) => c.push(d3d::Cmd::CopyBuffer {
+                src: src.d3d().clone(),
+                src_offset,
+                dst: dst.d3d().clone(),
+                dst_offset,
+                size: size.unwrap_or_else(|| src.size().saturating_sub(src_offset)),
+            }),
             #[cfg(feature = "wgpu")]
             EncoderInner::Wgpu(e) => {
                 e.copy_buffer_to_buffer(src.wg(), src_offset, dst.wg(), dst_offset, size);
@@ -2256,6 +3288,26 @@ impl CommandEncoder {
                 src: src.single_mip().clone(),
                 src_origin: src.origin,
                 dst: dst.single_mip().clone(),
+                dst_origin: dst.origin,
+                size,
+            }),
+            #[cfg(target_os = "macos")]
+            EncoderInner::Metal(c) => c.push(mtl::Cmd::TextureToTexture {
+                src: src.texture.mtl().clone(),
+                src_mip: src.mip_level,
+                src_origin: src.origin,
+                dst: dst.texture.mtl().clone(),
+                dst_mip: dst.mip_level,
+                dst_origin: dst.origin,
+                size,
+            }),
+            #[cfg(target_os = "windows")]
+            EncoderInner::D3d11(c) => c.push(d3d::Cmd::TextureToTexture {
+                src: src.texture.d3d().clone(),
+                src_mip: src.mip_level,
+                src_origin: src.origin,
+                dst: dst.texture.d3d().clone(),
+                dst_mip: dst.mip_level,
                 dst_origin: dst.origin,
                 size,
             }),
@@ -2298,6 +3350,34 @@ impl CommandEncoder {
                     size,
                 });
             }
+            #[cfg(target_os = "macos")]
+            EncoderInner::Metal(c) => {
+                let block = src.texture.format().block_size();
+                c.push(mtl::Cmd::TextureToBuffer {
+                    src: src.texture.mtl().clone(),
+                    mip_level: src.mip_level,
+                    origin: src.origin,
+                    dst: dst.buffer.mtl().clone(),
+                    offset: dst.layout.offset,
+                    bytes_per_row: dst.layout.bytes_per_row.unwrap_or(size.width * block),
+                    rows_per_image: dst.layout.rows_per_image.unwrap_or(size.height),
+                    size,
+                });
+            }
+            #[cfg(target_os = "windows")]
+            EncoderInner::D3d11(c) => {
+                let block = src.texture.format().block_size();
+                c.push(d3d::Cmd::TextureToBuffer {
+                    src: src.texture.d3d().clone(),
+                    mip_level: src.mip_level,
+                    origin: src.origin,
+                    dst: dst.buffer.d3d().clone(),
+                    offset: dst.layout.offset,
+                    bytes_per_row: dst.layout.bytes_per_row.unwrap_or(size.width * block),
+                    rows_per_image: dst.layout.rows_per_image.unwrap_or(size.height),
+                    size,
+                });
+            }
             #[cfg(feature = "wgpu")]
             EncoderInner::Wgpu(e) => e.copy_texture_to_buffer(
                 wgpu::TexelCopyTextureInfo {
@@ -2319,6 +3399,10 @@ impl CommandEncoder {
         match &mut self.0 {
             #[cfg(target_os = "linux")]
             EncoderInner::Vulkan(c) => c.push(vk::Cmd::Timestamp(set.vk().clone(), index)),
+            #[cfg(target_os = "macos")]
+            EncoderInner::Metal(c) => c.push(mtl::Cmd::Timestamp(set.mtl().clone(), index)),
+            #[cfg(target_os = "windows")]
+            EncoderInner::D3d11(c) => c.push(d3d::Cmd::Timestamp(set.d3d().clone(), index)),
             #[cfg(feature = "wgpu")]
             EncoderInner::Wgpu(e) => e.write_timestamp(set.wg(), index),
         }
@@ -2340,6 +3424,22 @@ impl CommandEncoder {
                 dst: dst.vk().clone(),
                 offset,
             }),
+            #[cfg(target_os = "macos")]
+            EncoderInner::Metal(c) => c.push(mtl::Cmd::Resolve {
+                set: set.mtl().clone(),
+                first: range.start,
+                count: range.len() as u32,
+                dst: dst.mtl().clone(),
+                offset,
+            }),
+            #[cfg(target_os = "windows")]
+            EncoderInner::D3d11(c) => c.push(d3d::Cmd::Resolve {
+                set: set.d3d().clone(),
+                first: range.start,
+                count: range.len() as u32,
+                dst: dst.d3d().clone(),
+                offset,
+            }),
             #[cfg(feature = "wgpu")]
             EncoderInner::Wgpu(e) => e.resolve_query_set(set.wg(), range, dst.wg(), offset),
         }
@@ -2349,6 +3449,10 @@ impl CommandEncoder {
 enum PassInner {
     #[cfg(target_os = "linux")]
     Vulkan(vk::PassRecord),
+    #[cfg(target_os = "macos")]
+    Metal(mtl::PassRecord),
+    #[cfg(target_os = "windows")]
+    D3d11(d3d::PassRecord),
     #[cfg(feature = "wgpu")]
     Wgpu(Box<wgpu::RenderPass<'static>>),
 }
@@ -2366,6 +3470,14 @@ impl Drop for RenderPass<'_> {
             (Some(PassInner::Vulkan(record)), EncoderInner::Vulkan(c)) => {
                 c.push(vk::Cmd::Pass(record));
             }
+            #[cfg(target_os = "macos")]
+            (Some(PassInner::Metal(record)), EncoderInner::Metal(c)) => {
+                c.push(mtl::Cmd::Pass(record));
+            }
+            #[cfg(target_os = "windows")]
+            (Some(PassInner::D3d11(record)), EncoderInner::D3d11(c)) => {
+                c.push(d3d::Cmd::Pass(record));
+            }
             // wgpu's pass ends itself when dropped.
             _ => {}
         }
@@ -2377,6 +3489,14 @@ impl RenderPass<'_> {
         match self.inner.as_mut() {
             #[cfg(target_os = "linux")]
             Some(PassInner::Vulkan(r)) => r.cmds.push(vk::PassCmd::Pipeline(pipeline.vk().clone())),
+            #[cfg(target_os = "macos")]
+            Some(PassInner::Metal(r)) => {
+                r.cmds.push(mtl::PassCmd::Pipeline(pipeline.mtl().clone()));
+            }
+            #[cfg(target_os = "windows")]
+            Some(PassInner::D3d11(r)) => {
+                r.cmds.push(d3d::PassCmd::Pipeline(pipeline.d3d().clone()));
+            }
             #[cfg(feature = "wgpu")]
             Some(PassInner::Wgpu(p)) => p.set_pipeline(pipeline.wg()),
             None => {}
@@ -2397,6 +3517,18 @@ impl RenderPass<'_> {
                 group.vk().clone(),
                 offsets.to_vec(),
             )),
+            #[cfg(target_os = "macos")]
+            Some(PassInner::Metal(r)) => r.cmds.push(mtl::PassCmd::Group(
+                index,
+                group.mtl().clone(),
+                offsets.to_vec(),
+            )),
+            #[cfg(target_os = "windows")]
+            Some(PassInner::D3d11(r)) => r.cmds.push(d3d::PassCmd::Group(
+                index,
+                group.d3d().clone(),
+                offsets.to_vec(),
+            )),
             #[cfg(feature = "wgpu")]
             Some(PassInner::Wgpu(p)) => p.set_bind_group(index, group.wg(), offsets),
             None => {}
@@ -2411,6 +3543,18 @@ impl RenderPass<'_> {
                 slice.buffer.vk().clone(),
                 slice.offset,
             )),
+            #[cfg(target_os = "macos")]
+            Some(PassInner::Metal(r)) => r.cmds.push(mtl::PassCmd::Vertex(
+                slot,
+                slice.buffer.mtl().clone(),
+                slice.offset,
+            )),
+            #[cfg(target_os = "windows")]
+            Some(PassInner::D3d11(r)) => r.cmds.push(d3d::PassCmd::Vertex(
+                slot,
+                slice.buffer.d3d().clone(),
+                slice.offset,
+            )),
             #[cfg(feature = "wgpu")]
             Some(PassInner::Wgpu(p)) => p.set_vertex_buffer(slot, slice.wg()),
             None => {}
@@ -2423,6 +3567,14 @@ impl RenderPass<'_> {
             Some(PassInner::Vulkan(r)) => r
                 .cmds
                 .push(vk::PassCmd::Viewport([x, y, w, h, min_depth, max_depth])),
+            #[cfg(target_os = "macos")]
+            Some(PassInner::Metal(r)) => r
+                .cmds
+                .push(mtl::PassCmd::Viewport([x, y, w, h, min_depth, max_depth])),
+            #[cfg(target_os = "windows")]
+            Some(PassInner::D3d11(r)) => r
+                .cmds
+                .push(d3d::PassCmd::Viewport([x, y, w, h, min_depth, max_depth])),
             #[cfg(feature = "wgpu")]
             Some(PassInner::Wgpu(p)) => p.set_viewport(x, y, w, h, min_depth, max_depth),
             None => {}
@@ -2433,6 +3585,10 @@ impl RenderPass<'_> {
         match self.inner.as_mut() {
             #[cfg(target_os = "linux")]
             Some(PassInner::Vulkan(r)) => r.cmds.push(vk::PassCmd::Scissor([x, y, w, h])),
+            #[cfg(target_os = "macos")]
+            Some(PassInner::Metal(r)) => r.cmds.push(mtl::PassCmd::Scissor([x, y, w, h])),
+            #[cfg(target_os = "windows")]
+            Some(PassInner::D3d11(r)) => r.cmds.push(d3d::PassCmd::Scissor([x, y, w, h])),
             #[cfg(feature = "wgpu")]
             Some(PassInner::Wgpu(p)) => p.set_scissor_rect(x, y, w, h),
             None => {}
@@ -2443,6 +3599,16 @@ impl RenderPass<'_> {
         match self.inner.as_mut() {
             #[cfg(target_os = "linux")]
             Some(PassInner::Vulkan(r)) => r.cmds.push(vk::PassCmd::Draw {
+                vertices,
+                instances,
+            }),
+            #[cfg(target_os = "macos")]
+            Some(PassInner::Metal(r)) => r.cmds.push(mtl::PassCmd::Draw {
+                vertices,
+                instances,
+            }),
+            #[cfg(target_os = "windows")]
+            Some(PassInner::D3d11(r)) => r.cmds.push(d3d::PassCmd::Draw {
                 vertices,
                 instances,
             }),
@@ -2460,6 +3626,10 @@ impl<T: Send + Sync> Keep for T {}
 enum SurfaceInner<'w> {
     #[cfg(target_os = "linux")]
     Vulkan(Arc<vk::Surface>),
+    #[cfg(target_os = "macos")]
+    Metal(Arc<mtl::Surface>),
+    #[cfg(target_os = "windows")]
+    D3d11(Arc<d3d::Surface>),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::Surface<'w>),
     #[cfg(not(feature = "wgpu"))]
@@ -2482,6 +3652,14 @@ impl Drop for Surface<'_> {
         if let SurfaceInner::Vulkan(s) = &self.inner {
             s.release();
         }
+        #[cfg(target_os = "macos")]
+        if let SurfaceInner::Metal(s) = &self.inner {
+            s.release();
+        }
+        #[cfg(target_os = "windows")]
+        if let SurfaceInner::D3d11(s) = &self.inner {
+            s.release();
+        }
     }
 }
 
@@ -2501,14 +3679,18 @@ impl<'w> Surface<'w> {
         }
     }
 
-    /// What the surface offers. On Vulkan the swapchain settles format and
-    /// alpha when configured ([`Surface::alpha_mode`]); this lists what it
+    /// What the surface offers. On native backends the swapchain settles format
+    /// and alpha when configured ([`Surface::alpha_mode`]); this lists what it
     /// may pick.
     /// Whether this is a native (not wgpu) surface.
     fn is_native(&self) -> bool {
         match &self.inner {
             #[cfg(target_os = "linux")]
             SurfaceInner::Vulkan(_) => true,
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(_) => true,
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(_) => true,
             #[cfg(feature = "wgpu")]
             SurfaceInner::Wgpu(_) => false,
             #[cfg(not(feature = "wgpu"))]
@@ -2533,6 +3715,51 @@ impl<'w> Surface<'w> {
                     CompositeAlphaMode::Opaque,
                     CompositeAlphaMode::PreMultiplied,
                     CompositeAlphaMode::PostMultiplied,
+                ],
+                usages: TextureUsages::RENDER_ATTACHMENT,
+            },
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(_) if !adapter.is_native() => SurfaceCapabilities {
+                formats: Vec::new(),
+                present_modes: Vec::new(),
+                alpha_modes: Vec::new(),
+                usages: TextureUsages::empty(),
+            },
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(_) => SurfaceCapabilities {
+                formats: vec![
+                    TextureFormat::Bgra8Unorm,
+                    TextureFormat::Bgra8UnormSrgb,
+                    TextureFormat::Rgba16Float,
+                ],
+                present_modes: vec![PresentMode::Fifo, PresentMode::Immediate],
+                alpha_modes: vec![
+                    CompositeAlphaMode::Opaque,
+                    CompositeAlphaMode::PreMultiplied,
+                ],
+                usages: TextureUsages::RENDER_ATTACHMENT
+                    | TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::TEXTURE_BINDING,
+            },
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(_) if !adapter.is_native() => SurfaceCapabilities {
+                formats: Vec::new(),
+                present_modes: Vec::new(),
+                alpha_modes: Vec::new(),
+                usages: TextureUsages::empty(),
+            },
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(_) => SurfaceCapabilities {
+                formats: vec![TextureFormat::Bgra8Unorm, TextureFormat::Rgba8Unorm],
+                present_modes: vec![
+                    PresentMode::Fifo,
+                    PresentMode::Mailbox,
+                    PresentMode::Immediate,
+                ],
+                alpha_modes: vec![
+                    CompositeAlphaMode::Opaque,
+                    CompositeAlphaMode::PreMultiplied,
                 ],
                 usages: TextureUsages::RENDER_ATTACHMENT,
             },
@@ -2611,11 +3838,26 @@ impl<'w> Surface<'w> {
                     });
                 }
             }
+            #[cfg(target_os = "macos")]
+            (SurfaceInner::Metal(s), DeviceInner::Metal(o)) => {
+                if let Err(e) = s.configure(&o.0, config) {
+                    device.report(e.into_hal());
+                }
+            }
+            #[cfg(target_os = "windows")]
+            (SurfaceInner::D3d11(s), DeviceInner::D3d11(o)) => {
+                if let Err(e) = s.configure(&o.0, config) {
+                    device.report(e.into_hal());
+                }
+            }
             #[cfg(feature = "wgpu")]
             (SurfaceInner::Wgpu(s), DeviceInner::Wgpu(d, _)) => {
                 s.configure(d, &wg::surface_config(config));
             }
-            #[cfg(all(target_os = "linux", feature = "wgpu"))]
+            #[cfg(all(
+                any(target_os = "linux", target_os = "macos", target_os = "windows"),
+                feature = "wgpu"
+            ))]
             _ => device.report(Error::Validation {
                 description: "the surface and device are on different backends".into(),
             }),
@@ -2624,12 +3866,16 @@ impl<'w> Surface<'w> {
         }
     }
 
-    /// The alpha mode the configured swapchain composites with (Vulkan), or
+    /// The alpha mode the configured swapchain composites with (native), or
     /// `None` where the configuration's own is in effect.
     pub fn alpha_mode(&self) -> Option<CompositeAlphaMode> {
         match &self.inner {
             #[cfg(target_os = "linux")]
             SurfaceInner::Vulkan(s) => s.alpha_mode(),
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(s) => s.alpha_mode(),
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(s) => s.alpha_mode(),
             #[cfg(feature = "wgpu")]
             SurfaceInner::Wgpu(_) => None,
             #[cfg(not(feature = "wgpu"))]
@@ -2637,12 +3883,16 @@ impl<'w> Surface<'w> {
         }
     }
 
-    /// The configured swapchain's format (Vulkan), or `None` where the
+    /// The configured swapchain's format (native), or `None` where the
     /// configuration's own is in effect.
     pub fn format(&self) -> Option<TextureFormat> {
         match &self.inner {
             #[cfg(target_os = "linux")]
             SurfaceInner::Vulkan(s) => s.format(),
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(s) => s.format(),
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(s) => s.format(),
             #[cfg(feature = "wgpu")]
             SurfaceInner::Wgpu(_) => None,
             #[cfg(not(feature = "wgpu"))]
@@ -2655,6 +3905,14 @@ impl<'w> Surface<'w> {
         match &self.inner {
             #[cfg(target_os = "linux")]
             SurfaceInner::Vulkan(s) => s.set_logical_size(width, height),
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(_) => {
+                let _ = (width, height);
+            }
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(_) => {
+                let _ = (width, height);
+            }
             #[cfg(feature = "wgpu")]
             SurfaceInner::Wgpu(_) => {}
             #[cfg(not(feature = "wgpu"))]
@@ -2684,6 +3942,36 @@ impl<'w> Surface<'w> {
                 vk::Acquired::Lost => CurrentSurfaceTexture::Lost,
                 vk::Acquired::Failed(e) => {
                     eprintln!("mui-hal: acquiring a swapchain image failed: {e}");
+                    CurrentSurfaceTexture::Lost
+                }
+            },
+            #[cfg(target_os = "macos")]
+            SurfaceInner::Metal(s) => match s.acquire() {
+                mtl::Acquired::Image(f) => CurrentSurfaceTexture::Success(SurfaceTexture {
+                    texture: Texture(TextureInner::Metal(f.texture.clone())),
+                    view: TextureView(ViewInner::Metal(f.view.clone())),
+                    inner: SurfaceTextureInner::Metal(s.clone(), f),
+                }),
+                mtl::Acquired::Outdated => CurrentSurfaceTexture::Outdated,
+                mtl::Acquired::Timeout => CurrentSurfaceTexture::Timeout,
+                mtl::Acquired::Lost => CurrentSurfaceTexture::Lost,
+                mtl::Acquired::Failed(e) => {
+                    eprintln!("mui-hal: acquiring a Metal drawable failed: {e}");
+                    CurrentSurfaceTexture::Lost
+                }
+            },
+            #[cfg(target_os = "windows")]
+            SurfaceInner::D3d11(s) => match s.acquire() {
+                d3d::Acquired::Image(f) => CurrentSurfaceTexture::Success(SurfaceTexture {
+                    texture: Texture(TextureInner::D3d11(f.texture.clone())),
+                    view: TextureView(ViewInner::D3d11(f.view.clone())),
+                    inner: SurfaceTextureInner::D3d11(s.clone(), f),
+                }),
+                d3d::Acquired::Outdated => CurrentSurfaceTexture::Outdated,
+                d3d::Acquired::Occluded => CurrentSurfaceTexture::Occluded,
+                d3d::Acquired::Lost => CurrentSurfaceTexture::Lost,
+                d3d::Acquired::Failed(e) => {
+                    eprintln!("mui-hal: acquiring a D3D11 back buffer failed: {e}");
                     CurrentSurfaceTexture::Lost
                 }
             },
@@ -2720,6 +4008,10 @@ impl<'w> Surface<'w> {
 enum SurfaceTextureInner {
     #[cfg(target_os = "linux")]
     Vulkan(Arc<vk::Surface>, vk::SurfaceTexture),
+    #[cfg(target_os = "macos")]
+    Metal(Arc<mtl::Surface>, mtl::SurfaceTexture),
+    #[cfg(target_os = "windows")]
+    D3d11(Arc<d3d::Surface>, d3d::SurfaceTexture),
     #[cfg(feature = "wgpu")]
     Wgpu(wgpu::SurfaceTexture),
 }

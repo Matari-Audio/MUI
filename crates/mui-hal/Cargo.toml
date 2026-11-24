@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-description = "MUI's owned render-only GPU HAL: Vulkan (ash), with an opt-in wgpu passthrough"
+description = "MUI's owned render-only GPU HAL: Vulkan (ash), Metal (objc2-metal), D3D11 (windows), with an opt-in wgpu passthrough"
 
 [features]
 default = []
@@ -29,9 +29,49 @@ mui-present.workspace = true
 # The passthrough's native backend per target, so `wgpu` alone works
 # (Linux users of it enable `vulkan` themselves; plugins there never do).
 [target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSResponder", "NSView", "objc2-quartz-core"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["CFCGTypes"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSArray", "NSError", "NSGeometry", "NSObject", "NSRange", "NSString"] }
+objc2-metal = { version = "0.3", default-features = false, features = [
+    "MTLBlitCommandEncoder",
+    "MTLBuffer",
+    "MTLCommandBuffer",
+    "MTLCommandEncoder",
+    "MTLCommandQueue",
+    "MTLCounters",
+    "MTLDevice",
+    "MTLDrawable",
+    "MTLLibrary",
+    "MTLPixelFormat",
+    "MTLRenderCommandEncoder",
+    "MTLRenderPass",
+    "MTLRenderPipeline",
+    "MTLResource",
+    "MTLSampler",
+    "MTLTexture",
+    "MTLTypes",
+    "MTLVertexDescriptor",
+] }
+objc2-quartz-core = { version = "0.3", default-features = false, features = [
+    "CALayer",
+    "CAMetalLayer",
+    "CATransaction",
+    "objc2-core-foundation",
+    "objc2-metal",
+] }
 wgpu = { workspace = true, optional = true, features = ["metal"] }
 
-[target.'cfg(windows)'.dependencies]
+[target.'cfg(target_os = "windows")'.dependencies]
+mui-present.workspace = true
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
 wgpu = { workspace = true, optional = true, features = ["dx12"] }
 
 [dev-dependencies]
