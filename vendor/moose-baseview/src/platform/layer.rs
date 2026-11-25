@@ -14,7 +14,7 @@ mod toplevel;
 
 use super::{linux, x11::PlatformError};
 use crate::{dpi::*, window::WindowInitializer, *};
-use calloop::{channel, EventLoop, LoopSignal};
+use calloop::{channel, ping, EventLoop, LoopSignal};
 use calloop_wayland_source::WaylandSource;
 use context::Role;
 pub use context::{Context, PlatformHandle};
@@ -68,28 +68,44 @@ struct Shared {
     surface: Mutex<Option<(Role, Connection)>>,
 }
 impl Shared {
+    /// Answers the host reads before the surface exists: the requested size,
+    /// at scale 1 until the compositor reports the output's.
     fn new(settings: &WindowSettings, visible: bool) -> Arc<Self> {
+        let size = settings.size.to_physical::<u32>(1.0);
         Arc::new(Self {
             open: AtomicBool::new(true),
             visible: AtomicBool::new(visible),
             desired_visible: AtomicBool::new(visible),
             redraw: AtomicBool::new(true),
             fixed: AtomicBool::new(!settings.resizable),
-            size: AtomicU64::new((800_u64 << 32) | 160),
+            size: AtomicU64::new((u64::from(size.width) << 32) | u64::from(size.height)),
             scale: AtomicU64::new(1_f64.to_bits()),
             error: Mutex::new(None),
             surface: Mutex::new(None),
         })
     }
     /// Wakes the runtime's loop for a frame; holds neither the window nor the loop alive.
-    fn frame_requester(self: &Arc<Self>, signal: LoopSignal) -> FrameRequester {
+    fn frame_requester(
+        self: &Arc<Self>, wake: impl Fn() + Send + Sync + 'static,
+    ) -> FrameRequester {
         let shared = Arc::downgrade(self);
         FrameRequester::new(move || {
             if let Some(s) = shared.upgrade() {
                 s.redraw.store(true, Ordering::Release);
-                signal.wakeup();
+                wake();
             }
         })
+    }
+    /// Worker side: the runtime failed. Logged, and returned by later host calls.
+    fn record_error(&self, error: String) {
+        crate::error!("Wayland editor window failed: {}", &error);
+        *self.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+    }
+    fn closed(&self) -> PlatformError {
+        match self.error.lock().unwrap_or_else(|e| e.into_inner()).clone() {
+            Some(e) => failure(format!("Wayland window is closed: {e}")),
+            None => failure("Wayland window is closed"),
+        }
     }
     fn size(&self) -> WindowSize {
         let packed = self.size.load(Ordering::Acquire);
@@ -108,10 +124,16 @@ enum Command {
     Close,
 }
 
+/// Host commands are one-way: a full queue fails the request at once rather
+/// than blocking the host.
+const COMMAND_QUEUE: usize = 32;
+
 pub struct WindowHandle {
     shared: Arc<Shared>,
     sender: channel::SyncSender<Command>,
-    signal: LoopSignal,
+    /// Wakes the owner's loop. Created here, so a wake sent before the loop
+    /// exists is kept by the eventfd and seen when it starts.
+    wake: ping::Ping,
     thread: Cell<Option<JoinHandle<()>>>,
     close_timeout: Cell<Duration>,
 }
@@ -132,28 +154,29 @@ impl WindowHandle {
             return Err(failure("could not pin the window's executable image"));
         }
         let shared = Shared::new(&settings, false);
-        let (send, recv) = mpsc::sync_channel(1);
-        let (sender, receiver) = channel::sync_channel(8);
+        let (sender, receiver) = channel::sync_channel(COMMAND_QUEUE);
+        let (wake, woken) = ping::make_ping().map_err(failure)?;
         let state = Arc::clone(&shared);
+        // Open returns once the owner thread exists. Connecting, configuring and
+        // building the handler happen there; their failure is an event (logged,
+        // `is_open` turns false, later calls report it), never a deadline the
+        // host thread waits out. Commands and wakes sent meanwhile queue.
         let thread = std::thread::Builder::new()
             .name("mui-wayland".into())
             .stack_size(8 * 1024 * 1024)
             .spawn(move || {
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let mut event_loop = EventLoop::<Runtime>::try_new().map_err(failure)?;
-                    let signal = event_loop.get_signal();
-                    let mut runtime =
-                        Runtime::new(settings, builder, Arc::clone(&state), &mut event_loop, None)?;
-                    event_loop
-                        .handle()
+                    let handle = event_loop.handle();
+                    handle.insert_source(woken, |(), _, _| {}).map_err(failure)?;
+                    handle
                         .insert_source(receiver, |event, _, runtime| match event {
                             channel::Event::Msg(command) => runtime.command(command),
                             channel::Event::Closed => runtime.exit = true,
                         })
                         .map_err(failure)?;
-                    if send.send(Ok(signal)).is_err() {
-                        return Ok(());
-                    }
+                    let mut runtime =
+                        Runtime::new(settings, builder, Arc::clone(&state), &mut event_loop, None)?;
                     while !runtime.exit && state.open.load(Ordering::Acquire) {
                         runtime.tick()?;
                         event_loop.dispatch(runtime.deadline(), &mut runtime).map_err(failure)?;
@@ -166,36 +189,38 @@ impl WindowHandle {
                     Ok(Err(e)) => Some(e.to_string()),
                     Err(_) => Some("panic in native Wayland runtime".into()),
                 };
-                if let Some(error) = error {
-                    let _ = send.try_send(Err(error.clone()));
-                    *state.error.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+                // A window the host already closed has no one to tell.
+                if let Some(error) = error.filter(|_| state.open.load(Ordering::Acquire)) {
+                    state.record_error(error);
                 }
                 state.open.store(false, Ordering::Release);
             })
             .map_err(failure)?;
-        match recv.recv_timeout(Duration::from_secs(3)) {
-            Ok(Ok(signal)) => Ok(Self {
-                shared,
-                sender,
-                signal,
-                thread: Cell::new(Some(thread)),
-                close_timeout: Cell::new(Duration::from_millis(250)),
-            }),
-            result => {
-                shared.open.store(false, Ordering::Release);
-                if thread.is_finished() {
-                    let _ = thread.join();
-                }
-                Err(failure(match result {
-                    Ok(Err(e)) => e,
-                    Err(e) => e.to_string(),
-                    _ => "Wayland window creation failed".into(),
-                }))
-            }
-        }
+        Ok(Self {
+            shared,
+            sender,
+            wake,
+            thread: Cell::new(Some(thread)),
+            close_timeout: Cell::new(Duration::from_millis(250)),
+        })
     }
+    /// Queues `command` and returns: Ok means queued, not applied. A full
+    /// queue or a stopped owner fails at once; neither blocks the host.
     fn command(&self, command: Command) -> linux::Result<()> {
-        self.sender.try_send(command).map_err(failure)
+        self.sender.try_send(command).map_err(|e| match e {
+            mpsc::TrySendError::Full(_) => {
+                failure("Wayland request queue is full; request was not sent")
+            }
+            mpsc::TrySendError::Disconnected(_) => self.shared.closed(),
+        })
+    }
+    fn set_visible(&self, visible: bool) -> linux::Result<()> {
+        if !self.is_open() {
+            return Err(self.shared.closed());
+        }
+        self.shared.desired_visible.store(visible, Ordering::Release);
+        self.wake.ping();
+        Ok(())
     }
     pub fn size(&self) -> WindowSize {
         self.shared.size()
@@ -207,14 +232,10 @@ impl WindowHandle {
         self.command(Command::Title(title.into()))
     }
     pub fn show(&self) -> linux::Result<()> {
-        self.shared.desired_visible.store(true, Ordering::Release);
-        self.signal.wakeup();
-        Ok(())
+        self.set_visible(true)
     }
     pub fn hide(&self) -> linux::Result<()> {
-        self.shared.desired_visible.store(false, Ordering::Release);
-        self.signal.wakeup();
-        Ok(())
+        self.set_visible(false)
     }
     pub fn suggest_scale_factor(&self, _: f64) -> linux::Result<()> {
         Ok(())
@@ -244,26 +265,28 @@ impl WindowHandle {
     }
     pub fn visibility_control(&self) -> WindowVisibility {
         let shared = Arc::downgrade(&self.shared);
-        let signal = self.signal.clone();
+        let wake = self.wake.clone();
         WindowVisibility::new(move |visible| {
             if let Some(s) = shared.upgrade() {
                 if s.open.load(Ordering::Acquire) {
                     s.desired_visible.store(visible, Ordering::Release);
                     s.redraw.store(true, Ordering::Release);
-                    signal.wakeup();
+                    wake.ping();
                 }
             }
         })
     }
     pub fn frame_requester(&self) -> FrameRequester {
-        self.shared.frame_requester(self.signal.clone())
+        let wake = self.wake.clone();
+        self.shared.frame_requester(move || wake.ping())
     }
     pub fn run_until_closed(&self) -> linux::Result<()> {
-        self.show()?;
+        let shown = self.show();
         if let Some(thread) = self.thread.take() {
             thread.join().map_err(|_| failure("dock thread panicked"))?;
         }
-        match self.shared.error.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        shown?;
+        match self.shared.error.lock().unwrap_or_else(|e| e.into_inner()).clone() {
             Some(e) => Err(failure(e)),
             None => Ok(()),
         }
@@ -273,7 +296,7 @@ impl Drop for WindowHandle {
     fn drop(&mut self) {
         self.shared.open.store(false, Ordering::Release);
         let _ = self.sender.try_send(Command::Close);
-        self.signal.wakeup();
+        self.wake.ping();
         // Release the reservation even when a product renderer is stalled.
         // Wayland proxies/Connection support requests from another thread; only
         // the native owner dispatches events or accesses the product handler.
@@ -366,7 +389,8 @@ impl Embedded {
         self.runtime.shared.size()
     }
     pub fn frame_requester(&self) -> FrameRequester {
-        self.runtime.shared.frame_requester(self.event_loop.get_signal())
+        let signal = self.event_loop.get_signal();
+        self.runtime.shared.frame_requester(move || signal.wakeup())
     }
 }
 
@@ -542,7 +566,11 @@ impl Runtime {
                 std::thread::sleep(Duration::from_millis(1));
             }
         }
-        if !runtime.configured || !runtime.shared.open.load(Ordering::Acquire) {
+        if !runtime.shared.open.load(Ordering::Acquire) {
+            // Closed by the host before it was ready: skip the handler build.
+            return Err(failure("closed before the surface was ready"));
+        }
+        if !runtime.configured {
             return Err(failure("compositor did not configure the dock"));
         }
         let handler = builder
@@ -1078,5 +1106,145 @@ mod tests {
         drop(embedded);
         assert!(host.is_open(), "closing the embedded editor leaves the host alone");
         host.close();
+    }
+
+    /// Structural guard: no host-facing path in this file may wait on the
+    /// owner thread with a deadline or a reply. Open and commands are events;
+    /// the one timed wait is the bounded close in `Drop`, whose bound the
+    /// caller chooses.
+    #[test]
+    fn host_paths_have_no_deadlines_or_replies() {
+        let source = include_str!("layer.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for banned in ["recv_timeout", ".recv()", "mpsc::sync_channel", "mpsc::channel"] {
+            assert!(!production.contains(banned), "layer.rs production code uses `{banned}`");
+        }
+        let host = &production[production.find("impl WindowHandle {").unwrap()
+            ..production.find("impl Drop for WindowHandle").unwrap()];
+        for banned in ["sleep", "recv", "Duration::from_secs", "is_finished"] {
+            assert!(!host.contains(banned), "a WindowHandle host call uses `{banned}`");
+        }
+    }
+
+    #[test]
+    fn requested_size_is_answered_before_the_surface_exists() {
+        let settings = WindowSettings::new().with_size(LogicalSize::new(300., 200.));
+        let size = Shared::new(&settings, false).size();
+        assert_eq!(size.physical, PhysicalSize::new(300, 200));
+        assert_eq!(size.scale_factor, 1.0);
+    }
+
+    struct Slow {
+        resized: mpsc::Sender<WindowSize>,
+        framed: mpsc::Sender<()>,
+        _retired: Retired,
+    }
+    struct Retired(mpsc::Sender<()>);
+    impl Drop for Retired {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+    impl WindowHandler for Slow {
+        fn resized(&self, size: WindowSize) -> std::result::Result<(), HandlerError> {
+            let _ = self.resized.send(size);
+            Ok(())
+        }
+        fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+            let _ = self.framed.send(());
+            Ok(())
+        }
+        fn on_event(&self, _: Event) -> EventStatus {
+            EventStatus::Ignored
+        }
+    }
+    const BUILD: Duration = Duration::from_secs(2);
+    /// Generous for a loaded machine; the old open waited up to 3 s.
+    const AT_ONCE: Duration = Duration::from_millis(100);
+
+    type SlowWindow = (crate::ThreadedWindow, mpsc::Receiver<WindowSize>, mpsc::Receiver<()>);
+
+    /// A floating toplevel whose handler takes [`BUILD`] to build. `retired`
+    /// fires when the handler, or the builder if never run, is freed.
+    fn slow_toplevel(retired: mpsc::Sender<()>) -> SlowWindow {
+        let (resized, sizes) = mpsc::channel();
+        let (framed, frames) = mpsc::channel();
+        let retired = Retired(retired);
+        let window = crate::ThreadedWindow::create(
+            WindowSettings::new().with_size(LogicalSize::new(300., 200.)).with_wayland(true),
+            move |_| {
+                std::thread::sleep(BUILD);
+                Ok(Slow { resized, framed, _retired: retired })
+            },
+        )
+        .expect("open is queued");
+        (window, sizes, frames)
+    }
+
+    /// MUI#193's regression intent on Wayland: a 2 s handler build neither
+    /// blocks nor fails the open, and requests made meanwhile apply when ready.
+    #[test]
+    #[ignore = "requires a running Wayland compositor (CI: weston headless)"]
+    fn native_wayland_slow_build_opens_at_once_and_applies_queued_requests() {
+        let (retired, _freed) = mpsc::channel();
+        let start = Instant::now();
+        let (window, sizes, frames) = slow_toplevel(retired);
+        assert_eq!(window.size().physical, PhysicalSize::new(300, 200), "requested size");
+        window.show().expect("show is queued");
+        window.resize(LogicalSize::new(420., 260.)).expect("resize is queued");
+        window.set_title("slow build").expect("title is queued");
+        assert!(start.elapsed() < AT_ONCE, "host calls waited {:?}", start.elapsed());
+        assert!(window.is_open());
+
+        frames.recv_timeout(BUILD * 3).expect("the queued show maps and draws");
+        assert!(start.elapsed() >= BUILD);
+        let mut sizes = std::iter::from_fn(|| sizes.recv_timeout(Duration::from_secs(3)).ok());
+        let applied = sizes
+            .by_ref()
+            .take(16)
+            .any(|size| size.logical.width.round() == 420. && size.logical.height.round() == 260.);
+        assert!(applied, "the queued resize never applied");
+        assert_eq!(window.size().logical.width.round(), 420.);
+        window.close();
+    }
+
+    /// Close during a 2 s build returns within its bound; the owner frees the
+    /// handler once the build ends. Close before the build starts frees the
+    /// builder instead. Either way nothing outlives the window.
+    #[test]
+    #[ignore = "requires a running Wayland compositor (CI: weston headless)"]
+    fn native_wayland_close_during_slow_build_frees_everything() {
+        for settle in [Duration::ZERO, Duration::from_millis(500)] {
+            let (retired, freed) = mpsc::channel();
+            let (window, _, frames) = slow_toplevel(retired);
+            window.show().expect("show is queued");
+            // Lets the build start before close in the second pass.
+            std::thread::sleep(settle);
+            let start = Instant::now();
+            window.close_bounded(Duration::from_millis(30));
+            assert!(start.elapsed() < AT_ONCE + Duration::from_millis(30), "close waited");
+            freed.recv_timeout(BUILD * 3).expect("handler or builder freed");
+            assert!(frames.try_recv().is_err(), "a closed window never draws");
+        }
+    }
+
+    /// A failed build is an event: logged, `is_open` turns false, and the
+    /// window's run reports it.
+    #[test]
+    #[ignore = "requires a running Wayland compositor (CI: weston headless)"]
+    fn native_wayland_failed_build_is_reported() {
+        let start = Instant::now();
+        let window = crate::ThreadedWindow::create(
+            WindowSettings::new().with_wayland(true),
+            move |_| -> std::result::Result<Counting, HandlerError> {
+                std::thread::sleep(Duration::from_millis(300));
+                Err(std::io::Error::other("renderer refused").into())
+            },
+        )
+        .expect("open is queued");
+        assert!(start.elapsed() < AT_ONCE);
+        assert!(window.is_open(), "still building");
+        let error = window.run_until_closed().unwrap_err().to_string();
+        assert!(error.contains("renderer refused"), "{error}");
     }
 }

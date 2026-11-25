@@ -62,6 +62,7 @@ with tempfile.TemporaryDirectory() as directory:
     assert "WARP shader compilation can crash" in embedded
     assert "target/debug/examples/native_editor" in embedded and "--timeout 60" in embedded
     assert "weston --backend=headless-backend.so" in ui_workflow and "WINIT_UNIX_BACKEND=wayland" in ui_workflow
+    assert "vendor/moose-baseview/Cargo.toml --lib --locked native_wayland" in ui_workflow, "Wayland event-driven open"
     browser = (ROOT / ".github/workflows/playground.yml").read_text()
     assert "browser: [chromium, firefox, webkit]" in browser and "needs: [build, browser]" in browser
     assert "python3 tools/ci/playground.py" in browser

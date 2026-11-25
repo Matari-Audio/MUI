@@ -146,6 +146,8 @@ jobs:
             target/debug/examples/native_windows
           /usr/bin/python3 tools/ci/ui.py --output ui-results/wayland-embedded --timeout 90 -- \
             cargo test -p mui-baseview --lib --locked native_wayland -- --ignored --test-threads=1
+          /usr/bin/python3 tools/ci/ui.py --output ui-results/wayland-open --timeout 90 -- \
+            cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked native_wayland -- --ignored --test-threads=1
       - name: Retain evidence even after a native fault
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
