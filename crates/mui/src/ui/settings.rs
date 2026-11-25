@@ -7,7 +7,7 @@ impl Ui {
     /// or automatic, is reused on the next frame.
     pub(super) fn invalidate_retained(&mut self) {
         self.retained_root = None;
-        self.hot_all = true;
+        self.cold_all = true;
         self.auto_cold = true;
     }
     /// Compare each frame's tree with the last and lay out and paint every
@@ -164,7 +164,7 @@ impl Ui {
             self.gpu_welding_available = available;
             self.scene = None;
             self.resolver = Resolver::default();
-            self.hot_all = true;
+            self.cold_all = true;
             self.auto_cold = true;
         }
     }

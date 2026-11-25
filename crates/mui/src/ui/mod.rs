@@ -257,9 +257,14 @@ pub struct Ui {
     /// This `Ui`'s key in [`TREES`].
     me: u64,
     /// Memos the next build must run again, because something inside them
-    /// moved; `hot_all` for every one.
+    /// moved; `hot_all` for every one that reads input (discrete input
+    /// arrived), `cold_all` for every one (theme, font, scale changed).
     hot: BTreeSet<u64>,
     hot_all: bool,
+    cold_all: bool,
+    /// Input reads so far ([`Ui::saw_input`]): a memo whose build read none
+    /// is not rebuilt for input.
+    input_reads: std::cell::Cell<u64>,
     /// Compare each frame's tree with the last and reuse what did not
     /// change; see [`Ui::set_auto_retain`].
     auto_retain: bool,
@@ -393,6 +398,8 @@ impl Ui {
             me: NEXT_UI.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             hot: BTreeSet::new(),
             hot_all: false,
+            cold_all: false,
+            input_reads: std::cell::Cell::new(0),
             auto_retain: true,
             auto_cold: false,
             touched: Vec::new(),
@@ -407,6 +414,7 @@ impl Ui {
     }
     /// Borrow the last successfully resolved scene.
     pub fn scene(&self) -> Option<&ResolvedScene> {
+        self.saw_input();
         self.scene.as_deref()
     }
     /// Confine wheel input to this popup and its descendants while it is mounted.
@@ -510,6 +518,7 @@ impl Ui {
     /// let el = slider(&mut ui, "cutoff", "Cutoff", &mut cutoff, 0.0..=1.0).el;
     /// ```
     pub fn edit(&self, id: impl Into<Id>) -> Option<Edit> {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         self.delivered
@@ -534,6 +543,7 @@ impl Ui {
     /// # assert_eq!(zoom, 1.0);
     /// ```
     pub fn get(&self, id: impl Into<Id>) -> Response {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         let mut response = self.interaction.get(id);
@@ -694,6 +704,7 @@ impl Ui {
     /// All gesture edges for a control. Unlike `edit`, this preserves an atomic
     /// Begin/End pair, such as one accessibility value change in one frame.
     pub fn edits_for(&self, id: impl Into<Id>) -> impl Iterator<Item = Edit> + '_ {
+        self.saw_input();
         let id: Id = id.into();
         self.delivered
             .iter()
@@ -704,6 +715,7 @@ impl Ui {
     /// Every gesture edge the last frame delivered, in order, for a host
     /// that dispatches them all rather than asking per control.
     pub fn edits(&self) -> &[(String, Edit)] {
+        self.saw_input();
         // `edits` is the queue still to deliver; this is what went out.
         self.delivered.as_slice()
     }

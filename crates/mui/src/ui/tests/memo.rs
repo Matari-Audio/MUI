@@ -416,3 +416,45 @@ fn a_kept_memo_follows_a_resize() {
         assert_eq!(kept, plain, "at {w}");
     }
 }
+
+/// A memo left out of some frames (a tab switched away) is kept, and comes
+/// back without building. A click rebuilds the memos whose build read
+/// input, and leaves the ones that read none.
+#[test]
+fn a_hidden_memo_is_kept_and_input_rebuilds_only_its_readers() {
+    let mut ui = Ui::default();
+    let (mut pure, mut reader) = (0, 0);
+    let tree = |ui: &mut Ui, shown: bool, pure: &mut usize, reader: &mut usize| {
+        if !shown {
+            return block(10., 10.);
+        }
+        let a = ui.memo("pure", 1, |_| {
+            *pure += 1;
+            block(20., 20.).id("pure.a")
+        });
+        let b = ui.memo("reader", 1, |ui| {
+            *reader += 1;
+            let lit = ui.get("reader.b").hovered;
+            block(20., 20.)
+                .fill(if lit { Role::Raised } else { Role::Surface })
+                .id("reader.b")
+        });
+        row([a, b])
+    };
+    let press = |buttons| PointerInput {
+        pos: Some(Point::new(5., 5.)),
+        buttons,
+        ..Default::default()
+    };
+    for shown in [true, false, false, true] {
+        let t = tree(&mut ui, shown, &mut pure, &mut reader);
+        ui.frame(t, ROOM, PointerInput::default(), 0.016).unwrap();
+    }
+    assert_eq!((pure, reader), (1, 1), "kept while hidden");
+    for buttons in [Buttons::PRIMARY, Buttons::default(), Buttons::default()] {
+        let t = tree(&mut ui, true, &mut pure, &mut reader);
+        ui.frame(t, ROOM, press(buttons), 0.016).unwrap();
+    }
+    assert_eq!(pure, 1, "read no input: never rebuilt for it");
+    assert!(reader > 1, "read input: rebuilt after the press");
+}

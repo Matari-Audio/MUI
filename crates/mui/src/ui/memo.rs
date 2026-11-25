@@ -92,12 +92,20 @@ impl Ui {
                 *next
             });
         self.issued += 1;
-        let cold = self.hot_all || self.hot.contains(&key);
+        let reads_input = self.kept.get(&key).is_none_or(|k| k.input);
+        let cold = self.cold_all || (self.hot_all && reads_input) || self.hot.contains(&key);
         if let Some(k) = self.kept.get_mut(&key) {
             let me = self.me;
             let kept = TREES.with(|t| t.borrow().contains_key(&(me, key)));
             if !cold && k.deps == deps && k.still && k.layout_floats == layout_floats && kept {
                 k.live = true;
+                k.idle = 0;
+                // Reused, it still reads what it read: an enclosing build
+                // that hands it out reads input through it.
+                if k.input {
+                    // `saw_input`, by field: `k` holds `kept`.
+                    self.input_reads.set(self.input_reads.get() + 1);
+                }
                 let read = std::mem::take(&mut k.read);
                 // What it read is still read, as the closure would have.
                 for id in &read {
@@ -117,7 +125,9 @@ impl Ui {
             }
         }
         self.building.push((key, self.read.len(), true));
+        let reads_before = self.input_reads.get();
         let mut el = build(self);
+        let input = self.input_reads.get() != reads_before;
         let (_, from, still) = self.building.pop().expect("pushed above");
         let read = self.read[from..].to_vec();
         let built = shell_of(&el);
@@ -155,6 +165,8 @@ impl Ui {
                 read,
                 still,
                 live: true,
+                input,
+                idle: 0,
             },
         );
         el
@@ -251,6 +263,7 @@ impl Ui {
             return;
         };
         k.live = true;
+        k.idle = 0;
         let nested = std::mem::take(&mut k.nested);
         // The placeholder is the root as built, plus whatever the caller did
         // to it this frame. Declared as last frame, the kept tree stands;
@@ -332,7 +345,40 @@ impl Ui {
     }
 }
 
+/// Memos kept while no frame hands them out (a closed tab, a folded panel),
+/// past which the longest idle go first.
+// ponytail: a count, not bytes; a byte budget if parked trees ever hold
+// large pictures of their own (pictures are shared `Arc`s today).
+const PARKED: usize = 4096;
+
 impl Ui {
+    /// Notes that a build read input (a response, keys, focus, the pointer,
+    /// scroll): the memos building now are rebuilt when input arrives.
+    pub(super) fn saw_input(&self) {
+        self.input_reads.set(self.input_reads.get() + 1);
+    }
+
+    /// After a frame: a memo it did not hand out is parked, not dropped, so
+    /// showing it again (a tab switched back, a panel unfolded) reuses it
+    /// when its deps still match. Past [`PARKED`] the longest idle go.
+    pub(super) fn park_memos(&mut self) {
+        let mut parked = Vec::new();
+        for (id, k) in &mut self.kept {
+            if std::mem::take(&mut k.live) {
+                k.idle = 0;
+            } else {
+                k.idle = k.idle.saturating_add(1);
+                parked.push((k.idle, *id));
+            }
+        }
+        if parked.len() > PARKED {
+            parked.sort_unstable_by_key(|&(idle, _)| std::cmp::Reverse(idle));
+            for &(_, id) in &parked[..parked.len() - PARKED] {
+                self.forget_memo(id);
+            }
+        }
+    }
+
     /// Drop everything kept for memo `id`: its next call builds it.
     fn forget_memo(&mut self, id: u64) {
         if let Some(k) = self.kept.remove(&id) {
@@ -438,6 +484,10 @@ pub(super) struct Kept {
     pub(super) still: bool,
     /// Handed out, or brought back inside one that was, this frame.
     pub(super) live: bool,
+    /// Its build read input ([`Ui::saw_input`]): input arriving rebuilds it.
+    pub(super) input: bool,
+    /// Frames since one handed it out.
+    pub(super) idle: u32,
 }
 
 /// A memo's root declaration, without children, kept beside its tree in
@@ -539,6 +589,8 @@ mod lifetime_tests {
         assert_eq!(dropped.get(), 3);
     }
 
+    /// An omitted memo is parked, its captures kept; past [`PARKED`] the
+    /// longest idle is let go, its captures released outside the table.
     #[test]
     fn omitted_memos_release_captures_outside_the_table_borrow() {
         let mut ui = Ui::default();
@@ -548,7 +600,18 @@ mod lifetime_tests {
             .unwrap();
         ui.frame(mui_scene::block(30., 30.), None, Input::default(), 0.016)
             .unwrap();
-        assert_eq!(dropped.get(), 1);
+        assert_eq!(dropped.get(), 0, "parked, not dropped");
+        let mut limits = ui.layout_limits();
+        limits.nodes = 4 * PARKED;
+        ui.set_layout_limits(limits).unwrap();
+        let others = (0..PARKED)
+            .map(|n| ui.memo(format!("other-{n}"), 0, |_| mui_scene::block(1., 1.)))
+            .collect::<Vec<_>>();
+        ui.frame(mui_scene::col(others), None, Input::default(), 0.016)
+            .unwrap();
+        ui.frame(mui_scene::block(30., 30.), None, Input::default(), 0.016)
+            .unwrap();
+        assert_eq!(dropped.get(), 1, "the longest idle goes first");
     }
 
     #[test]

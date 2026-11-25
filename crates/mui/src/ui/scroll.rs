@@ -122,6 +122,7 @@ impl Ui {
     /// How far `id`'s children are scrolled to: the settled offset, which
     /// the drawn one springs toward.
     pub fn scroll(&self, id: impl Into<Id>) -> [f64; 2] {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         (self.nodes.get(id).and_then(|n| n.scroll)).map_or([0.0, 0.0], |s| s.map(|s| s.target))
@@ -161,6 +162,7 @@ impl Ui {
     /// # assert_eq!(zoom, 1.0);
     /// ```
     pub fn wheel(&mut self, id: impl Into<Id>) -> Option<Vec2> {
+        self.saw_input();
         let id: Id = id.into();
         let wheel = self.get(id.as_str()).wheel;
         self.wheel_claims.push(id.as_str().to_owned());

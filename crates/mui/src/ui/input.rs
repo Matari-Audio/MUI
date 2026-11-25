@@ -52,6 +52,7 @@ impl Ui {
     /// The displayed focused edit buffer, including marked composition. Its
     /// selection and geometry come from the same resolved frame as `Frame::ime`.
     pub fn text_input_state(&self) -> Option<TextInputState> {
+        self.saw_input();
         let surface = self.scene()?.surface(self.focus_key()?)?;
         let geometry = surface.text_geometry.as_ref()?;
         Some(TextInputState {
@@ -131,6 +132,7 @@ impl Ui {
     /// [`Clipboard`] if the host gave one, else what the host handed in on
     /// this frame's [`Input::clipboard`].
     pub fn paste(&mut self) -> Option<String> {
+        self.saw_input();
         match self.board.as_mut() {
             Some(b) => b.get(),
             None => self.pasted.clone(),
@@ -140,6 +142,7 @@ impl Ui {
     /// Position is in scene coordinates; `None` means the pointer left the
     /// surface. This is a read-only snapshot, including current modifiers.
     pub fn pointer(&self) -> PointerInput {
+        self.saw_input();
         self.pointer
     }
 
@@ -165,6 +168,7 @@ impl Ui {
     /// assert_eq!(ui.tag("plot"), None, "the pointer is nowhere");
     /// ```
     pub fn tag(&self, id: impl Into<Id>) -> Option<&str> {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         let (k, t) = self.tagged.as_ref()?;
@@ -179,6 +183,7 @@ impl Ui {
     /// assert_eq!((hover, press), (0.0, 0.0), "nothing has touched it");
     /// ```
     pub fn state(&self, id: impl Into<Id>) -> Interaction {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         (self.nodes.get(id).and_then(|n| n.springs)).map_or(Interaction::default(), |[h, p]| {
@@ -190,10 +195,12 @@ impl Ui {
     }
     /// The id that holds the keyboard focus, for a host reporting it.
     pub fn focus_key(&self) -> Option<&str> {
+        self.saw_input();
         self.focus.as_deref()
     }
     /// Whether `id` holds the keyboard focus.
     pub fn focused(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         self.focus.as_deref() == Some(id)
@@ -203,6 +210,7 @@ impl Ui {
     /// [`State::FocusVisible`](mui_scene::State::FocusVisible) is the same
     /// test on a node's look.
     pub fn focus_visible(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         self.focus_visible && self.focused(id)
     }
     /// Drop the keyboard focus from code: a field that submits on Enter
@@ -263,6 +271,7 @@ impl Ui {
     /// The keys this frame, if `id` is focused. Empty otherwise, so a widget
     /// may loop over it unconditionally.
     pub fn keys(&self, id: impl Into<Id>) -> &[KeyPress] {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         if self.focused(Id::runtime(id)) && !self.disabled_target(id) {
@@ -293,6 +302,7 @@ impl Ui {
     /// assert!(!undo, "nothing was pressed");
     /// ```
     pub fn shortcuts(&self) -> &[KeyPress] {
+        self.saw_input();
         if self.focus_is_text() {
             &[]
         } else {
@@ -303,6 +313,7 @@ impl Ui {
     /// are typing, not shortcuts. A host routes keys, or takes the keyboard
     /// from its parent window, by it.
     pub fn focus_is_text(&self) -> bool {
+        self.saw_input();
         self.focus.as_deref().is_some_and(|k| {
             self.scene
                 .as_ref()
@@ -313,6 +324,7 @@ impl Ui {
     }
     /// The text typed this frame, if `id` is focused.
     pub fn text(&self, id: impl Into<Id>) -> &str {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         if self.focused(Id::runtime(id)) {
@@ -323,6 +335,7 @@ impl Ui {
     }
     /// The pointer relative to `id`'s frame origin, if both exist.
     pub fn local(&self, id: impl Into<Id>) -> Option<Point> {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         let p = self.pointer.pos?;
@@ -424,6 +437,7 @@ impl Ui {
     }
     /// Source and target of a drag released this frame.
     pub fn dropped(&self) -> Option<(&str, &str)> {
+        self.saw_input();
         self.interaction.dropped()
     }
     /// Attach a payload to the drag `id` has in flight: the value the drop
@@ -533,6 +547,7 @@ impl Ui {
     /// # assert!(open, "nothing was pressed");
     /// ```
     pub fn clicked_outside(&self, ids: &[&str]) -> bool {
+        self.saw_input();
         let (Some(p), Some(scene)) = (self.press_at, self.scene.as_ref()) else {
             return false;
         };
@@ -561,6 +576,7 @@ impl Ui {
     /// [`Ui::clicked_outside`], or Escape pressed this frame whatever holds
     /// the focus: everything that closes a popup, in one question.
     pub fn dismissed(&self, ids: &[&str]) -> bool {
+        self.saw_input();
         self.clicked_outside(ids) || self.keys.iter().any(|k| k.key == Key::Escape)
     }
     /// Keep a selection endpoint on the previous visual line when a soft
@@ -574,6 +590,7 @@ impl Ui {
             .upstream = upstream;
     }
     pub(crate) fn text_navigation(&self, id: &str) -> (Option<f64>, bool) {
+        self.saw_input();
         self.nodes
             .get(id)
             .and_then(|n| n.text_edit.as_ref())
@@ -587,12 +604,14 @@ impl Ui {
         e.upstream = upstream;
     }
     pub(crate) fn take_native_text(&mut self, id: &str) -> Vec<Ime> {
+        self.saw_input();
         self.nodes
             .get_mut(id)
             .and_then(|n| n.text_edit.as_mut())
             .map_or_else(Vec::new, |e| std::mem::take(&mut e.native))
     }
     pub(crate) fn text_scroll(&self, id: &str) -> f64 {
+        self.saw_input();
         self.nodes
             .get(id)
             .and_then(|n| n.text_scroll)
@@ -602,6 +621,7 @@ impl Ui {
         node(&mut self.nodes, id).text_scroll = Some(y);
     }
     pub(crate) fn stash<T: Any>(&self, id: &str) -> Option<&T> {
+        self.saw_input();
         self.nodes.get(id)?.stash.as_ref()?.downcast_ref()
     }
     pub(crate) fn set_stash<T: Any + Send>(&mut self, id: &str, v: Option<T>) {
@@ -615,6 +635,7 @@ impl Ui {
         }
     }
     pub(crate) fn sel(&self, id: &str) -> (usize, usize) {
+        self.saw_input();
         self.nodes.get(id).and_then(|n| n.sel).unwrap_or((0, 0))
     }
     pub(crate) fn set_sel(&mut self, id: &str, anchor: usize, caret: usize) {
@@ -622,10 +643,12 @@ impl Ui {
     }
     /// The clipboard the host handed in because a paste key arrived.
     pub(crate) fn pasted(&self) -> Option<&str> {
+        self.saw_input();
         self.pasted.as_deref()
     }
     /// Whether the last press on `id` was the second of a double click.
     pub fn double_click(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         let id: Id = id.into();
         let id = id.as_str();
         self.double.as_deref() == Some(id)
@@ -657,6 +680,7 @@ impl Ui {
     /// The text the input method is composing, for the focused field to
     /// paint. It is never part of a value.
     pub fn preedit(&self) -> Option<(&str, Option<(usize, usize)>)> {
+        self.saw_input();
         self.preedit.as_ref().map(|(t, c)| (t.as_str(), *c))
     }
     /// Tell the host where this field's caret is, in the field's own space,
@@ -779,6 +803,7 @@ impl Ui {
         px: f64,
         vertical: bool,
     ) -> bool {
+        self.saw_input();
         let id: Id = id.into();
         let fine = self.get(id.as_str()).mods.shift;
         self.drag_with_fine(id, value, range, px, vertical, fine)
@@ -786,6 +811,7 @@ impl Ui {
 
     /// Return a validated semantic value requested for this control.
     pub fn requested_value(&self, id: impl Into<Id>) -> Option<f64> {
+        self.saw_input();
         let id: Id = id.into();
         self.actions.iter().rev().find_map(|a| match a {
             SemanticAction::SetValue { id: target, value } if target == id.as_str() => Some(*value),
@@ -843,20 +869,8 @@ impl Ui {
     /// `was` is the hovered, held and tagged keys before this frame.
     pub(super) fn heat(&mut self, scene: &ResolvedScene, was: &[Option<Id>; 3], buttons: bool) {
         self.hot.clear();
-        let me = self.me;
-        let ids = &mut self.memo_ids;
-        self.kept.retain(|id, k| {
-            let live = std::mem::take(&mut k.live);
-            if !live {
-                let old = TREES.with(|t| t.borrow_mut().remove(&(me, *id)));
-                if let Some(old) = old {
-                    Self::retire_tree(old);
-                }
-                super::memo::put_shells(me, *id, None);
-                ids.remove(&k.id);
-            }
-            live
-        });
+        self.park_memos();
+        self.cold_all = false;
         self.hot_all = buttons
             || !self.keys.is_empty()
             || !self.typed.is_empty()
@@ -864,7 +878,9 @@ impl Ui {
             || self.preedit.is_some()
             || !self.delivered.is_empty();
         // Automatic retention reads `hot` too, with or without kept memos.
-        if (self.kept.is_empty() && !self.auto_retain) || self.hot_all {
+        // Memos that read no input stay warm through it: work out which
+        // others moved even when input heats every reader.
+        if self.kept.is_empty() && !self.auto_retain {
             return;
         }
         let hot: Vec<u64> = (self.stirred(was).into_iter())

@@ -7,19 +7,23 @@ impl Ui {
     /// Reads the last resolved scene, like `Ui::get`; a floating descendant
     /// belongs to its authored group even when it is outside the group's bounds.
     pub fn group_hovered(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         self.in_group(id.into().as_str(), self.interaction.hovered())
     }
     /// Whether this named group or a descendant owns the pointer gesture.
     pub fn group_held(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         self.in_group(id.into().as_str(), self.interaction.held())
     }
     /// Whether this named group contains the currently focused element.
     pub fn group_focused(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         self.in_group(id.into().as_str(), self.focus.as_deref())
     }
     /// Whether this named group contains keyboard or programmatic focus.
     /// Pointer focus does not light the group's focus ring.
     pub fn group_focus_visible(&self, id: impl Into<Id>) -> bool {
+        self.saw_input();
         self.focus_visible && self.group_focused(id)
     }
     pub(super) fn in_group(&self, group: &str, target: Option<&str>) -> bool {
