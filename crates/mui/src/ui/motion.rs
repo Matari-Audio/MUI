@@ -27,6 +27,13 @@ pub(super) fn step_spring(s: &mut Spring, dt: f64, reduced: bool) -> bool {
 }
 
 impl Ui {
+    /// Hover and press land in the frame they change: [`Ui::state`] reads 0
+    /// or 1, automatic hover and press fills switch, and no frames run for
+    /// them. Every other motion keeps its springs.
+    pub fn snap_pointer_states(mut self) -> Self {
+        self.snap_pointer = true;
+        self
+    }
     /// The configured UI motion policy.
     pub fn motion_policy(&self) -> MotionPolicy {
         self.motion_policy
@@ -176,7 +183,7 @@ impl Ui {
     /// Retarget and step the hover and press springs. Returns whether one is
     /// still moving.
     pub(super) fn hover_springs(&mut self, root: &El, dt: f64) -> bool {
-        let reduced = self.reduced_motion();
+        let reduced = self.reduced_motion() || self.snap_pointer;
         let (hovered, held) = (self.interaction.hovered(), self.interaction.held());
         // Identity and state ownership are separate. A named layout surface
         // still participates in hit testing, while only an interactive role

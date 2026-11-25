@@ -311,12 +311,29 @@ fn selection(
     }
     let mut result = scene.clone();
     result.forget_memos();
-    result.paint.retain(|p| {
-        matches!(
-            p.layer,
-            Layer::Clip | Layer::Unclip | Layer::Blend { .. } | Layer::Unblend
-        ) || selected[p.key.as_ref()]
-    });
+    // Groups left with nothing inside draw nothing; dropped, they no longer
+    // reach a renderer's damage (a fading ghost would repaint every clip in
+    // the window each frame).
+    let mut paint = Vec::with_capacity(result.paint.len());
+    let mut opened = Vec::new();
+    for p in result.paint.drain(..) {
+        match p.layer {
+            Layer::Clip | Layer::Blend { .. } => {
+                opened.push(paint.len());
+                paint.push(p);
+            }
+            Layer::Unclip | Layer::Unblend => {
+                if opened.pop() == Some(paint.len() - 1) {
+                    paint.pop();
+                } else {
+                    paint.push(p);
+                }
+            }
+            _ if selected[p.key.as_ref()] => paint.push(p),
+            _ => {}
+        }
+    }
+    result.paint = paint;
     Ok(result)
 }
 
@@ -384,6 +401,12 @@ mod tests {
         let rest = s.without(&["card"]).unwrap();
         assert!(!rest.paint.iter().any(|p| &*p.key == "unrelated-name"));
         assert!(rest.paint.iter().any(|p| &*p.key == "card/sibling"));
+        // The card's clip holds nothing once the card is out, so it goes too.
+        let clips: Vec<_> = (rest.paint.iter())
+            .filter(|p| matches!(p.layer, Layer::Clip | Layer::Unclip))
+            .map(|p| &*p.key)
+            .collect();
+        assert_eq!(clips, ["root", "root"]);
         assert!(matches!(
             s.isolate(&["missing"]),
             Err(CaptureError::MissingSurface(_))

@@ -151,6 +151,8 @@ pub struct Ui {
     theme: Theme,
     motion_policy: MotionPolicy,
     system_reduced_motion: bool,
+    /// [`Ui::snap_pointer_states`].
+    snap_pointer: bool,
     font: Option<Font>,
     /// Optional faces tried per grapheme after [`Self::font`].
     fallback_fonts: Vec<Font>,
@@ -340,6 +342,7 @@ impl Ui {
             theme,
             motion_policy: MotionPolicy::default(),
             system_reduced_motion: false,
+            snap_pointer: false,
             font: None,
             fallback_fonts: Vec::new(),
             runs: TextRuns::default(),
