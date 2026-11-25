@@ -150,9 +150,11 @@ fn release(code: u64, key: NativeKey, mods: Mods) -> KeyEvent {
 fn inputs(d: &Driver) -> Vec<&Input> {
     d.pending
         .iter()
-        .map(|p| match p {
-            Pending::Input(i) | Pending::Move(i) | Pending::Drag(i) => i,
-            Pending::Cancel(_) => panic!("unexpected cancel"),
+        .filter_map(|p| match p {
+            Pending::Input(i) | Pending::Move(i) | Pending::Drag(i) => Some(i),
+            // A view-only cancel (focus lost with no button down) carries no input.
+            Pending::Cancel { reset: false, .. } => None,
+            Pending::Cancel { reset: true, .. } => panic!("unexpected cancel"),
         })
         .collect()
 }
@@ -385,7 +387,9 @@ fn focus_loss_queues_a_cancel_after_the_pressed_snapshot() {
     assert!(
         matches!(r.d.pending.front(), Some(Pending::Input(i)) if i.pointer.buttons.contains(Button::Primary))
     );
-    assert!(matches!(r.d.pending.get(1), Some(Pending::Cancel(p)) if p.buttons.is_empty()));
+    assert!(
+        matches!(r.d.pending.get(1), Some(Pending::Cancel { pointer: p, reset: true }) if p.buttons.is_empty())
+    );
 }
 
 mod keyboard_capture_tests {
@@ -396,9 +400,12 @@ mod keyboard_capture_tests {
     struct Menu {
         search: String,
         clicks: usize,
+        /// Clicks as a widget sees them: read by the next build.
+        built: usize,
     }
     impl View for Menu {
         fn build(&mut self, ui: &mut Ui, _: &Input) -> El {
+            self.built += usize::from(ui.get("row").clicked);
             col([
                 crate::widgets::text_input(ui, "search", &mut self.search).el,
                 block(160., 40.).id("row").focusable(),
@@ -457,6 +464,52 @@ mod keyboard_capture_tests {
     }
 
     #[test]
+    fn a_focus_loss_after_the_release_keeps_the_click_in_one_batch() {
+        let mut r = press_row_after_focusing_search();
+        let pos = r.d.pointer().pos.unwrap();
+        r.d.focus(true);
+        r.step();
+        r.d.button(Button::Primary, false, none());
+        r.d.focus(false);
+        r.d.pointer_moved(pos, none());
+        r.step();
+        assert_eq!(r.s.view.clicks, 1, "same batch");
+        assert_eq!(r.s.view.built, 1, "the next build reads it");
+    }
+
+    /// What X11 baseview delivers when a window manager takes focus back
+    /// from each click: Focused while held, then the deferred Unfocused and
+    /// the re-sent pointer right after the release, all in one tick.
+    #[test]
+    fn a_refocus_mid_click_then_focus_loss_after_release_is_one_click() {
+        let mut r = press_row_after_focusing_search();
+        let pos = r.d.pointer().pos.unwrap();
+        r.d.focus(true);
+        r.d.button(Button::Primary, false, none());
+        r.d.focus(false);
+        r.d.pointer_moved(pos, none());
+        r.step();
+        r.step();
+        assert_eq!((r.s.view.clicks, r.s.view.built), (1, 1));
+        assert_eq!(r.d.pointer().pos, Some(pos));
+    }
+
+    #[test]
+    fn a_focus_loss_after_the_release_keeps_the_click_a_frame_later() {
+        let mut r = press_row_after_focusing_search();
+        let pos = r.d.pointer().pos.unwrap();
+        r.d.focus(true);
+        r.step();
+        r.d.button(Button::Primary, false, none());
+        r.step();
+        r.d.focus(false);
+        r.d.pointer_moved(pos, none());
+        r.step();
+        assert_eq!(r.s.view.clicks, 1, "next frame");
+        assert_eq!(r.s.view.built, 1, "the next build reads it");
+    }
+
+    #[test]
     fn genuine_focus_loss_between_row_press_and_release_still_cancels() {
         let mut r = press_row_after_focusing_search();
         r.d.focus(false);
@@ -464,6 +517,7 @@ mod keyboard_capture_tests {
         r.d.button(Button::Primary, false, none());
         assert!(r.step());
         assert_eq!(r.s.view.clicks, 0);
+        assert_eq!(r.s.view.built, 0);
         assert!(!r.s.ui.get("row").held);
         assert!(!r.s.ui.get("row").clicked);
     }

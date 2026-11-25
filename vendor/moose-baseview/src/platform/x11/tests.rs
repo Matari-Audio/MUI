@@ -690,6 +690,127 @@ fn native_a_click_takes_the_keyboard_from_the_host_and_a_wheel_does_not() {
     conn.destroy_window(host).unwrap().check().unwrap();
 }
 
+/// GNOME keeps the X focus on its managed toplevel: it takes the focus back
+/// from the click that asked for it. The click must still complete, and the
+/// next one, with no motion between, must still land where the pointer is.
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_a_window_manager_taking_focus_back_does_not_cancel_the_click() {
+    use x11rb::protocol::xproto::{
+        ButtonPressEvent, ChangeWindowAttributesAux, EventMask, InputFocus, KeyButMask,
+    };
+    struct Recorder(Arc<std::sync::Mutex<Vec<&'static str>>>);
+    impl WindowHandler for Recorder {
+        fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+            Ok(())
+        }
+        fn resized(&self, _: crate::WindowSize) -> std::result::Result<(), HandlerError> {
+            Ok(())
+        }
+        fn on_event(&self, event: crate::Event) -> crate::EventStatus {
+            use crate::{Event, MouseEvent, WindowEvent};
+            let tag = match event {
+                Event::Mouse(MouseEvent::ButtonPressed { .. }) => "press",
+                Event::Mouse(MouseEvent::ButtonReleased { .. }) => "release",
+                Event::Mouse(MouseEvent::CursorMoved { .. }) => "moved",
+                Event::Window(WindowEvent::Focused) => "focused",
+                Event::Window(WindowEvent::Unfocused) => "unfocused",
+                _ => return crate::EventStatus::Ignored,
+            };
+            self.0.lock().unwrap().push(tag);
+            crate::EventStatus::Captured
+        }
+    }
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let root = conn.setup().roots[screen].root;
+    let host = parent(&conn, root);
+    conn.map_window(host).unwrap().check().unwrap();
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut settings = WindowSettings::new().with_size(PhysicalSize::new(96u32, 64));
+    settings.parent = Some(crate::ParentWindowHandle {
+        inner: ParentWindowHandle { window_id: NonZeroU32::new(host).unwrap() },
+    });
+    let recorded = Arc::clone(&log);
+    let window = Window::create(settings, move |_| Ok(Recorder(recorded))).unwrap();
+    conn.set_input_focus(InputFocus::PARENT, host, x11rb::CURRENT_TIME).unwrap().check().unwrap();
+    window.show().unwrap();
+    thread::sleep(Duration::from_millis(200));
+    let child = conn.query_tree(host).unwrap().reply().unwrap().children[0];
+    // The window manager: it hears the child take the focus.
+    conn.change_window_attributes(
+        child,
+        &ChangeWindowAttributesAux::new().event_mask(EventMask::FOCUS_CHANGE),
+    )
+    .unwrap()
+    .check()
+    .unwrap();
+    conn.warp_pointer(x11rb::NONE, child, 0, 0, 0, 0, 10, 10).unwrap().check().unwrap();
+    conn.flush().unwrap();
+    thread::sleep(Duration::from_millis(150));
+    let button = |response_type: u8| {
+        let event = ButtonPressEvent {
+            response_type,
+            detail: 1,
+            sequence: 0,
+            time: x11rb::CURRENT_TIME,
+            root,
+            event: child,
+            child: x11rb::NONE,
+            root_x: 10,
+            root_y: 10,
+            event_x: 10,
+            event_y: 10,
+            state: KeyButMask::default(),
+            same_screen: true,
+        };
+        let mask = if response_type == x11rb::protocol::xproto::BUTTON_PRESS_EVENT {
+            EventMask::BUTTON_PRESS
+        } else {
+            EventMask::BUTTON_RELEASE
+        };
+        conn.send_event(false, child, mask, event).unwrap().check().unwrap();
+    };
+    let click = || {
+        log.lock().unwrap().clear();
+        button(x11rb::protocol::xproto::BUTTON_PRESS_EVENT);
+        // The click takes the keyboard; the window manager takes it back.
+        let end = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < end {
+            match conn.poll_for_event().unwrap() {
+                Some(x11rb::protocol::Event::FocusIn(e)) if e.event == child => break,
+                Some(_) => {}
+                None => thread::sleep(Duration::from_millis(2)),
+            }
+        }
+        conn.set_input_focus(InputFocus::PARENT, host, x11rb::CURRENT_TIME)
+            .unwrap()
+            .check()
+            .unwrap();
+        thread::sleep(Duration::from_millis(150));
+        button(x11rb::protocol::xproto::BUTTON_RELEASE_EVENT);
+        thread::sleep(Duration::from_millis(150));
+        log.lock().unwrap().clone()
+    };
+    for round in 0..2 {
+        let seen = click();
+        let at = |tag| seen.iter().position(|t| *t == tag);
+        let (press, release) = (at("press").unwrap(), at("release").unwrap());
+        assert!(
+            seen[press..release].iter().all(|t| *t != "unfocused"),
+            "round {round}: the focus loss cancelled the click: {seen:?}"
+        );
+        let unfocused = at("unfocused").expect("the focus loss is still delivered");
+        assert!(unfocused > release, "round {round}: {seen:?}");
+        assert_eq!(
+            seen.get(unfocused + 1),
+            Some(&"moved"),
+            "round {round}: the pointer is still known after the keyboard left: {seen:?}"
+        );
+    }
+    window.close_bounded(Duration::from_millis(250));
+    conn.destroy_window(host).unwrap().check().unwrap();
+}
+
 #[test]
 #[ignore = "requires a live X11 display"]
 fn native_held_keys_repeat_without_fake_releases() {
