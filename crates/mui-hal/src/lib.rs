@@ -9,8 +9,9 @@
 //! - Metal (`objc2-metal`, macOS): MSL 2.3 from `mui-shaders`, presentation
 //!   through `CAMetalLayer`.
 //! - D3D11 (`windows`, Windows): HLSL SM 5.0 / precompiled DXBC from
-//!   `mui-shaders`, presentation through `mui-present`'s DirectComposition
-//!   swapchain.
+//!   `mui-shaders`, presentation through `mui-present`'s flip-model DXGI 1.2
+//!   swapchain (`CreateSwapChainForHwnd` for opaque, DirectComposition for
+//!   translucent).
 //! - wgpu (feature `wgpu`): passthrough for web, media and wgpu-sharing plugins, and interim
 //!   default on macOS and Windows while OS-CI parity is pending. It also wraps
 //!   a device a host made itself (`Device::from_wgpu`).
@@ -49,6 +50,7 @@ pub(crate) mod binding;
 pub mod d3d11;
 #[cfg(target_os = "macos")]
 pub mod metal;
+pub(crate) mod shared;
 mod types;
 #[cfg(target_os = "linux")]
 pub mod vulkan;
@@ -171,9 +173,9 @@ pub fn validation_errors() -> usize {
     }
 }
 
-fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+#[cfg(all(test, target_os = "linux"))]
+use shared::lock;
+use shared::{ErrorSink, Scope, UncapturedHandler};
 
 /// A future that is either ready or wgpu's (which may not be `Send`).
 pub struct Pending<T>(PendingInner<T>);
@@ -557,6 +559,7 @@ impl Instance {
                 .map_err(|e| CreateSurfaceError(e.to_string()))?;
             return Ok(Surface {
                 inner: SurfaceInner::Vulkan(Arc::new(surface)),
+                _not_sync: std::marker::PhantomData,
                 _target: Some(Box::new(target)),
             });
         }
@@ -572,6 +575,7 @@ impl Instance {
                 .map_err(|e| CreateSurfaceError(e.to_string()))?;
             return Ok(Surface {
                 inner: SurfaceInner::Metal(Arc::new(surface)),
+                _not_sync: std::marker::PhantomData,
                 _target: Some(Box::new(target)),
             });
         }
@@ -581,12 +585,13 @@ impl Instance {
             let window = target.window_handle().map_err(handle)?.as_raw();
             let display = target.display_handle().map_err(handle)?.as_raw();
             // SAFETY: `target` owns the HWND and lives inside the surface,
-            // which releases its DirectComposition presenter before `_target` drops.
+            // which releases its DXGI swapchain presenter before `_target` drops.
             #[expect(unsafe_code, reason = "raw handles kept alive by `target`")]
             let surface = unsafe { d3d::Surface::new(display, window) }
                 .map_err(|e| CreateSurfaceError(e.to_string()))?;
             return Ok(Surface {
                 inner: SurfaceInner::D3d11(Arc::new(surface)),
+                _not_sync: std::marker::PhantomData,
                 _target: Some(Box::new(target)),
             });
         }
@@ -844,78 +849,6 @@ enum DeviceInner {
     Wgpu(wgpu::Device, wgpu::Queue),
 }
 
-type UncapturedHandler = Arc<dyn Fn(Error) + Send + Sync>;
-
-/// Per-device native error scopes and uncaptured handler, shared with native
-/// resources without forming a reference cycle back to `DeviceShared`.
-pub(crate) struct ErrorSink {
-    /// Native error scopes, innermost last.
-    scopes: std::sync::Mutex<Vec<Scope>>,
-    uncaptured: std::sync::Mutex<Option<UncapturedHandler>>,
-}
-
-impl ErrorSink {
-    pub(crate) fn new() -> Self {
-        Self {
-            scopes: std::sync::Mutex::new(Vec::new()),
-            uncaptured: std::sync::Mutex::new(None),
-        }
-    }
-
-    /// Reports `e` to the innermost native scope that filters it, else the
-    /// uncaptured handler.
-    #[cfg_attr(
-        not(any(target_os = "linux", target_os = "macos", target_os = "windows")),
-        expect(dead_code, reason = "native only")
-    )]
-    pub(crate) fn report(&self, e: Error) {
-        let filter = match &e {
-            Error::OutOfMemory { .. } => ErrorFilter::OutOfMemory,
-            Error::Validation { .. } => ErrorFilter::Validation,
-            Error::Internal { .. } => ErrorFilter::Internal,
-        };
-        {
-            let mut scopes = lock(&self.scopes);
-            let thread = std::thread::current().id();
-            if let Some(scope) = scopes
-                .iter_mut()
-                .rev()
-                .find(|s| s.thread == thread && s.filter == filter)
-            {
-                scope.caught.get_or_insert(e);
-                return;
-            }
-        }
-        let handler = lock(&self.uncaptured).clone();
-        match handler {
-            Some(h) => h(e),
-            None => eprintln!("mui-hal: uncaptured GPU error: {e}"),
-        }
-    }
-
-    fn push_scope(&self, filter: ErrorFilter) -> u64 {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        lock(&self.scopes).push(Scope {
-            id,
-            thread: std::thread::current().id(),
-            filter,
-            caught: None,
-        });
-        id
-    }
-
-    fn take_scope(&self, id: u64) -> Option<Scope> {
-        let mut scopes = lock(&self.scopes);
-        let at = scopes.iter().position(|s| s.id == id)?;
-        Some(scopes.remove(at))
-    }
-
-    fn set_uncaptured(&self, handler: UncapturedHandler) {
-        *lock(&self.uncaptured) = Some(handler);
-    }
-}
-
 struct DeviceShared {
     inner: DeviceInner,
     info: AdapterInfo,
@@ -951,15 +884,6 @@ impl std::fmt::Debug for Queue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Queue").finish_non_exhaustive()
     }
-}
-
-/// A native error scope. Like wgpu's, scopes are per thread: an error is
-/// caught by the innermost matching scope its own thread pushed.
-struct Scope {
-    id: u64,
-    thread: std::thread::ThreadId,
-    filter: ErrorFilter,
-    caught: Option<Error>,
 }
 
 /// A pushed native scope; it leaves the stack when popped or dropped.
@@ -1208,30 +1132,8 @@ impl Device {
 
     /// Unwraps a native creation result, reporting any error to per-thread
     /// error scopes (or the uncaptured handler) and returning `invalid`.
-    #[cfg(target_os = "linux")]
-    fn or_invalid<T>(&self, r: Result<T, vk::Error>, invalid: impl FnOnce() -> T) -> T {
-        match r {
-            Ok(v) => v,
-            Err(e) => {
-                self.report(e.into_hal());
-                invalid()
-            }
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn or_invalid_mtl<T>(&self, r: Result<T, mtl::Error>, invalid: impl FnOnce() -> T) -> T {
-        match r {
-            Ok(v) => v,
-            Err(e) => {
-                self.report(e.into_hal());
-                invalid()
-            }
-        }
-    }
-
-    #[cfg(target_os = "windows")]
-    fn or_invalid_d3d<T>(&self, r: Result<T, d3d::Error>, invalid: impl FnOnce() -> T) -> T {
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    fn or_invalid<T>(&self, r: Result<T, shared::BackendError>, invalid: impl FnOnce() -> T) -> T {
         match r {
             Ok(v) => v,
             Err(e) => {
@@ -1255,13 +1157,13 @@ impl Device {
             }
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => {
-                BufferInner::Metal(self.or_invalid_mtl(mtl::Buffer::new(&o.0, desc), || {
+                BufferInner::Metal(self.or_invalid(mtl::Buffer::new(&o.0, desc), || {
                     mtl::Buffer::invalid(&o.0, desc)
                 }))
             }
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => {
-                BufferInner::D3d11(self.or_invalid_d3d(d3d::Buffer::new(&o.0, desc), || {
+                BufferInner::D3d11(self.or_invalid(d3d::Buffer::new(&o.0, desc), || {
                     d3d::Buffer::invalid(&o.0, desc)
                 }))
             }
@@ -1287,13 +1189,13 @@ impl Device {
             }
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => {
-                TextureInner::Metal(self.or_invalid_mtl(mtl::Texture::new(&o.0, desc), || {
+                TextureInner::Metal(self.or_invalid(mtl::Texture::new(&o.0, desc), || {
                     mtl::Texture::invalid(&o.0, desc)
                 }))
             }
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => {
-                TextureInner::D3d11(self.or_invalid_d3d(d3d::Texture::new(&o.0, desc), || {
+                TextureInner::D3d11(self.or_invalid(d3d::Texture::new(&o.0, desc), || {
                     d3d::Texture::invalid(&o.0, desc)
                 }))
             }
@@ -1322,13 +1224,13 @@ impl Device {
             ),
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => {
-                SamplerInner::Metal(self.or_invalid_mtl(mtl::Sampler::new(&o.0, desc), || {
+                SamplerInner::Metal(self.or_invalid(mtl::Sampler::new(&o.0, desc), || {
                     mtl::Sampler::invalid(&o.0)
                 }))
             }
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => {
-                SamplerInner::D3d11(self.or_invalid_d3d(d3d::Sampler::new(&o.0, desc), || {
+                SamplerInner::D3d11(self.or_invalid(d3d::Sampler::new(&o.0, desc), || {
                     d3d::Sampler::invalid(&o.0)
                 }))
             }
@@ -1357,13 +1259,13 @@ impl Device {
             ),
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => LayoutInner::Metal(
-                self.or_invalid_mtl(mtl::BindGroupLayout::new(&o.0, desc.entries), || {
+                self.or_invalid(mtl::BindGroupLayout::new(&o.0, desc.entries), || {
                     mtl::BindGroupLayout::invalid(&o.0)
                 }),
             ),
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => LayoutInner::D3d11(
-                self.or_invalid_d3d(d3d::BindGroupLayout::new(&o.0, desc.entries), || {
+                self.or_invalid(d3d::BindGroupLayout::new(&o.0, desc.entries), || {
                     d3d::BindGroupLayout::invalid(&o.0)
                 }),
             ),
@@ -1427,7 +1329,7 @@ impl Device {
                     })
                     .collect();
                 GroupInner::Metal(
-                    self.or_invalid_mtl(mtl::BindGroup::new(&o.0, layout, entries), || {
+                    self.or_invalid(mtl::BindGroup::new(&o.0, layout, entries), || {
                         mtl::BindGroup::invalid(layout)
                     }),
                 )
@@ -1452,7 +1354,7 @@ impl Device {
                     })
                     .collect();
                 GroupInner::D3d11(
-                    self.or_invalid_d3d(d3d::BindGroup::new(&o.0, layout, entries), || {
+                    self.or_invalid(d3d::BindGroup::new(&o.0, layout, entries), || {
                         d3d::BindGroup::invalid(layout)
                     }),
                 )
@@ -1519,7 +1421,7 @@ impl Device {
                     .collect();
                 if let Some(sets) = sets {
                     PipelineLayoutInner::Metal(
-                        self.or_invalid_mtl(mtl::PipelineLayout::new(&o.0, &sets), || {
+                        self.or_invalid(mtl::PipelineLayout::new(&o.0, &sets), || {
                             mtl::PipelineLayout::invalid(&o.0)
                         }),
                     )
@@ -1539,7 +1441,7 @@ impl Device {
                     .collect();
                 if let Some(sets) = sets {
                     PipelineLayoutInner::D3d11(
-                        self.or_invalid_d3d(d3d::PipelineLayout::new(&o.0, &sets), || {
+                        self.or_invalid(d3d::PipelineLayout::new(&o.0, &sets), || {
                             d3d::PipelineLayout::invalid(&o.0)
                         }),
                     )
@@ -1579,13 +1481,13 @@ impl Device {
             }
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => {
-                ModuleInner::Metal(self.or_invalid_mtl(mtl::ShaderModule::new(&o.0, id), || {
+                ModuleInner::Metal(self.or_invalid(mtl::ShaderModule::new(&o.0, id), || {
                     mtl::ShaderModule::invalid(&o.0, id)
                 }))
             }
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => {
-                ModuleInner::D3d11(self.or_invalid_d3d(d3d::ShaderModule::new(&o.0, id), || {
+                ModuleInner::D3d11(self.or_invalid(d3d::ShaderModule::new(&o.0, id), || {
                     d3d::ShaderModule::invalid(&o.0, id)
                 }))
             }
@@ -1710,7 +1612,7 @@ impl Device {
                         description: "mui-hal pipelines require an explicit layout".into(),
                     });
                 };
-                let pipe = self.or_invalid_mtl(
+                let pipe = self.or_invalid(
                     mtl::RenderPipeline::new(
                         &o.0,
                         &mtl::PipelineDesc {
@@ -1747,7 +1649,7 @@ impl Device {
                         description: "mui-hal pipelines require an explicit layout".into(),
                     });
                 };
-                let pipe = self.or_invalid_d3d(
+                let pipe = self.or_invalid(
                     d3d::RenderPipeline::new(
                         &o.0,
                         &d3d::PipelineDesc {
@@ -1870,13 +1772,13 @@ impl Device {
             }
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => {
-                QueryInner::Metal(self.or_invalid_mtl(mtl::QuerySet::new(&o.0, desc), || {
+                QueryInner::Metal(self.or_invalid(mtl::QuerySet::new(&o.0, desc), || {
                     mtl::QuerySet::invalid(&o.0)
                 }))
             }
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => {
-                QueryInner::D3d11(self.or_invalid_d3d(d3d::QuerySet::new(&o.0, desc), || {
+                QueryInner::D3d11(self.or_invalid(d3d::QuerySet::new(&o.0, desc), || {
                     d3d::QuerySet::invalid(&o.0)
                 }))
             }
@@ -1910,13 +1812,13 @@ impl Device {
             ),
             #[cfg(target_os = "macos")]
             DeviceInner::Metal(o) => CacheInner::Metal(
-                self.or_invalid_mtl(mtl::PipelineCache::new(&o.0, desc.data), || {
+                self.or_invalid(mtl::PipelineCache::new(&o.0, desc.data), || {
                     mtl::PipelineCache::invalid(&o.0)
                 }),
             ),
             #[cfg(target_os = "windows")]
             DeviceInner::D3d11(o) => CacheInner::D3d11(
-                self.or_invalid_d3d(d3d::PipelineCache::new(&o.0, desc.data), || {
+                self.or_invalid(d3d::PipelineCache::new(&o.0, desc.data), || {
                     d3d::PipelineCache::invalid(&o.0)
                 }),
             ),
@@ -2112,194 +2014,44 @@ impl Queue {
         }
         #[cfg(target_os = "macos")]
         if let Some(d) = self.mtl() {
-            if dest.mip_level != 0 {
-                self.0.errors.report(Error::Validation {
-                    description: "native textures have one mip level".into(),
-                });
-                return;
-            }
-            if size.width == 0 || size.height == 0 {
-                return;
-            }
             let dst = dest.texture.mtl();
-            let layers_u32 = size.depth_or_array_layers.max(1);
-            if dest
-                .origin
-                .x
-                .checked_add(size.width)
-                .is_none_or(|x| x > dst.width())
-                || dest
-                    .origin
-                    .y
-                    .checked_add(size.height)
-                    .is_none_or(|y| y > dst.height())
-                || dest
-                    .origin
-                    .z
-                    .checked_add(layers_u32)
-                    .is_none_or(|z| z > dst.layers())
-            {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture destination region exceeds texture bounds".into(),
-                });
-                return;
-            }
-            let block = dst.format().block_size() as usize;
-            let Some(row) = (size.width as usize).checked_mul(block) else {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture row stride overflows usize".into(),
-                });
-                return;
-            };
-            let bytes_per_row = layout.bytes_per_row.map_or(row, |b| b as usize);
-            let rows_per_image = layout.rows_per_image.unwrap_or(size.height) as usize;
-            if bytes_per_row < row || rows_per_image < size.height as usize {
-                self.0.errors.report(Error::Validation {
-                    description:
-                        "write_texture layout bytes_per_row or rows_per_image is too small".into(),
-                });
-                return;
-            }
-            let layers = layers_u32 as usize;
-            let Some(len) = row
-                .checked_mul(size.height as usize)
-                .and_then(|n| n.checked_mul(layers))
-            else {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture byte length overflows usize".into(),
-                });
-                return;
-            };
-            let Ok(base_off) = usize::try_from(layout.offset) else {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture source offset overflows usize".into(),
-                });
-                return;
-            };
-            let mut packed = vec![0u8; len];
-            let mut at = 0;
-            for z in 0..layers {
-                for y in 0..size.height as usize {
-                    let from = z
-                        .checked_mul(rows_per_image)
-                        .and_then(|r| r.checked_add(y))
-                        .and_then(|r| r.checked_mul(bytes_per_row))
-                        .and_then(|off| base_off.checked_add(off));
-                    let end = from.and_then(|f| f.checked_add(row));
-                    let (Some(from), Some(end)) = (from, end) else {
-                        self.0.errors.report(Error::Validation {
-                            description: "write_texture source offset overflows usize".into(),
-                        });
-                        return;
-                    };
-                    if end > data.len() {
-                        self.0.errors.report(Error::Validation {
-                            description: "write_texture source slice out of bounds".into(),
-                        });
-                        return;
+            match shared::pack_texture_write_bytes(
+                dest.mip_level,
+                dest.origin,
+                size,
+                (dst.width(), dst.height(), dst.layers()),
+                dst.format().block_size(),
+                layout,
+                data,
+            ) {
+                Ok(Some(packed)) => {
+                    if let Err(e) = d.stage_texture_write(dst, dest.origin, size, &packed) {
+                        self.0.errors.report(e.into_hal());
                     }
-                    packed[at..at + row].copy_from_slice(&data[from..end]);
-                    at += row;
                 }
-            }
-            if let Err(e) = d.stage_texture_write(dst, dest.origin, size, &packed) {
-                self.0.errors.report(e.into_hal());
+                Ok(None) => {}
+                Err(e) => self.0.errors.report(e.into_hal()),
             }
         }
         #[cfg(target_os = "windows")]
         if let Some(d) = self.d3d() {
-            if dest.mip_level != 0 {
-                self.0.errors.report(Error::Validation {
-                    description: "native textures have one mip level".into(),
-                });
-                return;
-            }
-            if size.width == 0 || size.height == 0 {
-                return;
-            }
             let dst = dest.texture.d3d();
-            let layers_u32 = size.depth_or_array_layers.max(1);
-            if dest
-                .origin
-                .x
-                .checked_add(size.width)
-                .is_none_or(|x| x > dst.width())
-                || dest
-                    .origin
-                    .y
-                    .checked_add(size.height)
-                    .is_none_or(|y| y > dst.height())
-                || dest
-                    .origin
-                    .z
-                    .checked_add(layers_u32)
-                    .is_none_or(|z| z > dst.layers())
-            {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture destination region exceeds texture bounds".into(),
-                });
-                return;
-            }
-            let block = dst.format().block_size() as usize;
-            let Some(row) = (size.width as usize).checked_mul(block) else {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture row stride overflows usize".into(),
-                });
-                return;
-            };
-            let bytes_per_row = layout.bytes_per_row.map_or(row, |b| b as usize);
-            let rows_per_image = layout.rows_per_image.unwrap_or(size.height) as usize;
-            if bytes_per_row < row || rows_per_image < size.height as usize {
-                self.0.errors.report(Error::Validation {
-                    description:
-                        "write_texture layout bytes_per_row or rows_per_image is too small".into(),
-                });
-                return;
-            }
-            let layers = layers_u32 as usize;
-            let Some(len) = row
-                .checked_mul(size.height as usize)
-                .and_then(|n| n.checked_mul(layers))
-            else {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture byte length overflows usize".into(),
-                });
-                return;
-            };
-            let Ok(base_off) = usize::try_from(layout.offset) else {
-                self.0.errors.report(Error::Validation {
-                    description: "write_texture source offset overflows usize".into(),
-                });
-                return;
-            };
-            let mut packed = vec![0u8; len];
-            let mut at = 0;
-            for z in 0..layers {
-                for y in 0..size.height as usize {
-                    let from = z
-                        .checked_mul(rows_per_image)
-                        .and_then(|r| r.checked_add(y))
-                        .and_then(|r| r.checked_mul(bytes_per_row))
-                        .and_then(|off| base_off.checked_add(off));
-                    let end = from.and_then(|f| f.checked_add(row));
-                    let (Some(from), Some(end)) = (from, end) else {
-                        self.0.errors.report(Error::Validation {
-                            description: "write_texture source offset overflows usize".into(),
-                        });
-                        return;
-                    };
-                    if end > data.len() {
-                        self.0.errors.report(Error::Validation {
-                            description: "write_texture source slice out of bounds".into(),
-                        });
-                        return;
+            match shared::pack_texture_write_bytes(
+                dest.mip_level,
+                dest.origin,
+                size,
+                (dst.width(), dst.height(), dst.layers()),
+                dst.format().block_size(),
+                layout,
+                data,
+            ) {
+                Ok(Some(packed)) => {
+                    if let Err(e) = d.stage_texture_write(dst, dest.origin, size, packed) {
+                        self.0.errors.report(e.into_hal());
                     }
-                    packed[at..at + row].copy_from_slice(&data[from..end]);
-                    at += row;
                 }
-            }
-            if let Err(e) = d.stage_texture_write(dst, dest.origin, size, packed) {
-                self.0.errors.report(e.into_hal());
+                Ok(None) => {}
+                Err(e) => self.0.errors.report(e.into_hal()),
             }
         }
         let _ = (data, layout, size, dest);
@@ -3638,11 +3390,24 @@ enum SurfaceInner<'w> {
 }
 
 /// A window's surface, holding the window target it was made from.
+///
+/// `Surface` is `Send` (so a window thread can hand a created surface to a
+/// render worker) and intentionally `!Sync` to prevent concurrent cross-thread
+/// surface reconfiguration or presentation races.
 pub struct Surface<'w> {
     inner: SurfaceInner<'w>,
+    _not_sync: std::marker::PhantomData<std::cell::Cell<()>>,
     // Declared last: drops after the swapchain.
     _target: Option<Box<dyn Keep + 'w>>,
 }
+
+// wgpu's types are `!Send` on wasm32 without `fragile-send-sync-non-atomic-wasm`.
+#[cfg(not(all(target_arch = "wasm32", feature = "wgpu")))]
+const _: () = {
+    const fn assert_send<T: Send>() {}
+    assert_send::<Surface<'static>>();
+    assert_send::<Device>();
+};
 
 impl Drop for Surface<'_> {
     fn drop(&mut self) {
@@ -3675,6 +3440,7 @@ impl<'w> Surface<'w> {
     pub fn from_wgpu(surface: wgpu::Surface<'w>) -> Self {
         Self {
             inner: SurfaceInner::Wgpu(surface),
+            _not_sync: std::marker::PhantomData,
             _target: None,
         }
     }

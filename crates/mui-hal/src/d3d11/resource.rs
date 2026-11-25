@@ -3,7 +3,7 @@
 //! states, and bind groups).
 
 use std::ffi::CString;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use mui_shaders::{EntryPointInfo, ShaderId, Stage};
@@ -26,11 +26,11 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_INSTANCE_DATA, D3D11_INPUT_PER_VERTEX_DATA,
     D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE, D3D11_RASTERIZER_DESC,
     D3D11_RENDER_TARGET_BLEND_DESC, D3D11_SAMPLER_DESC, D3D11_SHADER_RESOURCE_VIEW_DESC,
-    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_TEX2D_ARRAY_SRV, D3D11_TEX2D_SRV,
-    D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT, D3D11_USAGE_STAGING,
-    ID3D11BlendState, ID3D11Buffer, ID3D11InputLayout, ID3D11PixelShader, ID3D11RasterizerState,
-    ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D,
-    ID3D11VertexShader,
+    D3D11_SHADER_RESOURCE_VIEW_DESC_0, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_ARRAY_SRV,
+    D3D11_TEX2D_SRV, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING, ID3D11BlendState, ID3D11Buffer, ID3D11InputLayout, ID3D11PixelShader,
+    ID3D11RasterizerState, ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView,
+    ID3D11Texture2D, ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM_SRGB, DXGI_FORMAT_R8_UNORM,
@@ -43,6 +43,10 @@ use super::{ComSend, Device, DeviceShared, Error, MapCallback, lock, win_err};
 use crate::binding::{
     BoundKind, HLSL_VERTEX_SEMANTIC, ShaderBindingTable, d3d11_constant_buffer_byte_width,
     dynamic_offset_bindings, resolve_entry_point, validate_bind_group_entries,
+};
+use crate::shared::{
+    BufferMapState, validate_bind_group_buffer, validate_bind_group_sampler,
+    validate_bind_group_view, validate_buffer_size, validate_map_async, validate_texture_desc,
 };
 use crate::types::{
     AddressMode, BindGroupLayoutEntry, BlendFactor, BlendOperation, BufferDescriptor, BufferUsages,
@@ -111,25 +115,18 @@ fn d3d_vertex_format(f: VertexFormat) -> DXGI_FORMAT {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MapState {
-    Unmapped,
-    Pending(u64),
-    Mapped,
-}
-
 pub(crate) struct BufferInner {
     device: Arc<DeviceShared>,
     pub raw: Option<ComSend<ID3D11Buffer>>,
     size: u64,
     alloc_size: u32,
     usage: BufferUsages,
-    /// CPU shadow copy for `UNIFORM` buffers (so `UpdateSubresource` always
-    /// uploads the full constant buffer cleanly on D3D11.0 and D3D11.1) and
-    /// for `MAP_READ` buffers (filled on `copy_mapped_range`).
+    /// CPU shadow copy for `UNIFORM` buffers (every update re-uploads the whole
+    /// shadow, so native contents always equal it; also backs the D3D11.0
+    /// dynamic-offset fallback) and
+    /// for `MAP_READ` buffers populated by `TextureToBuffer`.
     pub shadow: Mutex<Option<Vec<u8>>>,
-    map_state: Mutex<MapState>,
-    next_map_token: AtomicU64,
+    map: BufferMapState,
 }
 
 #[derive(Clone)]
@@ -140,13 +137,7 @@ impl Buffer {
         if device.is_lost() {
             return Err(Error::internal("D3D11 device is lost"));
         }
-        if desc.size > device.limits().max_buffer_size {
-            return Err(Error::validation(format!(
-                "buffer size {} exceeds D3D11 max_buffer_size {}",
-                desc.size,
-                device.limits().max_buffer_size
-            )));
-        }
+        validate_buffer_size(desc.size, device.limits().max_buffer_size, "D3D11")?;
         let is_staging = desc.usage.contains(BufferUsages::MAP_READ);
         if is_staging
             && !(desc.usage - (BufferUsages::MAP_READ | BufferUsages::COPY_DST)).is_empty()
@@ -182,9 +173,6 @@ impl Buffer {
             if is_vertex {
                 bind |= D3D11_BIND_VERTEX_BUFFER;
             }
-            // Staging-free default copy buffer needs a valid bind flag or staging usage;
-            // D3D11 permits `BindFlags = 0` on `D3D11_USAGE_STAGING`, while `DEFAULT`
-            // copy-only buffers can safely set `D3D11_BIND_VERTEX_BUFFER`.
             if bind.0 == 0 {
                 bind = D3D11_BIND_VERTEX_BUFFER;
             }
@@ -199,17 +187,27 @@ impl Buffer {
             MiscFlags: 0,
             StructureByteStride: 0,
         };
+        // D3D11 leaves `CreateBuffer(.., None, ..)` contents undefined; WebGPU
+        // buffers start zeroed, so every native buffer is created from zeros.
+        let zeros = vec![0u8; byte_width_u32 as usize];
+        let init = D3D11_SUBRESOURCE_DATA {
+            pSysMem: zeros.as_ptr().cast(),
+            SysMemPitch: 0,
+            SysMemSlicePitch: 0,
+        };
         let mut raw = None;
-        // SAFETY: `bdesc` is a valid D3D11 buffer descriptor on a live device.
-        unsafe { device.0.raw.CreateBuffer(&bdesc, None, Some(&mut raw)) }
-            .map_err(|e| win_err("ID3D11Device::CreateBuffer", &e))?;
+        // SAFETY: `bdesc` is a valid D3D11 buffer descriptor on a live device and
+        // `init.pSysMem` points at `ByteWidth` readable bytes for the call.
+        unsafe {
+            device
+                .0
+                .raw
+                .CreateBuffer(&bdesc, Some(&init), Some(&mut raw))
+        }
+        .map_err(|e| win_err("ID3D11Device::CreateBuffer", &e))?;
         let raw = raw.ok_or_else(|| Error::internal("CreateBuffer returned null"))?;
 
-        let shadow = if is_uniform {
-            Some(vec![0u8; byte_width_u32 as usize])
-        } else {
-            None
-        };
+        let shadow = is_uniform.then_some(zeros);
 
         Ok(Self(Arc::new(BufferInner {
             device: device.0.clone(),
@@ -218,8 +216,7 @@ impl Buffer {
             alloc_size: byte_width_u32,
             usage: desc.usage,
             shadow: Mutex::new(shadow),
-            map_state: Mutex::new(MapState::Unmapped),
-            next_map_token: AtomicU64::new(1),
+            map: BufferMapState::new(),
         })))
     }
 
@@ -231,8 +228,7 @@ impl Buffer {
             alloc_size: 0,
             usage: desc.usage,
             shadow: Mutex::new(None),
-            map_state: Mutex::new(MapState::Unmapped),
-            next_map_token: AtomicU64::new(1),
+            map: BufferMapState::new(),
         }))
     }
 
@@ -257,31 +253,19 @@ impl Buffer {
     }
 
     pub fn is_mapped_or_pending(&self) -> bool {
-        *lock(&self.0.map_state) != MapState::Unmapped
+        self.0.map.is_mapped_or_pending()
     }
 
     pub(crate) fn try_mark_pending(&self, token: u64) -> bool {
-        let mut state = lock(&self.0.map_state);
-        if *state != MapState::Unmapped {
-            return false;
-        }
-        *state = MapState::Pending(token);
-        true
+        self.0.map.try_mark_pending(token)
     }
 
     pub fn map_async(&self, offset: u64, size: u64, callback: MapCallback) {
         let device = Device(self.0.device.clone());
-        if !self.is_valid() || !self.0.usage.contains(BufferUsages::MAP_READ) {
-            device.errors().report(crate::Error::Validation {
-                description: "map_async requires a valid MAP_READ buffer".into(),
-            });
-            callback(Err(crate::BufferAsyncError));
-            return;
-        }
-        if offset.checked_add(size).is_none_or(|end| end > self.0.size) {
-            device.errors().report(crate::Error::Validation {
-                description: "map_async slice exceeds buffer bounds".into(),
-            });
+        if let Err(err) =
+            validate_map_async(self.is_valid(), self.0.usage, self.0.size, offset, size)
+        {
+            device.errors().report(err);
             callback(Err(crate::BufferAsyncError));
             return;
         }
@@ -289,21 +273,10 @@ impl Buffer {
             callback(Err(crate::BufferAsyncError));
             return;
         }
-        let token = self.0.next_map_token.fetch_add(1, Ordering::Relaxed);
+        let token = self.0.map.next_token();
         let this = self.clone();
         let wrapped: MapCallback = Box::new(move |res| {
-            let mut state = lock(&this.0.map_state);
-            let delivered = if *state == MapState::Pending(token) {
-                *state = if res.is_ok() {
-                    MapState::Mapped
-                } else {
-                    MapState::Unmapped
-                };
-                res
-            } else {
-                Err(crate::BufferAsyncError)
-            };
-            drop(state);
+            let delivered = this.0.map.complete_pending(token, res);
             callback(delivered);
         });
         if let Err((err, cb)) = device.begin_map_for_buffer(self, token, wrapped) {
@@ -318,10 +291,7 @@ impl Buffer {
         size: u64,
     ) -> Result<Vec<u8>, crate::BufferAsyncError> {
         let st = lock(&self.0.device.state);
-        let state = lock(&self.0.map_state);
-        if *state != MapState::Mapped {
-            return Err(crate::BufferAsyncError);
-        }
+        let state = self.0.map.lock_mapped()?;
         let Some(raw) = &self.0.raw else {
             return Err(crate::BufferAsyncError);
         };
@@ -332,8 +302,6 @@ impl Buffer {
         let start = usize::try_from(offset).map_err(|_| crate::BufferAsyncError)?;
         let len = usize::try_from(size).map_err(|_| crate::BufferAsyncError)?;
 
-        // If `TextureToBuffer` populated our CPU shadow (because D3D11 cannot
-        // CopySubresourceRegion from Texture2D directly into a Buffer), read it.
         if let Some(shadow) = lock(&self.0.shadow).as_ref()
             && start + len <= shadow.len()
         {
@@ -373,7 +341,7 @@ impl Buffer {
     }
 
     pub fn unmap(&self) {
-        *lock(&self.0.map_state) = MapState::Unmapped;
+        self.0.map.unmap();
     }
 }
 
@@ -398,16 +366,7 @@ impl Texture {
         if device.is_lost() {
             return Err(Error::internal("D3D11 device is lost"));
         }
-        if desc.size.width == 0 || desc.size.height == 0 {
-            return Err(Error::validation("texture dimensions must be non-zero"));
-        }
-        if desc.mip_level_count > 1 {
-            return Err(Error::validation(
-                "native D3D11 textures support only one mip level (mip_level_count == 1)",
-            ));
-        }
-        let layers = desc.size.depth_or_array_layers.max(1);
-        let sample_count = desc.sample_count.max(1);
+        let (layers, sample_count) = validate_texture_desc(desc, "D3D11")?;
         let mut bind = D3D11_BIND_FLAG(0);
         if desc.usage.contains(TextureUsages::TEXTURE_BINDING) {
             bind |= D3D11_BIND_SHADER_RESOURCE;
@@ -810,60 +769,22 @@ impl BindGroup {
                     buffer,
                     offset,
                     size,
-                } => {
-                    if !buffer.belongs_to(&device.0) {
-                        return Err(Error::validation(
-                            "bind group references a buffer from another device",
-                        ));
-                    }
-                    if !buffer.is_valid() {
-                        return Err(Error::validation("bind group references an invalid buffer"));
-                    }
-                    if !buffer.usage().contains(BufferUsages::UNIFORM) {
-                        return Err(Error::validation("bind group buffer lacks UNIFORM usage"));
-                    }
-                    let end = offset.checked_add(size.unwrap_or(0)).ok_or_else(|| {
-                        Error::validation("bind group buffer range overflows u64")
-                    })?;
-                    if end > buffer.size() {
-                        return Err(Error::validation(
-                            "bind group buffer range exceeds buffer size",
-                        ));
-                    }
-                }
-                Bound::View(view) => {
-                    if !view.belongs_to(&device.0) {
-                        return Err(Error::validation(
-                            "bind group references a texture view from another device",
-                        ));
-                    }
-                    if view.is_retired_swapchain() {
-                        return Err(Error::validation(
-                            "bind group references a retired swapchain image",
-                        ));
-                    }
-                    if !view.is_valid() {
-                        return Err(Error::validation(
-                            "bind group references an invalid texture view",
-                        ));
-                    }
-                    if view.0.srv.is_none() {
-                        return Err(Error::validation(
-                            "bind group texture view lacks TEXTURE_BINDING",
-                        ));
-                    }
-                }
+                } => validate_bind_group_buffer(
+                    buffer.belongs_to(&device.0),
+                    buffer.is_valid(),
+                    buffer.usage(),
+                    buffer.size(),
+                    *offset,
+                    *size,
+                )?,
+                Bound::View(view) => validate_bind_group_view(
+                    view.belongs_to(&device.0),
+                    view.is_retired_swapchain(),
+                    view.is_valid(),
+                    view.0.srv.is_some(),
+                )?,
                 Bound::Sampler(sampler) => {
-                    if !sampler.belongs_to(&device.0) {
-                        return Err(Error::validation(
-                            "bind group references a sampler from another device",
-                        ));
-                    }
-                    if !sampler.is_valid() {
-                        return Err(Error::validation(
-                            "bind group references an invalid sampler",
-                        ));
-                    }
+                    validate_bind_group_sampler(sampler.belongs_to(&device.0), sampler.is_valid())?;
                 }
             }
         }

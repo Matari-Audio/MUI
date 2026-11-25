@@ -13,86 +13,22 @@ mod surface;
 use std::collections::VecDeque;
 use std::ffi::{CStr, c_char};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use ash::vk;
 
+pub use crate::shared::BackendError as Error;
 pub use record::{Cmd, PassCmd, PassRecord};
 pub use resource::*;
 pub use surface::{Acquired, Surface, SurfaceTexture};
 
+pub(crate) use crate::shared::{LostCallback, MapCallback, WorkCallback as WorkDoneCallback, lock};
 use crate::types::{
     AdapterInfo, Backend, DeviceDescriptor, DeviceLostReason, DeviceType, Features, Limits,
 };
 
 /// Messages the validation layer reported as errors, across all devices.
 pub(crate) static VALIDATION_ERRORS: AtomicUsize = AtomicUsize::new(0);
-
-/// Lock `m`, past a panic on another thread: every guarded value here stays
-/// consistent between statements.
-pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// A Vulkan error's HAL category.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ErrorKind {
-    Validation,
-    OutOfMemory,
-    Internal,
-}
-
-/// A Vulkan failure, already formatted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error {
-    kind: ErrorKind,
-    message: String,
-}
-
-impl Error {
-    pub(crate) fn validation(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Validation,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn out_of_memory(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::OutOfMemory,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn internal(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn into_hal(self) -> crate::Error {
-        match self.kind {
-            ErrorKind::Validation => crate::Error::Validation {
-                description: self.message,
-            },
-            ErrorKind::OutOfMemory => crate::Error::OutOfMemory {
-                source: self.message,
-            },
-            ErrorKind::Internal => crate::Error::Internal {
-                description: self.message,
-            },
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for Error {}
 
 pub(crate) fn err(what: &str, e: impl std::fmt::Display) -> Error {
     Error::internal(format!("{what}: {e}"))
@@ -500,10 +436,6 @@ struct Flight {
     rejected_maps: Vec<MapCallback>,
 }
 
-pub(crate) type MapCallback = Box<dyn FnOnce(Result<(), crate::BufferAsyncError>) + Send>;
-pub(crate) type WorkDoneCallback = Box<dyn FnOnce() + Send>;
-type LostCallback = Box<dyn Fn(DeviceLostReason, String) + Send + Sync>;
-
 pub(crate) struct DeviceShared {
     pub adapter: Adapter,
     pub raw: ash::Device,
@@ -587,8 +519,7 @@ impl Drop for Owner {
         }
         // Resource captures point back to this device. Release the handler
         // after the final callbacks, with no internal lock held during drop.
-        let handler = lock(&d.errors.uncaptured).take();
-        drop(handler);
+        d.errors.clear_uncaptured();
     }
 }
 

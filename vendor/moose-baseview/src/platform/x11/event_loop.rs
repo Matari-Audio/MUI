@@ -26,8 +26,8 @@ use x11rb::connection::Connection;
 use x11rb::errors::ConnectionError;
 use x11rb::protocol::randr::{ConnectionExt as _, ModeFlag, ModeInfo};
 use x11rb::protocol::xproto::{
-    AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, InputFocus, KeyPressEvent,
-    KeyReleaseEvent, NotifyDetail,
+    AtomEnum, ClientMessageEvent, ConnectionExt as _, EventMask, InputFocus, KeyButMask,
+    KeyPressEvent, KeyReleaseEvent, NotifyDetail,
 };
 use x11rb::protocol::Event as XEvent;
 use x11rb::CURRENT_TIME;
@@ -100,6 +100,17 @@ pub(crate) struct EventLoop {
     /// pointer-derived focus it replaces ends first, with a FocusOut that
     /// must not cancel the very click that asked.
     taking_focus: bool,
+    /// Mouse buttons held in this window, as a bitmask of X button numbers.
+    /// X's implicit grab delivers their releases here whatever the focus does.
+    buttons_held: u32,
+    /// A focus loss that came while a button was held: delivered after the
+    /// last release. A window manager that keeps the X focus on its toplevel
+    /// (GNOME) takes it back from every click's `take_focus`; delivered at
+    /// once, `Unfocused` cancelled that click.
+    deferred_unfocus: bool,
+    /// Where the pointer is inside the window, with the state of its last
+    /// event: re-sent after `Unfocused`, which forgets it.
+    pointer_at: Option<(i16, i16, KeyButMask)>,
     /// Key-downs the handler ignored and that were forwarded to the embed
     /// parent, so the matching key-up can be synthesized on focus loss/close.
     forwarded_keys: [Option<KeyPressEvent>; 256],
@@ -166,6 +177,9 @@ impl EventLoop {
             pressed_keys: [false; 256],
             owns_focus: false,
             taking_focus: false,
+            buttons_held: 0,
+            deferred_unfocus: false,
+            pointer_at: None,
             forwarded_keys: [None; 256],
             embedder: None,
 
@@ -731,6 +745,7 @@ impl EventLoop {
 
         self.update_pointer_authority(&event);
         self.forward_matari_drag_event(&event);
+        trace_input(self.window.raw_id(), self.window.scaling_factor.get(), &event);
 
         match event {
             XEvent::RandrScreenChangeNotify(_) | XEvent::RandrNotify(_) => {
@@ -754,7 +769,7 @@ impl EventLoop {
                             self.embedder = Some(embedder);
                         }
                         xembed::Message::FocusIn => self.focus_in(true),
-                        xembed::Message::FocusOut => self.focus_out(),
+                        xembed::Message::FocusOut => self.focus_lost(),
                         xembed::Message::Other => {}
                     }
                     return Ok(());
@@ -839,6 +854,7 @@ impl EventLoop {
             // mouse
             ////
             XEvent::MotionNotify(event) if event.event == self.window.raw_id() => {
+                self.pointer_at = Some((event.event_x, event.event_y, event.state));
                 let physical_pos = PhysicalPosition::new(event.event_x, event.event_y);
 
                 self.handle_event(Event::Mouse(MouseEvent::CursorMoved {
@@ -848,6 +864,7 @@ impl EventLoop {
             }
 
             XEvent::EnterNotify(event) if event.event == self.window.raw_id() => {
+                self.pointer_at = Some((event.event_x, event.event_y, event.state));
                 self.handle_event(Event::Mouse(MouseEvent::CursorEntered));
                 // since no `MOTION_NOTIFY` event is generated when `ENTER_NOTIFY` is generated,
                 // we generate a CursorMoved as well, so the mouse position from here isn't lost
@@ -859,6 +876,7 @@ impl EventLoop {
             }
 
             XEvent::LeaveNotify(event) if event.event == self.window.raw_id() => {
+                self.pointer_at = None;
                 self.handle_event(Event::Mouse(MouseEvent::CursorLeft));
             }
 
@@ -880,6 +898,7 @@ impl EventLoop {
                         // A host does not always give its plugin's window the
                         // keyboard: a click inside takes it, with the click's
                         // own time, and it goes back to the parent after.
+                        self.buttons_held |= button_bit(detail);
                         if takes_focus(self.window.parented, self.owns_focus, detail) {
                             self.take_focus(event.time);
                         }
@@ -899,6 +918,10 @@ impl EventLoop {
                     button: button_id,
                     modifiers: key_mods(event.state),
                 }));
+                self.buttons_held &= !button_bit(event.detail);
+                if self.buttons_held == 0 && std::mem::take(&mut self.deferred_unfocus) {
+                    self.focus_out();
+                }
             }
 
             ////
@@ -936,7 +959,7 @@ impl EventLoop {
                     && self.embedder.is_none()
                     && !(self.taking_focus && e.detail == NotifyDetail::POINTER) =>
             {
-                self.focus_out();
+                self.focus_lost();
             }
 
             XEvent::MapNotify(e) => {
@@ -960,6 +983,16 @@ impl EventLoop {
                     }
 
                     self.window.visibility_state.window_unmapped(window_id);
+                    // An unviewable window loses its implicit grab: the held
+                    // buttons' releases go elsewhere, so stop waiting for them.
+                    if self.buttons_held != 0
+                        && !self.window.visibility_state.own_window_is_viewable()
+                    {
+                        self.buttons_held = 0;
+                        if std::mem::take(&mut self.deferred_unfocus) {
+                            self.focus_out();
+                        }
+                    }
                 }
             }
 
@@ -1013,12 +1046,22 @@ impl EventLoop {
 
     fn focus_in(&mut self, owned: bool) {
         self.taking_focus = false;
+        self.deferred_unfocus = false;
         self.owns_focus = owned;
         self.window.is_focused.set(true);
         let config = self.window.ime_configuration.borrow().clone();
         self.window.set_ime_configuration(config);
         self.drain_ime();
         self.handle_event(Event::Window(WindowEvent::Focused));
+    }
+
+    /// The keyboard left: at once, or after the held buttons' releases.
+    fn focus_lost(&mut self) {
+        if self.buttons_held == 0 {
+            self.focus_out();
+        } else {
+            self.deferred_unfocus = true;
+        }
     }
 
     fn focus_out(&mut self) {
@@ -1030,6 +1073,14 @@ impl EventLoop {
         self.pressed_keys.fill(false);
         self.release_forwarded_keys();
         self.handle_event(Event::Window(WindowEvent::Unfocused));
+        // The keyboard left, not the pointer: a click with no motion before it
+        // must still land where the pointer is.
+        if let Some((x, y, state)) = self.pointer_at {
+            self.handle_event(Event::Mouse(MouseEvent::CursorMoved {
+                position: PhysicalPosition::new(x, y).cast(),
+                modifiers: key_mods(state),
+            }));
+        }
     }
 
     /// `Xft.dpi` changed: a window that follows it keeps its logical size at
@@ -1055,6 +1106,20 @@ impl EventLoop {
                 && !matches!(event, Event::Window(WindowEvent::WillClose)))
         {
             return EventStatus::Ignored;
+        }
+        if trace_on()
+            && matches!(
+                &event,
+                Event::Mouse(_) | Event::Window(WindowEvent::Focused | WindowEvent::Unfocused)
+            )
+        {
+            #[expect(
+                clippy::print_stderr,
+                reason = "MUI_INPUT_TRACE is a user-run stderr diagnostic"
+            )]
+            {
+                eprintln!("[mui-input] deliver {event:?}");
+            }
         }
         if matches!(&event, Event::Window(WindowEvent::WillClose)) {
             self.window.primary_pointer_down.set(false);
@@ -1106,6 +1171,73 @@ impl EventLoop {
 /// pointer passing over or scrolling leaves the host's keys alone.
 fn takes_focus(parented: bool, focused: bool, detail: u8) -> bool {
     parented && !focused && !(4..=7).contains(&detail)
+}
+
+fn trace_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("MUI_INPUT_TRACE").is_some_and(|v| v != "0"))
+}
+
+/// `MUI_INPUT_TRACE=1`: the pointer and focus events X delivers, on stderr,
+/// so a user can show where their clicks go.
+#[expect(clippy::print_stderr, reason = "MUI_INPUT_TRACE is a user-run stderr diagnostic")]
+fn trace_input(window: u32, scale: f64, event: &XEvent) {
+    if !trace_on() {
+        return;
+    }
+    let what = match event {
+        XEvent::MotionNotify(e) => {
+            format!("motion to={:#x} at={},{}", e.event, e.event_x, e.event_y)
+        }
+        XEvent::EnterNotify(e) | XEvent::LeaveNotify(e) => format!(
+            "{} to={:#x} at={},{} mode={:?} detail={:?}",
+            if e.response_type & 0x7f == x11rb::protocol::xproto::ENTER_NOTIFY_EVENT {
+                "enter"
+            } else {
+                "leave"
+            },
+            e.event,
+            e.event_x,
+            e.event_y,
+            e.mode,
+            e.detail
+        ),
+        XEvent::ButtonPress(e) | XEvent::ButtonRelease(e) => format!(
+            "{} {} to={:#x} child={:#x} at={},{}",
+            if e.response_type & 0x7f == x11rb::protocol::xproto::BUTTON_PRESS_EVENT {
+                "press"
+            } else {
+                "release"
+            },
+            e.detail,
+            e.event,
+            e.child,
+            e.event_x,
+            e.event_y
+        ),
+        XEvent::FocusIn(e) | XEvent::FocusOut(e) => format!(
+            "{} to={:#x} mode={:?} detail={:?}",
+            if e.response_type & 0x7f == x11rb::protocol::xproto::FOCUS_IN_EVENT {
+                "focus-in"
+            } else {
+                "focus-out"
+            },
+            e.event,
+            e.mode,
+            e.detail
+        ),
+        _ => return,
+    };
+    eprintln!("[mui-input] window={window:#x} scale={scale} {what}");
+}
+
+/// A held-button bit for X button `detail`; wheel steps (4-7) hold nothing.
+fn button_bit(detail: u8) -> u32 {
+    if (4..=7).contains(&detail) {
+        0
+    } else {
+        1u32.checked_shl(u32::from(detail)).unwrap_or(0)
+    }
 }
 
 fn frame_deadline(

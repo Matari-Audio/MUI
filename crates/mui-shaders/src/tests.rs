@@ -233,22 +233,39 @@ fn hlsl_has_entry_points_and_d3d11_registers() {
     }
 }
 
-/// FXC's SM 5.0 bytecode ships for every entry point exactly when built on
-/// Windows for Windows.
+/// FXC's SM 5.0 bytecode ships for every entry point on native Windows builds
+/// (and cross-builds when `prebuilt/dxbc/` is committed).
 #[test]
 fn dxbc_ships_with_native_windows_builds() {
     for a in artifacts() {
         for e in a.entry_points {
             assert_eq!(
                 e.dxbc.is_some(),
-                cfg!(windows),
-                "{} {}: DXBC ships exactly on Windows",
+                EXPECT_DXBC,
+                "{} {}: DXBC availability must match build-time provider",
                 a.name,
                 e.name
             );
             if let Some(bytes) = e.dxbc {
                 assert_eq!(&bytes[..4], b"DXBC", "{} {}", a.name, e.name);
             }
+        }
+    }
+}
+
+/// Precompiled `.metallib` ships on macOS builds (native or via `prebuilt/metallib/`).
+#[test]
+fn metallib_ships_only_on_macos_with_valid_magic() {
+    for a in artifacts() {
+        // EXPECT_METALLIB is false off macOS, so this also forbids shipping it elsewhere.
+        assert_eq!(
+            a.metallib.is_some(),
+            EXPECT_METALLIB,
+            "{}: metallib availability must match build-time provider",
+            a.name
+        );
+        if let Some(bytes) = a.metallib {
+            assert_eq!(&bytes[..4], b"MTLB", "{}: metallib magic", a.name);
         }
     }
 }

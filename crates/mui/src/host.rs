@@ -163,8 +163,13 @@ enum Pending {
     Move(Input),
     /// A move with a button held: consecutive ones fold into one frame.
     Drag(Input),
-    /// Focus went away mid-gesture.
-    Cancel(PointerInput),
+    /// Focus went away. `reset` also drops MUI's own gesture state (a button
+    /// was still down); without it only the view's app-owned gestures cancel,
+    /// so a click released earlier in the batch survives for the next build.
+    Cancel {
+        pointer: PointerInput,
+        reset: bool,
+    },
 }
 
 /// Who a key belongs to: the host, a focused control, a focused text field.
@@ -446,19 +451,29 @@ impl Driver {
         self.pending.push_back(Pending::Input(input));
     }
 
-    /// The window gained or lost keyboard focus. Losing it cancels the
-    /// gesture in flight and forgets the keys held.
+    /// The window gained or lost keyboard focus. Losing it forgets the keys
+    /// held and always tells the view to cancel its app-owned gestures. MUI's
+    /// own gesture state is reset only while a button is still down: with
+    /// every button up nothing of MUI's is in flight, and a click released
+    /// earlier in this batch is still unread by the next build (a window
+    /// manager that takes focus back from each click sends exactly this).
     pub fn focus(&mut self, focused: bool) {
         self.focused = focused;
         self.input_enqueued();
         if focused {
             self.pending
                 .push_back(Pending::Input(Input::from(self.pointer)));
-        } else {
-            self.held.clear();
-            self.pointer = PointerInput::default();
-            self.pending.push_back(Pending::Cancel(self.pointer));
+            return;
         }
+        self.held.clear();
+        let reset = !self.pointer.buttons.is_empty();
+        if reset {
+            self.pointer = PointerInput::default();
+        }
+        self.pending.push_back(Pending::Cancel {
+            pointer: self.pointer,
+            reset,
+        });
     }
 
     /// The window closes: no tree is built from here on.
@@ -685,8 +700,10 @@ impl Driver {
                     }
                     input
                 }
-                Pending::Cancel(pointer) => {
-                    s.ui.cancel();
+                Pending::Cancel { pointer, reset } => {
+                    if reset {
+                        s.ui.cancel();
+                    }
                     s.view.cancel(&s.ui);
                     Input::from(pointer)
                 }

@@ -17,7 +17,9 @@ pub enum PresentationMode {
 /// Concrete OS presentation mechanism backing a surface.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PresentationBackend {
-    /// Windows DirectComposition visual + flip-model DXGI swapchain (D3D11/D3D12).
+    /// Windows HWND flip-model DXGI swapchain (`CreateSwapChainForHwnd`, opaque D3D11).
+    WinDxgiFlip,
+    /// Windows DirectComposition visual + flip-model DXGI swapchain (translucent D3D11/D3D12).
     WinDirectComposition,
     /// Windows Vulkan `VkSwapchainKHR` on the `HWND` (when D3D12 is unavailable).
     WinVkSwapchain,
@@ -46,7 +48,8 @@ impl PresentationBackend {
     pub const fn is_gpu(self) -> bool {
         matches!(
             self,
-            Self::WinDirectComposition
+            Self::WinDxgiFlip
+                | Self::WinDirectComposition
                 | Self::WinVkSwapchain
                 | Self::MacMetalLayer
                 | Self::LinuxVkSwapchain
@@ -54,17 +57,21 @@ impl PresentationBackend {
     }
 
     /// The window-system mechanism presenting frames rendered with `api` on
-    /// this OS; [`Self::Offscreen`] for software or an API the OS cannot present.
+    /// this OS to a surface that is (`translucent`) or is not alpha-composited;
+    /// [`Self::Offscreen`] for software or an API the OS cannot present.
     #[must_use]
-    pub const fn for_gpu(api: GraphicsApi) -> Self {
+    pub const fn for_gpu(api: GraphicsApi, translucent: bool) -> Self {
         match api {
             // MoltenVK draws into the view's CAMetalLayer too.
             GraphicsApi::Metal | GraphicsApi::Vulkan if cfg!(target_os = "macos") => {
                 Self::MacMetalLayer
             }
-            GraphicsApi::D3D11 | GraphicsApi::D3D12 if cfg!(target_os = "windows") => {
+            // Translucent D3D11 presents through DirectComposition.
+            GraphicsApi::D3D11 if cfg!(target_os = "windows") && translucent => {
                 Self::WinDirectComposition
             }
+            GraphicsApi::D3D11 if cfg!(target_os = "windows") => Self::WinDxgiFlip,
+            GraphicsApi::D3D12 if cfg!(target_os = "windows") => Self::WinDirectComposition,
             GraphicsApi::Vulkan if cfg!(target_os = "windows") => Self::WinVkSwapchain,
             GraphicsApi::Vulkan if cfg!(target_os = "linux") => Self::LinuxVkSwapchain,
             _ => Self::Offscreen,
@@ -232,32 +239,36 @@ mod tests {
     #[test]
     fn gpu_backend_follows_the_selected_api() {
         assert_eq!(
-            PresentationBackend::for_gpu(GraphicsApi::Software),
+            PresentationBackend::for_gpu(GraphicsApi::Software, false),
             PresentationBackend::Offscreen
         );
         #[cfg(target_os = "linux")]
         {
             assert_eq!(
-                PresentationBackend::for_gpu(GraphicsApi::Vulkan),
+                PresentationBackend::for_gpu(GraphicsApi::Vulkan, false),
                 PresentationBackend::LinuxVkSwapchain
             );
             assert_eq!(
-                PresentationBackend::for_gpu(GraphicsApi::D3D12),
+                PresentationBackend::for_gpu(GraphicsApi::D3D12, false),
                 PresentationBackend::Offscreen
             );
             assert_eq!(
-                PresentationBackend::for_gpu(GraphicsApi::D3D11),
+                PresentationBackend::for_gpu(GraphicsApi::D3D11, false),
                 PresentationBackend::Offscreen
             );
         }
         #[cfg(target_os = "windows")]
         {
             assert_eq!(
-                PresentationBackend::for_gpu(GraphicsApi::D3D11),
+                PresentationBackend::for_gpu(GraphicsApi::D3D11, false),
+                PresentationBackend::WinDxgiFlip
+            );
+            assert_eq!(
+                PresentationBackend::for_gpu(GraphicsApi::D3D11, true),
                 PresentationBackend::WinDirectComposition
             );
             assert_eq!(
-                PresentationBackend::for_gpu(GraphicsApi::D3D12),
+                PresentationBackend::for_gpu(GraphicsApi::D3D12, false),
                 PresentationBackend::WinDirectComposition
             );
         }

@@ -279,12 +279,18 @@ impl Requests {
     }
 
     /// A GPU frame rendered with `api` straight to the window's surface.
-    fn presented_gpu(&self, size: (u32, u32), api: GraphicsApi, reason: &'static str) {
+    fn presented_gpu(
+        &self,
+        size: (u32, u32),
+        api: GraphicsApi,
+        translucent: bool,
+        reason: &'static str,
+    ) {
         self.presented_with(
             size,
             size,
             PresentationMode::DirectGpu,
-            PresentationBackend::for_gpu(api),
+            PresentationBackend::for_gpu(api, translucent),
             api,
             None,
             reason,
@@ -1155,8 +1161,12 @@ impl<V: View> Handler<V> {
                     self.requests.drag.rendered(drag_frame);
                     self.gpu_retry.reset();
                     self.unpainted = false;
-                    self.requests
-                        .presented_gpu(gpu.size(), gpu.api(), self.presenter_reason);
+                    self.requests.presented_gpu(
+                        gpu.size(),
+                        gpu.api(),
+                        gpu.translucent(),
+                        self.presenter_reason,
+                    );
                 }
                 Ok(Frame::Current) => {
                     self.requests.drag.rendered(drag_frame);

@@ -101,7 +101,8 @@ wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
 mui-hal = { workspace = true, features = ["wgpu"] }
 
 [target.'cfg(not(any(target_os = "linux", target_arch = "wasm32")))'.dependencies]
-# No native backend here yet (Metal and D3D11 are to come): wgpu covers it.
+# Native Metal and D3D11 backends live in mui-hal; wgpu stays enabled as the
+# interim default on macOS and Windows until OS-CI parity promotes them.
 mui-hal = { workspace = true, features = ["wgpu"] }
 
 [target.'cfg(all(windows, not(target_arch = "aarch64"), target_env = "msvc"))'.dependencies]
