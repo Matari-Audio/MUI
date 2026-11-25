@@ -1,0 +1,4 @@
+# Emission scratch (build.rs publish_prebuilt): lock, staging, backup.
+.*.lock
+.*.staging/
+.*.old/

@@ -1,13 +1,17 @@
 //! Metal resource wrappers (`MTLBuffer`, `MTLTexture`, `MTLSamplerState`,
 //! `MTLLibrary`, `MTLRenderPipelineState`, bind groups, and query placeholders).
 
+use std::ffi::c_void;
+use std::io::Write as _;
+use std::ptr;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use mui_shaders::ShaderId;
+use objc2::msg_send;
 use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_foundation::{NSRange, NSString};
+use objc2::runtime::{AnyObject, ProtocolObject};
+use objc2_foundation::{NSError, NSRange, NSString};
 use objc2_metal::{
     MTLBlendFactor, MTLBlendOperation, MTLBuffer, MTLColorWriteMask, MTLCompileOptions, MTLDevice,
     MTLLanguageVersion, MTLLibrary, MTLPixelFormat, MTLPrimitiveType, MTLRenderPipelineDescriptor,
@@ -16,10 +20,14 @@ use objc2_metal::{
     MTLTextureType, MTLTextureUsage, MTLVertexDescriptor, MTLVertexFormat, MTLVertexStepFunction,
 };
 
-use super::{Device, DeviceShared, Error, MapCallback, SendObj, lock};
+use super::{Device, DeviceShared, Error, MapCallback, SendObj};
 use crate::binding::{
     BoundKind, ShaderBindingTable, dynamic_offset_bindings, metal_vertex_buffer_index,
     resolve_entry_point, validate_bind_group_entries,
+};
+use crate::shared::{
+    BufferMapState, validate_bind_group_buffer, validate_bind_group_sampler,
+    validate_bind_group_view, validate_buffer_size, validate_map_async, validate_texture_desc,
 };
 use crate::types::{
     AddressMode, BindGroupLayoutEntry, BlendFactor, BlendOperation, BufferDescriptor, BufferUsages,
@@ -27,6 +35,16 @@ use crate::types::{
     SamplerDescriptor, TextureDescriptor, TextureFormat, TextureUsages, TextureViewDimension,
     VertexBufferLayout, VertexFormat, VertexStepMode,
 };
+
+unsafe extern "C" {
+    fn dispatch_data_create(
+        buffer: *const c_void,
+        size: usize,
+        queue: *mut c_void,
+        destructor: *const c_void,
+    ) -> *mut AnyObject;
+    fn dispatch_release(object: *mut AnyObject);
+}
 
 pub(crate) fn mtl_format(f: TextureFormat) -> MTLPixelFormat {
     match f {
@@ -101,20 +119,12 @@ fn mtl_address(a: AddressMode) -> MTLSamplerAddressMode {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MapState {
-    Unmapped,
-    Pending(u64),
-    Mapped,
-}
-
 pub(crate) struct BufferInner {
     device: Arc<DeviceShared>,
     pub raw: Option<SendObj<ProtocolObject<dyn MTLBuffer>>>,
     size: u64,
     usage: BufferUsages,
-    map_state: Mutex<MapState>,
-    next_map_token: AtomicU64,
+    map: BufferMapState,
     last_write_seq: AtomicU64,
 }
 
@@ -126,13 +136,7 @@ impl Buffer {
         if device.is_lost() {
             return Err(Error::internal("Metal device is lost"));
         }
-        if desc.size > device.limits().max_buffer_size {
-            return Err(Error::validation(format!(
-                "buffer size {} exceeds Metal max_buffer_size {}",
-                desc.size,
-                device.limits().max_buffer_size
-            )));
-        }
+        validate_buffer_size(desc.size, device.limits().max_buffer_size, "Metal")?;
         let alloc = usize::try_from(desc.size.max(4))
             .map_err(|_| Error::out_of_memory("buffer size overflows usize"))?;
         let raw = device
@@ -154,8 +158,7 @@ impl Buffer {
             raw: Some(SendObj(raw)),
             size,
             usage,
-            map_state: Mutex::new(MapState::Unmapped),
-            next_map_token: AtomicU64::new(1),
+            map: BufferMapState::new(),
             last_write_seq: AtomicU64::new(0),
         }))
     }
@@ -166,8 +169,7 @@ impl Buffer {
             raw: None,
             size: desc.size,
             usage: desc.usage,
-            map_state: Mutex::new(MapState::Unmapped),
-            next_map_token: AtomicU64::new(1),
+            map: BufferMapState::new(),
             last_write_seq: AtomicU64::new(0),
         }))
     }
@@ -197,31 +199,19 @@ impl Buffer {
     }
 
     pub fn is_mapped_or_pending(&self) -> bool {
-        *lock(&self.0.map_state) != MapState::Unmapped
+        self.0.map.is_mapped_or_pending()
     }
 
     pub(crate) fn try_mark_pending(&self, token: u64) -> bool {
-        let mut state = lock(&self.0.map_state);
-        if *state != MapState::Unmapped {
-            return false;
-        }
-        *state = MapState::Pending(token);
-        true
+        self.0.map.try_mark_pending(token)
     }
 
     pub fn map_async(&self, offset: u64, size: u64, callback: MapCallback) {
         let device = Device(self.0.device.clone());
-        if !self.is_valid() || !self.0.usage.contains(BufferUsages::MAP_READ) {
-            device.errors().report(crate::Error::Validation {
-                description: "map_async requires a valid MAP_READ buffer".into(),
-            });
-            callback(Err(crate::BufferAsyncError));
-            return;
-        }
-        if offset.checked_add(size).is_none_or(|end| end > self.0.size) {
-            device.errors().report(crate::Error::Validation {
-                description: "map_async slice exceeds buffer bounds".into(),
-            });
+        if let Err(err) =
+            validate_map_async(self.is_valid(), self.0.usage, self.0.size, offset, size)
+        {
+            device.errors().report(err);
             callback(Err(crate::BufferAsyncError));
             return;
         }
@@ -229,21 +219,10 @@ impl Buffer {
             callback(Err(crate::BufferAsyncError));
             return;
         }
-        let token = self.0.next_map_token.fetch_add(1, Ordering::Relaxed);
+        let token = self.0.map.next_token();
         let this = self.clone();
         let wrapped: MapCallback = Box::new(move |res| {
-            let mut state = lock(&this.0.map_state);
-            let delivered = if *state == MapState::Pending(token) {
-                *state = if res.is_ok() {
-                    MapState::Mapped
-                } else {
-                    MapState::Unmapped
-                };
-                res
-            } else {
-                Err(crate::BufferAsyncError)
-            };
-            drop(state);
+            let delivered = this.0.map.complete_pending(token, res);
             callback(delivered);
         });
         if let Err((err, cb)) = device.begin_map_for_buffer(self, token, wrapped) {
@@ -257,10 +236,7 @@ impl Buffer {
         offset: u64,
         size: u64,
     ) -> Result<Vec<u8>, crate::BufferAsyncError> {
-        let state = lock(&self.0.map_state);
-        if *state != MapState::Mapped {
-            return Err(crate::BufferAsyncError);
-        }
+        let state = self.0.map.lock_mapped()?;
         let Some(raw) = &self.0.raw else {
             return Err(crate::BufferAsyncError);
         };
@@ -285,7 +261,7 @@ impl Buffer {
     }
 
     pub fn unmap(&self) {
-        *lock(&self.0.map_state) = MapState::Unmapped;
+        self.0.map.unmap();
     }
 }
 
@@ -310,16 +286,7 @@ impl Texture {
         if device.is_lost() {
             return Err(Error::internal("Metal device is lost"));
         }
-        if desc.size.width == 0 || desc.size.height == 0 {
-            return Err(Error::validation("texture dimensions must be non-zero"));
-        }
-        if desc.mip_level_count > 1 {
-            return Err(Error::validation(
-                "native Metal textures support only one mip level (mip_level_count == 1)",
-            ));
-        }
-        let layers = desc.size.depth_or_array_layers.max(1);
-        let sample_count = desc.sample_count.max(1);
+        let (layers, sample_count) = validate_texture_desc(desc, "Metal")?;
         let td = MTLTextureDescriptor::new();
         td.setTextureType(if layers > 1 {
             MTLTextureType::Type2DArray
@@ -668,65 +635,25 @@ impl BindGroup {
                     buffer,
                     offset,
                     size,
-                } => {
-                    if !buffer.belongs_to(&device.0) {
-                        return Err(Error::validation(
-                            "bind group references a buffer from another device",
-                        ));
-                    }
-                    if !buffer.is_valid() {
-                        return Err(Error::validation("bind group references an invalid buffer"));
-                    }
-                    if !buffer.usage().contains(BufferUsages::UNIFORM) {
-                        return Err(Error::validation("bind group buffer lacks UNIFORM usage"));
-                    }
-                    let end = offset.checked_add(size.unwrap_or(0)).ok_or_else(|| {
-                        Error::validation("bind group buffer range overflows u64")
-                    })?;
-                    if end > buffer.size() {
-                        return Err(Error::validation(
-                            "bind group buffer range exceeds buffer size",
-                        ));
-                    }
-                }
-                Bound::View(view) => {
-                    if !view.belongs_to(&device.0) {
-                        return Err(Error::validation(
-                            "bind group references a texture view from another device",
-                        ));
-                    }
-                    if view.is_retired_swapchain() {
-                        return Err(Error::validation(
-                            "bind group references a retired swapchain image",
-                        ));
-                    }
-                    if !view.is_valid() {
-                        return Err(Error::validation(
-                            "bind group references an invalid texture view",
-                        ));
-                    }
-                    if !view
-                        .0
+                } => validate_bind_group_buffer(
+                    buffer.belongs_to(&device.0),
+                    buffer.is_valid(),
+                    buffer.usage(),
+                    buffer.size(),
+                    *offset,
+                    *size,
+                )?,
+                Bound::View(view) => validate_bind_group_view(
+                    view.belongs_to(&device.0),
+                    view.is_retired_swapchain(),
+                    view.is_valid(),
+                    view.0
                         .texture
                         .usage()
-                        .contains(TextureUsages::TEXTURE_BINDING)
-                    {
-                        return Err(Error::validation(
-                            "bind group texture view lacks TEXTURE_BINDING",
-                        ));
-                    }
-                }
+                        .contains(TextureUsages::TEXTURE_BINDING),
+                )?,
                 Bound::Sampler(sampler) => {
-                    if !sampler.belongs_to(&device.0) {
-                        return Err(Error::validation(
-                            "bind group references a sampler from another device",
-                        ));
-                    }
-                    if !sampler.is_valid() {
-                        return Err(Error::validation(
-                            "bind group references an invalid sampler",
-                        ));
-                    }
+                    validate_bind_group_sampler(sampler.belongs_to(&device.0), sampler.is_valid())?;
                 }
             }
         }
@@ -806,19 +733,65 @@ pub(crate) struct ShaderModuleInner {
 #[derive(Clone)]
 pub struct ShaderModule(pub(crate) Arc<ShaderModuleInner>);
 
+fn load_prebuilt_metallib(
+    raw_device: &ProtocolObject<dyn MTLDevice>,
+    bytes: &[u8],
+) -> Result<Retained<ProtocolObject<dyn MTLLibrary>>, Error> {
+    // SAFETY: `dispatch_data_create` with `DISPATCH_DATA_DESTRUCTOR_DEFAULT` (NULL)
+    // copies `bytes` into a new `dispatch_data_t` (Objective-C `OS_dispatch_data`).
+    let data = unsafe {
+        dispatch_data_create(
+            bytes.as_ptr().cast(),
+            bytes.len(),
+            ptr::null_mut(),
+            ptr::null(),
+        )
+    };
+    if data.is_null() {
+        return Err(Error::out_of_memory("dispatch_data_create returned null"));
+    }
+    // SAFETY: `data` is a live `dispatch_data_t` (`OS_dispatch_data`) object, and
+    // `newLibraryWithData:error:` follows Cocoa's `new*` + `NSError**` convention.
+    let res: Result<Retained<ProtocolObject<dyn MTLLibrary>>, Retained<NSError>> =
+        unsafe { msg_send![raw_device, newLibraryWithData: &*data, error: _] };
+    // SAFETY: balances `dispatch_data_create` above.
+    unsafe {
+        dispatch_release(data);
+    }
+    res.map_err(|e| Error::internal(format!("MTLDevice::newLibraryWithData: {e}")))
+}
+
 impl ShaderModule {
     pub fn new(device: &Device, id: ShaderId) -> Result<Self, Error> {
         if device.is_lost() {
             return Err(Error::internal("Metal device is lost"));
         }
-        let msl = NSString::from_str(id.artifact().msl);
-        let opts = MTLCompileOptions::new();
-        opts.setLanguageVersion(MTLLanguageVersion::Version2_3);
-        let library = device
-            .0
-            .raw
-            .newLibraryWithSource_options_error(&msl, Some(&opts))
-            .map_err(|e| Error::internal(format!("compiling MSL for {id:?}: {e}")))?;
+        let artifact = id.artifact();
+        let prebuilt = artifact.metallib.and_then(|bytes| {
+            match load_prebuilt_metallib(&device.0.raw.0, bytes) {
+                Ok(library) => Some(library),
+                Err(err) => {
+                    // Best-effort: a broken stderr must not block the MSL fallback.
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "mui-hal: prebuilt metallib load failed for {id:?} ({err}); falling back to MSL compilation"
+                    );
+                    None
+                }
+            }
+        });
+        let library = if let Some(library) = prebuilt {
+            library
+        } else {
+            let msl = NSString::from_str(artifact.msl);
+            let opts = MTLCompileOptions::new();
+            opts.setLanguageVersion(MTLLanguageVersion::Version2_3);
+            device
+                .0
+                .raw
+                .newLibraryWithSource_options_error(&msl, Some(&opts))
+                .map_err(|e| Error::internal(format!("compiling MSL for {id:?}: {e}")))?
+        };
         Ok(Self(Arc::new(ShaderModuleInner {
             device: device.0.clone(),
             id,

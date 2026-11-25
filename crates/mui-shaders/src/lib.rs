@@ -99,9 +99,10 @@ pub struct EntryPointInfo {
     pub msl_name: &'static str,
     /// The function name in [`ShaderArtifact::hlsl`], for `D3DCompile`.
     pub hlsl_name: &'static str,
-    /// SM 5.0 DXBC (`vs_5_0` / `ps_5_0`) compiled by FXC. Built on Windows
-    /// for Windows; `None` elsewhere, where `mui-hal` compiles
-    /// [`ShaderArtifact::hlsl`] at runtime.
+    /// SM 5.0 DXBC (`vs_5_0` / `ps_5_0`) compiled by FXC (either on native
+    /// Windows or from hash-verified `prebuilt/dxbc/` on cross-builds). `None`
+    /// when unavailable, in which case `mui-hal` compiles [`ShaderArtifact::hlsl`]
+    /// at runtime.
     pub dxbc: Option<&'static [u8]>,
 }
 
@@ -152,6 +153,12 @@ pub struct ShaderArtifact {
     pub spirv: &'static [u32],
     /// MSL source holding every entry point.
     pub msl: &'static str,
+    /// Precompiled Metal library (`.metallib`) built by `xcrun metal` +
+    /// `xcrun metallib` (either on native macOS or from hash-verified
+    /// `prebuilt/metallib/` on cross-builds). `None` when unavailable; `mui-hal`
+    /// compiles [`Self::msl`] at runtime when absent or when loading the
+    /// prebuilt library fails.
+    pub metallib: Option<&'static [u8]>,
     /// HLSL SM 5.0 source holding every entry point.
     pub hlsl: &'static str,
     /// Entry points in WGSL declaration order.

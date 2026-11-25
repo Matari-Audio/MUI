@@ -375,7 +375,7 @@ impl Presenter {
                         self.state.record_fallback(None);
                         self.state.record_frame(
                             mui_present::PresentationMode::DirectGpu,
-                            mui_present::PresentationBackend::for_gpu(gpu.api()),
+                            mui_present::PresentationBackend::for_gpu(gpu.api(), gpu.translucent()),
                             self.size,
                             self.size,
                             self.reason,

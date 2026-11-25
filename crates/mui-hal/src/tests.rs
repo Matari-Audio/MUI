@@ -1,15 +1,33 @@
 //! Offscreen checks on the first adapter the machine offers. Skipped (with
-//! a note) where no Vulkan 1.3 device exists.
+//! a note) where no device exists, unless `MUI_HAL_REQUIRE_NATIVE=1`.
 
 use super::*;
 
+/// The first adapter, or `None` (test skipped). With `MUI_HAL_REQUIRE_NATIVE=1`
+/// (native OS CI) a missing adapter, or one that is not this OS's native
+/// backend, fails instead, so native coverage cannot silently vanish.
 fn device() -> Option<(Device, Queue)> {
+    let require_native = std::env::var("MUI_HAL_REQUIRE_NATIVE").is_ok_and(|v| v == "1");
     let instance = Instance::new(InstanceDescriptor::from_env());
     let adapters = pollster::block_on(instance.enumerate_adapters(Backends::all()));
     let Some(adapter) = adapters.into_iter().next() else {
+        assert!(
+            !require_native,
+            "MUI_HAL_REQUIRE_NATIVE=1 but no adapter ({:?})",
+            instance.backend_errors()
+        );
         eprintln!("skipped: no adapter ({:?})", instance.backend_errors());
         return None;
     };
+    if require_native {
+        // The wgpu fallback reports the same graphics API (e.g. Metal), so check the
+        // implementation, not the API.
+        assert!(
+            adapter.is_native(),
+            "MUI_HAL_REQUIRE_NATIVE=1 but the adapter is wgpu ({:?})",
+            adapter.get_info().backend
+        );
+    }
     Some(pollster::block_on(adapter.request_device(&DeviceDescriptor::default())).unwrap())
 }
 

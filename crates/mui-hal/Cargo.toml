@@ -8,8 +8,8 @@ description = "MUI's owned render-only GPU HAL: Vulkan (ash), Metal (objc2-metal
 
 [features]
 default = []
-# Passthrough backend for web/wasm, media and wgpu-sharing plugins, and for macOS/Windows
-# plugin builds until the Metal and D3D11 backends land.
+# Passthrough backend for web/wasm, media and wgpu-sharing plugins, and interim
+# default on macOS/Windows while native Metal and D3D11 OS-CI parity is pending.
 wgpu = ["dep:wgpu"]
 # Open every device through wgpu, never natively: for a plugin that shares
 # the renderer's device with its own wgpu work (e.g. compute). Per build,
@@ -76,6 +76,14 @@ wgpu = { workspace = true, optional = true, features = ["dx12"] }
 
 [dev-dependencies]
 pollster.workspace = true
+
+[target.'cfg(target_os = "windows")'.dev-dependencies]
+windows = { version = "0.62", features = ["Win32_UI_WindowsAndMessaging"] }
+
+# AppKit views must be made on the main thread, which libtest's are not.
+[[test]]
+name = "native_surface"
+harness = false
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 libc = "0.2"

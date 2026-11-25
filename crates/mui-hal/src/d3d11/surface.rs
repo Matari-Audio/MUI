@@ -1,14 +1,24 @@
-//! D3D11 window surface wired to `mui-present`'s `DirectCompositionPresenter`.
+//! D3D11 window surface wired to `mui-present`'s `DxgiSwapChainPresenter`
+//! (`HwndFlipSwapChain` for opaque surfaces; `DirectCompositionPresenter` when
+//! `translucent == true`).
 //!
-//! Enforces Microsoft Learn's DXGI 1.2 `ResizeBuffers` contract:
-//! - Before resizing, all cached back-buffer `Texture` / `TextureView` (`RTV`)
-//!   handles are retired and dropped, and `ID3D11DeviceContext::OMSetRenderTargets`
-//!   is cleared + flushed so zero COM references linger on back buffer `0`.
+//! **Lock ordering invariant:** Always acquire `Surface::state` FIRST, then
+//! `DeviceShared::state` SECOND. Never acquire `Surface::state` while holding
+//! `DeviceShared::state`. Every DXGI swapchain call (`new`, `resize`,
+//! `back_buffer`, `present`, and swapchain teardown) executes while holding
+//! `DeviceShared::state` so DXGI's internal use of the immediate
+//! `ID3D11DeviceContext` can never race with `Queue::submit`.
+//!
+//! **Retirement/loss rule:** swapchain generation retirement (`live = false`)
+//! is published only under `DeviceShared::state` (via [`SwapState::invalidate`]),
+//! and `Device::submit` validates every command, staged or explicit, under that
+//! same lock. Likewise `acquire` checks the HAL loss flag under it. So a
+//! submit either runs entirely before a retirement/loss or observes it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use mui_present::windows::DirectCompositionPresenter;
+use mui_present::windows::DxgiSwapChainPresenter;
 use mui_present::{PresentError, PresentMode as PMode, SurfaceFormat};
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 
@@ -24,7 +34,7 @@ fn to_present_format(f: TextureFormat) -> Result<SurfaceFormat, Error> {
         TextureFormat::Bgra8Unorm => Ok(SurfaceFormat::Bgra8Unorm),
         TextureFormat::Rgba8Unorm => Ok(SurfaceFormat::Rgba8Unorm),
         other => Err(Error::validation(format!(
-            "D3D11 DirectComposition surface does not support format {other:?}"
+            "D3D11 DXGI surface does not support format {other:?}"
         ))),
     }
 }
@@ -38,13 +48,46 @@ fn to_present_mode(m: PresentMode) -> PMode {
     }
 }
 
+fn map_present_err(device: &Device, err: PresentError) -> Error {
+    match err {
+        PresentError::SurfaceLost => {
+            let _ = device.check_device_removed();
+            Error::internal(PresentError::SurfaceLost.to_string())
+        }
+        other => Error::internal(other.to_string()),
+    }
+}
+
 struct SwapState {
-    presenter: DirectCompositionPresenter,
+    presenter: DxgiSwapChainPresenter,
     device: Device,
     format: TextureFormat,
     alpha_mode: CompositeAlphaMode,
     usage: TextureUsages,
     live: Arc<AtomicBool>,
+}
+
+impl SwapState {
+    /// Marks this swapchain generation retired. Takes `DeviceShared::state`
+    /// (caller holds `Surface::state`), so it serializes with `Device::submit`.
+    fn invalidate(&self) {
+        let _ctx_st = lock(&self.device.0.state);
+        self.live.store(false, Ordering::Release);
+    }
+
+    /// Destroys the swapchain so a new one can be created on the same `HWND`.
+    ///
+    /// DXGI defers swapchain destruction until the owning immediate context
+    /// flushes, and a flip-model `HWND` accepts only one swapchain at a time. So,
+    /// under this device's context lock: unbind the back buffer, release the
+    /// presenter, *then* flush, so the destruction has happened before any
+    /// device (this one or another) creates the next swapchain on the window.
+    fn retire(self) {
+        let ctx_st = lock(&self.device.0.state);
+        ctx_st.clear_render_targets_and_flush();
+        drop(self.presenter);
+        ctx_st.flush();
+    }
 }
 
 struct SurfaceState {
@@ -102,17 +145,20 @@ impl Surface {
         let fmt = to_present_format(config.format)?;
         let translucent = d3d11_surface_translucent(config.alpha_mode);
         let pmode = to_present_mode(config.present_mode);
+        if device.is_lost() {
+            return Err(Error::internal("D3D11 device is lost"));
+        }
 
-        // Retire any active back-buffer handles and snapshot the previous device
-        // so we can drain inflight GPU submissions OUTSIDE `self.state` before
-        // `IDXGISwapChain::ResizeBuffers` or swapchain teardown.
+        // Phase 1: retire active back-buffer handles and drain inflight GPU work
+        // outside `self.state` so `poll(true)` never violates `Surface::state ->
+        // DeviceShared::state` lock ordering.
         let prev_device = {
             let st = lock(&self.state);
             if st.released {
                 return Err(Error::validation("surface has been released"));
             }
             st.swap.as_ref().map(|swap| {
-                swap.live.store(false, Ordering::Release);
+                swap.invalidate();
                 swap.device.clone()
             })
         };
@@ -122,51 +168,96 @@ impl Surface {
         {
             prev.prune_retired_staged();
             let _ = prev.poll(true);
-            prev.clear_render_targets_and_flush();
         }
-        // Drop any staged writes targeting retired swapchain images and wait
-        // for inflight submissions on `device` so zero COM refs to back buffer
-        // `0` / RTV linger before `ResizeBuffers`.
         device.prune_retired_staged();
-        let _ = device.poll(true);
-        device.clear_render_targets_and_flush();
+        device.poll(true)?;
+        if device.is_lost() {
+            return Err(Error::internal("D3D11 device is lost"));
+        }
 
+        // Phase 2: acquire `Surface::state` FIRST, then `DeviceShared::state`
+        // SECOND for every DXGI swapchain resize, teardown, or creation.
         let mut st = lock(&self.state);
         if st.released {
             return Err(Error::validation("surface has been released"));
         }
+        if device.is_lost() {
+            return Err(Error::internal("D3D11 device is lost"));
+        }
 
         if let Some(swap) = &mut st.swap {
-            swap.live.store(false, Ordering::Release);
+            swap.invalidate();
             let same_device = Arc::ptr_eq(&swap.device.0, &device.0);
             if same_device && swap.presenter.translucent() == translucent {
-                swap.presenter.set_present_mode(pmode);
-                swap.presenter
-                    .resize((config.width, config.height), fmt)
-                    .map_err(|e| Error::internal(e.to_string()))?;
-                swap.format = config.format;
-                swap.alpha_mode = config.alpha_mode;
-                swap.usage = config.usage;
-                swap.live = Arc::new(AtomicBool::new(true));
-                return Ok(());
+                let resize_res = {
+                    let ctx_st = lock(&device.0.state);
+                    if device.is_lost() {
+                        return Err(Error::internal("D3D11 device is lost"));
+                    }
+                    ctx_st.clear_render_targets_and_flush();
+                    swap.presenter.set_present_mode(pmode);
+                    swap.presenter.resize((config.width, config.height), fmt)
+                };
+                match resize_res {
+                    Ok(()) => {
+                        swap.format = config.format;
+                        swap.alpha_mode = config.alpha_mode;
+                        swap.usage = config.usage;
+                        swap.live = Arc::new(AtomicBool::new(true));
+                        return Ok(());
+                    }
+                    Err(PresentError::SurfaceLost) => {
+                        // Drop the lost swapchain under the device context lock
+                        // so subsequent `acquire` sees an unconfigured/lost surface.
+                        if let Some(dead) = st.swap.take() {
+                            dead.retire();
+                        }
+                        drop(st);
+                        return Err(map_present_err(device, PresentError::SurfaceLost));
+                    }
+                    Err(e) => {
+                        drop(st);
+                        return Err(map_present_err(device, e));
+                    }
+                }
             }
-            st.swap = None;
+            // Different device or translucent mode toggled: tear down the old
+            // swapchain while holding its own `DeviceShared::state`.
+            if let Some(old) = st.swap.take() {
+                old.retire();
+            }
         }
 
         let buffer_count = d3d11_buffer_count(config.desired_maximum_frame_latency);
-        // SAFETY: `st.window` is a live Win32 `HWND` owned by `Surface._target`.
-        let presenter = unsafe {
-            DirectCompositionPresenter::new(
-                st.window,
-                &device.0.raw,
-                (config.width, config.height),
-                fmt,
-                buffer_count,
-                translucent,
-                pmode,
-            )
-        }
-        .map_err(|e| Error::internal(e.to_string()))?;
+        let presenter_res = {
+            let ctx_st = lock(&device.0.state);
+            if device.is_lost() {
+                return Err(Error::internal("D3D11 device is lost"));
+            }
+            ctx_st.clear_render_targets_and_flush();
+            // SAFETY: `st.window` is a live Win32 `HWND` owned by `Surface._target`,
+            // and `ctx_st` serializes with `device`'s immediate context.
+            unsafe {
+                DxgiSwapChainPresenter::new(
+                    st.window,
+                    &device.0.raw,
+                    (config.width, config.height),
+                    fmt,
+                    buffer_count,
+                    translucent,
+                    pmode,
+                )
+            }
+        };
+        // Map errors only after releasing `Surface::state`: a first-time device-loss
+        // detection fires the loss callback inline, which may read this surface.
+        let presenter = match presenter_res {
+            Ok(p) => p,
+            Err(e) => {
+                drop(st);
+                return Err(map_present_err(device, e));
+            }
+        };
 
         st.swap = Some(SwapState {
             presenter,
@@ -198,9 +289,22 @@ impl Surface {
         if !swap.live.load(Ordering::Acquire) {
             return Acquired::Outdated;
         }
-        let back_buf = match swap.presenter.back_buffer() {
+        // Lock order: `Surface::state` -> `DeviceShared::state`.
+        let back_buf = {
+            let _ctx_st = lock(&swap.device.0.state);
+            if swap.device.is_lost() {
+                return Acquired::Lost;
+            }
+            swap.presenter.back_buffer()
+        };
+        let back_buf = match back_buf {
             Ok(b) => b,
-            Err(PresentError::SurfaceLost) => return Acquired::Lost,
+            Err(PresentError::SurfaceLost) => {
+                let dev = swap.device.clone();
+                drop(st);
+                let _ = dev.check_device_removed();
+                return Acquired::Lost;
+            }
             Err(PresentError::OutOfDate) => return Acquired::Outdated,
             Err(e) => return Acquired::Failed(Error::internal(e.to_string())),
         };
@@ -229,7 +333,7 @@ impl Surface {
     pub fn present(&self, frame: SurfaceTexture) -> Result<(), Error> {
         if !frame.live.load(Ordering::Acquire) {
             return Err(Error::validation(
-                "cannot present a back buffer from a reconfigured or released DirectComposition swapchain",
+                "cannot present a back buffer from a reconfigured or released DXGI swapchain",
             ));
         }
         frame.device.flush_staged_before_present()?;
@@ -244,13 +348,12 @@ impl Surface {
         } = frame;
         drop(view);
         drop(texture);
-        device.clear_render_targets_and_flush();
 
-        let res = {
+        let present_res = {
             let st = lock(&self.state);
             if st.released {
                 return Err(Error::validation(
-                    "cannot present to a released DirectComposition surface",
+                    "cannot present to a released DXGI surface",
                 ));
             }
             let Some(swap) = &st.swap else {
@@ -260,15 +363,20 @@ impl Surface {
             };
             if !Arc::ptr_eq(&swap.live, &live) || !live.load(Ordering::Acquire) {
                 return Err(Error::validation(
-                    "cannot present a back buffer from another surface or replaced DirectComposition swapchain",
+                    "cannot present a back buffer from another surface or replaced DXGI swapchain",
                 ));
             }
-            swap.presenter
-                .present()
-                .map(drop)
-                .map_err(|e| Error::internal(e.to_string()))
+            // Lock order: `Surface::state` -> `DeviceShared::state`.
+            // Clear OM targets + flush AND call `IDXGISwapChain1::Present` under
+            // the same context lock so no concurrent `Queue::submit` can race.
+            let ctx_st = lock(&swap.device.0.state);
+            ctx_st.clear_render_targets_and_flush();
+            swap.presenter.present()
         };
         drop(live);
+        let res = present_res
+            .map(drop)
+            .map_err(|e| map_present_err(&device, e));
         let _ = device.poll(false);
         res
     }
@@ -279,15 +387,14 @@ impl Surface {
             st.released = true;
             let swap = st.swap.take();
             if let Some(s) = &swap {
-                s.live.store(false, Ordering::Release);
+                s.invalidate();
             }
             swap
         };
         if let Some(swap) = taken {
             swap.device.prune_retired_staged();
             let _ = swap.device.poll(true);
-            swap.device.clear_render_targets_and_flush();
-            drop(swap);
+            swap.retire();
         }
     }
 }

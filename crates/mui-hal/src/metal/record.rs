@@ -15,6 +15,10 @@ use super::{
     mtl_primitive,
 };
 use crate::binding::{clamp_scissor_rect, metal_vertex_buffer_index};
+use crate::shared::{
+    resolve_dynamic_offset, validate_buffer_range, validate_submit_buffer, validate_submit_texture,
+    validate_texture_region, validate_texture_to_buffer_layout, validate_texture_to_texture,
+};
 use crate::types::{BufferUsages, Extent3d, Origin3d, ShaderStages, TextureUsages};
 
 pub enum Cmd {
@@ -81,107 +85,40 @@ pub enum PassCmd {
     },
 }
 
+const METAL_MAX_END: u64 = usize::MAX as u64;
+
 fn check_texture(device: &Arc<DeviceShared>, t: &Texture) -> Result<(), Error> {
-    if !t.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a texture from another device",
-        ));
-    }
-    if t.is_retired_swapchain() {
-        return Err(Error::validation(
-            "cannot submit commands targeting a retired swapchain image",
-        ));
-    }
-    if !t.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid texture",
-        ));
-    }
-    Ok(())
+    validate_submit_texture(
+        t.belongs_to(device),
+        t.is_retired_swapchain(),
+        t.is_valid(),
+        "texture",
+    )
 }
 
 fn check_view(device: &Arc<DeviceShared>, v: &TextureView) -> Result<(), Error> {
-    if !v.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a texture view from another device",
-        ));
-    }
-    if v.is_retired_swapchain() {
-        return Err(Error::validation(
-            "cannot submit commands targeting a retired swapchain image",
-        ));
-    }
-    if !v.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid texture view",
-        ));
-    }
-    Ok(())
+    validate_submit_texture(
+        v.belongs_to(device),
+        v.is_retired_swapchain(),
+        v.is_valid(),
+        "texture view",
+    )
 }
 
 fn check_buffer_src(device: &Arc<DeviceShared>, src: &Buffer) -> Result<(), Error> {
-    if !src.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a buffer from another device",
-        ));
-    }
-    if !src.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid buffer",
-        ));
-    }
-    Ok(())
+    validate_submit_buffer(src.belongs_to(device), src.is_valid(), None)
 }
 
 fn check_buffer_write(device: &Arc<DeviceShared>, dst: &Buffer) -> Result<(), Error> {
-    if !dst.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a buffer from another device",
-        ));
-    }
-    if !dst.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid buffer",
-        ));
-    }
-    if dst.is_mapped_or_pending() {
-        return Err(Error::validation(
-            "cannot write to a buffer while it is mapped",
-        ));
-    }
-    Ok(())
-}
-
-fn check_texture_region(t: &Texture, origin: Origin3d, size: Extent3d) -> Result<(), Error> {
-    let layers = size.depth_or_array_layers.max(1);
-    if origin
-        .x
-        .checked_add(size.width)
-        .is_none_or(|x| x > t.width())
-        || origin
-            .y
-            .checked_add(size.height)
-            .is_none_or(|y| y > t.height())
-        || origin.z.checked_add(layers).is_none_or(|z| z > t.layers())
-    {
-        return Err(Error::validation("texture copy region exceeds bounds"));
-    }
-    Ok(())
+    validate_submit_buffer(
+        dst.belongs_to(device),
+        dst.is_valid(),
+        Some(dst.is_mapped_or_pending()),
+    )
 }
 
 fn check_buffer_range(b: &Buffer, offset: u64, size: u64, what: &str) -> Result<(), Error> {
-    let end = offset
-        .checked_add(size)
-        .ok_or_else(|| Error::validation(format!("{what} buffer range overflows u64")))?;
-    if end > b.size() {
-        return Err(Error::validation(format!(
-            "{what} buffer range {offset}..{end} exceeds buffer size {}",
-            b.size()
-        )));
-    }
-    let _ = usize::try_from(end)
-        .map_err(|_| Error::validation(format!("{what} buffer offset overflows usize")))?;
-    Ok(())
+    validate_buffer_range(offset, size, b.size(), METAL_MAX_END, what).map(drop)
 }
 
 pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), Error> {
@@ -224,7 +161,7 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
             if size.width == 0 || size.height == 0 {
                 return Ok(());
             }
-            check_texture_region(dst, *origin, *size)?;
+            validate_texture_region(*origin, *size, dst.width(), dst.height(), dst.layers())?;
             let layers = u64::from(size.depth_or_array_layers.max(1));
             let total = u64::from(size.width)
                 .checked_mul(u64::from(dst.format().block_size()))
@@ -244,60 +181,37 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
             size,
         } => {
             check_texture(device, src)?;
-            if *mip_level >= src.mip_level_count() {
-                return Err(Error::validation(format!(
-                    "texture_to_buffer mip_level {mip_level} exceeds mip_level_count {}",
-                    src.mip_level_count()
-                )));
-            }
-            if src.sample_count() > 1 {
-                return Err(Error::validation(
-                    "cannot copy multisampled texture to buffer without resolving first",
-                ));
-            }
-            if !src.usage().contains(TextureUsages::COPY_SRC) {
-                return Err(Error::validation("texture_to_buffer source lacks COPY_SRC"));
-            }
             check_buffer_write(device, dst)?;
-            if !dst.usage().contains(BufferUsages::COPY_DST) {
-                return Err(Error::validation(
-                    "texture_to_buffer destination lacks COPY_DST",
-                ));
+            validate_texture_to_buffer_layout(
+                *origin,
+                *size,
+                (src.width(), src.height(), src.layers()),
+                *mip_level,
+                src.mip_level_count(),
+                src.sample_count(),
+                src.usage(),
+                src.format().block_size(),
+                dst.usage(),
+                dst.size(),
+                *offset,
+                *bytes_per_row,
+                *rows_per_image,
+                METAL_MAX_END,
+            )?;
+            if size.width > 0 && size.height > 0 {
+                let align = u64::from(src.format().block_size());
+                if !offset.is_multiple_of(align) {
+                    return Err(Error::validation(format!(
+                        "texture_to_buffer destination offset ({offset}) must be a multiple of the texture pixel size ({align})"
+                    )));
+                }
+                if !u64::from(*bytes_per_row).is_multiple_of(align) {
+                    return Err(Error::validation(format!(
+                        "texture_to_buffer bytes_per_row ({bytes_per_row}) must be a multiple of the texture pixel size ({align})"
+                    )));
+                }
             }
-            if size.width == 0 || size.height == 0 {
-                return Ok(());
-            }
-            check_texture_region(src, *origin, *size)?;
-            let row_bytes = u64::from(size.width)
-                .checked_mul(u64::from(src.format().block_size()))
-                .ok_or_else(|| Error::validation("texture_to_buffer row bytes overflow"))?;
-            let bpr = u64::from(*bytes_per_row);
-            let rpi = u64::from(*rows_per_image);
-            let layers = u64::from(size.depth_or_array_layers.max(1));
-            if bpr < row_bytes {
-                return Err(Error::validation(
-                    "texture_to_buffer bytes_per_row is smaller than row byte width",
-                ));
-            }
-            if layers > 1 && rpi < u64::from(size.height) {
-                return Err(Error::validation(
-                    "texture_to_buffer rows_per_image is smaller than copy height",
-                ));
-            }
-            let bpi = bpr
-                .checked_mul(rpi)
-                .ok_or_else(|| Error::validation("texture_to_buffer bytes_per_image overflows"))?;
-            let last_slice_off = (layers - 1)
-                .checked_mul(bpi)
-                .ok_or_else(|| Error::validation("texture_to_buffer slice offset overflows"))?;
-            let last_row_off = u64::from(size.height - 1)
-                .checked_mul(bpr)
-                .ok_or_else(|| Error::validation("texture_to_buffer row offset overflows"))?;
-            let total = last_slice_off
-                .checked_add(last_row_off)
-                .and_then(|v| v.checked_add(row_bytes))
-                .ok_or_else(|| Error::validation("texture_to_buffer byte range overflows"))?;
-            check_buffer_range(dst, *offset, total, "texture_to_buffer")
+            Ok(())
         }
         Cmd::TextureToTexture {
             src,
@@ -310,34 +224,23 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
         } => {
             check_texture(device, src)?;
             check_texture(device, dst)?;
-            if *src_mip >= src.mip_level_count() || *dst_mip >= dst.mip_level_count() {
-                return Err(Error::validation(
-                    "texture_to_texture mip level exceeds texture mip_level_count",
-                ));
-            }
-            if !src.usage().contains(TextureUsages::COPY_SRC) {
-                return Err(Error::validation(
-                    "texture_to_texture source lacks COPY_SRC",
-                ));
-            }
-            if !dst.usage().contains(TextureUsages::COPY_DST) {
-                return Err(Error::validation(
-                    "texture_to_texture destination lacks COPY_DST",
-                ));
-            }
-            if src.format() != dst.format() {
-                return Err(Error::validation("texture_to_texture formats must match"));
-            }
-            if src.sample_count() != dst.sample_count() {
-                return Err(Error::validation(
-                    "texture_to_texture sample counts must match",
-                ));
-            }
-            if size.width == 0 || size.height == 0 {
-                return Ok(());
-            }
-            check_texture_region(src, *src_origin, *size)?;
-            check_texture_region(dst, *dst_origin, *size)
+            validate_texture_to_texture(
+                (src.width(), src.height(), src.layers()),
+                *src_mip,
+                src.mip_level_count(),
+                src.sample_count(),
+                src.format(),
+                src.usage(),
+                *src_origin,
+                (dst.width(), dst.height(), dst.layers()),
+                *dst_mip,
+                dst.mip_level_count(),
+                dst.sample_count(),
+                dst.format(),
+                dst.usage(),
+                *dst_origin,
+                *size,
+            )
         }
         Cmd::Timestamp(_, _) | Cmd::Resolve { .. } => Err(Error::validation(
             "timestamp queries are not supported on the native Metal backend",
@@ -407,25 +310,16 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
                                             "bound buffer lacks UNIFORM usage",
                                         ));
                                     }
-                                    let dyn_off =
-                                        g.0.layout
-                                            .0
-                                            .dynamic_bindings
-                                            .binary_search(binding)
-                                            .ok()
-                                            .and_then(|idx| dynamic_offsets.get(idx))
-                                            .copied()
-                                            .unwrap_or(0);
-                                    let total_off = offset
-                                        .checked_add(u64::from(dyn_off))
-                                        .ok_or_else(|| {
-                                            Error::validation("uniform buffer offset overflows u64")
-                                        })?;
-                                    let bind_len = size.unwrap_or(0);
+                                    let total_off = resolve_dynamic_offset(
+                                        &g.0.layout.0.dynamic_bindings,
+                                        *binding,
+                                        dynamic_offsets,
+                                        *offset,
+                                    )?;
                                     check_buffer_range(
                                         buffer,
                                         total_off,
-                                        bind_len,
+                                        size.unwrap_or(0),
                                         "uniform bind group",
                                     )?;
                                 }
@@ -504,11 +398,19 @@ pub(super) fn encode_all(
                 if *size == 0 {
                     continue;
                 }
+                let s = src
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("copy_buffer source is invalid"))?;
+                let d = dst
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("copy_buffer destination is invalid"))?;
                 let blit = cb.blitCommandEncoder().ok_or_else(|| {
                     Error::internal("MTLCommandBuffer::blitCommandEncoder returned nil")
                 })?;
-                let s = src.0.raw.as_ref().expect("validated src buffer");
-                let d = dst.0.raw.as_ref().expect("validated dst buffer");
                 // SAFETY: bounds checked by validation; both buffers stay retained in `cmds`.
                 unsafe {
                     blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
@@ -531,6 +433,15 @@ pub(super) fn encode_all(
                 if size.width == 0 || size.height == 0 {
                     continue;
                 }
+                let s = src
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("buffer_to_texture source is invalid"))?;
+                let d =
+                    dst.0.raw.as_ref().ok_or_else(|| {
+                        Error::validation("buffer_to_texture destination is invalid")
+                    })?;
                 let layers = size.depth_or_array_layers.max(1);
                 let block = dst.format().block_size();
                 let bpr = size.width * block;
@@ -538,8 +449,6 @@ pub(super) fn encode_all(
                 let blit = cb.blitCommandEncoder().ok_or_else(|| {
                     Error::internal("MTLCommandBuffer::blitCommandEncoder returned nil")
                 })?;
-                let s = src.0.raw.as_ref().expect("validated src buffer");
-                let d = dst.0.raw.as_ref().expect("validated dst texture");
                 for z in 0..layers {
                     let slice_offset = *offset as usize + (z as usize) * (bpi as usize);
                     // SAFETY: packed tightly per slice, retained in `cmds`; `sourceBytesPerImage`
@@ -581,13 +490,20 @@ pub(super) fn encode_all(
                 if size.width == 0 || size.height == 0 {
                     continue;
                 }
+                let s = src
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("texture_to_buffer source is invalid"))?;
+                let d =
+                    dst.0.raw.as_ref().ok_or_else(|| {
+                        Error::validation("texture_to_buffer destination is invalid")
+                    })?;
                 let layers = size.depth_or_array_layers.max(1);
                 let bpi = (*bytes_per_row as usize) * (*rows_per_image as usize);
                 let blit = cb.blitCommandEncoder().ok_or_else(|| {
                     Error::internal("MTLCommandBuffer::blitCommandEncoder returned nil")
                 })?;
-                let s = src.0.raw.as_ref().expect("validated src texture");
-                let d = dst.0.raw.as_ref().expect("validated dst buffer");
                 for z in 0..layers {
                     let dst_off = *offset as usize + (z as usize) * bpi;
                     // SAFETY: valid slice/region/offset, retained in `cmds`; `destinationBytesPerImage`
@@ -628,12 +544,18 @@ pub(super) fn encode_all(
                 if size.width == 0 || size.height == 0 {
                     continue;
                 }
+                let s = src
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("texture_to_texture source is invalid"))?;
+                let d = dst.0.raw.as_ref().ok_or_else(|| {
+                    Error::validation("texture_to_texture destination is invalid")
+                })?;
                 let layers = size.depth_or_array_layers.max(1);
                 let blit = cb.blitCommandEncoder().ok_or_else(|| {
                     Error::internal("MTLCommandBuffer::blitCommandEncoder returned nil")
                 })?;
-                let s = src.0.raw.as_ref().expect("validated src texture");
-                let d = dst.0.raw.as_ref().expect("validated dst texture");
                 for z in 0..layers {
                     // SAFETY: valid source/dest slices and 2D regions, retained in `cmds`.
                     unsafe {
@@ -684,7 +606,12 @@ impl Drop for EndEncodingGuard<'_> {
 }
 
 fn encode_pass(cb: &ProtocolObject<dyn MTLCommandBuffer>, pass: &PassRecord) -> Result<(), Error> {
-    let target_tex = pass.target.0.raw.as_ref().expect("validated target view");
+    let target_tex = pass
+        .target
+        .0
+        .raw
+        .as_ref()
+        .ok_or_else(|| Error::validation("render pass target view is invalid"))?;
     let rp = MTLRenderPassDescriptor::renderPassDescriptor();
     // SAFETY: attachment 0 always exists on `MTLRenderPassDescriptor`.
     let color0 = unsafe { rp.colorAttachments().objectAtIndexedSubscript(0) };
@@ -732,10 +659,13 @@ fn encode_pass(cb: &ProtocolObject<dyn MTLCommandBuffer>, pass: &PassRecord) -> 
     for cmd in &pass.cmds {
         match cmd {
             PassCmd::Pipeline(pipe) => {
-                let state = pipe.0.state.as_ref().expect("validated pipeline");
+                let state = pipe
+                    .0
+                    .state
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("invalid render pipeline state"))?;
                 enc.setRenderPipelineState(&state.0);
                 current_pipeline = Some(pipe);
-                // Re-apply only compatible groups bound before `set_pipeline`.
                 for (group_idx, slot) in pending_groups.iter().enumerate() {
                     if let Some((bg, offsets)) = slot
                         && pipe
@@ -744,7 +674,7 @@ fn encode_pass(cb: &ProtocolObject<dyn MTLCommandBuffer>, pass: &PassRecord) -> 
                             .get(group_idx)
                             .is_some_and(|expected| bg.0.layout.is_compatible_with(expected))
                     {
-                        bind_group(&enc, pipe, group_idx as u32, bg, offsets);
+                        bind_group(&enc, pipe, group_idx as u32, bg, offsets)?;
                     }
                 }
             }
@@ -759,12 +689,16 @@ fn encode_pass(cb: &ProtocolObject<dyn MTLCommandBuffer>, pass: &PassRecord) -> 
                         .get(*group_idx as usize)
                         .is_some_and(|expected| bg.0.layout.is_compatible_with(expected))
                 {
-                    bind_group(&enc, pipe, *group_idx, bg, offsets);
+                    bind_group(&enc, pipe, *group_idx, bg, offsets)?;
                 }
             }
             PassCmd::Vertex(slot, buffer, offset) => {
                 let metal_idx = metal_vertex_buffer_index(*slot).map_err(Error::validation)?;
-                let raw = buffer.0.raw.as_ref().expect("validated vertex buffer");
+                let raw = buffer
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("cannot bind an invalid vertex buffer"))?;
                 // SAFETY: `metal_idx` is in `16..31` and `buffer` stays retained in `pass`.
                 unsafe {
                     enc.setVertexBuffer_offset_atIndex(
@@ -828,7 +762,7 @@ fn bind_group(
     group_idx: u32,
     bg: &BindGroup,
     dynamic_offsets: &[u32],
-) {
+) -> Result<(), Error> {
     for (binding, bound) in &bg.0.entries {
         let Some(resolved) = pipe.0.bindings.resolve(group_idx, *binding) else {
             continue;
@@ -837,17 +771,16 @@ fn bind_group(
         let vis = resolved.visibility;
         match (resolved.kind, bound) {
             (BindingKind::UniformBuffer, Bound::Buffer { buffer, offset, .. }) => {
-                let dyn_off =
-                    bg.0.layout
-                        .0
-                        .dynamic_bindings
-                        .binary_search(binding)
-                        .ok()
-                        .and_then(|idx| dynamic_offsets.get(idx))
-                        .copied()
-                        .unwrap_or(0);
-                let total_offset = (*offset + u64::from(dyn_off)) as usize;
-                let raw = buffer.0.raw.as_ref().expect("validated buffer");
+                let total_offset = resolve_dynamic_offset(
+                    &bg.0.layout.0.dynamic_bindings,
+                    *binding,
+                    dynamic_offsets,
+                    *offset,
+                )? as usize;
+                let raw =
+                    buffer.0.raw.as_ref().ok_or_else(|| {
+                        Error::validation("cannot bind an invalid uniform buffer")
+                    })?;
                 // SAFETY: slot matches `mui-shaders` MSL reflection and buffer stays retained.
                 unsafe {
                     if vis.contains(ShaderStages::VERTEX) {
@@ -859,7 +792,11 @@ fn bind_group(
                 }
             }
             (BindingKind::Texture2d | BindingKind::Texture2dArray, Bound::View(view)) => {
-                let raw = view.0.raw.as_ref().expect("validated texture view");
+                let raw = view
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("cannot bind an invalid texture view"))?;
                 // SAFETY: slot matches `mui-shaders` MSL reflection and view stays retained.
                 unsafe {
                     if vis.contains(ShaderStages::VERTEX) {
@@ -871,7 +808,11 @@ fn bind_group(
                 }
             }
             (BindingKind::Sampler, Bound::Sampler(sampler)) => {
-                let raw = sampler.0.raw.as_ref().expect("validated sampler");
+                let raw = sampler
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("cannot bind an invalid sampler"))?;
                 // SAFETY: slot matches `mui-shaders` MSL reflection and sampler stays retained.
                 unsafe {
                     if vis.contains(ShaderStages::VERTEX) {
@@ -885,4 +826,5 @@ fn bind_group(
             _ => {}
         }
     }
+    Ok(())
 }
