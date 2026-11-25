@@ -18,7 +18,7 @@ mod theme;
 mod vector;
 pub use vector::{RasterSource, Vector, VectorCommand};
 
-pub use color::{Color, Mode, Palette, Pigment};
+pub use color::{Color, InkLevel, InkRamp, Mode, Palette, Pigment};
 pub use style::{
     Cursor, Elevation, Fill, Fit, Gradient, GradientKind, Image, Mix, Paint, Radius, Role, Shadow,
     ShadowKind, Stroke, Style,

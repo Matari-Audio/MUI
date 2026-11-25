@@ -121,9 +121,19 @@ impl Color {
     /// is behind it, which a pair of colours cannot know. Compose first, then
     /// measure.
     pub fn contrast(self, other: Color) -> f32 {
-        let (a, b) = (self.luminance(), other.luminance());
-        let (hi, lo) = if a > b { (a, b) } else { (b, a) };
-        (hi + 0.05) / (lo + 0.05)
+        contrast_luminance(self.luminance(), other.luminance())
+    }
+
+    /// The highest WCAG 2.1 contrast ratio any opaque colour (black or white)
+    /// can reach against `self`.
+    ///
+    /// Mid-tone surfaces reach their lowest physical ceiling at relative
+    /// luminance `√(1.05 * 0.05) - 0.05 ≈ 0.179`, where black and white tie at
+    /// `√21 ≈ 4.58:1` — always clearing [`Palette::AA_TEXT`] (4.5:1), but
+    /// below [`Palette::AAA_TEXT`] (7.0:1).
+    #[must_use]
+    pub fn max_contrast(self) -> f32 {
+        max_contrast_for_lum(self.luminance()).1
     }
 
     /// The least-changed version of `self` that clears `ratio` against `bg`.
@@ -134,24 +144,33 @@ impl Color {
     /// cannot reach 4.5 in either direction -- the extreme comes back rather
     /// than an error, because a slightly-illegal label still beats no label.
     pub fn readable_on(self, bg: Color, ratio: f32) -> Color {
-        let fg = self;
-        if !ratio.is_finite() || fg.contrast(bg) >= ratio {
-            return fg;
-        }
-        let away = if fg.lightness() >= bg.lightness() {
+        let away = if self.lightness() >= bg.lightness() {
             1.0
         } else {
             0.0
         };
-        if fg.with_lightness(away).contrast(bg) < ratio {
-            return fg.with_lightness(away);
+        self.readable_toward_lum(bg.luminance(), ratio, away)
+    }
+
+    /// Move lightness from `self.lightness()` toward `away` (`0.0` or `1.0`)
+    /// until `self` clears `ratio` against a backdrop of relative luminance
+    /// `bg_lum`, saturating at the achromatic extreme (`away`, zero chroma) if
+    /// unreachable.
+    fn readable_toward_lum(self, bg_lum: f32, ratio: f32, away: f32) -> Color {
+        let fg = self;
+        if !ratio.is_finite() || contrast_luminance(fg.luminance(), bg_lum) >= ratio {
+            return fg;
+        }
+        let extreme = fg.with_lightness(away).scale_chroma(0.0);
+        if contrast_luminance(extreme.luminance(), bg_lum) < ratio {
+            return extreme;
         }
         // `fail` never clears the ratio and `ok` always does, so bisecting
         // toward `fail` lands on the smallest move that still works.
         let (mut fail, mut ok) = (fg.lightness(), away);
         while (ok - fail).abs() > 1e-3 {
             let mid = 0.5 * (fail + ok);
-            if fg.with_lightness(mid).contrast(bg) >= ratio {
+            if contrast_luminance(fg.with_lightness(mid).luminance(), bg_lum) >= ratio {
                 ok = mid;
             } else {
                 fail = mid;
@@ -161,10 +180,10 @@ impl Color {
         // Gamut mapping pulls chroma as lightness moves, so contrast is not
         // perfectly monotonic; fall back to the extreme if the bisection
         // landed a hair short.
-        if out.contrast(bg) >= ratio {
+        if contrast_luminance(out.luminance(), bg_lum) >= ratio {
             out
         } else {
-            fg.with_lightness(away)
+            extreme
         }
     }
 
@@ -176,6 +195,25 @@ impl Color {
             && (0.0..=1.0).contains(&a)
             && c.is_finite()
             && c >= 0.0
+    }
+}
+
+/// WCAG 2.1 contrast ratio from two precomputed relative luminances.
+fn contrast_luminance(a: f32, b: f32) -> f32 {
+    let (hi, lo) = if a > b { (a, b) } else { (b, a) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Which extreme (white -> `Mode::Dark`, black -> `Mode::Light`) achieves
+/// higher WCAG 2.1 contrast against a backdrop of relative luminance `bg_lum`,
+/// along with that contrast ratio.
+fn max_contrast_for_lum(bg_lum: f32) -> (Mode, f32) {
+    let white = contrast_luminance(1.0, bg_lum);
+    let black = contrast_luminance(0.0, bg_lum);
+    if white >= black {
+        (Mode::Dark, white)
+    } else {
+        (Mode::Light, black)
     }
 }
 
@@ -420,6 +458,15 @@ impl Palette {
     /// WCAG 2.1 1.4.11: a control identified only by its fill, or a state
     /// shown only by a colour change, needs this against what is next to it.
     pub const UI_NONTEXT: f32 = 3.0;
+    /// Ergonomic contrast floor for disabled text (`1.8:1`).
+    ///
+    /// WCAG 2.1 SC 1.4.3 explicitly exempts inactive user interface components
+    /// from the 4.5:1 / 3.0:1 text floors so unavailable labels read as
+    /// inactive rather than competing with active text. `1.8:1` keeps disabled
+    /// labels visibly distinct from the surface (~0.20 Oklch lightness
+    /// separation on standard surfaces) while staying well below active
+    /// [`InkLevel::Tertiary`] text (`>= 4.5:1`).
+    pub const DISABLED_TEXT: f32 = 1.8;
 
     /// A whole palette from one accent, in `mode`.
     ///
@@ -695,6 +742,114 @@ impl Palette {
         fg.readable_on(bg, Self::AA_TEXT)
     }
 
+    /// Full-strength neutral ink for a backdrop of relative luminance `bg_lum`
+    /// and its extreme lightness (`1.0` or `0.0`), reusing
+    /// [`max_contrast_for_lum`] so all four ramp levels share one polarity and
+    /// temperature without recomputing backdrop luminance.
+    fn ink_anchor_for_lum(&self, bg_lum: f32) -> (Color, f32) {
+        let (polarity, _) = max_contrast_for_lum(bg_lum);
+        let away = match polarity {
+            Mode::Dark => 1.0,
+            Mode::Light => 0.0,
+        };
+        (self.neutral.at(polarity.ink()), away)
+    }
+
+    /// Resolve one emphasis `level` against a backdrop whose lightness and
+    /// relative luminance are already computed.
+    fn ink_level_for_lum(
+        &self,
+        level: InkLevel,
+        bg_l: f32,
+        bg_lum: f32,
+        anchor: Color,
+        away: f32,
+    ) -> Color {
+        let l = (anchor.lightness() + (bg_l - anchor.lightness()) * level.nominal_mix())
+            .clamp(0.0, 1.0);
+        let nominal = self.neutral.at(l);
+        let floor = level.min_contrast();
+        if contrast_luminance(nominal.luminance(), bg_lum) >= floor {
+            nominal
+        } else {
+            // Bisect from the backdrop's own lightness toward `away` so levels
+            // sharing a floor converge to the exact same minimal lightness with
+            // zero bracket-dependent ordering jitter.
+            self.neutral
+                .at(bg_l)
+                .readable_toward_lum(bg_lum, floor, away)
+        }
+    }
+
+    /// Text ink at emphasis `level` over `bg`, held to
+    /// [`InkLevel::min_contrast`].
+    ///
+    /// Starts at a perceptual lightness step between the palette's neutral ink
+    /// and `bg`, then pushes lightness away from `bg` if the nominal step fell
+    /// short of the level's WCAG floor. Because every opaque sRGB colour has
+    /// [`Color::max_contrast`] `>= √21 ≈ 4.58:1`, [`InkLevel::Secondary`],
+    /// [`InkLevel::Tertiary`], and [`InkLevel::Disabled`] always meet their
+    /// floors on any opaque `bg`. [`InkLevel::Primary`] meets
+    /// [`Self::AAA_TEXT`] (7.0:1) on every named surface (`field`, `background`,
+    /// `surface`, `raised`) at the mode's default ground; on custom grounds
+    /// near [`Mode::limit`] (such as `with_ground(0.5)` in dark mode, where
+    /// white reaches ~6.0:1) or mid-tone chromatic backdrops, `Primary`
+    /// saturates at [`Color::max_contrast`] (`>= 4.58:1`), and `Secondary` /
+    /// `Tertiary` converge toward the `4.5:1` AA floor so legibility always
+    /// wins over dimming.
+    ///
+    /// A non-finite backdrop lightness falls back to [`Self::ground`]. Returns
+    /// an opaque colour: alpha-fading text over an unknown surface would
+    /// dilute its contrast below the verified floor.
+    ///
+    /// ```
+    /// use mui_style::{InkLevel, Mode, Palette};
+    /// let p = Palette::NEUTRAL.with_mode(Mode::Light);
+    /// let bg = p.surface();
+    /// assert!(p.ink_for(InkLevel::Primary, bg).contrast(bg) >= Palette::AAA_TEXT);
+    /// assert!(p.ink_for(InkLevel::Secondary, bg).contrast(bg) >= Palette::AA_TEXT);
+    /// assert!(p.ink_for(InkLevel::Tertiary, bg).contrast(bg) >= Palette::AA_TEXT);
+    /// assert!(p.ink_for(InkLevel::Disabled, bg).contrast(bg) >= Palette::DISABLED_TEXT);
+    /// ```
+    #[must_use]
+    pub fn ink_for(&self, level: InkLevel, bg: Color) -> Color {
+        let bg_lum = bg.luminance();
+        let bg_l = if bg.lightness().is_finite() {
+            bg.lightness().clamp(0.0, 1.0)
+        } else {
+            self.ground()
+        };
+        let (anchor, away) = self.ink_anchor_for_lum(bg_lum);
+        self.ink_level_for_lum(level, bg_l, bg_lum, anchor, away)
+    }
+
+    /// All four WCAG-checked text ink levels derived for `bg`, computing the
+    /// backdrop's luminance and polarity once for the whole ramp.
+    ///
+    /// ```
+    /// use mui_style::{InkLevel, Palette};
+    /// let p = Palette::NEUTRAL;
+    /// let ramp = p.ink_ramp(p.surface());
+    /// assert_eq!(ramp.get(InkLevel::Primary), ramp.primary);
+    /// assert!(ramp.primary.contrast(p.surface()) > ramp.secondary.contrast(p.surface()));
+    /// ```
+    #[must_use]
+    pub fn ink_ramp(&self, bg: Color) -> InkRamp {
+        let bg_lum = bg.luminance();
+        let bg_l = if bg.lightness().is_finite() {
+            bg.lightness().clamp(0.0, 1.0)
+        } else {
+            self.ground()
+        };
+        let (anchor, away) = self.ink_anchor_for_lum(bg_lum);
+        InkRamp {
+            primary: self.ink_level_for_lum(InkLevel::Primary, bg_l, bg_lum, anchor, away),
+            secondary: self.ink_level_for_lum(InkLevel::Secondary, bg_l, bg_lum, anchor, away),
+            tertiary: self.ink_level_for_lum(InkLevel::Tertiary, bg_l, bg_lum, anchor, away),
+            disabled: self.ink_level_for_lum(InkLevel::Disabled, bg_l, bg_lum, anchor, away),
+        }
+    }
+
     /// Whether every pigment and both positive steps are usable.
     pub fn is_valid(&self) -> bool {
         [
@@ -712,6 +867,109 @@ impl Palette {
             && self.step > 0.0
             && self.hover.is_finite()
             && self.hover > 0.0
+    }
+}
+
+/// Four-level text emphasis hierarchy, each level paired with a contrast floor.
+///
+/// Every active level ([`Primary`](Self::Primary),
+/// [`Secondary`](Self::Secondary), [`Tertiary`](Self::Tertiary)) meets WCAG 2.1
+/// SC 1.4.3 AA for normal-size text (`>= 4.5:1`), with `Primary` held to WCAG
+/// 2.1 SC 1.4.6 AAA (`>= 7.0:1`). [`Disabled`](Self::Disabled) uses the WCAG
+/// 2.1 SC 1.4.3 inactive-control exemption and is held to
+/// [`Palette::DISABLED_TEXT`] (`1.8:1`).
+///
+/// Resolve against the surface the text sits on with [`Palette::ink_for`] or
+/// [`Palette::ink_ramp`]. Existing [`Palette::on`] and [`Palette::dim`] (and
+/// [`Role::Ink`](crate::Role::Ink) / [`Role::Dim`](crate::Role::Dim)) keep
+/// their WCAG AA (`4.5:1`) semantics unchanged for full visual compatibility.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum InkLevel {
+    /// Headings, values, active labels: WCAG 2.1 AAA ([`Palette::AAA_TEXT`], 7.0:1).
+    #[default]
+    Primary,
+    /// Body copy, row labels, inactive tabs: WCAG 2.1 AA ([`Palette::AA_TEXT`], 4.5:1).
+    Secondary,
+    /// Quiet active text (captions, hints, units, provenance): WCAG 2.1 AA
+    /// ([`Palette::AA_TEXT`], 4.5:1) so normal-size text stays compliant.
+    Tertiary,
+    /// Unavailable controls (exempt under WCAG 2.1 SC 1.4.3): held to
+    /// [`Palette::DISABLED_TEXT`] (1.8:1).
+    Disabled,
+}
+
+impl InkLevel {
+    /// All four emphasis levels, from strongest to quietest.
+    pub const ALL: [Self; 4] = [
+        Self::Primary,
+        Self::Secondary,
+        Self::Tertiary,
+        Self::Disabled,
+    ];
+
+    /// Minimum WCAG 2.1 contrast ratio this level is held to against its
+    /// backdrop.
+    #[must_use]
+    pub const fn min_contrast(self) -> f32 {
+        match self {
+            Self::Primary => Palette::AAA_TEXT,
+            Self::Secondary | Self::Tertiary => Palette::AA_TEXT,
+            Self::Disabled => Palette::DISABLED_TEXT,
+        }
+    }
+
+    /// Nominal fraction of the way from full-strength neutral ink toward the
+    /// backdrop's lightness before contrast correction.
+    const fn nominal_mix(self) -> f32 {
+        match self {
+            Self::Primary => 0.0,
+            Self::Secondary => 0.22,
+            Self::Tertiary => 0.42,
+            Self::Disabled => 0.68,
+        }
+    }
+}
+
+/// Resolved four-level WCAG-checked text ink colours for one surface.
+///
+/// Produced by [`Palette::ink_ramp`] so callers painting multiple emphasis
+/// tiers on the same panel derive the surface's ramp once. All colours are
+/// opaque (`alpha == 1.0`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InkRamp {
+    /// [`InkLevel::Primary`] — headings, values, active labels (WCAG AAA, 7.0:1).
+    pub primary: Color,
+    /// [`InkLevel::Secondary`] — body copy, row labels (WCAG AA, 4.5:1).
+    pub secondary: Color,
+    /// [`InkLevel::Tertiary`] — quiet active text: captions, hints, units (WCAG AA, 4.5:1).
+    pub tertiary: Color,
+    /// [`InkLevel::Disabled`] — unavailable controls (WCAG SC 1.4.3 exempt, 1.8:1 floor).
+    pub disabled: Color,
+}
+
+impl InkRamp {
+    /// Look up one emphasis level in this ramp.
+    #[must_use]
+    pub const fn get(self, level: InkLevel) -> Color {
+        match level {
+            InkLevel::Primary => self.primary,
+            InkLevel::Secondary => self.secondary,
+            InkLevel::Tertiary => self.tertiary,
+            InkLevel::Disabled => self.disabled,
+        }
+    }
+
+    /// All four resolved colours, from [`InkLevel::Primary`] to
+    /// [`InkLevel::Disabled`].
+    #[must_use]
+    pub const fn levels(self) -> [Color; 4] {
+        [self.primary, self.secondary, self.tertiary, self.disabled]
+    }
+
+    /// Whether every resolved colour in the ramp is finite and in range.
+    #[must_use]
+    pub fn is_valid(self) -> bool {
+        self.levels().into_iter().all(Color::is_valid)
     }
 }
 
@@ -1204,5 +1462,181 @@ mod tests {
         assert_eq!((p.primary.hue, p.primary.chroma), (0.0, 0.0));
         let hot = Palette::from_seed(Color::oklch(0.5, 9.0, 400.0), Mode::Light);
         assert_eq!((hot.primary.hue, hot.primary.chroma), (40.0, 0.33));
+    }
+
+    /// Across light, dark, and seeded palettes (sweeping hues and chromas),
+    /// every named surface produces a valid 4-level ink ramp whose levels meet
+    /// their exact WCAG targets, stay strictly ordered in contrast, and stay
+    /// visually distinct in lightness on the same side of the surface.
+    #[test]
+    fn ink_ramp_clears_wcag_targets_across_light_dark_and_seeded_palettes() {
+        let mut palettes = vec![
+            Palette::NEUTRAL,
+            Palette::NEUTRAL.flipped(),
+            designed(),
+            designed().flipped(),
+        ];
+        for mode in [Mode::Dark, Mode::Light] {
+            for hue in (0..360).step_by(15) {
+                for chroma in [0.0, 0.08, 0.2, 0.33] {
+                    palettes.push(Palette::from_seed(
+                        Color::oklch(0.6, chroma, hue as f32),
+                        mode,
+                    ));
+                }
+            }
+        }
+
+        for p in palettes {
+            for (surface_name, bg) in [
+                ("field", p.field()),
+                ("background", p.background()),
+                ("surface", p.surface()),
+                ("raised", p.raised()),
+            ] {
+                let ramp = p.ink_ramp(bg);
+                assert!(
+                    ramp.is_valid(),
+                    "{:?} hue={} on {surface_name}: invalid ramp {ramp:?}",
+                    p.mode,
+                    p.primary.hue
+                );
+
+                for level in InkLevel::ALL {
+                    let c = ramp.get(level);
+                    assert_eq!(c, p.ink_for(level, bg));
+                    assert_eq!(c.alpha(), 1.0);
+                    let ratio = c.contrast(bg);
+                    assert!(
+                        ratio >= level.min_contrast(),
+                        "{:?} hue={} on {surface_name}: {level:?} contrast {ratio:.2}:1 < {:.1}:1",
+                        p.mode,
+                        p.primary.hue,
+                        level.min_contrast(),
+                    );
+                }
+
+                // Strictly ordered contrast and visibly separated lightness.
+                let contrasts = ramp.levels().map(|c| c.contrast(bg));
+                for pair in contrasts.windows(2) {
+                    assert!(
+                        pair[0] > pair[1],
+                        "{:?} hue={} on {surface_name}: ramp not strictly ordered: {contrasts:?}",
+                        p.mode,
+                        p.primary.hue
+                    );
+                }
+                let dists = ramp
+                    .levels()
+                    .map(|c| (c.lightness() - bg.lightness()).abs());
+                for pair in dists.windows(2) {
+                    assert!(
+                        pair[0] - pair[1] > 0.05,
+                        "{:?} hue={} on {surface_name}: adjacent levels collapsed: {dists:?}",
+                        p.mode,
+                        p.primary.hue
+                    );
+                }
+                // All four levels sit on the same side of the backdrop.
+                let primary_lighter = ramp.primary.lightness() > bg.lightness();
+                for c in ramp.levels() {
+                    assert_eq!(
+                        c.lightness() > bg.lightness(),
+                        primary_lighter,
+                        "{:?} hue={} on {surface_name}: polarity split in ramp",
+                        p.mode,
+                        p.primary.hue
+                    );
+                }
+            }
+        }
+    }
+
+    /// On extreme layers, custom grounds, saturated role chips, and mid-tone
+    /// surfaces where 7:1 is physically unreachable, every level meets its
+    /// exact WCAG floor (or the backdrop's exact physical ceiling `>= √21 ≈
+    /// 4.58:1`) with zero tolerance, never inverting order or producing
+    /// non-finite colours.
+    #[test]
+    fn ink_ramp_respects_physical_ceiling_on_extreme_and_chromatic_surfaces() {
+        let mut palettes = vec![
+            Palette::NEUTRAL,
+            Palette::NEUTRAL.flipped(),
+            designed(),
+            designed().flipped(),
+        ];
+        for mode in [Mode::Dark, Mode::Light] {
+            for g in [0.0, 0.25, 0.5, 0.6, 0.8, 1.0] {
+                palettes.push(designed().with_mode(mode).with_ground(g));
+            }
+            for hue in (0..360).step_by(30) {
+                palettes.push(Palette::from_seed(
+                    Color::oklch(0.6, 0.22, hue as f32),
+                    mode,
+                ));
+            }
+        }
+
+        for p in palettes {
+            let mut surfaces = vec![
+                p.primary(),
+                p.secondary(),
+                p.tertiary(),
+                p.success(),
+                p.warning(),
+                p.danger(),
+                p.hover(p.primary()),
+                Color::oklch(0.564, 0.0, 0.0),
+            ];
+            for level in [-50, -5, 0, 5, 50] {
+                surfaces.push(p.layer(level));
+            }
+            for bg in surfaces {
+                let ramp = p.ink_ramp(bg);
+                assert!(ramp.is_valid(), "{:?}: invalid ramp on {bg:?}", p.mode);
+                let ceiling = bg.max_contrast();
+                assert!(
+                    ceiling >= 21.0_f32.sqrt() - 1e-4,
+                    "every opaque surface has max_contrast >= sqrt(21): got {ceiling}"
+                );
+                for level in InkLevel::ALL {
+                    let got = ramp.get(level).contrast(bg);
+                    let want = level.min_contrast().min(ceiling);
+                    assert!(
+                        got >= want,
+                        "{:?} {level:?} on {bg:?}: got {got:.4}:1, want >= {want:.4}:1 (ceiling {ceiling:.4}:1)",
+                        p.mode
+                    );
+                }
+                let contrasts = ramp.levels().map(|c| c.contrast(bg));
+                for pair in contrasts.windows(2) {
+                    assert!(
+                        pair[0] >= pair[1],
+                        "{:?} on {bg:?}: inverted ramp order {contrasts:?}",
+                        p.mode
+                    );
+                }
+            }
+        }
+
+        // Worst-case mid-tone (relative luminance ≈ 0.179) caps out at √21 ≈ 4.58:1:
+        // Primary saturates at the exact physical ceiling while Secondary and
+        // Tertiary still clear WCAG AA (4.5:1) and Disabled clears 1.8:1.
+        let mid_y = (1.05_f32 * 0.05).sqrt() - 0.05;
+        let mid = Color::oklch(mid_y.cbrt(), 0.0, 0.0);
+        assert!(
+            (mid.max_contrast() - 21.0_f32.sqrt()).abs() < 0.02,
+            "mid-tone ceiling should sit at sqrt(21) (~4.58), got {}",
+            mid.max_contrast()
+        );
+        let mid_ramp = Palette::NEUTRAL.ink_ramp(mid);
+        assert_eq!(mid_ramp.primary.contrast(mid), mid.max_contrast());
+        assert!(mid_ramp.secondary.contrast(mid) >= Palette::AA_TEXT);
+        assert!(mid_ramp.tertiary.contrast(mid) >= Palette::AA_TEXT);
+        assert!(mid_ramp.disabled.contrast(mid) >= Palette::DISABLED_TEXT);
+
+        // Non-finite backdrop stays finite and opaque.
+        let bad = Color::oklch(f32::NAN, 0.0, 0.0);
+        assert!(Palette::NEUTRAL.ink_ramp(bad).is_valid());
     }
 }
