@@ -9,8 +9,8 @@ use toml_edit::{DocumentMut, Item, TableLike, Value};
 /// `mui2`), `v1` the keys of mui crates whose path points into a v1 checkout
 /// (no `crates/mui-scene` next to them, or under `.build-inputs/mui/`), which
 /// this tool must leave alone. With `root`, a path dep is v2 only inside it.
-pub fn mui_deps(manifest: &str, dir: &Path, root: Option<&Path>) -> (Vec<String>, Vec<String>) {
-    let Ok(doc) = manifest.parse::<DocumentMut>() else { return Default::default() };
+pub fn mui_deps(manifest: &str, dir: &Path, root: Option<&Path>) -> Result<(Vec<String>, Vec<String>), toml_edit::TomlError> {
+    let doc = manifest.parse::<DocumentMut>()?;
     let (mut v2, mut v1) = (Vec::new(), Vec::new());
     deps(doc.as_item(), false, &mut |key, entry| {
         let pkg = entry.get("package").and_then(Item::as_str).unwrap_or(key);
@@ -26,7 +26,7 @@ pub fn mui_deps(manifest: &str, dir: &Path, root: Option<&Path>) -> (Vec<String>
             v2.push(ident);
         }
     });
-    (v2, v1)
+    Ok((v2, v1))
 }
 
 /// Whether the crate at `dir` belongs to a v1 mui checkout.
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn finds_package_aliases() {
         let src = "[dependencies]\nmui2 = { package = \"mui\", path = \"x\" }\nmui2-vello = { package = \"mui-vello\", path = \"y\" }\nother = { package = \"mui-gpui-plugin-probe\", path = \"z\" }\n";
-        assert_eq!(mui_deps(src, Path::new("/nowhere"), None), (vec!["mui2".into(), "mui2_vello".into()], vec![]));
+        assert_eq!(mui_deps(src, Path::new("/nowhere"), None).unwrap(), (vec!["mui2".into(), "mui2_vello".into()], vec![]));
     }
 
     #[test]
@@ -172,13 +172,13 @@ mod tests {
         std::fs::create_dir_all(tmp.join(".build-inputs/mui2/crates/mui-scene")).unwrap();
         std::fs::create_dir_all(tmp.join(".build-inputs/mui2/crates/mui")).unwrap();
         let src = "[dependencies]\nmui-truce = { path = \".build-inputs/mui/crates/mui-truce\" }\nmui2 = { package = \"mui\", path = \".build-inputs/mui2/crates/mui\" }\n";
-        assert_eq!(mui_deps(src, &tmp, None), (vec!["mui2".into()], vec!["mui_truce".into()]));
+        assert_eq!(mui_deps(src, &tmp, None).unwrap(), (vec!["mui2".into()], vec!["mui_truce".into()]));
         // Not checked out: the `.build-inputs/mui/` path alone says v1.
         let missing = "[dependencies]\nmui-truce = { path = \"x/.build-inputs/mui/crates/mui-truce\" }\nmui = { path = \"y/crates/mui\" }\n";
-        assert_eq!(mui_deps(missing, Path::new("/nowhere"), None), (vec![], vec!["mui_truce".into()]));
+        assert_eq!(mui_deps(missing, Path::new("/nowhere"), None).unwrap(), (vec![], vec!["mui_truce".into()]));
         // `--mui-root` decides alone.
         let root = tmp.join(".build-inputs/mui");
-        assert_eq!(mui_deps(src, &tmp, Some(&root)), (vec![], vec!["mui2".into()]));
+        assert_eq!(mui_deps(src, &tmp, Some(&root)).unwrap(), (vec![], vec!["mui2".into()]));
         std::fs::remove_dir_all(&tmp).unwrap();
     }
 }

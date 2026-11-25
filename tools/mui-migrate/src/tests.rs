@@ -564,3 +564,56 @@ fn icon_font_moves_to_a_builder() {
     let local = "fn icon(a: u8, b: u8) {}\nfn f() { icon(1, 2); }\n";
     check(local, local);
 }
+
+#[test]
+fn check_flag_exits_nonzero_on_edits_or_warnings_without_writing() {
+    use std::process::ExitCode;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("mui-migrate-check-test-{nonce}"));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let clean = dir.join("clean.rs");
+    std::fs::write(&clean, "use mui::prelude::*;\nfn f() -> El { col([block(1.0, 2.0)]) }\n").unwrap();
+    assert_eq!(
+        crate::run_cli(["--check".into(), clean.display().to_string()]),
+        ExitCode::SUCCESS
+    );
+
+    let legacy = dir.join("legacy.rs");
+    let legacy_src = "use mui::prelude::*;\nfn f() -> El { column([leaf(1.0, 2.0)]) }\n";
+    std::fs::write(&legacy, legacy_src).unwrap();
+    assert_eq!(
+        crate::run_cli(["--check".into(), legacy.display().to_string()]),
+        ExitCode::FAILURE
+    );
+    // `--check` implies `--dry-run` and never mutates the file on disk.
+    assert_eq!(std::fs::read_to_string(&legacy).unwrap(), legacy_src);
+    // `--dry-run` keeps exiting SUCCESS when there are no read/parse errors.
+    assert_eq!(
+        crate::run_cli(["--dry-run".into(), legacy.display().to_string()]),
+        ExitCode::SUCCESS
+    );
+
+    let warn_only = dir.join("warn.rs");
+    std::fs::write(&warn_only, "use mui::prelude::*;\nimpl Sugar for X {}\n").unwrap();
+    assert_eq!(
+        crate::run_cli(["--check".into(), warn_only.display().to_string()]),
+        ExitCode::FAILURE
+    );
+
+    let missing = dir.join("missing");
+    assert_eq!(crate::run_cli(["--check".into(), missing.display().to_string()]), ExitCode::FAILURE);
+    assert_eq!(crate::run_cli(["--dry-run".into(), missing.display().to_string()]), ExitCode::SUCCESS);
+
+    // A source-only check still needs its ancestor manifest for aliases.
+    let manifest = dir.join("Cargo.toml");
+    for invalid_context in [b"[dependencies".as_slice(), &[0xff]] {
+        std::fs::write(&manifest, invalid_context).unwrap();
+        assert_eq!(crate::run_cli(["--check".into(), clean.display().to_string()]), ExitCode::FAILURE);
+        assert_eq!(crate::run_cli(["--dry-run".into(), clean.display().to_string()]), ExitCode::SUCCESS);
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
