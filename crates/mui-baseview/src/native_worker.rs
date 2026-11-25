@@ -245,6 +245,8 @@ struct Output {
     render_size: (u32, u32),
     /// Graphics API that rendered this frame.
     api: mui_present::GraphicsApi,
+    /// The direct host's surface composites alpha (selects the D3D11 backend).
+    translucent: bool,
     /// Why this frame is not a GPU one.
     fallback: Option<mui_present::FallbackReason>,
     reason: &'static str,
@@ -502,7 +504,7 @@ impl NativeAdapter {
             // On screen already: the worker presented it.
             *self.bitmap.borrow_mut() = None;
             self.requests
-                .presented_gpu(output.size, output.api, output.reason);
+                .presented_gpu(output.size, output.api, output.translucent, output.reason);
             self.requests.drag.rendered(output.drag);
             return;
         }
@@ -1257,6 +1259,7 @@ fn worker_with_mode<V: View>(
                     .map(Host::api)
                     .or_else(|| gpu.as_ref().map(Offscreen::api))
                     .unwrap_or_default(),
+                translucent: direct.as_ref().is_some_and(Host::translucent),
                 fallback,
                 reason,
                 capture,

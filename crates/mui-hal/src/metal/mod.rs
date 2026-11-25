@@ -7,7 +7,7 @@
 
 #![expect(
     unsafe_code,
-    reason = "the Metal backend bridges Objective-C Metal and QuartzCore protocols via objc2"
+    reason = "the Metal backend bridges Objective-C Metal, QuartzCore, and GCD APIs via objc2"
 )]
 
 mod record;
@@ -15,8 +15,7 @@ mod resource;
 mod surface;
 
 use std::collections::{BTreeSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 // `MTLCreateSystemDefaultDevice` requires linking CoreGraphics on macOS even
 // when `wgpu` is not enabled in the crate graph.
@@ -26,37 +25,97 @@ unsafe extern "C" {}
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_metal::{
-    MTLBuffer as _, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
-    MTLCreateSystemDefaultDevice, MTLDevice, MTLResourceOptions,
+    MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandQueue,
+    MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary, MTLRenderPipelineState,
+    MTLResourceOptions, MTLSamplerState, MTLTexture,
 };
+use objc2_quartz_core::{CAMetalDrawable, CAMetalLayer};
 
+pub use crate::shared::BackendError as Error;
 pub use record::{Cmd, PassCmd, PassRecord};
 pub use resource::*;
 pub use surface::{Acquired, Surface, SurfaceTexture};
 
+pub(crate) use crate::shared::{
+    DeviceLost, ErrorSink, MapCallback, WorkCallback, WorkWaiter, drain_ready_work, lock,
+};
+use crate::shared::{
+    validate_device_request, validate_write_buffer_args, validate_write_texture_args,
+};
 use crate::types::{
     AdapterInfo, Backend, BufferUsages, DeviceDescriptor, DeviceLostReason, DeviceType, Features,
     Limits,
 };
 
-/// Locks `m`, recovering across poison so internal HAL state stays consistent.
-pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+mod sealed {
+    pub trait Sealed {}
 }
 
-/// Wrapper marking thread-safe Objective-C Metal protocol objects `Send + Sync`.
+/// Sealed marker for Objective-C Metal protocol objects guaranteed thread-safe
+/// across threads by Apple's Metal framework specification.
 ///
-/// Apple's Metal specification guarantees that `MTLDevice`, `MTLCommandQueue`,
-/// `MTLBuffer`, `MTLTexture`, `MTLSamplerState`, `MTLLibrary`, and
-/// `MTLRenderPipelineState` are thread-safe to retain and reference across threads.
-pub(crate) struct SendObj<T: ?Sized>(pub Retained<T>);
+/// # Safety
+/// Implementors must be thread-safe for concurrent access across threads per
+/// Apple's Metal documentation.
+pub(crate) unsafe trait FreeThreaded: sealed::Sealed {}
 
-// SAFETY: only used for thread-safe Metal protocol objects documented above.
-unsafe impl<T: ?Sized> Send for SendObj<T> {}
+/// Sealed marker for Objective-C objects safe to move across threads under
+/// single ownership or external mutual exclusion (`Send` only, NOT `Sync`).
+///
+/// # Safety
+/// Implementors must be safe to transfer across threads when access is
+/// externally synchronized or uniquely owned.
+pub(crate) unsafe trait SendMetal: sealed::Sealed {}
+
+macro_rules! impl_free_threaded {
+    ($($ty:ty => $doc:literal),* $(,)?) => {
+        $(
+            impl sealed::Sealed for $ty {}
+            // SAFETY: $doc
+            unsafe impl FreeThreaded for $ty {}
+        )*
+    };
+}
+
+impl_free_threaded!(
+    ProtocolObject<dyn MTLDevice> => "Apple Metal docs: MTLDevice resource and pipeline creation methods are thread-safe.",
+    ProtocolObject<dyn MTLCommandQueue> => "Apple Metal docs: MTLCommandQueue is thread-safe for creating command buffers.",
+    ProtocolObject<dyn MTLBuffer> => "Apple Metal docs: MTLBuffer handles are thread-safe to retain and reference across command encoders.",
+    ProtocolObject<dyn MTLTexture> => "Apple Metal docs: MTLTexture handles are thread-safe to retain and reference across command encoders.",
+    ProtocolObject<dyn MTLSamplerState> => "Apple Metal docs: MTLSamplerState is an immutable thread-safe state object.",
+    ProtocolObject<dyn MTLLibrary> => "Apple Metal docs: MTLLibrary is thread-safe for function lookup across threads.",
+    ProtocolObject<dyn MTLRenderPipelineState> => "Apple Metal docs: MTLRenderPipelineState is an immutable thread-safe state object.",
+);
+
+impl sealed::Sealed for ProtocolObject<dyn MTLCommandBuffer> {}
+// SAFETY: Apple Metal docs: an `MTLCommandBuffer` is not safe for concurrent
+// encoding, but may be transferred across threads once encoded/committed or
+// guarded by `DeviceShared::state`'s `Mutex`.
+unsafe impl SendMetal for ProtocolObject<dyn MTLCommandBuffer> {}
+
+impl sealed::Sealed for ProtocolObject<dyn CAMetalDrawable> {}
+// SAFETY: Apple QuartzCore/Metal docs: a `CAMetalDrawable` is single-owner and
+// safe to move across threads to the thread that encodes and presents it.
+unsafe impl SendMetal for ProtocolObject<dyn CAMetalDrawable> {}
+
+impl sealed::Sealed for CAMetalLayer {}
+// SAFETY: `CAMetalLayer` is held inside `Surface::state` and all layer-hierarchy
+// / property mutations (`configure`, `release`) are dispatched onto the AppKit
+// main thread via GCD (`run_on_main_sync` / `run_on_main_async`); `nextDrawable()`
+// runs under `Surface::layer_io`, which `configure()` also holds while mutating
+// layer properties, so the two never overlap (see `surface.rs` module docs).
+unsafe impl SendMetal for CAMetalLayer {}
+
+/// Wrapper marking verified thread-safe Objective-C Metal protocol objects `Send + Sync`.
+pub(crate) struct SendObj<T: FreeThreaded + ?Sized>(pub Retained<T>);
+
+// SAFETY: `T: FreeThreaded` is sealed and implemented only for Metal protocol
+// objects documented thread-safe by Apple.
+unsafe impl<T: FreeThreaded + ?Sized> Send for SendObj<T> {}
 // SAFETY: as above.
-unsafe impl<T: ?Sized> Sync for SendObj<T> {}
+unsafe impl<T: FreeThreaded + ?Sized> Sync for SendObj<T> {}
 
-impl<T> Clone for SendObj<T>
+impl<T: FreeThreaded + ?Sized> Clone for SendObj<T>
 where
     Retained<T>: Clone,
 {
@@ -65,7 +124,7 @@ where
     }
 }
 
-impl<T: ?Sized> std::ops::Deref for SendObj<T> {
+impl<T: FreeThreaded + ?Sized> std::ops::Deref for SendObj<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -73,15 +132,14 @@ impl<T: ?Sized> std::ops::Deref for SendObj<T> {
 }
 
 /// Wrapper marking single-owner or externally mutex-guarded Objective-C objects
-/// (`MTLCommandBuffer`, `CAMetalLayer`, `CAMetalDrawable`) `Send` without
-/// claiming `Sync`.
-pub(crate) struct SendOnlyObj<T: ?Sized>(pub Retained<T>);
+/// `Send` without claiming `Sync`.
+pub(crate) struct SendOnlyObj<T: SendMetal + ?Sized>(pub Retained<T>);
 
-// SAFETY: held exclusively inside a `Mutex` or owned by a single value moved
-// across threads; never accessed concurrently without external synchronization.
-unsafe impl<T: ?Sized> Send for SendOnlyObj<T> {}
+// SAFETY: `T: SendMetal` is sealed and only held inside a `Mutex` or owned by a
+// single value moved across threads; never accessed concurrently without synchronization.
+unsafe impl<T: SendMetal + ?Sized> Send for SendOnlyObj<T> {}
 
-impl<T> Clone for SendOnlyObj<T>
+impl<T: SendMetal + ?Sized> Clone for SendOnlyObj<T>
 where
     Retained<T>: Clone,
 {
@@ -90,76 +148,12 @@ where
     }
 }
 
-impl<T: ?Sized> std::ops::Deref for SendOnlyObj<T> {
+impl<T: SendMetal + ?Sized> std::ops::Deref for SendOnlyObj<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-
-/// A Metal error's HAL category.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ErrorKind {
-    Validation,
-    OutOfMemory,
-    Internal,
-}
-
-/// A Metal failure, already formatted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error {
-    kind: ErrorKind,
-    message: String,
-}
-
-impl Error {
-    pub(crate) fn validation(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Validation,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn out_of_memory(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::OutOfMemory,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn internal(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn into_hal(self) -> crate::Error {
-        match self.kind {
-            ErrorKind::Validation => crate::Error::Validation {
-                description: self.message,
-            },
-            ErrorKind::OutOfMemory => crate::Error::OutOfMemory {
-                source: self.message,
-            },
-            ErrorKind::Internal => crate::Error::Internal {
-                description: self.message,
-            },
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for Error {}
-
-pub(crate) type MapCallback = Box<dyn FnOnce(Result<(), crate::BufferAsyncError>) + Send>;
-pub(crate) type WorkCallback = Box<dyn FnOnce() + Send>;
-type LostCallback = Box<dyn Fn(DeviceLostReason, String) + Send + Sync>;
 
 /// A Metal instance. Cheap to clone.
 #[derive(Clone)]
@@ -236,17 +230,13 @@ impl Adapter {
     }
 
     pub fn request_device(&self, desc: &DeviceDescriptor<'_>) -> Result<Device, Error> {
-        let missing = desc.required_features - self.features;
-        if !missing.is_empty() {
-            return Err(Error::validation(format!(
-                "Metal device lacks required features {missing:?}"
-            )));
-        }
-        if !desc.required_limits.check_limits(&self.limits) {
-            return Err(Error::validation(
-                "Metal adapter does not satisfy required limits",
-            ));
-        }
+        validate_device_request(
+            desc.required_features,
+            self.features,
+            &desc.required_limits,
+            &self.limits,
+            "Metal",
+        )?;
         let queue = self
             .device
             .newCommandQueue()
@@ -256,9 +246,10 @@ impl Adapter {
             command_queue: SendObj(queue),
             limits: self.limits,
             features: desc.required_features & self.features,
-            errors: Arc::new(crate::ErrorSink::new()),
+            errors: Arc::new(ErrorSink::new()),
             state: Mutex::new(QueueState {
                 staged: Vec::new(),
+                staging: Staging::default(),
                 inflight: VecDeque::new(),
                 map_waiters: Vec::new(),
                 work_waiters: Vec::new(),
@@ -267,9 +258,78 @@ impl Adapter {
                 retired: 0,
                 failed_seqs: BTreeSet::new(),
             }),
-            lost: AtomicBool::new(false),
-            on_lost: Mutex::new(None),
+            lost: DeviceLost::new(),
         })))
+    }
+}
+
+/// Reusable `StorageModeShared` staging chunks for `write_buffer` / `write_texture`,
+/// avoiding per-write `MTLBuffer` allocation.
+const STAGING_CHUNK_BYTES: u64 = 1 << 20;
+const MAX_RECYCLED_CHUNKS: usize = 8;
+
+#[derive(Default)]
+struct Staging {
+    /// Active chunk and current 16-byte-aligned write cursor.
+    current: Option<(Buffer, u64)>,
+    /// Chunks filled since the previous submission.
+    used: Vec<Buffer>,
+    /// Completed chunks ready for reuse.
+    free: Vec<Buffer>,
+}
+
+impl Staging {
+    /// Returns finished chunks to the free list. Only standard-size chunks are
+    /// kept, so retained staging memory is bounded by
+    /// `MAX_RECYCLED_CHUNKS * STAGING_CHUNK_BYTES` (8 MiB); oversized one-off
+    /// chunks for large uploads are released immediately.
+    fn recycle(&mut self, chunks: Vec<Buffer>) {
+        for b in chunks {
+            if b.size() == STAGING_CHUNK_BYTES && self.free.len() < MAX_RECYCLED_CHUNKS {
+                self.free.push(b);
+            }
+        }
+    }
+
+    fn staging_chunk_referenced(chunk: &Buffer, staged: &[Cmd]) -> bool {
+        staged.iter().any(|cmd| match cmd {
+            Cmd::CopyBuffer { src, .. } | Cmd::BufferToTexture { src, .. } => {
+                Arc::ptr_eq(&src.0, &chunk.0)
+            }
+            _ => false,
+        })
+    }
+
+    /// Reclaims any unsubmitted chunk that no surviving staged command
+    /// references (e.g. after pruning uploads targeting a retired drawable or
+    /// on an empty submit).
+    fn reclaim_unreferenced(&mut self, staged: &[Cmd]) {
+        if let Some((b, used)) = self.current.take() {
+            if Self::staging_chunk_referenced(&b, staged) {
+                self.current = Some((b, used));
+            } else {
+                self.recycle(vec![b]);
+            }
+        }
+        let mut kept = Vec::new();
+        let mut unreferenced = Vec::new();
+        for b in self.used.drain(..) {
+            if Self::staging_chunk_referenced(&b, staged) {
+                kept.push(b);
+            } else {
+                unreferenced.push(b);
+            }
+        }
+        self.used = kept;
+        self.recycle(unreferenced);
+    }
+
+    fn take_for_submission(&mut self) -> Vec<Buffer> {
+        let mut chunks = std::mem::take(&mut self.used);
+        if let Some((b, _)) = self.current.take() {
+            chunks.push(b);
+        }
+        chunks
     }
 }
 
@@ -278,6 +338,8 @@ struct InflightSubmission {
     cmd_buf: SendOnlyObj<ProtocolObject<dyn MTLCommandBuffer>>,
     /// Retained until `cmd_buf` finishes so buffers/textures/pipelines stay live.
     _kept: Vec<Cmd>,
+    /// Staging chunks consumed by this submission, recycled on completion.
+    staging: Vec<Buffer>,
 }
 
 struct MapWaiter {
@@ -287,13 +349,9 @@ struct MapWaiter {
     callback: MapCallback,
 }
 
-struct WorkWaiter {
-    seq: u64,
-    callback: WorkCallback,
-}
-
 struct QueueState {
     staged: Vec<Cmd>,
+    staging: Staging,
     inflight: VecDeque<InflightSubmission>,
     map_waiters: Vec<MapWaiter>,
     work_waiters: Vec<WorkWaiter>,
@@ -308,30 +366,33 @@ pub(crate) struct DeviceShared {
     pub command_queue: SendObj<ProtocolObject<dyn MTLCommandQueue>>,
     limits: Limits,
     features: Features,
-    errors: Arc<crate::ErrorSink>,
+    errors: Arc<ErrorSink>,
     state: Mutex<QueueState>,
-    lost: AtomicBool,
-    on_lost: Mutex<Option<LostCallback>>,
+    lost: DeviceLost,
 }
 
 /// A Metal device handle. Cheap to clone.
 #[derive(Clone)]
 pub struct Device(pub(crate) Arc<DeviceShared>);
 
-/// Public device owner stored in `DeviceInner::Metal`; dropping it destroys the
-/// device cleanly once no other clones remain.
+/// Public device owner stored in `DeviceInner::Metal`; dropping it drains work
+/// and breaks internal staging reference cycles.
 pub struct Owner(pub Device);
 
 impl Drop for Owner {
     fn drop(&mut self) {
         let _ = self.0.poll(true);
-        // Break `staged -> Texture/Buffer -> DeviceShared -> staged` ownership cycles.
-        lock(&self.0.0.state).staged.clear();
+        // Break `staged / staging -> Buffer/Texture -> DeviceShared` ownership cycles.
+        let mut q = lock(&self.0.0.state);
+        q.staged.clear();
+        q.staging = Staging::default();
+        drop(q);
+        self.0.0.errors.clear_uncaptured();
     }
 }
 
 impl Device {
-    pub(crate) fn errors(&self) -> &Arc<crate::ErrorSink> {
+    pub(crate) fn errors(&self) -> &Arc<ErrorSink> {
         &self.0.errors
     }
 
@@ -344,7 +405,7 @@ impl Device {
     }
 
     pub fn is_lost(&self) -> bool {
-        self.0.lost.load(Ordering::Acquire)
+        self.0.lost.is_lost()
     }
 
     pub fn submitted(&self) -> u64 {
@@ -359,16 +420,11 @@ impl Device {
         &self,
         f: impl Fn(DeviceLostReason, String) + Send + Sync + 'static,
     ) {
-        *lock(&self.0.on_lost) = Some(Box::new(f));
+        self.0.lost.set_callback(f);
     }
 
     pub(crate) fn notify_lost(&self, reason: DeviceLostReason, message: String) {
-        if !self.0.lost.swap(true, Ordering::AcqRel) {
-            let cb = lock(&self.0.on_lost).take();
-            if let Some(cb) = cb {
-                cb(reason, message);
-            }
-        }
+        self.0.lost.notify(reason, message);
     }
 
     pub fn destroy(&self) {
@@ -376,6 +432,7 @@ impl Device {
         let (maps, works) = {
             let mut q = lock(&self.0.state);
             q.staged.clear();
+            q.staging = Staging::default();
             q.inflight.clear();
             q.failed_seqs.clear();
             let last = q.submitted;
@@ -394,28 +451,70 @@ impl Device {
         }
     }
 
+    /// Sub-allocates `bytes.len()` from the reusable `StorageModeShared` staging
+    /// belt under `q`, copying `bytes` into the mapped slice and returning
+    /// `(chunk, offset)`.
+    fn stage_bytes_locked(&self, q: &mut QueueState, bytes: &[u8]) -> Result<(Buffer, u64), Error> {
+        let len = bytes.len() as u64;
+        let need = len.max(1).next_multiple_of(16);
+        let fits = q
+            .staging
+            .current
+            .as_ref()
+            .is_some_and(|(b, used)| used.checked_add(need).is_some_and(|end| end <= b.size()));
+        if !fits {
+            if let Some((b, _)) = q.staging.current.take() {
+                q.staging.used.push(b);
+            }
+            let chunk = if let Some(i) = q.staging.free.iter().position(|b| b.size() >= need) {
+                q.staging.free.swap_remove(i)
+            } else {
+                let alloc = usize::try_from(need.max(STAGING_CHUNK_BYTES))
+                    .map_err(|_| Error::out_of_memory("staging buffer size overflows usize"))?;
+                let raw = self
+                    .0
+                    .raw
+                    .newBufferWithLength_options(alloc, MTLResourceOptions::StorageModeShared)
+                    .ok_or_else(|| {
+                        Error::out_of_memory("MTLDevice::newBufferWithLength returned nil")
+                    })?;
+                Buffer::from_raw(self, raw, alloc as u64, BufferUsages::COPY_SRC)
+            };
+            q.staging.current = Some((chunk, 0));
+        }
+        let Some((chunk, used)) = q.staging.current.as_mut() else {
+            return Err(Error::internal("staging chunk unexpectedly absent"));
+        };
+        let at = *used;
+        *used += need;
+        if !bytes.is_empty() {
+            let raw = chunk
+                .0
+                .raw
+                .as_ref()
+                .ok_or_else(|| Error::internal("staging chunk missing MTLBuffer"))?;
+            // SAFETY: `chunk` is `StorageModeShared`, exclusively owned by `q.staging`
+            // until submitted, and `at + bytes.len() <= chunk.size()`.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    raw.contents().as_ptr().cast::<u8>().add(at as usize),
+                    bytes.len(),
+                );
+            }
+        }
+        Ok((chunk.clone(), at))
+    }
+
     pub fn stage_buffer_write(&self, dst: &Buffer, offset: u64, data: &[u8]) -> Result<(), Error> {
-        if !dst.belongs_to(&self.0) {
-            return Err(Error::validation(
-                "write_buffer destination belongs to a different device",
-            ));
-        }
-        if !dst.is_valid() {
-            return Err(Error::validation("cannot write to an invalid buffer"));
-        }
-        if !dst.usage().contains(BufferUsages::COPY_DST) {
-            return Err(Error::validation("write_buffer destination lacks COPY_DST"));
-        }
-        let end = offset
-            .checked_add(data.len() as u64)
-            .ok_or_else(|| Error::validation("write_buffer range overflows u64"))?;
-        if end > dst.size() {
-            return Err(Error::validation("write_buffer exceeds buffer size"));
-        }
-        if self.is_lost() {
-            return Err(Error::internal("Metal device is lost"));
-        }
-        let staging = self.make_staging_buffer(data)?;
+        validate_write_buffer_args(
+            dst.belongs_to(&self.0),
+            dst.is_valid(),
+            dst.usage(),
+            dst.size(),
+            offset,
+            data.len() as u64,
+        )?;
         let mut q = lock(&self.0.state);
         if self.is_lost() {
             return Err(Error::internal("Metal device is lost"));
@@ -423,9 +522,10 @@ impl Device {
         if dst.is_mapped_or_pending() {
             return Err(Error::validation("cannot write to a mapped buffer"));
         }
+        let (staging, src_offset) = self.stage_bytes_locked(&mut q, data)?;
         q.staged.push(Cmd::CopyBuffer {
             src: staging,
-            src_offset: 0,
+            src_offset,
             dst: dst.clone(),
             dst_offset: offset,
             size: data.len() as u64,
@@ -440,23 +540,7 @@ impl Device {
         size: crate::types::Extent3d,
         packed_bytes: &[u8],
     ) -> Result<(), Error> {
-        if !dst.belongs_to(&self.0) {
-            return Err(Error::validation(
-                "write_texture destination belongs to a different device",
-            ));
-        }
-        if !dst.is_valid() {
-            return Err(Error::validation("cannot write to an invalid texture"));
-        }
-        if !dst.usage().contains(crate::types::TextureUsages::COPY_DST) {
-            return Err(Error::validation(
-                "write_texture destination lacks COPY_DST",
-            ));
-        }
-        if self.is_lost() {
-            return Err(Error::internal("Metal device is lost"));
-        }
-        let staging = self.make_staging_buffer(packed_bytes)?;
+        validate_write_texture_args(dst.belongs_to(&self.0), dst.is_valid(), dst.usage())?;
         let mut q = lock(&self.0.state);
         if self.is_lost() {
             return Err(Error::internal("Metal device is lost"));
@@ -466,37 +550,15 @@ impl Device {
                 "cannot write to a retired swapchain image",
             ));
         }
+        let (staging, offset) = self.stage_bytes_locked(&mut q, packed_bytes)?;
         q.staged.push(Cmd::BufferToTexture {
             src: staging,
-            offset: 0,
+            offset,
             dst: dst.clone(),
             origin,
             size,
         });
         Ok(())
-    }
-
-    fn make_staging_buffer(&self, bytes: &[u8]) -> Result<Buffer, Error> {
-        let len = bytes.len().max(4);
-        let raw = self
-            .0
-            .raw
-            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
-            .ok_or_else(|| Error::out_of_memory("MTLDevice::newBufferWithLength returned nil"))?;
-        // SAFETY: `raw` is a newly created `StorageModeShared` buffer with length >= `bytes.len()`.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                raw.contents().as_ptr().cast::<u8>(),
-                bytes.len(),
-            );
-        }
-        Ok(Buffer::from_raw(
-            self,
-            raw,
-            len as u64,
-            BufferUsages::COPY_SRC,
-        ))
     }
 
     /// Flushes any already-staged writes targeting `buffer`, then atomically
@@ -549,12 +611,17 @@ impl Device {
     }
 
     /// Drops staged uploads targeting retired swapchain drawables while
-    /// preserving all unrelated staged writes.
+    /// preserving all unrelated staged writes and reclaiming unreferenced
+    /// staging chunks.
     pub(crate) fn prune_retired_staged(&self) {
         let mut q = lock(&self.0.state);
         q.staged.retain(
             |cmd| !matches!(cmd, Cmd::BufferToTexture { dst, .. } if dst.is_retired_swapchain()),
         );
+        let QueueState {
+            staged, staging, ..
+        } = &mut *q;
+        staging.reclaim_unreferenced(staged);
     }
 
     pub fn on_submitted_work_done(&self, f: WorkCallback) {
@@ -567,8 +634,6 @@ impl Device {
         if self.is_lost() {
             return Err(Error::internal("Metal device is lost"));
         }
-        // Validate caller command lists before touching `q.staged` so a bad
-        // command buffer never discards earlier valid `queue.write_*` calls.
         for list in &lists {
             for cmd in list {
                 record::validate_cmd(&self.0, cmd)?;
@@ -579,8 +644,6 @@ impl Device {
             if self.is_lost() {
                 return Err(Error::internal("Metal device is lost"));
             }
-            // Drop stale uploads to drawables retired by a surface reconfigure
-            // so they can never wedge subsequent valid submissions.
             q.staged.retain(|cmd| {
                 !matches!(cmd, Cmd::BufferToTexture { dst, .. } if dst.is_retired_swapchain())
             });
@@ -588,6 +651,7 @@ impl Device {
                 record::validate_cmd(&self.0, cmd)?;
             }
             if q.staged.is_empty() && lists.iter().all(Vec::is_empty) {
+                q.staging.reclaim_unreferenced(&[]);
                 q.submitted
             } else {
                 let staged_len = q.staged.len();
@@ -608,14 +672,13 @@ impl Device {
                 let cmd_buf = match encode_res {
                     Ok(cb) => cb,
                     Err(e) => {
-                        // Restore accepted staged writes in original order when
-                        // encoding or buffer creation fails before `commit()`.
                         cmds.truncate(staged_len);
                         q.staged = cmds;
                         return Err(e);
                     }
                 };
 
+                let staging_chunks = q.staging.take_for_submission();
                 q.submitted += 1;
                 let seq = q.submitted;
                 for cmd in &cmds {
@@ -630,12 +693,11 @@ impl Device {
                     seq,
                     cmd_buf: SendOnlyObj(cmd_buf),
                     _kept: cmds,
+                    staging: staging_chunks,
                 });
                 seq
             }
         };
-        // Non-blocking reap so completed drawables and staging buffers are freed
-        // promptly even when callers do not call `device.poll()`.
         let _ = self.poll(false);
         Ok(seq)
     }
@@ -652,7 +714,7 @@ impl Device {
 
     pub fn poll(&self, wait: bool) -> Result<(), Error> {
         let mut finished_maps: Vec<(MapCallback, Result<(), crate::BufferAsyncError>)> = Vec::new();
-        let mut finished_work = Vec::new();
+        let finished_work;
         let mut cb_errors = Vec::new();
         let lost = self.is_lost();
 
@@ -672,6 +734,7 @@ impl Device {
                         q.completed = q.completed.max(sub.seq);
                     }
                     q.retired = q.retired.max(sub.seq);
+                    q.staging.recycle(sub.staging);
                 }
             } else {
                 while let Some(front) = q.inflight.front() {
@@ -679,7 +742,9 @@ impl Device {
                     if status == MTLCommandBufferStatus::Completed
                         || status == MTLCommandBufferStatus::Error
                     {
-                        let sub = q.inflight.pop_front().expect("checked front");
+                        let Some(sub) = q.inflight.pop_front() else {
+                            break;
+                        };
                         if status == MTLCommandBufferStatus::Error {
                             let msg = sub.cmd_buf.error().map_or_else(
                                 || "Metal command buffer failed".into(),
@@ -691,6 +756,7 @@ impl Device {
                             q.completed = q.completed.max(sub.seq);
                         }
                         q.retired = q.retired.max(sub.seq);
+                        q.staging.recycle(sub.staging);
                     } else {
                         break;
                     }
@@ -720,7 +786,6 @@ impl Device {
             }
             q.map_waiters = remain_maps;
 
-            // Keep `failed_seqs` bounded once older than active waiters and recent writes.
             let min_keep = q
                 .map_waiters
                 .iter()
@@ -730,15 +795,7 @@ impl Device {
                 .min(q.retired.saturating_sub(256));
             q.failed_seqs.retain(|&seq| seq >= min_keep);
 
-            let mut remain_work = Vec::new();
-            for w in q.work_waiters.drain(..) {
-                if w.seq <= done {
-                    finished_work.push(w.callback);
-                } else {
-                    remain_work.push(w);
-                }
-            }
-            q.work_waiters = remain_work;
+            finished_work = drain_ready_work(&mut q.work_waiters, done);
         }
 
         for err in cb_errors {

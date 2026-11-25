@@ -18,6 +18,10 @@ use super::{
     d3d_topology, dxgi_format, lock, win_err,
 };
 use crate::binding::{d3d11_constant_buffer_byte_width, d3d11_constant_buffer_range};
+use crate::shared::{
+    resolve_dynamic_offset, validate_buffer_range, validate_submit_buffer, validate_submit_texture,
+    validate_texture_region, validate_texture_to_buffer_layout, validate_texture_to_texture,
+};
 use crate::types::{BufferUsages, Extent3d, Origin3d, ShaderStages, TextureUsages};
 
 pub enum Cmd {
@@ -88,109 +92,41 @@ pub enum PassCmd {
     },
 }
 
+const MAX_VERTEX_SLOTS: u32 = 16;
+const D3D11_MAX_END: u64 = u32::MAX as u64;
+
 fn check_texture(device: &Arc<DeviceShared>, t: &Texture) -> Result<(), Error> {
-    if !t.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a texture from another device",
-        ));
-    }
-    if t.is_retired_swapchain() {
-        return Err(Error::validation(
-            "cannot submit commands targeting a retired swapchain image",
-        ));
-    }
-    if !t.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid texture",
-        ));
-    }
-    Ok(())
+    validate_submit_texture(
+        t.belongs_to(device),
+        t.is_retired_swapchain(),
+        t.is_valid(),
+        "texture",
+    )
 }
 
 fn check_view(device: &Arc<DeviceShared>, v: &TextureView) -> Result<(), Error> {
-    if !v.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a texture view from another device",
-        ));
-    }
-    if v.is_retired_swapchain() {
-        return Err(Error::validation(
-            "cannot submit commands targeting a retired swapchain image",
-        ));
-    }
-    if !v.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid texture view",
-        ));
-    }
-    Ok(())
+    validate_submit_texture(
+        v.belongs_to(device),
+        v.is_retired_swapchain(),
+        v.is_valid(),
+        "texture view",
+    )
 }
 
 fn check_buffer_src(device: &Arc<DeviceShared>, src: &Buffer) -> Result<(), Error> {
-    if !src.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a buffer from another device",
-        ));
-    }
-    if !src.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid buffer",
-        ));
-    }
-    Ok(())
+    validate_submit_buffer(src.belongs_to(device), src.is_valid(), None)
 }
 
 fn check_buffer_write(device: &Arc<DeviceShared>, dst: &Buffer) -> Result<(), Error> {
-    if !dst.belongs_to(device) {
-        return Err(Error::validation(
-            "cannot submit commands referencing a buffer from another device",
-        ));
-    }
-    if !dst.is_valid() {
-        return Err(Error::validation(
-            "cannot submit commands referencing an invalid buffer",
-        ));
-    }
-    if dst.is_mapped_or_pending() {
-        return Err(Error::validation(
-            "cannot write to a buffer while it is mapped",
-        ));
-    }
-    Ok(())
-}
-
-const MAX_VERTEX_SLOTS: u32 = 16;
-
-fn check_texture_region(t: &Texture, origin: Origin3d, size: Extent3d) -> Result<(), Error> {
-    let layers = size.depth_or_array_layers.max(1);
-    if origin
-        .x
-        .checked_add(size.width)
-        .is_none_or(|x| x > t.width())
-        || origin
-            .y
-            .checked_add(size.height)
-            .is_none_or(|y| y > t.height())
-        || origin.z.checked_add(layers).is_none_or(|z| z > t.layers())
-    {
-        return Err(Error::validation("texture copy region exceeds bounds"));
-    }
-    Ok(())
+    validate_submit_buffer(
+        dst.belongs_to(device),
+        dst.is_valid(),
+        Some(dst.is_mapped_or_pending()),
+    )
 }
 
 fn check_buffer_range(b: &Buffer, offset: u64, size: u64, what: &str) -> Result<(), Error> {
-    let end = offset
-        .checked_add(size)
-        .ok_or_else(|| Error::validation(format!("{what} buffer range overflows u64")))?;
-    if end > b.size() {
-        return Err(Error::validation(format!(
-            "{what} buffer range {offset}..{end} exceeds buffer size {}",
-            b.size()
-        )));
-    }
-    let _ = u32::try_from(end)
-        .map_err(|_| Error::validation(format!("{what} buffer offset exceeds D3D11 u32 limit")))?;
-    Ok(())
+    validate_buffer_range(offset, size, b.size(), D3D11_MAX_END, what).map(drop)
 }
 
 pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), Error> {
@@ -217,7 +153,7 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
             if size.width == 0 || size.height == 0 {
                 return Ok(());
             }
-            check_texture_region(dst, *origin, *size)?;
+            validate_texture_region(*origin, *size, dst.width(), dst.height(), dst.layers())?;
             let layers = size.depth_or_array_layers.max(1) as usize;
             let expected = (size.width as usize)
                 .checked_mul(dst.format().block_size() as usize)
@@ -258,60 +194,23 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
             size,
         } => {
             check_texture(device, src)?;
-            if *mip_level >= src.mip_level_count() {
-                return Err(Error::validation(format!(
-                    "texture_to_buffer mip_level {mip_level} exceeds mip_level_count {}",
-                    src.mip_level_count()
-                )));
-            }
-            if src.sample_count() > 1 {
-                return Err(Error::validation(
-                    "D3D11 cannot copy multisampled texture to buffer without resolving first",
-                ));
-            }
-            if !src.usage().contains(TextureUsages::COPY_SRC) {
-                return Err(Error::validation("texture_to_buffer source lacks COPY_SRC"));
-            }
             check_buffer_write(device, dst)?;
-            if !dst.usage().contains(BufferUsages::COPY_DST) {
-                return Err(Error::validation(
-                    "texture_to_buffer destination lacks COPY_DST",
-                ));
-            }
-            if size.width == 0 || size.height == 0 {
-                return Ok(());
-            }
-            check_texture_region(src, *origin, *size)?;
-            let row_bytes = u64::from(size.width)
-                .checked_mul(u64::from(src.format().block_size()))
-                .ok_or_else(|| Error::validation("texture_to_buffer row bytes overflow"))?;
-            let bpr = u64::from(*bytes_per_row);
-            let rpi = u64::from(*rows_per_image);
-            let layers = u64::from(size.depth_or_array_layers.max(1));
-            if bpr < row_bytes {
-                return Err(Error::validation(
-                    "texture_to_buffer bytes_per_row is smaller than row byte width",
-                ));
-            }
-            if layers > 1 && rpi < u64::from(size.height) {
-                return Err(Error::validation(
-                    "texture_to_buffer rows_per_image is smaller than copy height",
-                ));
-            }
-            let bpi = bpr
-                .checked_mul(rpi)
-                .ok_or_else(|| Error::validation("texture_to_buffer bytes_per_image overflows"))?;
-            let last_slice_off = (layers - 1)
-                .checked_mul(bpi)
-                .ok_or_else(|| Error::validation("texture_to_buffer slice offset overflows"))?;
-            let last_row_off = u64::from(size.height - 1)
-                .checked_mul(bpr)
-                .ok_or_else(|| Error::validation("texture_to_buffer row offset overflows"))?;
-            let total = last_slice_off
-                .checked_add(last_row_off)
-                .and_then(|v| v.checked_add(row_bytes))
-                .ok_or_else(|| Error::validation("texture_to_buffer byte range overflows"))?;
-            check_buffer_range(dst, *offset, total, "texture_to_buffer")
+            validate_texture_to_buffer_layout(
+                *origin,
+                *size,
+                (src.width(), src.height(), src.layers()),
+                *mip_level,
+                src.mip_level_count(),
+                src.sample_count(),
+                src.usage(),
+                src.format().block_size(),
+                dst.usage(),
+                dst.size(),
+                *offset,
+                *bytes_per_row,
+                *rows_per_image,
+                D3D11_MAX_END,
+            )
         }
         Cmd::TextureToTexture {
             src,
@@ -324,49 +223,23 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
         } => {
             check_texture(device, src)?;
             check_texture(device, dst)?;
-            if *src_mip >= src.mip_level_count() || *dst_mip >= dst.mip_level_count() {
-                return Err(Error::validation(
-                    "texture_to_texture mip level exceeds texture mip_level_count",
-                ));
-            }
-            if !src.usage().contains(TextureUsages::COPY_SRC) {
-                return Err(Error::validation(
-                    "texture_to_texture source lacks COPY_SRC",
-                ));
-            }
-            if !dst.usage().contains(TextureUsages::COPY_DST) {
-                return Err(Error::validation(
-                    "texture_to_texture destination lacks COPY_DST",
-                ));
-            }
-            if src.format() != dst.format() {
-                return Err(Error::validation("texture_to_texture formats must match"));
-            }
-            if src.sample_count() != dst.sample_count() {
-                return Err(Error::validation(
-                    "texture_to_texture sample counts must match",
-                ));
-            }
-            if size.width == 0 || size.height == 0 {
-                return Ok(());
-            }
-            check_texture_region(src, *src_origin, *size)?;
-            check_texture_region(dst, *dst_origin, *size)?;
-            if src.sample_count() > 1
-                && (src_origin.x != 0
-                    || src_origin.y != 0
-                    || dst_origin.x != 0
-                    || dst_origin.y != 0
-                    || size.width != src.width()
-                    || size.height != src.height()
-                    || size.width != dst.width()
-                    || size.height != dst.height())
-            {
-                return Err(Error::validation(
-                    "D3D11 multisampled texture_to_texture requires whole-subresource copies with matching dimensions and zero x/y origins",
-                ));
-            }
-            Ok(())
+            validate_texture_to_texture(
+                (src.width(), src.height(), src.layers()),
+                *src_mip,
+                src.mip_level_count(),
+                src.sample_count(),
+                src.format(),
+                src.usage(),
+                *src_origin,
+                (dst.width(), dst.height(), dst.layers()),
+                *dst_mip,
+                dst.mip_level_count(),
+                dst.sample_count(),
+                dst.format(),
+                dst.usage(),
+                *dst_origin,
+                *size,
+            )
         }
         Cmd::Timestamp(_, _) | Cmd::Resolve { .. } => Err(Error::validation(
             "timestamp queries are not supported on the native D3D11 backend",
@@ -430,25 +303,16 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
                                             "bound buffer lacks UNIFORM usage",
                                         ));
                                     }
-                                    let dyn_off =
-                                        g.0.layout
-                                            .0
-                                            .dynamic_bindings
-                                            .binary_search(binding)
-                                            .ok()
-                                            .and_then(|idx| dynamic_offsets.get(idx))
-                                            .copied()
-                                            .unwrap_or(0);
-                                    let total_off = offset
-                                        .checked_add(u64::from(dyn_off))
-                                        .ok_or_else(|| {
-                                            Error::validation("uniform buffer offset overflows u64")
-                                        })?;
-                                    let bind_len = size.unwrap_or(0);
+                                    let total_off = resolve_dynamic_offset(
+                                        &g.0.layout.0.dynamic_bindings,
+                                        *binding,
+                                        dynamic_offsets,
+                                        *offset,
+                                    )?;
                                     check_buffer_range(
                                         buffer,
                                         total_off,
-                                        bind_len,
+                                        size.unwrap_or(0),
                                         "uniform bind group",
                                     )?;
                                     if total_off > 0 {
@@ -521,6 +385,22 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
     }
 }
 
+/// Re-uploads a `UNIFORM` buffer's whole CPU shadow after a write.
+///
+/// Deliberately never a partial `UpdateSubresource1` box: partial constant-buffer
+/// updates are only defined under `ConstantBufferPartialUpdate` with
+/// `D3D11_COPY_NO_OVERWRITE`/`DISCARD` semantics, which would race in-flight
+/// draws reading the same buffer. Full-buffer `UpdateSubresource(.., None, ..)`
+/// is valid on every D3D11.0+ driver, the runtime versions it against queued
+/// draws, and uniform buffers are small (<= 64 KiB), so the copy is cheap.
+fn upload_constant_buffer(ctx: &ID3D11DeviceContext, raw: &ID3D11Buffer, shadow: &[u8]) {
+    // SAFETY: `shadow.len()` equals the buffer's `ByteWidth` (both `alloc_size`),
+    // and a `None` box with a full-size source is valid for constant buffers.
+    unsafe {
+        ctx.UpdateSubresource(raw, 0, None, shadow.as_ptr().cast(), 0, 0);
+    }
+}
+
 pub(super) fn execute_all(
     device: &ID3D11Device,
     ctx: &ID3D11DeviceContext,
@@ -534,26 +414,28 @@ pub(super) fn execute_all(
                 if data.is_empty() {
                     continue;
                 }
-                let raw = dst.0.raw.as_ref().expect("validated dst buffer");
+                let raw = dst
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("cannot write to an invalid buffer"))?;
                 if dst.usage().contains(BufferUsages::UNIFORM) {
                     let mut shadow_guard = lock(&dst.0.shadow);
                     let shadow =
                         shadow_guard.get_or_insert_with(|| vec![0u8; dst.alloc_size() as usize]);
-                    let start = *offset as usize;
-                    let end = start + data.len();
+                    let start = usize::try_from(*offset)
+                        .map_err(|_| Error::validation("write_buffer offset overflows usize"))?;
+                    let end = start
+                        .checked_add(data.len())
+                        .ok_or_else(|| Error::validation("write_buffer end overflows usize"))?;
                     if end > shadow.len() {
                         return Err(Error::validation(
                             "write_buffer exceeds uniform buffer size",
                         ));
                     }
                     shadow[start..end].copy_from_slice(data);
-                    // SAFETY: full constant-buffer upload (`pDstBox = None`) works on D3D11.0 & 11.1.
-                    unsafe {
-                        ctx.UpdateSubresource(&raw.0, 0, None, shadow.as_ptr().cast(), 0, 0);
-                    }
+                    upload_constant_buffer(ctx, &raw.0, shadow);
                 } else {
-                    // Preserve any active `TextureToBuffer` CPU shadow on `MAP_READ`
-                    // buffers by updating only the overwritten byte slice in-place.
                     if dst.usage().contains(BufferUsages::MAP_READ)
                         && let Some(shadow) = lock(&dst.0.shadow).as_mut()
                     {
@@ -593,7 +475,11 @@ pub(super) fn execute_all(
                 if size.width == 0 || size.height == 0 {
                     continue;
                 }
-                let raw = dst.0.raw.as_ref().expect("validated dst texture");
+                let raw = dst
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("cannot write to an invalid texture"))?;
                 let layers = size.depth_or_array_layers.max(1);
                 let block = dst.format().block_size();
                 let bpr = size.width * block;
@@ -644,9 +530,6 @@ pub(super) fn execute_all(
                     )?;
                     continue;
                 }
-                // If `dst` is a `MAP_READ` buffer with an active `TextureToBuffer`
-                // shadow, update only the overwritten slice in-place so earlier
-                // shadow bytes outside `dst_offset..dst_offset + size` survive.
                 let has_map_read_shadow =
                     dst.usage().contains(BufferUsages::MAP_READ) && lock(&dst.0.shadow).is_some();
                 if has_map_read_shadow {
@@ -665,8 +548,16 @@ pub(super) fn execute_all(
                         shadow[dst_start..dst_end].copy_from_slice(&bytes);
                     }
                 }
-                let s = src.0.raw.as_ref().expect("validated src buffer");
-                let d = dst.0.raw.as_ref().expect("validated dst buffer");
+                let s = src
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("copy_buffer source is invalid"))?;
+                let d = dst
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("copy_buffer destination is invalid"))?;
                 let bx = D3D11_BOX {
                     left: *src_offset as u32,
                     top: 0,
@@ -724,8 +615,14 @@ pub(super) fn execute_all(
                 if size.width == 0 || size.height == 0 {
                     continue;
                 }
-                let s = src.0.raw.as_ref().expect("validated src texture");
-                let d = dst.0.raw.as_ref().expect("validated dst texture");
+                let s = src
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("texture_to_texture source is invalid"))?;
+                let d = dst.0.raw.as_ref().ok_or_else(|| {
+                    Error::validation("texture_to_texture destination is invalid")
+                })?;
                 let layers = size.depth_or_array_layers.max(1);
                 let is_msaa = src.sample_count() > 1;
                 let bx = D3D11_BOX {
@@ -789,7 +686,11 @@ fn read_buffer_slice(
         return Ok(src_shadow[src_start..src_start + len].to_vec());
     }
 
-    let s = src.0.raw.as_ref().expect("validated src buffer");
+    let s = src
+        .0
+        .raw
+        .as_ref()
+        .ok_or_else(|| Error::validation("copy_buffer source is invalid"))?;
     let len_u32 = u32::try_from(size)
         .map_err(|_| Error::validation("copy_buffer size exceeds D3D11 u32 limit"))?;
     let sdesc = D3D11_BUFFER_DESC {
@@ -835,9 +736,6 @@ fn read_buffer_slice(
     Ok(buf)
 }
 
-/// Copies a slice from `src` into a `UNIFORM` buffer `dst`, keeping `dst.0.shadow`
-/// synchronized so subsequent full-buffer `UpdateSubresource` uploads and
-/// D3D11.0 dynamic-offset staging stay consistent.
 fn copy_buffer_into_uniform(
     device: &ID3D11Device,
     ctx: &ID3D11DeviceContext,
@@ -851,7 +749,11 @@ fn copy_buffer_into_uniform(
         .map_err(|_| Error::validation("copy_buffer dst_offset overflows usize"))?;
     let bytes = read_buffer_slice(device, ctx, src, src_offset, size)?;
 
-    let d = dst.0.raw.as_ref().expect("validated dst buffer");
+    let d = dst
+        .0
+        .raw
+        .as_ref()
+        .ok_or_else(|| Error::validation("copy_buffer destination is invalid"))?;
     let mut shadow_guard = lock(&dst.0.shadow);
     let shadow = shadow_guard.get_or_insert_with(|| vec![0u8; dst.alloc_size() as usize]);
     let dst_end = dst_start
@@ -861,10 +763,7 @@ fn copy_buffer_into_uniform(
         return Err(Error::validation("copy_buffer exceeds uniform buffer size"));
     }
     shadow[dst_start..dst_end].copy_from_slice(&bytes);
-    // SAFETY: full constant-buffer upload (`pDstBox = None`) works on D3D11.0 & 11.1.
-    unsafe {
-        ctx.UpdateSubresource(&d.0, 0, None, shadow.as_ptr().cast(), 0, 0);
-    }
+    upload_constant_buffer(ctx, &d.0, shadow);
     Ok(())
 }
 
@@ -887,7 +786,16 @@ fn copy_texture_to_staging_buffer(
     if size.width == 0 || size.height == 0 {
         return Ok(());
     }
-    let raw_src = src.0.raw.as_ref().expect("validated src texture");
+    let raw_src = src
+        .0
+        .raw
+        .as_ref()
+        .ok_or_else(|| Error::validation("texture_to_buffer source is invalid"))?;
+    let raw_dst = dst
+        .0
+        .raw
+        .as_ref()
+        .ok_or_else(|| Error::validation("texture_to_buffer destination is invalid"))?;
     let layers = size.depth_or_array_layers.max(1);
     let block = src.format().block_size();
     let copy_row_bytes = (size.width as usize)
@@ -989,8 +897,6 @@ fn copy_texture_to_staging_buffer(
                             copy_row_bytes,
                         );
                     }
-                    // Coalesce strictly contiguous written row ranges so padded
-                    // inter-row gaps in `dst` are never overwritten.
                     if let Some(last) = written_ranges.last_mut()
                         && last.1 == dst_at
                     {
@@ -1011,13 +917,10 @@ fn copy_texture_to_staging_buffer(
     };
 
     if is_map_read {
-        let raw_dst = dst.0.raw.as_ref().expect("validated dst buffer");
         let mut shadow_guard = lock(&dst.0.shadow);
         let mut next_shadow = if let Some(existing) = shadow_guard.as_ref() {
             existing.clone()
         } else {
-            // Initialize from the existing native D3D11 staging buffer so earlier
-            // `CopyBuffer` / `WriteBuffer` bytes outside copied texture rows survive.
             let mut init = vec![0u8; dst_len];
             if dst_len > 0 {
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
@@ -1044,7 +947,6 @@ fn copy_texture_to_staging_buffer(
         let _ = copy_into(&mut next_shadow)?;
         *shadow_guard = Some(next_shadow);
     } else if is_uniform {
-        let raw_dst = dst.0.raw.as_ref().expect("validated dst buffer");
         let mut shadow_guard = lock(&dst.0.shadow);
         let mut next_shadow = shadow_guard
             .as_ref()
@@ -1057,10 +959,6 @@ fn copy_texture_to_staging_buffer(
         }
         *shadow_guard = Some(next_shadow);
     } else {
-        // Non-MAP_READ, non-UNIFORM GPU buffer (e.g. VERTEX | COPY_DST): upload
-        // ONLY the coalesced written row ranges so inter-row padding in `dst`
-        // is preserved intact.
-        let raw_dst = dst.0.raw.as_ref().expect("validated dst buffer");
         let mut tmp = vec![0u8; dst_len];
         let ranges = copy_into(&mut tmp)?;
         for (start, end) in ranges {
@@ -1168,10 +1066,24 @@ fn execute_pass(
     for cmd in &pass.cmds {
         match cmd {
             PassCmd::Pipeline(pipe) => {
-                let vs = pipe.0.vs.as_ref().expect("validated vs");
-                let ps = pipe.0.ps.as_ref().expect("validated ps");
-                let blend = pipe.0.blend.as_ref().expect("validated blend");
-                let rast = pipe.0.rasterizer.as_ref().expect("validated rasterizer");
+                let vs =
+                    pipe.0.vs.as_ref().ok_or_else(|| {
+                        Error::validation("invalid render pipeline vertex shader")
+                    })?;
+                let ps = pipe
+                    .0
+                    .ps
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("invalid render pipeline pixel shader"))?;
+                let blend = pipe
+                    .0
+                    .blend
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("invalid render pipeline blend state"))?;
+                let rast =
+                    pipe.0.rasterizer.as_ref().ok_or_else(|| {
+                        Error::validation("invalid render pipeline rasterizer state")
+                    })?;
                 // SAFETY: all pipeline COM objects are live and retained in `pass`.
                 unsafe {
                     ctx.VSSetShader(&vs.0, None);
@@ -1199,7 +1111,7 @@ fn execute_pass(
                 }
                 for (slot, v) in pending_vertices.iter().enumerate() {
                     if let Some((buf, off)) = v {
-                        bind_vertex_buffer(ctx, pipe, slot as u32, buf, *off);
+                        bind_vertex_buffer(ctx, pipe, slot as u32, buf, *off)?;
                     }
                 }
             }
@@ -1222,7 +1134,7 @@ fn execute_pass(
                     *entry = Some((buf, *off));
                 }
                 if let Some(pipe) = current_pipeline {
-                    bind_vertex_buffer(ctx, pipe, *slot, buf, *off);
+                    bind_vertex_buffer(ctx, pipe, *slot, buf, *off)?;
                 }
             }
             PassCmd::Viewport([x, y, w, h, min_d, max_d]) => {
@@ -1284,11 +1196,15 @@ fn bind_vertex_buffer(
     slot: u32,
     buf: &Buffer,
     offset: u64,
-) {
+) -> Result<(), Error> {
     let Some(&stride) = pipe.0.vertex_strides.get(slot as usize) else {
-        return;
+        return Ok(());
     };
-    let raw = buf.0.raw.as_ref().expect("validated vertex buffer");
+    let raw = buf
+        .0
+        .raw
+        .as_ref()
+        .ok_or_else(|| Error::validation("cannot bind an invalid vertex buffer"))?;
     let bufs: [Option<ID3D11Buffer>; 1] = [Some(raw.0.clone())];
     let strides = [stride];
     let offsets = [offset as u32];
@@ -1302,6 +1218,7 @@ fn bind_vertex_buffer(
             Some(offsets.as_ptr()),
         );
     }
+    Ok(())
 }
 
 #[expect(
@@ -1333,19 +1250,16 @@ fn bind_group(
                     size,
                 },
             ) => {
-                let dyn_off =
-                    bg.0.layout
-                        .0
-                        .dynamic_bindings
-                        .binary_search(binding)
-                        .ok()
-                        .and_then(|idx| dynamic_offsets.get(idx))
-                        .copied()
-                        .unwrap_or(0);
-                let total_offset = offset
-                    .checked_add(u64::from(dyn_off))
-                    .ok_or_else(|| Error::validation("uniform buffer offset overflows u64"))?;
-                let raw = buffer.0.raw.as_ref().expect("validated uniform buffer");
+                let total_offset = resolve_dynamic_offset(
+                    &bg.0.layout.0.dynamic_bindings,
+                    *binding,
+                    dynamic_offsets,
+                    *offset,
+                )?;
+                let raw =
+                    buffer.0.raw.as_ref().ok_or_else(|| {
+                        Error::validation("cannot bind an invalid uniform buffer")
+                    })?;
                 if total_offset > 0 {
                     let slice_bytes =
                         size.unwrap_or_else(|| buffer.size().saturating_sub(total_offset));
@@ -1377,9 +1291,6 @@ fn bind_group(
                             }
                         }
                     } else {
-                        // D3D11.0 fallback when `ConstantBufferOffsetting` is unsupported:
-                        // materialize the offset slice from `buffer.0.shadow` into a small
-                        // temporary constant buffer and bind at offset 0.
                         let byte_width = d3d11_constant_buffer_byte_width(slice_bytes)
                             .and_then(|n| u32::try_from(n).ok())
                             .ok_or_else(|| {
@@ -1459,7 +1370,11 @@ fn bind_group(
                 }
             }
             (BindingKind::Sampler, Bound::Sampler(sampler)) => {
-                let raw = sampler.0.raw.as_ref().expect("validated sampler");
+                let raw = sampler
+                    .0
+                    .raw
+                    .as_ref()
+                    .ok_or_else(|| Error::validation("cannot bind an invalid sampler"))?;
                 let samps: [Option<ID3D11SamplerState>; 1] = [Some(raw.0.clone())];
                 // SAFETY: binding live sampler state at slot `reg`.
                 unsafe {

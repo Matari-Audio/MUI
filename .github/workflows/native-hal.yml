@@ -1,0 +1,117 @@
+name: Native HAL (Metal & D3D11)
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-hal-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  MUI_REPORTING_DISABLED: '1'
+  MUI_GPU_DEBUG: '1'
+jobs:
+  macos-metal:
+    if: github.event.repository.private == false
+    name: macOS Metal (native)
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: native-hal-macos-metal
+      - name: Emit prebuilt metallib artifacts
+        env:
+          MUI_SHADERS_EMIT_PREBUILT: ${{ runner.temp }}/prebuilt-shaders
+        run: |
+          mkdir -p "$MUI_SHADERS_EMIT_PREBUILT"
+          cargo test -p mui-shaders --locked -- --nocapture
+      - name: Check native-only HAL and presenter builds (no wgpu)
+        run: |
+          cargo check --no-default-features -p mui-hal -p mui-present --locked
+      # Fail closed: MUI_HAL_REQUIRE_NATIVE turns "no native device" skips into
+      # failures. gpu-quad compiles mui-vello's quad pixel tests, which compare
+      # the native backend's readback against vello_cpu within tolerance;
+      # mui-hal's native_surface test presents to a live window.
+      - name: Run native Metal HAL, presenter, surface, and pixel tests
+        env:
+          MUI_HAL_BACKEND: native
+          MUI_HAL_REQUIRE_NATIVE: '1'
+        run: |
+          cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture
+      - name: Upload prebuilt metallib artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.6.2
+        with:
+          name: mui-shaders-prebuilt-metallib
+          path: ${{ runner.temp }}/prebuilt-shaders/metallib
+          if-no-files-found: warn
+          retention-days: 14
+
+  windows-d3d11:
+    if: github.event.repository.private == false
+    name: Windows D3D11 (native + MinGW check)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      MUI_TEST_ALLOW_WARP: '1'
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/native-setup
+        with:
+          cache-key: native-hal-windows-d3d11
+          warp: 'true'
+      - name: Add Windows GNU target
+        run: |
+          rustup target add x86_64-pc-windows-msvc x86_64-pc-windows-gnu
+      - name: Emit prebuilt DXBC artifacts
+        env:
+          MUI_SHADERS_EMIT_PREBUILT: ${{ runner.temp }}/prebuilt-shaders
+        run: |
+          mkdir -p "$MUI_SHADERS_EMIT_PREBUILT"
+          cargo test -p mui-shaders --locked -- --nocapture
+      - name: Check native-only HAL and presenter builds (no wgpu)
+        run: |
+          cargo check --no-default-features -p mui-hal -p mui-present --locked
+      # Fail closed: MUI_HAL_REQUIRE_NATIVE turns "no native device" skips into
+      # failures. gpu-quad compiles mui-vello's quad pixel tests, which compare
+      # the native backend's readback against vello_cpu within tolerance;
+      # mui-hal's native_surface test presents to a live window.
+      - name: Run native D3D11 HAL, presenter, surface, and pixel tests
+        env:
+          MUI_HAL_BACKEND: native
+          MUI_HAL_REQUIRE_NATIVE: '1'
+        run: |
+          cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture
+      - name: Check shipping Windows GNU target
+        run: |
+          cargo check --target x86_64-pc-windows-gnu -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview --locked
+      - name: Upload prebuilt DXBC artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v4.6.2
+        with:
+          name: mui-shaders-prebuilt-dxbc
+          path: ${{ runner.temp }}/prebuilt-shaders/dxbc
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Remove developer driver before caching
+        if: always()
+        uses: ./.github/actions/warp-cleanup

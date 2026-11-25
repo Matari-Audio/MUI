@@ -12,6 +12,12 @@ pub const W: f64 = 320.;
 pub const H: f64 = 200.;
 pub const SCALES: [f64; 3] = [1., 1.5, 2.];
 
+/// Native OS CI sets this so a missing or non-native device fails the
+/// pixel comparisons instead of skipping them.
+fn require_native() -> bool {
+    std::env::var("MUI_HAL_REQUIRE_NATIVE").is_ok_and(|v| v == "1")
+}
+
 pub fn device() -> Option<(mui_hal::Device, mui_hal::Queue)> {
     device_with(|_| mui_hal::Limits::downlevel_webgl2_defaults())
 }
@@ -27,16 +33,35 @@ pub fn device_with(
         )
         .request_adapter(&mui_hal::RequestAdapterOptions::default())
         .await
-        .map_err(|e| eprintln!("SKIPPED: no wgpu adapter ({e})"))
+        .map_err(|e| {
+            assert!(
+                !require_native(),
+                "MUI_HAL_REQUIRE_NATIVE=1 but no adapter ({e})"
+            );
+            eprintln!("SKIPPED: no wgpu adapter ({e})");
+        })
         .ok()?;
-        eprintln!("adapter: {:?}", adapter.get_info());
+        let info = adapter.get_info();
+        eprintln!("adapter: {info:?}");
+        assert!(
+            !require_native()
+                || mui_hal::native_backends().contains(mui_hal::Backends::from(info.backend)),
+            "MUI_HAL_REQUIRE_NATIVE=1 but the adapter is {:?}",
+            info.backend
+        );
         adapter
             .request_device(&mui_hal::DeviceDescriptor {
                 required_limits: limits(adapter.limits()),
                 ..Default::default()
             })
             .await
-            .map_err(|e| eprintln!("SKIPPED: no wgpu device ({e})"))
+            .map_err(|e| {
+                assert!(
+                    !require_native(),
+                    "MUI_HAL_REQUIRE_NATIVE=1 but no device ({e})"
+                );
+                eprintln!("SKIPPED: no wgpu device ({e})");
+            })
             .ok()
     })
 }

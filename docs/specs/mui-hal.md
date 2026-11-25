@@ -24,22 +24,34 @@ through the HAL's opt-in `wgpu` backend until they migrate.
 - One concrete API, `wgpu`-subset names and descriptor shapes, so `mui-vello`
   ports by path (`wgpu::X` becomes `mui_hal::X`). Each handle is a cheap
   clone and dispatches over backends with an enum. No traits, no generics
-  reaching callers.
+  reaching callers. `Surface` is `Send + !Sync` so a window thread can hand it
+  to a render worker while preventing concurrent cross-thread surface races.
 - Backends:
   - `vulkan` (Linux): `ash`, Vulkan 1.3 loader and device required (dynamic
     rendering and timeline semaphores in core), SPIR-V from `mui-shaders`,
     presentation through `mui-present`'s `VkSwapchain`.
   - `metal` (macOS): `objc2-metal` + `objc2-quartz-core` (`CAMetalLayer`),
-    MSL 2.3 from `mui-shaders`. Selectable via `MUI_HAL_BACKEND=metal` /
-    `MUI_HAL_BACKEND=native` (or standalone builds without the `wgpu` feature);
-    interim `wgpu` fallback remains default while `wgpu` is enabled until
-    macOS OS-CI parity passes.
+    precompiled `.metallib` (hash-verified from `mui-shaders` or native
+    `xcrun metal` + `xcrun metallib`) with MSL 2.3 runtime fallback, reusable
+    `StorageModeShared` staging belt, sealed `FreeThreaded` / `SendMetal`
+    threading markers, and main-thread-enforced `CAMetalLayer` mutations via
+    GCD (`dispatch_sync_f` / non-blocking `dispatch_async_f`). Selectable via
+    `MUI_HAL_BACKEND=metal` / `MUI_HAL_BACKEND=native` (or standalone builds
+    without the `wgpu` feature); interim `wgpu` fallback remains default while
+    `wgpu` is enabled until macOS OS-CI parity passes.
   - `d3d11` (Windows): `windows` COM bindings (`ID3D11Device`,
     `ID3D11DeviceContext`, `ID3D11DeviceContext1`, `IDXGIFactory2`,
     `IDXGISwapChain1`, `IDCompositionDevice`), precompiled SM 5.0 DXBC from
-    `mui-shaders` with runtime `D3DCompile` fallback when cross-built without
-    FXC, presentation through `mui-present`'s owned DirectComposition
-    presenter (`dcomp::DirectCompositionPresenter`). Selectable via
+    `mui-shaders` (native FXC or hash-verified `prebuilt/dxbc/` for Linux ->
+    `x86_64-pc-windows-gnu` cross-builds) with runtime `D3DCompile` fallback,
+    presentation through `mui-present`'s `DxgiSwapChainPresenter` (defaulting
+    opaque surfaces to `HwndFlipSwapChain` via `CreateSwapChainForHwnd` and
+    reserving `DirectCompositionPresenter` for `translucent == true`),
+    lock-ordered (`Surface::state -> DeviceShared::state`) serialization of all
+    DXGI swapchain ops with the immediate context, sealed `FreeThreaded` /
+    `SendCom` markers, zero-initialized buffers with full-shadow
+    `UpdateSubresource(..., None, ...)` constant-buffer uploads, and bounded 5 s
+    timeout + `GetDeviceRemovedReason()` checks in `poll(true)`. Selectable via
     `MUI_HAL_BACKEND=d3d11` / `MUI_HAL_BACKEND=native` / `WGPU_BACKEND=d3d11`
     (or standalone builds without the `wgpu` feature); interim `wgpu` fallback
     remains default while `wgpu` is enabled until Windows OS-CI parity passes.
@@ -47,6 +59,13 @@ through the HAL's opt-in `wgpu` backend until they migrate.
     plugins, and interim default on macOS and Windows until OS-CI parity
     promotes the native backends.
 - Shaders are named by `mui_shaders::ShaderId`, never by arbitrary source text.
+  `mui-shaders/build.rs` computes pure-Rust FIPS 180-4 SHA-256 digests of
+  lowered HLSL/MSL sources and compiled blobs; when `prebuilt/{dxbc,metallib}/`
+  is committed (it is, from `Matari-Audio/MUI` run 45360025044), every host build
+  verifies `manifest.sha256` (source hash, blob hash, `DXBC`/`MTLB` magic) and
+  fails loudly on any drift, while `MUI_SHADERS_EMIT_PREBUILT=<dir>` skips that
+  verification and emits fresh blobs + manifests on Windows/macOS CI, so a WGSL
+  edit is regenerated rather than blocked by its own stale manifest.
 - Render only: no compute, no storage buffers. Resources: buffers (vertex,
   uniform with dynamic offsets, copy, map-read, query-resolve), 2D and 2D
   array textures (`R8Unorm`, `Rgba8Unorm`, `Rgba8UnormSrgb`, `Bgra8Unorm`,
@@ -60,11 +79,11 @@ through the HAL's opt-in `wgpu` backend until they migrate.
 
 | Standard / Vendor API | Pinned Version / Spec Rev | Primary-Source URL | Verified Date | Key Invariants / Deprecations Checked |
 |---|---|---|---|---|
-| Apple QuartzCore `CAMetalLayer` | macOS Metal 2.3 / QuartzCore | https://developer.apple.com/documentation/quartzcore/cametallayer?language=objc | 2026-11-24 | `nextDrawable()` blocks up to 1s and returns `nil` when `allowsNextDrawableTimeout == true` (default); `presentsWithTransaction == true` requires `MTLCommandBuffer::waitUntilScheduled()` before calling `MTLDrawable::present()`; `displaySyncEnabled` paces to display refresh; `maximumDrawableCount` defaults to 3 (valid 2..=3). |
-| Apple Metal `MTLDevice`, `MTLLibrary`, `MTLRenderPipelineDescriptor`, `MTLComputePipelineState`, `MTLCommandBuffer` | MSL 2.3 (`MTLLanguageVersion::Version2_3`) | https://developer.apple.com/documentation/metal/mtldevice?language=objc | 2026-11-24 | `newLibraryWithSource:options:error:` compiles MSL 2.3 at runtime; `MTLRenderPipelineDescriptor` configures vertex/fragment `MTLFunction`, `MTLVertexDescriptor`, and `colorAttachments[0]` pixel format and blend state; `MTLComputePipelineState` represents compute kernels (out of scope for render-only HAL); `waitUntilScheduled()` blocks until GPU scheduling without waiting for full execution; wrap per-frame encoding in `objc2::rc::autoreleasepool`. |
-| Microsoft Direct3D 11 (`D3D11CreateDevice`, `ID3D11Device`, `ID3D11DeviceContext`, `ID3D11DeviceContext1`, `D3DCompile`) | D3D_FEATURE_LEVEL_11_0 / HLSL SM 5.0 | https://learn.microsoft.com/en-us/windows/win32/api/d3d11/nf-d3d11-d3d11createdevice | 2026-11-24 | `D3D11CreateDevice` creates `ID3D11Device` + immediate `ID3D11DeviceContext`; `D3D11_USAGE_STAGING` with `CPUAccessFlags = D3D11_CPU_ACCESS_READ` is required for GPU-to-CPU readback via `CopyResource`/`CopySubresourceRegion` + `Map`/`Unmap`; `ID3D11DeviceContext1::VSSetConstantBuffers1`/`PSSetConstantBuffers1` bind dynamic constant-buffer offsets in 16-byte constant units (256-byte aligned = 16 constants); `D3DCompile` compiles HLSL SM 5.0 (`vs_5_0`/`ps_5_0`) when precompiled DXBC is absent. |
-| Microsoft DXGI 1.2 (`IDXGIFactory2::CreateSwapChainForComposition`, `IDXGISwapChain::ResizeBuffers`) | DXGI 1.2 (`dxgi1_2.h`) | https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforcomposition | 2026-11-24 | Accepts `ID3D11Device` (as `IUnknown`); requires `DXGI_SWAP_EFFECT_FLIP_DISCARD` or `DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL`, `BufferCount >= 2`, `Scaling = DXGI_SCALING_STRETCH`, `SampleDesc = { Count: 1, Quality: 0 }`; every outstanding `ID3D11RenderTargetView` and back-buffer `ID3D11Texture2D` reference MUST be released before `ResizeBuffers`. |
-| Microsoft DirectComposition (`DCompositionCreateDevice`, `IDCompositionDevice`, `IDCompositionTarget`, `IDCompositionVisual`) | DirectComposition (`dcomp.h`) | https://learn.microsoft.com/en-us/windows/win32/api/dcomp/nf-dcomp-dcompositioncreatedevice | 2026-11-24 | `DCompositionCreateDevice(dxgiDevice, ...)` binds to the D3D11 device's `IDXGIDevice`; attach to `HWND` via `CreateTargetForHwnd(hwnd, false)`, create root visual via `CreateVisual()`, bind swapchain via `SetContent(swapChain)`, attach via `SetRoot(visual)`, and publish atomically via `Commit()`. Teardown clears root/content and commits without blocking. |
+| Apple QuartzCore `CAMetalLayer` | macOS Metal 2.3 / QuartzCore | https://developer.apple.com/documentation/quartzcore/cametallayer?language=objc | 2026-11-24 | `nextDrawable()` is thread-safe and blocks up to 1s returning `nil` when `allowsNextDrawableTimeout == true`; `CALayer` hierarchy and property mutations (`addSublayer`, `setFrame`, `removeFromSuperlayer`) execute on the AppKit main thread (verified via `MainThreadMarker` or dispatched via GCD main queue); `displaySyncEnabled` paces to display refresh; `maximumDrawableCount` defaults to 3 (valid 2..=3). |
+| Apple Metal `MTLDevice`, `MTLLibrary`, `MTLRenderPipelineDescriptor`, `MTLCommandBuffer` | MSL 2.3 (`MTLLanguageVersion::Version2_3`) | https://developer.apple.com/documentation/metal/mtldevice?language=objc | 2026-11-24 | `newLibraryWithData:error:` loads precompiled `.metallib` via `dispatch_data_t`; `newLibraryWithSource:options:error:` compiles MSL 2.3 at runtime fallback; `MTLDevice`, `MTLCommandQueue`, `MTLBuffer`, `MTLTexture`, `MTLSamplerState`, `MTLLibrary`, and `MTLRenderPipelineState` are thread-safe (`FreeThreaded`); per-frame encoding runs inside `objc2::rc::autoreleasepool`. |
+| Microsoft Direct3D 11 (`D3D11CreateDevice`, `ID3D11Device`, `ID3D11DeviceContext`, `ID3D11DeviceContext1::UpdateSubresource1`, `D3DCompile`) | D3D_FEATURE_LEVEL_11_0 / 11_1, HLSL SM 5.0 | https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11devicecontext1-updatesubresource1 | 2026-11-24 | `ID3D11Device` and immutable device children are free-threaded while `ID3D11DeviceContext` is NOT thread-safe and requires external synchronization; `UpdateSubresource1` supports partial constant-buffer updates with 16-byte-aligned byte `D3D11_BOX` when `D3D11_FEATURE_DATA_D3D11_OPTIONS::ConstantBufferPartialUpdate == TRUE` (D3D11.0 `UpdateSubresource` requires `pDstBox = NULL`); `VSSetConstantBuffers1`/`PSSetConstantBuffers1` bind dynamic offsets in 16-byte constant units (256-byte aligned = 16 constants); `GetDeviceRemovedReason` detects TDR/device-removed without blocking. |
+| Microsoft DXGI 1.2 (`IDXGIFactory2::CreateSwapChainForHwnd`, `CreateSwapChainForComposition`, `IDXGISwapChain::ResizeBuffers`) | DXGI 1.2 (`dxgi1_2.h`) | https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgifactory2-createswapchainforhwnd | 2026-11-24 | `CreateSwapChainForHwnd` with `DXGI_SWAP_EFFECT_FLIP_DISCARD` + `DXGI_ALPHA_MODE_IGNORE` is the simpler, lower-risk default for opaque embedded DAW child HWNDs (`MakeWindowAssociation(DXGI_MWA_NO_ALT_ENTER)`); `CreateSwapChainForComposition` with `DXGI_ALPHA_MODE_PREMULTIPLIED` is reserved for `translucent == true`; DXGI swapchain ops (`ResizeBuffers`, `GetBuffer`, `Present`) use the immediate context internally and MUST be serialized under `DeviceShared::state`; `DXGI_ERROR_DEVICE_REMOVED`/`RESET`/`INVALID_CALL` map to `PresentError::SurfaceLost`; every back-buffer `ID3D11Texture2D`/`RTV` reference MUST be released before `ResizeBuffers`. |
+| Microsoft DirectComposition (`DCompositionCreateDevice`, `IDCompositionDevice`, `IDCompositionTarget`, `IDCompositionVisual`) | DirectComposition (`dcomp.h`) | https://learn.microsoft.com/en-us/windows/win32/api/dcomp/nf-dcomp-dcompositioncreatedevice | 2026-11-24 | Reserved for translucent surfaces (`CompositeAlphaMode::PreMultiplied` / `PostMultiplied`); `DCompositionCreateDevice(dxgiDevice, ...)` binds to the D3D11 device's `IDXGIDevice`, attaches via `CreateTargetForHwnd(hwnd, false)` -> `CreateVisual()` -> `SetContent(swapChain)` -> `SetRoot(visual)` -> `Commit()`. Teardown clears content/root and commits without blocking. |
 | Khronos Vulkan 1.3 Specification (Dynamic Rendering & Synchronization2) | Vulkan 1.3 (`VK_API_VERSION_1_3`, SPIR-V 1.3) | https://registry.khronos.org/vulkan/specs/1.3/html/vkspec.html | 2026-11-24 | `VK_KHR_dynamic_rendering` (`vkCmdBeginRendering`/`vkCmdEndRendering`) and `VK_KHR_synchronization2` (`vkQueueSubmit2`/`vkCmdPipelineBarrier2`) plus timeline semaphores are core in Vulkan 1.3; validation layers verified with `MUI_HAL_VALIDATION=1`. |
 
 ## Pinned Crate & SDK Ground Truth
@@ -72,14 +91,20 @@ through the HAL's opt-in `wgpu` backend until they migrate.
 | Dependency / Tool | Pinned Version | Lockfile / Header Source | Verified Symbols / Features |
 |---|---|---|---|
 | `ash` | `0.38.0+1.3.281` | `frameworks/mui/Cargo.lock` | Features `loaded`, `debug`; `Entry::load`, Vulkan 1.3 `cmd_begin_rendering`, `queue_submit2`, timeline semaphores. |
-| `objc2` | `0.6.4` | `frameworks/mui/Cargo.lock` | Feature `std`; `rc::Retained`, `rc::autoreleasepool`, `runtime::ProtocolObject`, `MainThreadMarker`. |
+| `objc2` | `0.6.4` | `frameworks/mui/Cargo.lock` | Feature `std`; `rc::Retained`, `rc::autoreleasepool`, `runtime::ProtocolObject`, `MainThreadMarker`, `msg_send!`. |
 | `objc2-foundation` | `0.3.2` | `frameworks/mui/Cargo.lock` | Features `NSArray`, `NSError`, `NSGeometry`, `NSObject`, `NSRange`, `NSString`. |
-| `objc2-metal` | `0.3.2` | `frameworks/mui/Cargo.lock` | Features `MTLBlitCommandEncoder`, `MTLBuffer`, `MTLCommandBuffer`, `MTLCommandEncoder`, `MTLCommandQueue`, `MTLCounters`, `MTLDevice`, `MTLDrawable`, `MTLLibrary`, `MTLPixelFormat`, `MTLRenderCommandEncoder`, `MTLRenderPass`, `MTLRenderPipeline`, `MTLResource`, `MTLSampler`, `MTLTexture`, `MTLTypes`, `MTLVertexDescriptor`; verified `MTLCreateSystemDefaultDevice`, `MTLDevice::newLibraryWithSource_options_error`, `MTLRenderPipelineDescriptor`, `MTLCommandBuffer::waitUntilScheduled`, `MTLCommandBuffer::waitUntilCompleted`. |
-| `objc2-quartz-core` | `0.3.2` | `frameworks/mui/Cargo.lock` | Features `CALayer`, `CAMetalLayer`, `CATransaction`, `objc2-core-foundation`, `objc2-metal`; verified `CAMetalLayer::{new, setDevice, setPixelFormat, setFramebufferOnly, setDrawableSize, setMaximumDrawableCount, setPresentsWithTransaction, setDisplaySyncEnabled, setAllowsNextDrawableTimeout, nextDrawable}`, `CAMetalDrawable::texture`. |
-| `windows` | `0.62.2` | `frameworks/mui/Cargo.lock` | Features `Win32_Foundation`, `Win32_Graphics_Direct3D`, `Win32_Graphics_Direct3D11`, `Win32_Graphics_Direct3D_Fxc`, `Win32_Graphics_DirectComposition`, `Win32_Graphics_Dxgi`, `Win32_Graphics_Dxgi_Common`; Microsoft-generated WinMD COM bindings (`D3D11CreateDevice`, `ID3D11Device`, `ID3D11DeviceContext`, `ID3D11DeviceContext1`, `CreateDXGIFactory1`, `IDXGIFactory2::CreateSwapChainForComposition`, `IDXGISwapChain1`, `DCompositionCreateDevice`, `IDCompositionDevice`, `IDCompositionTarget`, `IDCompositionVisual`, `D3DCompile`). Note: `windows-sys 0.61.2` intentionally omits COM interfaces (removed upstream in `windows-sys 0.59+`), so COM backends use `windows 0.62.2` (already pinned in the workspace lockfile) for ABI-exact vtables and RAII `IUnknown::Release`. |
+| `objc2-metal` | `0.3.2` | `frameworks/mui/Cargo.lock` | Features `MTLBlitCommandEncoder`, `MTLBuffer`, `MTLCommandBuffer`, `MTLCommandEncoder`, `MTLCommandQueue`, `MTLCounters`, `MTLDevice`, `MTLDrawable`, `MTLLibrary`, `MTLPixelFormat`, `MTLRenderCommandEncoder`, `MTLRenderPass`, `MTLRenderPipeline`, `MTLResource`, `MTLSampler`, `MTLTexture`, `MTLTypes`, `MTLVertexDescriptor`; verified `MTLCreateSystemDefaultDevice`, `MTLDevice::newLibraryWithSource_options_error`, `newLibraryWithData:error:`, `MTLRenderPipelineDescriptor`, `MTLCommandBuffer::waitUntilCompleted`. |
+| `objc2-quartz-core` | `0.3.2` | `frameworks/mui/Cargo.lock` | Features `CALayer`, `CAMetalLayer`, `CATransaction`, `objc2-core-foundation`, `objc2-metal`; verified `CAMetalLayer::{new, setDevice, setPixelFormat, setFramebufferOnly, setDrawableSize, setMaximumDrawableCount, setDisplaySyncEnabled, setAllowsNextDrawableTimeout, nextDrawable}`, `CAMetalDrawable::texture`. |
+| `windows` | `0.62.2` | `frameworks/mui/Cargo.lock` | Features `Win32_Foundation`, `Win32_Graphics_Direct3D`, `Win32_Graphics_Direct3D11`, `Win32_Graphics_Direct3D_Fxc`, `Win32_Graphics_DirectComposition`, `Win32_Graphics_Dxgi`, `Win32_Graphics_Dxgi_Common`; Microsoft-generated WinMD COM bindings (`D3D11CreateDevice`, `ID3D11Device`, `ID3D11DeviceContext`, `ID3D11DeviceContext1::{UpdateSubresource1, VSSetConstantBuffers1, PSSetConstantBuffers1}`, `CreateDXGIFactory1`, `IDXGIFactory2::{CreateSwapChainForHwnd, CreateSwapChainForComposition, MakeWindowAssociation}`, `IDXGISwapChain1`, `DCompositionCreateDevice`, `IDCompositionDevice`, `IDCompositionTarget`, `IDCompositionVisual`, `D3DCompile`). |
 | `windows-sys` | `0.61.2` | `frameworks/mui/Cargo.lock` | Features `Win32_Foundation`, `Win32_Graphics_Gdi`, `Win32_UI_Shell`, `Win32_UI_WindowsAndMessaging` (retained by `mui-present/src/windows/dib.rs` for flat Win32 GDI/Shell C APIs). |
 
 ## Backend Rules
+
+### Shared Native Infrastructure (`mui-hal/src/shared.rs`)
+- `BackendError`, `ErrorSink`, `DeviceLost`, `BufferMapState`, `WorkWaiter`,
+  `lock`, and portable resource/copy/write validation helpers live in
+  `shared.rs` and are unit-tested on every host so Vulkan, Metal, and D3D11
+  enforce identical validation contracts without duplicated boilerplate.
 
 ### Vulkan (Linux)
 - Resources are reference-counted. A submission keeps every resource it
@@ -93,49 +118,77 @@ through the HAL's opt-in `wgpu` backend until they migrate.
   runs with `MUI_HAL_VALIDATION=1`.
 
 ### Metal (macOS)
-- Uses `objc2-metal` + `objc2-quartz-core` (`CAMetalLayer`) with `mui-shaders`
-  MSL 2.3 sources (`MTLLanguageVersion::Version2_3`).
+- Uses `objc2-metal` + `objc2-quartz-core` (`CAMetalLayer`) with precompiled
+  `.metallib` from `mui-shaders` (loaded via `dispatch_data_create` +
+  `newLibraryWithData:error:`) and MSL 2.3 (`MTLLanguageVersion::Version2_3`)
+  runtime fallback when no `.metallib` is embedded.
+- Sealed `FreeThreaded` and `SendMetal` marker traits restrict `SendObj` /
+  `SendOnlyObj` to verified thread-safe Metal protocol objects and
+  externally-synchronized objects (no blanket `unsafe impl<T>`).
+- Queue writes (`write_buffer`, `write_texture`) sub-allocate from a reusable
+  1 MiB `StorageModeShared` staging belt instead of allocating a fresh
+  `MTLBuffer` per write. Only standard 1 MiB chunks are recycled (at most 8, so
+  retained staging is bounded at 8 MiB); oversized one-off chunks are released
+  on completion, and chunks whose staged writes were all pruned (retired
+  drawables, empty submits) return to the pool immediately.
 - Uniform buffers bind at `[[buffer(msl_slot)]]` (`0..15`), textures at
   `[[texture(msl_slot)]]`, samplers at `[[sampler(msl_slot)]]`, and vertex
   buffers at `VERTEX_BUFFER_BASE + slot` (`16 + slot`) to guarantee zero index
   collision with uniform buffers within Metal's 31-slot vertex buffer table.
-- `CAMetalLayer` configures `pixelFormat`, `drawableSize`, `framebufferOnly`,
-  `maximumDrawableCount` (clamped `2..=3`), `displaySyncEnabled` from
-  `PresentMode`, `allowsNextDrawableTimeout = true` (returning
-  `CurrentSurfaceTexture::Timeout` cleanly when `nextDrawable()` returns `nil`),
-  and `opaque` from `CompositeAlphaMode`. When `presentsWithTransaction` is
-  enabled, presentation calls `commit()` + `waitUntilScheduled()` before
-  `drawable.present()`; otherwise `command_buffer.presentDrawable(&drawable)`
-  before `commit()`.
+- `CAMetalLayer` creation requires `MainThreadMarker`; `configure` dispatches
+  layer hierarchy/property mutations synchronously onto the AppKit main thread
+  (outside `Surface::state`) and `release`/`Drop` detaches via non-blocking
+  `dispatch_async_f` on `_dispatch_main_q`. Presentation always calls
+  `command_buffer.presentDrawable(&drawable)` followed by `commit()`.
 - Command recording runs inside `objc2::rc::autoreleasepool`, retains all
   referenced resources until `MTLCommandBuffer` completion, and routes
-  compilation/creation/submission errors into per-thread `ErrorSink`.
+  compilation/creation/submission errors into per-thread `ErrorSink` without
+  reachable `.expect(...)` panics.
 
-### D3D11 + DirectComposition (Windows)
-- `mui-present::windows::dcomp::DirectCompositionPresenter` owns the
-  `IDCompositionDevice`, `IDCompositionTarget`, `IDCompositionVisual`, and
-  `IDXGISwapChain1` created via `IDXGIFactory2::CreateSwapChainForComposition`
-  with `DXGI_SWAP_EFFECT_FLIP_DISCARD`, `BufferCount = 2` (or configured
-  latency + 1, minimum 2), `DXGI_SCALING_STRETCH`, and `DXGI_ALPHA_MODE`
-  matching `CompositeAlphaMode`.
-- Before calling `ResizeBuffers`, the surface releases all cached back-buffer
-  `ID3D11Texture2D` and `ID3D11RenderTargetView` references and flushes the
-  device context's OM target binding (`OMSetRenderTargets(None, None)`).
-- Shaders use precompiled SM 5.0 DXBC from `mui-shaders` when present (Windows
-  native builds with FXC), falling back to runtime `D3DCompile` (`vs_5_0` /
-  `ps_5_0`) on cross-compiled builds without embedded DXBC.
-- Input layouts bind `@location(N)` attributes to HLSL semantic `"LOC"` +
-  `SemanticIndex = N` matching naga's SM 5.0 output.
-- Uniform buffers use `ID3D11DeviceContext1::VSSetConstantBuffers1` /
-  `PSSetConstantBuffers1` when dynamic offsets are non-zero (16-byte constant
-  granularity; 256-byte aligned HAL dynamic offsets map cleanly to multiples of
-  16 constants), with a staging-buffer fallback if `ConstantBufferOffsetting`
-  is unsupported.
-- GPU-to-CPU readback copies into `D3D11_USAGE_STAGING` (`D3D11_CPU_ACCESS_READ`)
-  and maps via `ID3D11DeviceContext::Map`/`Unmap`.
-- All COM pointers are owned by `windows` RAII wrappers (`Drop` calls
-  `IUnknown::Release()`); `DirectCompositionPresenter::drop` clears visual
-  content and root target and commits without blocking.
+### D3D11 + DXGI / DirectComposition (Windows)
+- `mui-present::windows::DxgiSwapChainPresenter` defaults opaque surfaces
+  (`CompositeAlphaMode::Opaque` / `Auto`) to `HwndFlipSwapChain`
+  (`IDXGIFactory2::CreateSwapChainForHwnd`, `DXGI_SWAP_EFFECT_FLIP_DISCARD`,
+  `DXGI_ALPHA_MODE_IGNORE`, `DXGI_MWA_NO_ALT_ENTER`) and reserves
+  `DirectCompositionPresenter` (`CreateSwapChainForComposition`,
+  `DXGI_ALPHA_MODE_PREMULTIPLIED`) for `translucent == true`
+  (`CompositeAlphaMode::PreMultiplied` / `PostMultiplied`).
+- **Strict Lock Ordering (`Surface::state -> DeviceShared::state`):** Every
+  DXGI swapchain operation (`new`, `resize`, `back_buffer`, `present`, and
+  teardown) acquires `DeviceShared::state` (and unbinds OM render targets +
+  flushes before `ResizeBuffers`, `Present`, and teardown) so DXGI's internal
+  use of the immediate `ID3D11DeviceContext` can never race with `Queue::submit`.
+- Sealed `FreeThreaded` and `SendCom` marker traits restrict `ComSend` /
+  `ComSendOnly` to exact verified free-threaded D3D11/DXGI interfaces and
+  mutex-guarded immediate contexts (no blanket `unsafe impl<T>`).
+- `poll(true)` checks `GetDeviceRemovedReason()` inside the wait loop and
+  enforces a bounded 5 s deadline with yield-then-sleep backoff; on timeout or
+  device removal it publishes the lost flag *under* `DeviceShared::state`
+  before releasing the `completed` it force-advanced (so no thread can treat
+  unfinished GPU work as complete on a live device), then fires the device-lost
+  callback outside the mutex, fails pending map callbacks cleanly, and breaks
+  out without deadlocking.
+- Swapchain teardown (device switch, translucency toggle, surface lost,
+  `release`) runs under the old device's context lock in the order unbind ->
+  release presenter -> `Flush`, so DXGI's deferred destruction completes before
+  any device creates the next flip-model swapchain on the same `HWND`.
+- `DXGI_ERROR_DEVICE_REMOVED`, `DXGI_ERROR_DEVICE_RESET`, and
+  `DXGI_ERROR_INVALID_CALL` on `ResizeBuffers`, `GetBuffer`, and `Present`
+  preserve `PresentError::SurfaceLost`.
+- Every native buffer is created from zeros (D3D11 leaves `CreateBuffer`
+  without initial data undefined; WebGPU buffers start zeroed). Uniform
+  buffer writes update the CPU shadow and re-upload the whole shadow with
+  `UpdateSubresource(..., None, ...)`, valid on every D3D11.0+ driver and
+  versioned by the runtime against queued draws. Partial
+  `UpdateSubresource1` boxes are deliberately not used: their
+  constant-buffer semantics hinge on `ConstantBufferPartialUpdate` plus
+  `NO_OVERWRITE`/`DISCARD` copy flags, which would race in-flight draws, and
+  uniform buffers are at most 64 KiB.
+- Shaders use precompiled SM 5.0 DXBC from `mui-shaders` (native FXC or
+  hash-verified `prebuilt/dxbc/` on Linux -> `x86_64-pc-windows-gnu` cross-builds),
+  falling back to runtime `D3DCompile` (`vs_5_0` / `ps_5_0`) when absent.
+- All command-execution paths return structured `Error` instead of panicking on
+  `.expect(...)`.
 
 ## Invariants & Non-Goals
 
@@ -169,15 +222,19 @@ through the HAL's opt-in `wgpu` backend until they migrate.
   the Vulkan backend.
 - [x] `mui-baseview` native windows present through `mui-hal` on Linux with no
   `wgpu` linked for non-compute plugins.
-- [x] `mui-present` provides owned Windows DirectComposition GPU presenter
-  (`dcomp::DirectCompositionPresenter`), `mui-hal` implements native Metal
-  (`objc2-metal` + `CAMetalLayer`) and D3D11 (`windows` COM + DirectComposition)
-  backends, portable layout/binding/descriptor unit tests pass on Linux, and
-  both `aarch64-apple-darwin` and `x86_64-pc-windows-msvc` cross-compile cleanly
-  with and without `--features wgpu`.
+- [x] `mui-present` provides owned Windows `HwndFlipSwapChain` (opaque default)
+  and `DirectCompositionPresenter` (translucent) via `DxgiSwapChainPresenter`,
+  `mui-hal` implements sound native Metal (`objc2-metal` + main-thread-safe
+  `CAMetalLayer` + staging belt) and D3D11 (lock-ordered swapchain/context
+  synchronization, sealed `FreeThreaded` traits, bounded `poll(true)` deadline,
+  full-shadow CB uploads), `mui-shaders` commits hash-checked prebuilt
+  DXBC/`.metallib` blobs verified on every host, portable tests pass on Linux, and
+  `aarch64-apple-darwin`, `x86_64-pc-windows-msvc`, and `x86_64-pc-windows-gnu`
+  all cross-compile cleanly with and without `--features mui-hal/wgpu`.
 - [ ] Metal and D3D11 backends pass the offscreen + window parity suite on
-  real macOS and Windows OS-CI runners and hardware; only after that flips to
-  `PASS` may the interim `wgpu` default on macOS/Windows be switched off.
+  real macOS and Windows OS-CI runners (`native-hal.yml` on `Matari-Audio/MUI`)
+  and hardware; only after that flips to `PASS` may the interim `wgpu` default
+  on macOS/Windows be switched off.
 
 ## Verification Matrix
 
@@ -186,28 +243,30 @@ through the HAL's opt-in `wgpu` backend until they migrate.
 | Spec proof gate | Doc | any | `python3 tools/check-spec-proof.py frameworks/mui/docs/specs/mui-hal.md` | Exit 0, zero proof errors | PASS (2026-11-24, linux-x86_64) |
 | Formatting check | Compile/ABI | linux-x86_64 | `cargo fmt --manifest-path frameworks/mui/Cargo.toml --all -- --check` | Exit 0, zero diffs | PASS (2026-11-24, linux-x86_64) |
 | Workspace clippy gate | Compile/ABI | linux-x86_64 | `build-slot cargo clippy --manifest-path frameworks/mui/Cargo.toml --workspace --all-targets -- -D warnings` | Exit 0, zero warnings | PASS (2026-11-24, linux-x86_64) |
-| Native + wgpu test suite | Validator/Runtime | linux-x86_64 | `build-slot cargo nextest run --manifest-path frameworks/mui/Cargo.toml -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview` (and `--features mui-hal/wgpu`) | Exit 0, zero failures, zero Vulkan validation errors (275/275 native + 275/275 wgpu + 30/30 `MUI_HAL_VALIDATION=1`) | PASS (2026-11-24, linux-x86_64) |
-| macOS Metal cross-compile (native + wgpu) | Compile/ABI | aarch64-apple-darwin | `build-slot cargo check --manifest-path frameworks/mui/Cargo.toml --target aarch64-apple-darwin -p mui-hal -p mui-present -p mui-vello -p mui-baseview` (default & `--features mui-hal/wgpu`, plus `clippy -p mui-hal -p mui-present -- -D warnings`) | Exit 0, zero errors/warnings | PASS (2026-11-24, linux-x86_64 -> aarch64-apple-darwin) |
-| Windows D3D11 + DirectComposition cross-compile (native + wgpu) | Compile/ABI | x86_64-pc-windows-msvc | `build-slot cargo check --manifest-path frameworks/mui/Cargo.toml --target x86_64-pc-windows-msvc -p mui-hal -p mui-present -p mui-vello -p mui-baseview` (default & `--features mui-hal/wgpu`, plus `clippy -p mui-hal -p mui-present -- -D warnings`) | Exit 0, zero errors/warnings | PASS (2026-11-24, linux-x86_64 -> x86_64-pc-windows-msvc) |
-| Lockfile offline integrity | Compile/ABI | linux-x86_64 | `cargo metadata --locked --offline --manifest-path frameworks/mui/Cargo.toml && cargo metadata --locked --offline --manifest-path frameworks/mui/media/Cargo.toml` | Exit 0 on both lockfiles (`sync-stack.py --check --projects frameworks/mui` PASS) | PASS (2026-11-24, linux-x86_64) |
-| macOS Metal GPU & `CAMetalLayer` runtime parity | Hardware/OS-CI | macos-aarch64 | `MUI_HAL_BACKEND=metal cargo test --manifest-path frameworks/mui/Cargo.toml -p mui-hal -p mui-vello` | Byte-identical readback vs `wgpu` Metal and live `CAMetalLayer` presentation | PENDING_OS_CI (macos) |
-| Windows D3D11 & DirectComposition runtime parity | Hardware/OS-CI | windows-x86_64 | `MUI_HAL_BACKEND=d3d11 cargo test --manifest-path frameworks/mui/Cargo.toml -p mui-hal -p mui-present -p mui-vello` | Byte-identical readback vs `wgpu` DX12 and live DirectComposition swapchain presentation | PENDING_OS_CI (windows) |
+| Native + wgpu test suite | Validator/Runtime | linux-x86_64 | `build-slot cargo nextest run --manifest-path frameworks/mui/Cargo.toml -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview` (and `--features mui-hal/wgpu`) | Exit 0, zero failures | PASS (2026-11-24, linux-x86_64) |
+| macOS Metal cross-compile (native + wgpu) | Compile/ABI | aarch64-apple-darwin | `build-slot cargo check --manifest-path frameworks/mui/Cargo.toml --target aarch64-apple-darwin -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview` (default & `--features mui-hal/wgpu`) | Exit 0, zero errors/warnings | PASS (2026-11-24, linux-x86_64 -> aarch64-apple-darwin) |
+| Windows MSVC cross-compile (native + wgpu) | Compile/ABI | x86_64-pc-windows-msvc | `build-slot cargo check --manifest-path frameworks/mui/Cargo.toml --target x86_64-pc-windows-msvc -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview` (default & `--features mui-hal/wgpu`) | Exit 0, zero errors/warnings | PASS (2026-11-24, linux-x86_64 -> x86_64-pc-windows-msvc) |
+| Windows GNU shipping cross-compile (native + wgpu) | Compile/ABI | x86_64-pc-windows-gnu | `build-slot cargo check --manifest-path frameworks/mui/Cargo.toml --target x86_64-pc-windows-gnu -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview` (default & `--features mui-hal/wgpu`) | Exit 0, zero errors/warnings | PASS (2026-11-24, linux-x86_64 -> x86_64-pc-windows-gnu) |
+| Stack & lockfile sync check | Compile/ABI | linux-x86_64 | `python3 tools/sync-stack.py --check --skip-lock-refresh` | Exit 0, zero drift | PASS (2026-11-24, linux-x86_64) |
+| Prebuilt shader blobs verified on Linux | Validator/Runtime | linux-x86_64 | `build-slot cargo test --manifest-path frameworks/mui/Cargo.toml -p mui-shaders` | Build verifies every committed DXBC/`.metallib` source hash, blob hash and magic | PASS (2026-11-24, linux-x86_64) |
+| macOS Metal GPU & `CAMetalLayer` runtime parity | Hardware/OS-CI | macos-15 | `MUI_HAL_BACKEND=native MUI_HAL_REQUIRE_NATIVE=1 cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture` (`native-hal.yml`) | Fail-closed native Metal device; offscreen readback exact on `mui-hal` tests and within the quad tests' tolerances vs `vello_cpu`; `native_surface` presents to a live `CAMetalLayer` | PASS (2026-11-24, macos-15, https://github.com/Matari-Audio/MUI/actions/runs/45368310887/job/138355778064) |
+| Windows D3D11 & DXGI/DComp runtime parity | Hardware/OS-CI | windows-latest | `MUI_HAL_BACKEND=native MUI_HAL_REQUIRE_NATIVE=1 cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture` (`native-hal.yml`) | Fail-closed native D3D11 device; offscreen readback exact on `mui-hal` tests and within the quad tests' tolerances vs `vello_cpu`; `native_surface` presents through `HwndFlipSwapChain` and `DirectCompositionPresenter` on a live `HWND` | PASS (2026-11-24, windows-latest, https://github.com/Matari-Audio/MUI/actions/runs/45368310887/job/138355778414) |
+| Physical multi-vendor GPU & DAW host qualification (Wave 5) | Hardware/OS-CI | macOS + Windows hardware | Real Apple Silicon / Intel / AMD / NVIDIA hardware + embedded DAW hosts (Logic Pro, Ableton Live, Reaper, FL Studio) | Native Metal/D3D11 pass visual & lifecycle parity before flipping default off `wgpu` | PENDING_OS_CI (requires physical hardware + DAW hosts in Wave 5) |
 
 ## Unverified Boundaries & Promotion Gate
 
-When authoring on a Linux x86_64 host, the following cannot execute locally:
+`native-hal.yml` on `Matari-Audio/MUI` (PR #251, run `45368310887`) verified both
+native backends end-to-end on GitHub-hosted `macos-15` (Metal + `CAMetalLayer`)
+and `windows-latest` (D3D11 + WARP + `HwndFlipSwapChain` /
+`DirectCompositionPresenter`) runners. The following boundaries remain outside
+automated Linux/CI execution until Wave 5 hardware qualification:
 
-- **macOS Metal GPU & `CAMetalLayer` execution:** Cross-compilation against
-  `aarch64-apple-darwin` proves Rust/Objective-C ABI typing via `objc2-metal`
-  and `objc2-quartz-core`, and portable slot/descriptor tests execute on Linux,
-  but actual Metal shader compilation, command execution, readback parity, and
-  `CAMetalLayer` presentation require a macOS runner or hardware.
-- **Windows D3D11 & DirectComposition execution:** Cross-compilation against
-  `x86_64-pc-windows-msvc` proves COM interface/struct typing via `windows`,
-  and portable slot/descriptor/input-layout tests execute on Linux, but actual
-  `D3D11CreateDevice`, `D3DCompile`/FXC bytecode creation, `ID3D11DeviceContext`
-  rendering, `DCompositionCreateDevice`, and `IDXGISwapChain1` resize/present
-  require a Windows runner or hardware.
+- **Physical multi-vendor GPU & DAW host verification (macOS & Windows):**
+  CI proves Metal on Apple's `macos-15` runner and D3D11 on Windows WARP, plus
+  `native_surface` windowless `NSView` / popup `HWND` presentation. Real
+  discrete/integrated GPUs (Apple Silicon, Intel/AMD/NVIDIA) and embedded DAW
+  child windows (Logic Pro, Ableton Live, Reaper, FL Studio) still require
+  hardware qualification before deleting the interim `wgpu` fallback.
 
 **Hard Promotion Rules:**
 1. This spec **MUST NOT** move to `status: implemented` while any required row
@@ -215,24 +274,24 @@ When authoring on a Linux x86_64 host, the following cannot execute locally:
    while any unchecked `- [ ]` acceptance criterion remains.
 2. Neither `metal` nor `d3d11` may become the default backend when the `wgpu`
    feature is enabled, nor may `wgpu` be removed from macOS/Windows plugin
-   builds, until its `PENDING_OS_CI` row becomes `PASS` on real OS CI or
-   hardware.
+   builds, until its `Hardware/OS-CI` parity row is `PASS` and follow-up
+   hardware qualification flips the default in its own dedicated PR.
 
 ## Task Decomposition
 
 | # | Subtask | Owned Paths | Depends On | Verification |
 |---|---|---|---|---|
 | 1 | Upgrade `mui-hal.md` spec to 4-Tier Fact- & Docs-Proof Gate | `frameworks/mui/docs/specs/mui-hal.md` | — | `check-spec-proof.py` exits 0 |
-| 2 | Implement `DirectCompositionPresenter` in `mui-present` + `GraphicsApi::D3D11` | `frameworks/mui/crates/mui-present/**` | 1 | `cargo check --target x86_64-pc-windows-msvc -p mui-present` + Linux unit tests |
-| 3 | Implement native Metal backend (`objc2-metal` + `CAMetalLayer`) + portable tests | `frameworks/mui/crates/mui-hal/src/metal/**` | 1 | `cargo check --target aarch64-apple-darwin -p mui-hal` + Linux unit tests |
-| 4 | Implement native D3D11 backend (`windows` COM + DirectComposition) + portable tests | `frameworks/mui/crates/mui-hal/src/d3d11/**` | 2 | `cargo check --target x86_64-pc-windows-msvc -p mui-hal` + Linux unit tests |
-| 5 | Wire `mui-hal` dispatch, runtime `MUI_HAL_BACKEND` selection, lockfiles, and full cross-target verification | `frameworks/mui/crates/mui-hal/src/lib.rs`, `frameworks/mui/Cargo.lock`, `frameworks/mui/media/Cargo.lock` | 2, 3, 4 | fmt + clippy + nextest + macOS/Windows cross-check + locked metadata |
+| 2 | Implement `HwndFlipSwapChain` + `DirectCompositionPresenter` + `DxgiSwapChainPresenter` in `mui-present` | `frameworks/mui/crates/mui-present/**` | 1 | Cross-check MSVC + GNU + Linux unit tests |
+| 3 | Implement sound native Metal backend (`objc2-metal`, sealed `FreeThreaded`, main-thread `CAMetalLayer`, staging belt) | `frameworks/mui/crates/mui-hal/src/metal/**` | 1 | `cargo check --target aarch64-apple-darwin -p mui-hal` + Linux unit tests |
+| 4 | Implement sound native D3D11 backend (lock-ordered DXGI/context sync, sealed `FreeThreaded`, bounded `poll(true)`, zero-initialized full-shadow CB uploads) | `frameworks/mui/crates/mui-hal/src/d3d11/**` | 2 | Cross-check MSVC + GNU + Linux unit tests |
+| 5 | Deduplicate shared HAL primitives (`shared.rs`), add hash-checked prebuilt DXBC/`.metallib` support (`mui-shaders/build.rs`), add `native-hal.yml` CI workflow, and verify all 4 targets | `frameworks/mui/crates/mui-hal/src/shared.rs`, `frameworks/mui/crates/mui-hal/src/lib.rs`, `frameworks/mui/crates/mui-shaders/**`, `frameworks/mui/.github/workflows/native-hal.yml` | 2, 3, 4 | fmt + clippy + nextest + 3 cross-targets + `sync-stack.py` + `check-spec-proof.py` |
 
 ## Rollout & Affected Dependents
 
 - **Affected Projects:** `frameworks/mui` (direct); `frameworks/mui/media` and
-  all MUI-consuming plugins (transitive lockfile refresh when manifests add
-  target-specific deps).
-- **Mirror Impact:** Copybara PR to `Matari-Audio/MUI` (`frameworks/mui/**`).
+  all MUI-consuming plugins (no lockfile changes required in this audit pass).
+- **Mirror Impact:** Copybara PR to `Matari-Audio/MUI` (`frameworks/mui/**`),
+  automatically triggering `native-hal.yml` on `macos-15` and `windows-latest`.
 - **Versioning & Changelog:** No version bump required until OS-CI promotion
   removes the interim `wgpu` fallback on macOS/Windows.

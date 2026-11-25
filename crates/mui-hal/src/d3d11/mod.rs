@@ -1,9 +1,15 @@
 //! Native Windows Direct3D 11 backend (`windows` COM bindings + `mui-present`
-//! DirectComposition swapchain).
+//! DXGI 1.2 flip-model swapchain / DirectComposition).
 //!
 //! Commands are recorded as plain data and executed on the immediate
-//! `ID3D11DeviceContext` under the device's context mutex at submission, so
+//! `ID3D11DeviceContext` under `DeviceShared::state` at submission, so
 //! `CommandEncoder` stays `Send` and every submission retains its resources.
+//!
+//! **Lock ordering invariant:** Always acquire `Surface::state` BEFORE
+//! `DeviceShared::state`. Never acquire `Surface::state` while holding
+//! `DeviceShared::state`. Every DXGI swapchain operation (`new`, `resize`,
+//! `back_buffer`, `present`, teardown) acquires `DeviceShared::state` so DXGI's
+//! internal use of the immediate context can never race with `Queue::submit`.
 
 #![expect(
     unsafe_code,
@@ -15,8 +21,8 @@ mod resource;
 mod surface;
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
@@ -25,85 +31,37 @@ use windows::Win32::Graphics::Direct3D::{
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_DEBUG, D3D11_FEATURE_D3D11_OPTIONS,
     D3D11_FEATURE_DATA_D3D11_OPTIONS, D3D11_QUERY_DESC, D3D11_QUERY_EVENT, D3D11_SDK_VERSION,
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11DeviceContext1, ID3D11Query,
+    D3D11CreateDevice, ID3D11BlendState, ID3D11Buffer, ID3D11DepthStencilState, ID3D11Device,
+    ID3D11DeviceContext, ID3D11DeviceContext1, ID3D11InputLayout, ID3D11PixelShader, ID3D11Query,
+    ID3D11RasterizerState, ID3D11RenderTargetView, ID3D11SamplerState, ID3D11ShaderResourceView,
+    ID3D11Texture2D, ID3D11VertexShader,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, DXGI_ADAPTER_FLAG_SOFTWARE, IDXGIAdapter, IDXGIAdapter1, IDXGIFactory1,
 };
 use windows::core::Interface;
 
+pub use crate::shared::BackendError as Error;
 pub use record::{Cmd, PassCmd, PassRecord};
 pub use resource::*;
 pub use surface::{Acquired, Surface, SurfaceTexture};
 
+pub(crate) use crate::shared::{
+    DeviceLost, ErrorSink, MapCallback, WorkCallback, WorkWaiter, drain_ready_work, lock,
+};
+use crate::shared::{
+    validate_device_request, validate_write_buffer_args, validate_write_texture_args,
+};
 use crate::types::{
-    AdapterInfo, Backend, BufferUsages, DeviceDescriptor, DeviceLostReason, DeviceType, Extent3d,
-    Features, Limits, Origin3d, TextureUsages,
+    AdapterInfo, Backend, DeviceDescriptor, DeviceLostReason, DeviceType, Extent3d, Features,
+    Limits, Origin3d,
 };
 
-pub(crate) fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// A D3D11 error's HAL category.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ErrorKind {
-    Validation,
-    OutOfMemory,
-    Internal,
-}
-
-/// A D3D11 failure, already formatted.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Error {
-    kind: ErrorKind,
-    message: String,
-}
-
-impl Error {
-    pub(crate) fn validation(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Validation,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn out_of_memory(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::OutOfMemory,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn internal(message: impl Into<String>) -> Self {
-        Self {
-            kind: ErrorKind::Internal,
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn into_hal(self) -> crate::Error {
-        match self.kind {
-            ErrorKind::Validation => crate::Error::Validation {
-                description: self.message,
-            },
-            ErrorKind::OutOfMemory => crate::Error::OutOfMemory {
-                source: self.message,
-            },
-            ErrorKind::Internal => crate::Error::Internal {
-                description: self.message,
-            },
-        }
-    }
-}
-
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for Error {}
+/// Upper bound on `Device::poll(true)` event-query waits so a GPU TDR or device
+/// removal can never permanently deadlock the caller while holding the mutex.
+const POLL_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// Number of fast `yield_now()` polls before backing off to 1 ms sleeps.
+const POLL_YIELD_SPINS: u32 = 64;
 
 pub(crate) fn win_err(what: &str, e: &windows::core::Error) -> Error {
     let hr = e.code().0 as u32;
@@ -116,43 +74,95 @@ pub(crate) fn win_err(what: &str, e: &windows::core::Error) -> Error {
     }
 }
 
-pub(crate) type MapCallback = Box<dyn FnOnce(Result<(), crate::BufferAsyncError>) + Send>;
-pub(crate) type WorkCallback = Box<dyn FnOnce() + Send>;
-type LostCallback = Box<dyn Fn(DeviceLostReason, String) + Send + Sync>;
+mod sealed {
+    pub trait Sealed {}
+}
 
-/// Wrapper marking free-threaded D3D11/DXGI COM interfaces `Send + Sync`.
-pub(crate) struct ComSend<T>(pub T);
+/// Sealed marker for D3D11/DXGI COM interfaces guaranteed free-threaded by
+/// Microsoft Learn (safe to send and share concurrently across threads).
+///
+/// # Safety
+/// Implementors must be free-threaded COM interfaces per Microsoft Learn's
+/// Direct3D 11 / DXGI threading documentation.
+pub(crate) unsafe trait FreeThreaded: sealed::Sealed {}
 
-// SAFETY: `ID3D11Device`, `ID3D11Buffer`, `ID3D11Texture2D`, `ID3D11*View`,
-// `ID3D11*Shader`, `ID3D11*State`, `ID3D11Query`, `IDXGIFactory1`, and
-// `IDXGIAdapter1` are free-threaded in D3D11/DXGI.
-unsafe impl<T> Send for ComSend<T> {}
+/// Sealed marker for COM interfaces safe to move across threads under external
+/// mutual exclusion (`Send` only, NOT `Sync`).
+///
+/// # Safety
+/// Implementors must be apartment-neutral COM interfaces safe to transfer
+/// across threads when every call is externally serialized.
+pub(crate) unsafe trait SendCom: sealed::Sealed {}
+
+macro_rules! impl_free_threaded {
+    ($($ty:ty => $doc:literal),* $(,)?) => {
+        $(
+            impl sealed::Sealed for $ty {}
+            // SAFETY: $doc
+            unsafe impl FreeThreaded for $ty {}
+        )*
+    };
+}
+
+impl_free_threaded!(
+    IDXGIFactory1 => "Microsoft Learn DXGI threading: IDXGIFactory1 adapter enumeration is free-threaded.",
+    IDXGIAdapter1 => "Microsoft Learn DXGI threading: IDXGIAdapter1 descriptor queries are free-threaded.",
+    ID3D11Device => "Microsoft Learn D3D11 threading: ID3D11Device creation/query methods are free-threaded unless D3D11_CREATE_DEVICE_SINGLETHREADED is set.",
+    ID3D11Buffer => "Microsoft Learn D3D11 threading: ID3D11Buffer resource handles are immutable free-threaded device children.",
+    ID3D11Texture2D => "Microsoft Learn D3D11 threading: ID3D11Texture2D resource handles are immutable free-threaded device children.",
+    ID3D11ShaderResourceView => "Microsoft Learn D3D11 threading: ID3D11ShaderResourceView is an immutable free-threaded device child.",
+    ID3D11RenderTargetView => "Microsoft Learn D3D11 threading: ID3D11RenderTargetView is an immutable free-threaded device child.",
+    ID3D11SamplerState => "Microsoft Learn D3D11 threading: ID3D11SamplerState is an immutable free-threaded state object.",
+    ID3D11VertexShader => "Microsoft Learn D3D11 threading: ID3D11VertexShader is an immutable free-threaded shader object.",
+    ID3D11PixelShader => "Microsoft Learn D3D11 threading: ID3D11PixelShader is an immutable free-threaded shader object.",
+    ID3D11InputLayout => "Microsoft Learn D3D11 threading: ID3D11InputLayout is an immutable free-threaded device child.",
+    ID3D11RasterizerState => "Microsoft Learn D3D11 threading: ID3D11RasterizerState is an immutable free-threaded state object.",
+    ID3D11BlendState => "Microsoft Learn D3D11 threading: ID3D11BlendState is an immutable free-threaded state object.",
+    ID3D11DepthStencilState => "Microsoft Learn D3D11 threading: ID3D11DepthStencilState is an immutable free-threaded state object.",
+    ID3D11Query => "Microsoft Learn D3D11 threading: ID3D11Query handles are free-threaded; context End/GetData calls are serialized under DeviceShared::state.",
+);
+
+impl sealed::Sealed for ID3D11DeviceContext {}
+// SAFETY: Microsoft Learn D3D11 threading: ID3D11DeviceContext is NOT free-threaded
+// (`!Sync`), but is apartment-neutral and safe to transfer across threads when
+// every call is serialized under `DeviceShared::state`'s `Mutex`.
+unsafe impl SendCom for ID3D11DeviceContext {}
+
+impl sealed::Sealed for ID3D11DeviceContext1 {}
+// SAFETY: same as `ID3D11DeviceContext`; serialized under `DeviceShared::state`.
+unsafe impl SendCom for ID3D11DeviceContext1 {}
+
+/// Wrapper marking verified free-threaded D3D11/DXGI COM interfaces `Send + Sync`.
+pub(crate) struct ComSend<T: FreeThreaded>(pub T);
+
+// SAFETY: `T: FreeThreaded` is sealed and implemented only for COM interfaces
+// verified free-threaded per Microsoft Learn.
+unsafe impl<T: FreeThreaded> Send for ComSend<T> {}
 // SAFETY: as above.
-unsafe impl<T> Sync for ComSend<T> {}
+unsafe impl<T: FreeThreaded> Sync for ComSend<T> {}
 
-impl<T: Clone> Clone for ComSend<T> {
+impl<T: FreeThreaded + Clone> Clone for ComSend<T> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<T> std::ops::Deref for ComSend<T> {
+impl<T: FreeThreaded> std::ops::Deref for ComSend<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-/// Wrapper marking `!Sync` D3D11 immediate-context COM interfaces
-/// (`ID3D11DeviceContext`, `ID3D11DeviceContext1`) `Send` only; always held
-/// inside `Mutex<ContextState>`.
-pub(crate) struct ComSendOnly<T>(pub T);
+/// Wrapper marking `!Sync` D3D11 immediate-context COM interfaces `Send` only;
+/// always held inside `Mutex<ContextState>`.
+pub(crate) struct ComSendOnly<T: SendCom>(pub T);
 
-// SAFETY: `ID3D11DeviceContext` / `ID3D11DeviceContext1` are externally
-// synchronized by `DeviceShared::state`'s `Mutex` and never shared without it.
-unsafe impl<T> Send for ComSendOnly<T> {}
+// SAFETY: `T: SendCom` is sealed and implemented only for COM interfaces safe
+// to transfer across threads under external mutual exclusion (`Mutex<ContextState>`).
+unsafe impl<T: SendCom> Send for ComSendOnly<T> {}
 
-impl<T> std::ops::Deref for ComSendOnly<T> {
+impl<T: SendCom> std::ops::Deref for ComSendOnly<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -259,17 +269,13 @@ impl Adapter {
     }
 
     pub fn request_device(&self, desc: &DeviceDescriptor<'_>) -> Result<Device, Error> {
-        let missing = desc.required_features - self.features;
-        if !missing.is_empty() {
-            return Err(Error::validation(format!(
-                "D3D11 device lacks required features {missing:?}"
-            )));
-        }
-        if !desc.required_limits.check_limits(&self.limits) {
-            return Err(Error::validation(
-                "D3D11 adapter does not satisfy required limits",
-            ));
-        }
+        validate_device_request(
+            desc.required_features,
+            self.features,
+            &desc.required_limits,
+            &self.limits,
+            "D3D11",
+        )?;
         let adapter_base: IDXGIAdapter = self
             .raw
             .cast()
@@ -311,7 +317,7 @@ impl Adapter {
         let context1: Option<ID3D11DeviceContext1> = raw_context.cast().ok();
         let mut opts = D3D11_FEATURE_DATA_D3D11_OPTIONS::default();
         // SAFETY: `opts` matches `D3D11_FEATURE_D3D11_OPTIONS`.
-        let cb_offsetting = context1.is_some()
+        let has_opts = context1.is_some()
             && unsafe {
                 raw_device.CheckFeatureSupport(
                     D3D11_FEATURE_D3D11_OPTIONS,
@@ -319,14 +325,14 @@ impl Adapter {
                     std::mem::size_of::<D3D11_FEATURE_DATA_D3D11_OPTIONS>() as u32,
                 )
             }
-            .is_ok()
-            && opts.ConstantBufferOffsetting.as_bool();
+            .is_ok();
+        let cb_offsetting = has_opts && opts.ConstantBufferOffsetting.as_bool();
 
         Ok(Device(Arc::new(DeviceShared {
             raw: ComSend(raw_device),
             limits: self.limits,
             features: desc.required_features & self.features,
-            errors: Arc::new(crate::ErrorSink::new()),
+            errors: Arc::new(ErrorSink::new()),
             cb_offsetting,
             state: Mutex::new(ContextState {
                 context: ComSendOnly(raw_context),
@@ -338,8 +344,7 @@ impl Adapter {
                 submitted: 0,
                 completed: 0,
             }),
-            lost: AtomicBool::new(false),
-            on_lost: Mutex::new(None),
+            lost: DeviceLost::new(),
         })))
     }
 }
@@ -355,11 +360,6 @@ struct MapWaiter {
     callback: MapCallback,
 }
 
-struct WorkWaiter {
-    seq: u64,
-    callback: WorkCallback,
-}
-
 pub(crate) struct ContextState {
     pub context: ComSendOnly<ID3D11DeviceContext>,
     pub context1: Option<ComSendOnly<ID3D11DeviceContext1>>,
@@ -371,15 +371,32 @@ pub(crate) struct ContextState {
     completed: u64,
 }
 
+impl ContextState {
+    /// Unbinds OM render targets and flushes the immediate context while the
+    /// caller already holds `DeviceShared::state`.
+    pub(crate) fn clear_render_targets_and_flush(&self) {
+        // SAFETY: immediate context is exclusively locked by `&self`.
+        unsafe {
+            self.context.OMSetRenderTargets(None, None);
+            self.context.Flush();
+        }
+    }
+
+    /// Flushes the immediate context while the caller holds `DeviceShared::state`.
+    pub(crate) fn flush(&self) {
+        // SAFETY: immediate context is exclusively locked by `&self`.
+        unsafe { self.context.Flush() }
+    }
+}
+
 pub(crate) struct DeviceShared {
     pub raw: ComSend<ID3D11Device>,
     limits: Limits,
     features: Features,
-    errors: Arc<crate::ErrorSink>,
+    errors: Arc<ErrorSink>,
     pub cb_offsetting: bool,
     pub state: Mutex<ContextState>,
-    lost: AtomicBool,
-    on_lost: Mutex<Option<LostCallback>>,
+    lost: DeviceLost,
 }
 
 #[derive(Clone)]
@@ -392,11 +409,12 @@ impl Drop for Owner {
         let _ = self.0.poll(true);
         // Break `staged -> Texture/Buffer -> DeviceShared -> staged` ownership cycles.
         lock(&self.0.0.state).staged.clear();
+        self.0.0.errors.clear_uncaptured();
     }
 }
 
 impl Device {
-    pub(crate) fn errors(&self) -> &Arc<crate::ErrorSink> {
+    pub(crate) fn errors(&self) -> &Arc<ErrorSink> {
         &self.0.errors
     }
 
@@ -409,7 +427,7 @@ impl Device {
     }
 
     pub fn is_lost(&self) -> bool {
-        self.0.lost.load(Ordering::Acquire)
+        self.0.lost.is_lost()
     }
 
     pub fn submitted(&self) -> u64 {
@@ -424,16 +442,25 @@ impl Device {
         &self,
         f: impl Fn(DeviceLostReason, String) + Send + Sync + 'static,
     ) {
-        *lock(&self.0.on_lost) = Some(Box::new(f));
+        self.0.lost.set_callback(f);
     }
 
     pub(crate) fn notify_lost(&self, reason: DeviceLostReason, message: String) {
-        if !self.0.lost.swap(true, Ordering::AcqRel) {
-            let cb = lock(&self.0.on_lost).take();
-            if let Some(cb) = cb {
-                cb(reason, message);
-            }
+        self.0.lost.notify(reason, message);
+    }
+
+    /// Queries `ID3D11Device::GetDeviceRemovedReason` and triggers loss
+    /// notification if hardware removal/reset occurred.
+    pub(crate) fn check_device_removed(&self) -> bool {
+        // SAFETY: plain free-threaded status query on live `ID3D11Device`.
+        if let Err(e) = unsafe { self.0.raw.GetDeviceRemovedReason() } {
+            self.notify_lost(
+                DeviceLostReason::Unknown,
+                format!("ID3D11Device removed: {e}"),
+            );
+            return true;
         }
+        self.is_lost()
     }
 
     pub fn destroy(&self) {
@@ -458,23 +485,14 @@ impl Device {
     }
 
     pub fn stage_buffer_write(&self, dst: &Buffer, offset: u64, data: &[u8]) -> Result<(), Error> {
-        if !dst.belongs_to(&self.0) {
-            return Err(Error::validation(
-                "cannot write to a buffer from another device",
-            ));
-        }
-        if !dst.is_valid() {
-            return Err(Error::validation("cannot write to an invalid buffer"));
-        }
-        if !dst.usage().contains(BufferUsages::COPY_DST) {
-            return Err(Error::validation("write_buffer destination lacks COPY_DST"));
-        }
-        let end = offset
-            .checked_add(data.len() as u64)
-            .ok_or_else(|| Error::validation("write_buffer range overflows u64"))?;
-        if end > dst.size() {
-            return Err(Error::validation("write_buffer exceeds buffer size"));
-        }
+        validate_write_buffer_args(
+            dst.belongs_to(&self.0),
+            dst.is_valid(),
+            dst.usage(),
+            dst.size(),
+            offset,
+            data.len() as u64,
+        )?;
         let mut st = lock(&self.0.state);
         if self.is_lost() {
             return Err(Error::internal("D3D11 device is lost"));
@@ -497,19 +515,7 @@ impl Device {
         size: Extent3d,
         packed_bytes: Vec<u8>,
     ) -> Result<(), Error> {
-        if !dst.belongs_to(&self.0) {
-            return Err(Error::validation(
-                "cannot write to a texture from another device",
-            ));
-        }
-        if !dst.is_valid() {
-            return Err(Error::validation("cannot write to an invalid texture"));
-        }
-        if !dst.usage().contains(TextureUsages::COPY_DST) {
-            return Err(Error::validation(
-                "write_texture destination lacks COPY_DST",
-            ));
-        }
+        validate_write_texture_args(dst.belongs_to(&self.0), dst.is_valid(), dst.usage())?;
         let mut st = lock(&self.0.state);
         if self.is_lost() {
             return Err(Error::internal("D3D11 device is lost"));
@@ -589,36 +595,23 @@ impl Device {
     }
 
     pub fn submit(&self, lists: Vec<Vec<Cmd>>) -> Result<u64, Error> {
-        if self.is_lost() {
-            return Err(Error::internal("D3D11 device is lost"));
-        }
-        // Validate caller command lists before touching `st.staged` so a failing
-        // command buffer never discards earlier valid `queue.write_*` writes.
-        for list in &lists {
-            for cmd in list {
-                record::validate_cmd(&self.0, cmd)?;
-            }
-        }
-
         let submit_res = {
             let mut st = lock(&self.0.state);
             if self.is_lost() {
                 return Err(Error::internal("D3D11 device is lost"));
             }
-            // Drop stale uploads to swapchain images retired by reconfigure so
-            // they cannot permanently wedge subsequent valid submissions.
             st.staged.retain(
                 |cmd| !matches!(cmd, Cmd::WriteTexture { dst, .. } if dst.is_retired_swapchain()),
             );
-            for cmd in &st.staged {
+            // Validate under the context lock: swapchain retirement is published
+            // under it too (see `surface.rs`), so no back buffer can retire between
+            // validation and execution.
+            for cmd in st.staged.iter().chain(lists.iter().flatten()) {
                 record::validate_cmd(&self.0, cmd)?;
             }
             if st.staged.is_empty() && lists.iter().all(Vec::is_empty) {
                 Ok(st.submitted)
             } else {
-                // Allocate the completion event query BEFORE taking `st.staged`
-                // or executing any GPU commands so query-creation failure leaves
-                // state untouched and partial execution always stays tracked.
                 let qdesc = D3D11_QUERY_DESC {
                     Query: D3D11_QUERY_EVENT,
                     MiscFlags: 0,
@@ -642,9 +635,6 @@ impl Device {
                     &cmds,
                 );
 
-                // Always signal the completion query and retain `cmds` even if
-                // `execute_all` failed partway through so any already-issued GPU
-                // prefix keeps its resources alive and is never replayed.
                 // SAFETY: ends the event query on the immediate context and flushes.
                 unsafe {
                     st.context.End(&query);
@@ -661,21 +651,8 @@ impl Device {
                 exec_res.map(|()| seq)
             }
         };
-        // Non-blocking reap so completed back-buffer/staging refs do not leak
-        // when callers do not call `device.poll()`.
         let _ = self.poll(false);
         submit_res
-    }
-
-    /// Unbinds OM render targets and flushes the immediate context so DXGI
-    /// `ResizeBuffers` sees zero lingering references to swapchain back buffers.
-    pub(crate) fn clear_render_targets_and_flush(&self) {
-        let st = lock(&self.0.state);
-        // SAFETY: unbinding render targets and flushing immediate context.
-        unsafe {
-            st.context.OMSetRenderTargets(None, None);
-            st.context.Flush();
-        }
     }
 
     pub(crate) fn flush_staged_before_present(&self) -> Result<(), Error> {
@@ -688,23 +665,18 @@ impl Device {
 
     pub fn poll(&self, wait: bool) -> Result<(), Error> {
         let mut finished_maps = Vec::new();
-        let mut finished_work = Vec::new();
+        let finished_work;
 
-        // Check device removal on Windows.
-        // SAFETY: plain status query on live D3D11 device.
-        if let Err(e) = unsafe { self.0.raw.GetDeviceRemovedReason() } {
-            self.notify_lost(
-                DeviceLostReason::Unknown,
-                format!("ID3D11Device removed: {e}"),
-            );
-        }
-        let mut lost = self.is_lost();
-        let mut get_data_lost: Option<String> = None;
+        let mut lost = self.check_device_removed();
+        let mut poll_lost_msg: Option<String> = None;
 
         {
             let mut st = lock(&self.0.state);
+            lost |= self.is_lost();
             let inflight = std::mem::take(&mut st.inflight);
             let mut remaining = Vec::new();
+            let deadline = wait.then(|| Instant::now() + POLL_WAIT_TIMEOUT);
+
             for ev in inflight {
                 if lost {
                     st.completed = st.completed.max(ev.seq);
@@ -712,8 +684,9 @@ impl Device {
                 }
                 let mut done_flag = 0u32;
                 let mut ready = false;
+                let mut spins = 0u32;
                 loop {
-                    // SAFETY: polling a live `D3D11_QUERY_EVENT`.
+                    // SAFETY: polling a live `D3D11_QUERY_EVENT` under `DeviceShared::state`.
                     // Note: `windows` maps both `S_OK` (0) and `S_FALSE` (1) to `Ok(())`;
                     // only `S_OK` writes `done_flag = 1` (`TRUE`).
                     let res = unsafe {
@@ -733,10 +706,44 @@ impl Device {
                             if !wait {
                                 break;
                             }
-                            std::thread::yield_now();
+                            // Check device removal inside the wait loop so TDR
+                            // breaks out immediately instead of spinning forever.
+                            // SAFETY: plain free-threaded status query on live `ID3D11Device`.
+                            if let Err(e) = unsafe { self.0.raw.GetDeviceRemovedReason() } {
+                                poll_lost_msg.get_or_insert_with(|| {
+                                    format!("ID3D11Device removed during poll: {e}")
+                                });
+                                lost = true;
+                                ready = true;
+                                break;
+                            }
+                            // `destroy()` (or another poll) may set HAL loss while we
+                            // hold the lock; it already notified, so just stop waiting.
+                            if self.is_lost() {
+                                lost = true;
+                                ready = true;
+                                break;
+                            }
+                            if deadline.is_some_and(|d| Instant::now() >= d) {
+                                poll_lost_msg.get_or_insert_with(|| {
+                                    format!(
+                                        "D3D11 poll(wait) timed out after {}s (TDR or stalled GPU)",
+                                        POLL_WAIT_TIMEOUT.as_secs()
+                                    )
+                                });
+                                lost = true;
+                                ready = true;
+                                break;
+                            }
+                            if spins < POLL_YIELD_SPINS {
+                                spins += 1;
+                                std::thread::yield_now();
+                            } else {
+                                std::thread::sleep(Duration::from_millis(1));
+                            }
                         }
                         Err(e) => {
-                            get_data_lost.get_or_insert_with(|| {
+                            poll_lost_msg.get_or_insert_with(|| {
                                 format!("ID3D11DeviceContext::GetData: {e}")
                             });
                             lost = true;
@@ -752,6 +759,9 @@ impl Device {
                 }
             }
             st.inflight = remaining;
+            // Fold in loss published concurrently (e.g. `destroy()`), before any
+            // waiter is told its work completed successfully.
+            lost |= self.is_lost();
 
             let done = if lost { st.submitted } else { st.completed };
             let mut remain_maps = Vec::new();
@@ -763,20 +773,28 @@ impl Device {
                 }
             }
             st.map_waiters = remain_maps;
-
-            let mut remain_work = Vec::new();
-            for w in st.work_waiters.drain(..) {
-                if w.seq <= done {
-                    finished_work.push(w.callback);
-                } else {
-                    remain_work.push(w);
-                }
+            finished_work = drain_ready_work(&mut st.work_waiters, done);
+            // Publish loss while `st` is still held: `completed` was advanced past
+            // events that never signalled, so the flag must be visible before any
+            // other thread can read that `completed` and reuse "finished" memory.
+            if poll_lost_msg.is_some() && !self.0.lost.mark() {
+                poll_lost_msg = None;
             }
-            st.work_waiters = remain_work;
         }
 
-        if let Some(msg) = get_data_lost {
-            self.notify_lost(DeviceLostReason::Unknown, msg);
+        // A blocking wait that ended in loss/timeout did not complete the work: say so,
+        // after the loss callback and waiter cleanup below have run.
+        // Derived from the loss outcome, not from who owns the loss callback: loss seen at
+        // entry or already reported by another thread still fails a blocking wait.
+        let wait_err = (wait && lost).then(|| {
+            Error::internal(
+                poll_lost_msg
+                    .clone()
+                    .unwrap_or_else(|| "D3D11 device lost before the wait completed".into()),
+            )
+        });
+        if let Some(msg) = poll_lost_msg {
+            self.0.lost.fire(DeviceLostReason::Unknown, msg);
         }
 
         for cb in finished_maps {
@@ -790,6 +808,6 @@ impl Device {
         for cb in finished_work {
             cb();
         }
-        Ok(())
+        wait_err.map_or(Ok(()), Err)
     }
 }
