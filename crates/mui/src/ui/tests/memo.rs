@@ -391,3 +391,28 @@ fn a_reused_memo_root_takes_the_callers_declaration() {
     let (x4, _) = frame(&mut ui, 0., &mut built);
     assert_eq!((x4, built), (x0, 1), "and back");
 }
+
+/// A kept subtree is laid out again in the room it is offered: wrapping
+/// text in a memo follows a resize as the same text built plainly does.
+#[test]
+fn a_kept_memo_follows_a_resize() {
+    let words = || col([text("one two three four five six seven eight nine ten").id("t")]);
+    let size = |ui: &mut Ui, el: El, w: f64| {
+        let f = ui
+            .frame(
+                col([el]),
+                Some(Size::new(w, 400.)),
+                PointerInput::default(),
+                0.016,
+            )
+            .unwrap();
+        f.scene.surface("t").unwrap().frame.size
+    };
+    let mut ui = Ui::default();
+    for w in [600., 600., 80.] {
+        let m = ui.memo("m", 1, |_| words());
+        let kept = size(&mut ui, m, w);
+        let plain = size(&mut Ui::default(), words(), w);
+        assert_eq!(kept, plain, "at {w}");
+    }
+}

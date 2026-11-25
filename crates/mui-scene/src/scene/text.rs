@@ -622,22 +622,26 @@ pub(super) fn fit(runs: &mut Runs, th: &Theme, e: &crate::Element, room: Option<
     let min_width = if e.lines.is_some() { 0.0 } else { word };
     // A room narrower than a word is overflowed, not broken mid-word.
     let room = room.map(|r| r.max(min_width));
+    // Hard breaks alone: its widest line by its lines, like one line.
+    let broken = t.contains('\n').then(|| {
+        let lines = runs.lines(t, face, f64::INFINITY, e.lines);
+        let width = lines
+            .iter()
+            .map(|line| runs.measure(line, face).width)
+            .fold(0., f64::max);
+        Size::new(width, lines.len() as f64 * one_line.height)
+    });
+    let widest = broken.map_or(one_line.width, |b| b.width);
     let mut fit = match room {
         // The room it wrapped into, not its longest line: a paragraph that
         // reported the ragged width would then be centred inside its own
-        // column, aligned with nothing above it.
-        Some(room) if room > 0.0 && (one_line.width > room + 0.5 || t.contains('\n')) => {
+        // column, aligned with nothing above it. Text that only breaks
+        // where it says hugs its widest line: a two-line tooltip is not as
+        // wide as the window it floats in.
+        Some(room) if room > 0.0 && widest > room + 0.5 => {
             Size::new(room, runs.wrapped(t, face, room, e.lines))
         }
-        _ if t.contains('\n') => {
-            let lines = runs.lines(t, face, f64::INFINITY, e.lines);
-            let width = lines
-                .iter()
-                .map(|line| runs.measure(line, face).width)
-                .fold(0., f64::max);
-            Size::new(width, lines.len() as f64 * one_line.height)
-        }
-        _ => one_line,
+        _ => broken.unwrap_or(one_line),
     };
     // The reserved string widens the box and nothing else: its own height is
     // the same line at the same size, and a longer value still measures long.

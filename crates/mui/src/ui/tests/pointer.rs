@@ -336,6 +336,28 @@ fn a_tip_lands_where_it_was_measured_even_under_a_padded_root() {
     assert_eq!((tip.frame.x, tip.frame.y), (at.x, at.y));
 }
 
+/// A tip broken into lines by hand is as wide as its widest line, not
+/// the window it floats in.
+#[test]
+fn a_two_line_tip_hugs_its_text_in_a_wide_window() {
+    let mut ui = Ui::default();
+    let tree = || {
+        col([block(40., 40.)
+            .fill(Role::Raised)
+            .tip("Name\nWhat it does")
+            .id("b")])
+    };
+    let win = || Some(Size::new(1600., 300.));
+    let p = at(800., 20., false);
+    ui.frame(tree(), win(), p, 0.016).unwrap();
+    ui.frame(tree(), win(), p, 0.016).unwrap();
+    let f = ui.frame(tree(), win(), p, 0.6).unwrap();
+    assert!(f.tip.is_some(), "due");
+    let tip = f.scene.surface("/tip").expect("floated").frame;
+    assert!(tip.size.width < 200., "{tip:?}");
+    assert!(tip.size.height > 30., "two lines: {tip:?}");
+}
+
 #[test]
 fn a_press_and_its_release_bracket_the_gesture() {
     let mut ui = Ui::default();
