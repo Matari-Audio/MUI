@@ -44,10 +44,8 @@ pub fn device_with(
         let info = adapter.get_info();
         eprintln!("adapter: {info:?}");
         assert!(
-            !require_native()
-                || mui_hal::native_backends().contains(mui_hal::Backends::from(info.backend)),
-            "MUI_HAL_REQUIRE_NATIVE=1 but the adapter is {:?}",
-            info.backend
+            !require_native() || adapter.is_native(),
+            "MUI_HAL_REQUIRE_NATIVE=1 but the adapter is not native: {info:?}"
         );
         adapter
             .request_device(&mui_hal::DeviceDescriptor {

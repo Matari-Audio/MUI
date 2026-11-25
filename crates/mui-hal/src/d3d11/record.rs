@@ -224,6 +224,7 @@ pub(super) fn validate_cmd(device: &Arc<DeviceShared>, cmd: &Cmd) -> Result<(), 
             check_texture(device, src)?;
             check_texture(device, dst)?;
             validate_texture_to_texture(
+                Arc::ptr_eq(&src.0, &dst.0),
                 (src.width(), src.height(), src.layers()),
                 *src_mip,
                 src.mip_level_count(),

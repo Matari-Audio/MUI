@@ -783,8 +783,10 @@ impl Adapter {
         }
     }
 
-    /// Whether this is a native (not wgpu) adapter.
-    fn is_native(&self) -> bool {
+    /// Whether this is a native (not wgpu) adapter. A wgpu adapter can report
+    /// a native API in [`AdapterInfo::backend`]; this cannot be fooled.
+    #[must_use]
+    pub fn is_native(&self) -> bool {
         match &self.0 {
             #[cfg(target_os = "linux")]
             AdapterInner::Vulkan(_) => true,
@@ -2015,12 +2017,18 @@ impl Queue {
         #[cfg(target_os = "macos")]
         if let Some(d) = self.mtl() {
             let dst = dest.texture.mtl();
+            let target = shared::TextureWriteTarget {
+                belongs: dst.belongs_to(&d.0),
+                valid: dst.is_valid(),
+                usage: dst.usage(),
+                dims: (dst.width(), dst.height(), dst.layers()),
+                block_size: dst.format().block_size(),
+            };
             match shared::pack_texture_write_bytes(
+                &target,
                 dest.mip_level,
                 dest.origin,
                 size,
-                (dst.width(), dst.height(), dst.layers()),
-                dst.format().block_size(),
                 layout,
                 data,
             ) {
@@ -2036,12 +2044,18 @@ impl Queue {
         #[cfg(target_os = "windows")]
         if let Some(d) = self.d3d() {
             let dst = dest.texture.d3d();
+            let target = shared::TextureWriteTarget {
+                belongs: dst.belongs_to(&d.0),
+                valid: dst.is_valid(),
+                usage: dst.usage(),
+                dims: (dst.width(), dst.height(), dst.layers()),
+                block_size: dst.format().block_size(),
+            };
             match shared::pack_texture_write_bytes(
+                &target,
                 dest.mip_level,
                 dest.origin,
                 size,
-                (dst.width(), dst.height(), dst.layers()),
-                dst.format().block_size(),
                 layout,
                 data,
             ) {

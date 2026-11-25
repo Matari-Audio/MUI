@@ -22,7 +22,7 @@ fn native_device() -> Option<(Instance, Adapter, Device, Queue)> {
     });
     let adapter = pollster::block_on(instance.enumerate_adapters(native_backends()))
         .into_iter()
-        .find(|a| native_backends().contains(Backends::from(a.get_info().backend)));
+        .find(Adapter::is_native);
     let Some(adapter) = adapter else {
         assert!(
             !require_native(),

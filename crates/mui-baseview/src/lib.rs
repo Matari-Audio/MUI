@@ -292,6 +292,7 @@ impl Requests {
             PresentationMode::DirectGpu,
             PresentationBackend::for_gpu(api, translucent),
             api,
+            translucent,
             None,
             reason,
         );
@@ -308,6 +309,7 @@ impl Requests {
         mode: PresentationMode,
         backend: PresentationBackend,
         api: GraphicsApi,
+        translucent: bool,
         fallback: Option<FallbackReason>,
         reason: &'static str,
     ) {
@@ -335,6 +337,7 @@ impl Requests {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             state.software_forced = mui_present::software_mode_enabled();
             state.api = api;
+            state.translucent = translucent;
             state.record_fallback(fallback);
             state.record_frame(mode, backend, size, render_size, reason);
         }
@@ -1102,6 +1105,7 @@ impl<V: View> Handler<V> {
                             PresentationMode::CpuDirect,
                             software.backend(),
                             GraphicsApi::Software,
+                            false,
                             self.fallback,
                             reason,
                         );

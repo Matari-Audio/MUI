@@ -40,7 +40,8 @@ pub(crate) use crate::shared::{
     DeviceLost, ErrorSink, MapCallback, WorkCallback, WorkWaiter, drain_ready_work, lock,
 };
 use crate::shared::{
-    validate_device_request, validate_write_buffer_args, validate_write_texture_args,
+    replace_staging_chunk, validate_device_request, validate_write_buffer_args,
+    validate_write_texture_args,
 };
 use crate::types::{
     AdapterInfo, Backend, BufferUsages, DeviceDescriptor, DeviceLostReason, DeviceType, Features,
@@ -463,12 +464,15 @@ impl Device {
             .as_ref()
             .is_some_and(|(b, used)| used.checked_add(need).is_some_and(|end| end <= b.size()));
         if !fits {
-            if let Some((b, _)) = q.staging.current.take() {
-                q.staging.used.push(b);
-            }
-            let chunk = if let Some(i) = q.staging.free.iter().position(|b| b.size() >= need) {
-                q.staging.free.swap_remove(i)
-            } else {
+            let Staging {
+                current,
+                used,
+                free,
+            } = &mut q.staging;
+            replace_staging_chunk::<_, Error>(current, used, || {
+                if let Some(i) = free.iter().position(|b| b.size() >= need) {
+                    return Ok(free.swap_remove(i));
+                }
                 let alloc = usize::try_from(need.max(STAGING_CHUNK_BYTES))
                     .map_err(|_| Error::out_of_memory("staging buffer size overflows usize"))?;
                 let raw = self
@@ -478,9 +482,13 @@ impl Device {
                     .ok_or_else(|| {
                         Error::out_of_memory("MTLDevice::newBufferWithLength returned nil")
                     })?;
-                Buffer::from_raw(self, raw, alloc as u64, BufferUsages::COPY_SRC)
-            };
-            q.staging.current = Some((chunk, 0));
+                Ok(Buffer::from_raw(
+                    self,
+                    raw,
+                    alloc as u64,
+                    BufferUsages::COPY_SRC,
+                ))
+            })?;
         }
         let Some((chunk, used)) = q.staging.current.as_mut() else {
             return Err(Error::internal("staging chunk unexpectedly absent"));

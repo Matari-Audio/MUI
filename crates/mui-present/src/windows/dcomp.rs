@@ -121,15 +121,18 @@ fn get_back_buffer(swap_chain: &IDXGISwapChain1) -> Result<ID3D11Texture2D, Pres
     })
 }
 
+/// Resizes to `size` with `buffer_count` (clamped to the flip-model range;
+/// DXGI accepts a new count on `ResizeBuffers`) and returns the applied count.
 fn resize_swap_chain(
     swap_chain: &IDXGISwapChain1,
     buffer_count: u32,
     size: (u32, u32),
     format: SurfaceFormat,
-) -> Result<(), PresentError> {
+) -> Result<u32, PresentError> {
     if size.0 == 0 || size.1 == 0 {
         return Err(PresentError::InvalidSize(size));
     }
+    let buffer_count = buffer_count.clamp(MIN_FLIP_BUFFER_COUNT, MAX_FLIP_BUFFER_COUNT);
     // SAFETY: caller has released all back-buffer views and texture references
     // and holds external synchronization with the D3D11 immediate context.
     unsafe {
@@ -151,7 +154,8 @@ fn resize_swap_chain(
         } else {
             PresentError::Platform(format!("IDXGISwapChain1::ResizeBuffers: {e}"))
         }
-    })
+    })?;
+    Ok(buffer_count)
 }
 
 fn present_swap_chain(
@@ -303,8 +307,13 @@ impl HwndFlipSwapChain {
     /// # Errors
     /// Returns [`PresentError::InvalidSize`], [`PresentError::SurfaceLost`], or
     /// [`PresentError::Platform`].
-    pub fn resize(&mut self, size: (u32, u32), format: SurfaceFormat) -> Result<(), PresentError> {
-        resize_swap_chain(&self.swap_chain, self.buffer_count, size, format)?;
+    pub fn resize(
+        &mut self,
+        size: (u32, u32),
+        format: SurfaceFormat,
+        buffer_count: u32,
+    ) -> Result<(), PresentError> {
+        self.buffer_count = resize_swap_chain(&self.swap_chain, buffer_count, size, format)?;
         self.size = size;
         self.format = format;
         Ok(())
@@ -485,8 +494,13 @@ impl DirectCompositionPresenter {
     ///
     /// # Errors
     /// Returns [`PresentError`] when `size` is zero or `ResizeBuffers`/`Commit` fails.
-    pub fn resize(&mut self, size: (u32, u32), format: SurfaceFormat) -> Result<(), PresentError> {
-        resize_swap_chain(&self.swap_chain, self.buffer_count, size, format)?;
+    pub fn resize(
+        &mut self,
+        size: (u32, u32),
+        format: SurfaceFormat,
+        buffer_count: u32,
+    ) -> Result<(), PresentError> {
+        self.buffer_count = resize_swap_chain(&self.swap_chain, buffer_count, size, format)?;
         self.size = size;
         self.format = format;
         self.commit()
@@ -648,10 +662,15 @@ impl DxgiSwapChainPresenter {
     /// # Errors
     /// Returns [`PresentError::InvalidSize`], [`PresentError::SurfaceLost`], or
     /// [`PresentError::Platform`].
-    pub fn resize(&mut self, size: (u32, u32), format: SurfaceFormat) -> Result<(), PresentError> {
+    pub fn resize(
+        &mut self,
+        size: (u32, u32),
+        format: SurfaceFormat,
+        buffer_count: u32,
+    ) -> Result<(), PresentError> {
         match self {
-            Self::Hwnd(p) => p.resize(size, format),
-            Self::DirectComposition(p) => p.resize(size, format),
+            Self::Hwnd(p) => p.resize(size, format, buffer_count),
+            Self::DirectComposition(p) => p.resize(size, format, buffer_count),
         }
     }
 
