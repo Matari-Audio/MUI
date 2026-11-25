@@ -490,3 +490,20 @@ fn ui_plays_draw_the_endpoint_then_sleep_and_removed_plays_stop_requesting_frame
         "a play absent from the next build no longer schedules animation"
     );
 }
+
+#[test]
+fn snapped_pointer_states_land_in_one_frame_and_schedule_none() {
+    let mut ui = Ui::default().snap_pointer_states();
+    let tree = || block(40., 40.).fill(Role::Field).a11y(A11y::Button).id("b");
+    ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+    // The frame the pointer arrives owes the next tree its hover; that one
+    // has it in full and asks for nothing more.
+    ui.frame(tree(), None, at(20., 20., false), 0.016).unwrap();
+    let f = ui.frame(tree(), None, at(20., 20., false), 0.016).unwrap();
+    assert!(!f.animating, "a hover keeps frames coming");
+    assert_eq!(ui.state("b").hover, 1.);
+    ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+    let f = ui.frame(tree(), None, Input::default(), 0.016).unwrap();
+    assert!(!f.animating, "leaving keeps frames coming");
+    assert_eq!(ui.state("b").hover, 0.);
+}
