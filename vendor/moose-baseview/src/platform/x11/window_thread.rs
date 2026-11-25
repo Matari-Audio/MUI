@@ -12,7 +12,7 @@ use calloop::LoopSignal;
 use std::cell::{Cell, RefCell};
 use std::panic::resume_unwind;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{fence, AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::thread;
 use std::thread::JoinHandle;
@@ -27,7 +27,11 @@ pub(crate) struct WindowThreadShared {
     callbacks_revoked: AtomicBool,
     sizing_strategy: OnceLock<SizingStrategy>,
     frame_requested: AtomicBool,
-    startup_signal: OnceLock<LoopSignal>,
+    /// The worker's loop signal, published once its X window exists.
+    loop_signal: OnceLock<LoopSignal>,
+    /// Host stop vs. worker publish handshake: whichever runs second sees
+    /// the other, so a stop before the signal exists is never lost.
+    host_stopped: Mutex<bool>,
 }
 
 impl WindowThreadShared {
@@ -41,19 +45,72 @@ impl WindowThreadShared {
             callbacks_revoked: false.into(),
             sizing_strategy: OnceLock::new(),
             frame_requested: AtomicBool::new(false),
-            startup_signal: OnceLock::new(),
+            loop_signal: OnceLock::new(),
+            host_stopped: Mutex::new(false),
         }
     }
 
-    fn init(&self, window: &WindowInner) {
+    /// Host-side answers before the worker has created anything: the
+    /// requested size at the scale the settings pin (1.0 if the system's).
+    fn publish_requested(&self, settings: &WindowSettings) {
+        let scale = settings
+            .scale_factor_override
+            .or(settings.fallback_scale_factor)
+            .and_then(|s| crate::settings::sanitize_scale_factor(Some(s)))
+            .unwrap_or(1.0);
+        self.set_scaling_factor(scale);
+        self.set_size(settings.size.to_physical(scale));
+        let _ = self.sizing_strategy.set(SizingStrategy::from_settings(settings));
+    }
+
+    /// Worker side: the window exists. False when the host already stopped
+    /// it, in which case the worker tears down without building the handler.
+    fn publish_window(&self, window: &WindowInner) -> bool {
         self.set_size(window.get_size());
         self.set_scaling_factor(window.scale_factor());
-        let _ = self.sizing_strategy.set(window.sizing_strategy);
-        let _ = self.startup_signal.set(window.loop_signal.clone());
-        if self.callbacks_revoked() {
-            window.loop_signal.stop();
+        let stopped = self.host_stopped.lock().unwrap_or_else(|g| g.into_inner());
+        if *stopped || self.callbacks_revoked() {
+            return false;
+        }
+        let _ = self.loop_signal.set(window.loop_signal.clone());
+        drop(stopped);
+        // Pairs with the fence in `request_frame`: a frame asked for before
+        // the signal existed is woken here, one asked for after wakes itself.
+        fence(Ordering::SeqCst);
+        if self.has_frame_request() {
             window.loop_signal.wakeup();
         }
+        true
+    }
+
+    /// Host side: stop the worker now, or as soon as its window exists.
+    fn stop_from_host(&self) {
+        self.stopped_requested_from_host.store(true, Ordering::Release);
+        let mut stopped = self.host_stopped.lock().unwrap_or_else(|g| g.into_inner());
+        *stopped = true;
+        if let Some(signal) = self.loop_signal.get() {
+            signal.stop();
+            signal.wakeup();
+        }
+    }
+
+    fn request_frame(&self) {
+        if self.frame_requested.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        fence(Ordering::SeqCst);
+        if let Some(signal) = self.loop_signal.get() {
+            signal.wakeup();
+        }
+    }
+
+    fn record_error(&self, error: String) {
+        crate::error!("X11 editor window failed: {}", &error);
+        self.final_error.lock().unwrap_or_else(|g| g.into_inner()).replace(error);
+    }
+
+    fn last_error(&self) -> Option<String> {
+        self.final_error.lock().unwrap_or_else(|g| g.into_inner()).clone()
     }
 
     pub fn get_size(&self) -> PhysicalSize<u16> {
@@ -83,7 +140,7 @@ impl WindowThreadShared {
     }
 
     pub fn is_stop_host_requested(&self) -> bool {
-        self.stopped_requested_from_host.load(Ordering::Relaxed)
+        self.stopped_requested_from_host.load(Ordering::Acquire)
     }
 
     pub fn callbacks_revoked(&self) -> bool {
@@ -117,17 +174,15 @@ pub enum WindowThreadRequest {
     Hide,
 }
 
-pub type WindowThreadResponseMessage = core::result::Result<(), String>;
+/// Host requests are one-way: a host call can race a tick synchronously
+/// calling VST3 performEdit on the GUI thread, so the host never waits for
+/// the worker. Results the host reads back live in [`WindowThreadShared`];
+/// failures are logged by the worker. Requests sent before the window is
+/// ready queue here and apply once it is.
+pub type WindowThreadMessage = WindowThreadRequest;
 
-pub struct WindowThreadMessage {
-    pub request: WindowThreadRequest,
-    pub response: mpsc::Sender<WindowThreadResponseMessage>,
-}
-
-// A host RPC can race a tick synchronously calling VST3 performEdit on the GUI
-// thread. Time out instead of waiting for that thread to service itself.
-const REQUEST_TIMEOUT: Duration = Duration::from_millis(50);
-const OPEN_TIMEOUT: Duration = Duration::from_millis(250);
+/// A full queue fails the request at once rather than blocking the host.
+const REQUEST_QUEUE: usize = 32;
 
 pub enum HostCallback {
     Resized { new_size: WindowSize, previous: WindowSize },
@@ -137,7 +192,6 @@ pub enum HostCallback {
 /// Movable commands and metadata; native state stays on the X11 worker.
 pub struct WindowThreadControl {
     shared: Arc<WindowThreadShared>,
-    loop_signal: LoopSignal,
     event_loop_handle: Cell<Option<JoinHandle<()>>>,
     request_sender: calloop::channel::SyncSender<WindowThreadMessage>,
     can_detach: Cell<bool>,
@@ -245,11 +299,15 @@ impl WindowThreadControl {
             warn!("X11 editor window open refused: could not pin plugin image");
             return Err(PlatformError::CreationFailed("Could not pin X11 editor image".into()));
         }
-        let (tx, rx) = result_channel();
         let shared = Arc::new(WindowThreadShared::new());
-        let (request_sender, request_receiver) = calloop::channel::sync_channel(1);
+        shared.publish_requested(&settings);
+        let (request_sender, request_receiver) = calloop::channel::sync_channel(REQUEST_QUEUE);
         let (main_thread_caller, main_thread_receiver) = MainThreadCaller::new(main_thread);
 
+        // Open returns as soon as the worker exists. Creating the X window and
+        // building the handler happen there; their failure is an event
+        // (logged, `is_open` turns false, later requests report it), never a
+        // deadline the host thread waits out.
         let join_handle = {
             let shared = Arc::clone(&shared);
             let stop_watcher = ThreadStopWatcher(Arc::clone(&shared));
@@ -261,56 +319,27 @@ impl WindowThreadControl {
                         WindowThread::create(
                             settings,
                             builder,
-                            shared,
+                            Arc::clone(&shared),
                             request_receiver,
                             main_thread_caller,
                         )
                     }));
-                    let thread = match created {
-                        Ok(Ok(thread)) => thread,
-                        Ok(Err(e)) => return tx.send_error(e),
-                        Err(_) => {
-                            return tx.send_error(PlatformError::CreationFailed(
-                                "Panic during X11 window creation".into(),
-                            ))
-                        }
-                    };
-
-                    if tx.send_success(&thread) {
-                        thread.run()
+                    match created {
+                        Ok(Ok(Some(thread))) => thread.run(),
+                        Ok(Ok(None)) => {} // closed by the host before it was ready
+                        Ok(Err(e)) => shared.record_error(e.to_string()),
+                        Err(_) => shared.record_error("Panic during X11 window creation".into()),
                     }
-
                     // Forces the stop_watcher to be moved to this closure
                     drop(stop_watcher);
                 })
                 .map_err(|e| PlatformError::CreationFailed(e.to_string()))?
         };
 
-        let loop_signal = match rx.receive() {
-            Ok(signal) => signal,
-            Err(e) => {
-                shared.callbacks_revoked.store(true, Ordering::Release);
-                if let Some(signal) = shared.startup_signal.get() {
-                    signal.stop();
-                    signal.wakeup();
-                }
-                // The startup receiver is gone: a late creation will tear down
-                // instead of entering its loop. The image was pinned above.
-                if can_detach {
-                    join_bounded(join_handle, Duration::ZERO, || {});
-                } else {
-                    // Returning releases the caller's host/parent lifetime.
-                    let _ = join_handle.join();
-                }
-                return Err(e);
-            }
-        };
-
         Ok((
             Self {
                 event_loop_handle: Some(join_handle).into(),
                 shared,
-                loop_signal,
                 request_sender,
                 can_detach: Cell::new(can_detach),
                 close_timeout: Cell::new(None),
@@ -350,18 +379,14 @@ impl WindowThreadControl {
         self.request(WindowThreadRequest::SetScaleFactorOverride(scale_factor))
     }
 
-    /// A timeout means the queued request may still run, not that it was
-    /// cancelled. Each request owns its reply, so a late acknowledgement can
-    /// never satisfy the next RPC. A full queue fails immediately.
+    /// Queues `req` and returns: Ok means queued, not applied. A full queue
+    /// or a stopped worker fails at once; neither ever blocks the host.
     fn request(&self, req: WindowThreadRequest) -> Result<()> {
-        let (response, receiver) = mpsc::channel();
-        self.request_sender.try_send(WindowThreadMessage { request: req, response }).map_err(
-            |e| match e {
-                mpsc::TrySendError::Full(_) => RequestFailed::Busy,
-                mpsc::TrySendError::Disconnected(_) => RequestFailed::Send,
-            },
-        )?;
-        receive_response(&receiver, REQUEST_TIMEOUT)
+        self.request_sender.try_send(req).map_err(|e| match e {
+            mpsc::TrySendError::Full(_) => RequestFailed::Busy,
+            mpsc::TrySendError::Disconnected(_) => RequestFailed::Closed(self.shared.last_error()),
+        })?;
+        Ok(())
     }
 
     pub fn visibility_control(&self) -> crate::WindowVisibility {
@@ -374,22 +399,19 @@ impl WindowThreadControl {
             {
                 return;
             }
-            let (response, _) = mpsc::channel();
             let request =
                 if visible { WindowThreadRequest::Show } else { WindowThreadRequest::Hide };
-            let _ = sender.try_send(WindowThreadMessage { request, response });
+            let _ = sender.try_send(request);
         })
     }
     pub fn frame_requester(&self) -> crate::FrameRequester {
         let shared = Arc::clone(&self.shared);
-        let signal = self.loop_signal.clone();
         crate::FrameRequester::new(move || {
             if !shared.callbacks_revoked()
                 && !shared.is_stop_host_requested()
                 && !shared.stopped.load(Ordering::Acquire)
-                && !shared.frame_requested.swap(true, Ordering::AcqRel)
             {
-                signal.wakeup();
+                shared.request_frame();
             }
         })
     }
@@ -401,9 +423,7 @@ impl WindowThreadControl {
             self.request(WindowThreadRequest::Show)
         };
         if shown.is_err() {
-            self.shared.stopped_requested_from_host.store(true, Ordering::Release);
-            self.loop_signal.stop();
-            self.loop_signal.wakeup();
+            self.shared.stop_from_host();
         }
         let joined = self.join_thread();
         shown.and(joined)
@@ -456,9 +476,11 @@ impl WindowThreadControl {
 
 impl Drop for WindowThreadControl {
     fn drop(&mut self) {
-        self.shared.stopped_requested_from_host.store(true, Ordering::Relaxed);
-        self.loop_signal.stop();
-        self.loop_signal.wakeup();
+        // An embedded window still joins: the host's parent must outlive every
+        // use of it, including a handler build in flight. That wait is the
+        // build's own length, never a deadline; a close before the build
+        // starts skips it.
+        self.shared.stop_from_host();
 
         if self.can_detach.get() {
             if let Some(timeout) = self.close_timeout.get() {
@@ -495,21 +517,6 @@ fn join_bounded(thread: JoinHandle<()>, timeout: Duration, revoke: impl FnOnce()
     }
 }
 
-fn receive_response(
-    receiver: &mpsc::Receiver<WindowThreadResponseMessage>, timeout: Duration,
-) -> Result<()> {
-    match receiver.recv_timeout(timeout) {
-        Ok(result) => result.map_err(|e| RequestFailed::Response(e).into()),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(RequestFailed::Timeout.into()),
-        Err(mpsc::RecvTimeoutError::Disconnected) => Err(RequestFailed::Recv.into()),
-    }
-}
-
-enum WindowOpenResult {
-    Success { loop_signal: LoopSignal },
-    Error(String),
-}
-
 struct WindowThread {
     event_loop: EventLoop,
     ev_loop: calloop::EventLoop<'static, EventLoop>,
@@ -518,21 +525,17 @@ struct WindowThread {
 
 #[derive(Debug)]
 pub enum RequestFailed {
-    Send,
-    Recv,
-    Timeout,
+    /// The worker has stopped; its failure, if it recorded one.
+    Closed(Option<String>),
     Busy,
-    Response(String),
 }
 
 impl Display for RequestFailed {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            RequestFailed::Send => f.write_str("Request to X11 thread failed: Could not send request (X11 thread disconnected)"),
-            RequestFailed::Recv => f.write_str("Request to X11 thread failed: Could not receive response (X11 thread disconnected)"),
-            RequestFailed::Timeout => f.write_str("X11 request timed out after 50 ms; it may still execute"),
+            RequestFailed::Closed(Some(e)) => write!(f, "X11 window is closed: {e}"),
+            RequestFailed::Closed(None) => f.write_str("X11 window is closed"),
             RequestFailed::Busy => f.write_str("X11 request queue is full; request was not sent"),
-            RequestFailed::Response(e) => f.write_str(e),
         }
     }
 }
@@ -542,20 +545,19 @@ impl WindowThread {
         options: WindowSettings, handler: WindowHandlerBuilder, shared: Arc<WindowThreadShared>,
         receiver: calloop::channel::Channel<WindowThreadMessage>,
         main_thread_caller: Option<MainThreadCaller>,
-    ) -> Result<Self> {
+    ) -> Result<Option<Self>> {
         let mut ev_loop = calloop::EventLoop::try_new()?;
         let inner = WindowInner::create(options, &ev_loop, Arc::clone(&shared))?;
 
-        shared.init(&inner);
-        if shared.callbacks_revoked() {
-            return Err(PlatformError::CreationFailed("X11 window open was cancelled".into()));
+        if !shared.publish_window(&inner) {
+            return Ok(None);
         }
 
         let handler = handler.build(WindowContext::new(Rc::clone(&inner).into()))?;
         let event_loop =
             EventLoop::new(inner, handler, receiver, main_thread_caller, &mut ev_loop)?;
 
-        Ok(Self { event_loop, ev_loop, shared })
+        Ok(Some(Self { event_loop, ev_loop, shared }))
     }
 
     pub fn run(self) {
@@ -565,54 +567,7 @@ impl WindowThread {
         let result =
             result.unwrap_or_else(|_| Err(PlatformError::Run("Panic in X11 event loop".into())));
         if let Err(e) = result {
-            crate::warn!("X11 window thread stopped: {e}");
-            // Ignore a poisoned mutex, we just fully override this value anyway.
-            let mut guard = self.shared.final_error.lock().unwrap_or_else(|g| g.into_inner());
-
-            guard.replace(e.to_string());
-        }
-    }
-}
-
-fn result_channel() -> (WindowResultSender, WindowResultReceiver) {
-    let (tx, rx) = mpsc::sync_channel::<WindowOpenResult>(1);
-    (WindowResultSender(tx), WindowResultReceiver(rx))
-}
-
-struct WindowResultSender(mpsc::SyncSender<WindowOpenResult>);
-impl WindowResultSender {
-    pub fn send_error(self, error: PlatformError) {
-        if let Err(err) = self.0.send(WindowOpenResult::Error(format!("{}", error))) {
-            crate::error!("Window creation failed: {}", error);
-            crate::warn!("Failed to send error to main thread: {}", err);
-        }
-    }
-
-    pub fn send_success(self, thread: &WindowThread) -> bool {
-        let msg = WindowOpenResult::Success { loop_signal: thread.ev_loop.get_signal() };
-
-        if let Err(err) = self.0.send(msg) {
-            crate::error!("Failed to send created window to main thread: {}. Aborting.", err);
-            return false;
-        }
-
-        true
-    }
-}
-
-struct WindowResultReceiver(mpsc::Receiver<WindowOpenResult>);
-impl WindowResultReceiver {
-    pub fn receive(self) -> Result<LoopSignal> {
-        // Explicit first-open budget, including the builder. A slow/stalled X
-        // server may refuse this editor open, but cannot freeze the host GUI.
-        let result = self
-            .0
-            .recv_timeout(OPEN_TIMEOUT)
-            .map_err(|_| PlatformError::CreationFailed("X11 window open exceeded 250 ms".into()))?;
-
-        match result {
-            WindowOpenResult::Error(e) => Err(PlatformError::CreationFailed(e)),
-            WindowOpenResult::Success { loop_signal } => Ok(loop_signal),
+            self.shared.record_error(e.to_string());
         }
     }
 }
@@ -645,56 +600,73 @@ mod close_tests {
         finished.recv_timeout(Duration::from_secs(1)).unwrap();
     }
 
-    #[test]
-    fn request_timeout_does_not_consume_a_later_reply() {
-        let (first, first_rx) = mpsc::channel();
-        let started = Instant::now();
-        assert!(receive_response(&first_rx, Duration::from_millis(5)).is_err());
-        assert!(started.elapsed() < Duration::from_millis(100));
-        drop(first_rx);
-        assert!(first.send(Ok(())).is_err());
-        let (second, second_rx) = mpsc::channel();
-        second.send(Err("second request failed".into())).unwrap();
-        assert!(receive_response(&second_rx, Duration::ZERO)
-            .unwrap_err()
-            .to_string()
-            .contains("second request failed"));
-    }
-
-    #[test]
-    fn host_request_times_out_when_window_thread_is_inside_a_callback() {
-        let loop_: calloop::EventLoop<'static, ()> = calloop::EventLoop::try_new().unwrap();
-        let (request_sender, _waiting) = calloop::channel::sync_channel(1);
-        let handle = WindowThreadControl {
+    fn control(
+        request_sender: calloop::channel::SyncSender<WindowThreadMessage>,
+    ) -> WindowThreadControl {
+        WindowThreadControl {
             shared: Arc::new(WindowThreadShared::new()),
-            loop_signal: loop_.get_signal(),
             event_loop_handle: Cell::new(None),
             request_sender,
             can_detach: Cell::new(false),
             close_timeout: Cell::new(None),
-        };
+        }
+    }
+
+    /// The worker is busy (building its handler, or inside a callback that
+    /// waits on the host): requests still return at once and stay queued.
+    #[test]
+    fn host_requests_never_wait_for_the_worker() {
+        let (request_sender, queued) = calloop::channel::sync_channel(REQUEST_QUEUE);
+        let handle = control(request_sender);
         let start = Instant::now();
-        let error = handle.request(WindowThreadRequest::Show).unwrap_err().to_string();
-        assert!(error.contains("timed out"));
-        assert!(start.elapsed() >= REQUEST_TIMEOUT);
-        assert!(start.elapsed() < Duration::from_millis(150));
-        assert!(handle
-            .request(WindowThreadRequest::Hide)
-            .unwrap_err()
-            .to_string()
-            .contains("queue is full"));
+        handle.request(WindowThreadRequest::Show).unwrap();
+        handle.resize(crate::dpi::LogicalSize::new(10.0, 20.0).into()).unwrap();
+        for _ in 2..REQUEST_QUEUE {
+            handle.request(WindowThreadRequest::Hide).unwrap();
+        }
+        let full = handle.request(WindowThreadRequest::Show).unwrap_err().to_string();
+        assert!(full.contains("queue is full"), "{full}");
+        // Generous bound for a loaded machine; the old RPC waited 50 ms each.
+        assert!(start.elapsed() < Duration::from_millis(40), "{:?}", start.elapsed());
+        drop(queued);
+        handle.shared.record_error("parent window vanished".into());
+        let closed = handle.request(WindowThreadRequest::Show).unwrap_err().to_string();
+        assert!(closed.contains("parent window vanished"), "{closed}");
+    }
+
+    #[test]
+    fn requested_size_is_answered_before_the_window_exists() {
+        let shared = WindowThreadShared::new();
+        let settings = WindowSettings::new()
+            .with_size(crate::dpi::LogicalSize::new(300.0, 200.0))
+            .with_scale_factor_override(Some(2.0));
+        shared.publish_requested(&settings);
+        assert_eq!(shared.get_size(), PhysicalSize::new(600, 400));
+        assert_eq!(shared.get_scaling_factor(), 2.0);
+    }
+
+    /// Structural guard: no host-facing path in this file may wait on the
+    /// worker with a deadline or a reply. Open and requests are events; the
+    /// one timed wait is `close_bounded`, whose bound the caller chooses.
+    #[test]
+    fn host_paths_have_no_deadlines_or_replies() {
+        let source = include_str!("window_thread.rs");
+        let production = source.split("#[cfg(test)]").next().unwrap();
+        for banned in ["recv_timeout", ".recv()", "OPEN_TIMEOUT", "REQUEST_TIMEOUT", "response"] {
+            assert!(!production.contains(banned), "host-facing X11 code uses `{banned}`");
+        }
+        let sleeps: Vec<_> = production.match_indices("thread::sleep").collect();
+        let bounded = production.find("fn join_bounded").unwrap();
+        assert_eq!(sleeps.len(), 1, "only close_bounded may wait on a clock");
+        assert!(sleeps[0].0 > bounded);
     }
 
     #[test]
     fn full_request_queue_fails_without_blocking() {
         let (sender, _receiver) = calloop::channel::sync_channel(1);
-        let (response, _rx) = mpsc::channel();
-        sender
-            .try_send(WindowThreadMessage { request: WindowThreadRequest::Show, response })
-            .unwrap();
-        let (response, _rx) = mpsc::channel();
+        sender.try_send(WindowThreadRequest::Show).unwrap();
         assert!(matches!(
-            sender.try_send(WindowThreadMessage { request: WindowThreadRequest::Hide, response }),
+            sender.try_send(WindowThreadRequest::Hide),
             Err(mpsc::TrySendError::Full(_))
         ));
     }
