@@ -8,7 +8,7 @@ spec = importlib.util.spec_from_file_location('mui_sync', Path(__file__).with_na
 sync = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sync)
 
-VOLT = '''[dependencies]
+PLUGIN_MANIFEST = '''[dependencies]
 moose = { git = "https://github.com/Matari-Audio/moose", rev = "48879b19" }
 mui = { git = "https://github.com/Matari-Audio/MUI", rev = "48dde277444db4c4b9fa1099ecd52f997a18402a", features = ["cpu"] }
 mui-text = { rev = "1", git = "https://github.com/Matari-Audio/MUI" }
@@ -19,10 +19,10 @@ mui-baseview = { git = "https://github.com/Matari-Audio/MUI" }
 
 class Guard(unittest.TestCase):
     def test_flags_mui_rev_pins_only(self):
-        self.assertEqual(sync.pins(VOLT), ['mui', 'mui-text'])
+        self.assertEqual(sync.pins(PLUGIN_MANIFEST), ['mui', 'mui-text'])
 
     def test_unpin_drops_mui_revs_and_keeps_the_rest(self):
-        out = sync.unpin(VOLT)
+        out = sync.unpin(PLUGIN_MANIFEST)
         self.assertEqual(sync.pins(out), [])
         self.assertIn('mui = { git = "https://github.com/Matari-Audio/MUI", features = ["cpu"] }', out)
         self.assertIn('mui-text = { git = "https://github.com/Matari-Audio/MUI" }', out)
@@ -32,10 +32,10 @@ class Guard(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as d:
             d = Path(d)
             (d / 'vendor/x').mkdir(parents=True)
-            (d / 'vendor/x/Cargo.toml').write_text(VOLT)
-            (d / 'Cargo.toml').write_text(sync.unpin(VOLT))
+            (d / 'vendor/x/Cargo.toml').write_text(PLUGIN_MANIFEST)
+            (d / 'Cargo.toml').write_text(sync.unpin(PLUGIN_MANIFEST))
             self.assertEqual(sync.check([d]), 0)
-            (d / 'Cargo.toml').write_text(VOLT)
+            (d / 'Cargo.toml').write_text(PLUGIN_MANIFEST)
             self.assertEqual(sync.check([d]), 1)
 
 
