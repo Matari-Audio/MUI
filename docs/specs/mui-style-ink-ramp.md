@@ -61,7 +61,7 @@ evidence_freshness_days: 180
 - [x] `InkLevel` (`Primary`, `Secondary`, `Tertiary`, `Disabled`) and `InkRamp` (`primary`, `secondary`, `tertiary`, `disabled`) are exported from `mui-style` with `Palette::ink_ramp` as the single ramp constructor.
 - [x] `Palette::on`, `Palette::dim`, `Role::Ink`, and `Role::Dim` remain unchanged at WCAG AA (`4.5:1`) with zero downstream regressions.
 - [x] Unit tests assert exact (`ratio >= floor`, zero tolerance) contrast, monotonic ordering, lightness separation, polarity consistency, and `sqrt(21)` mid-tone ceiling saturation across dark, light, custom-ground, extreme-layer, chromatic, and seeded palettes.
-- [x] `mui-style`, `mui-scene`, `mui-material`, `mui`, `plugins/kik`, and `plugins/kurv` tests pass cleanly alongside `clippy -D warnings`, `rustfmt --check`, `check-spec-proof.py`, and `sync-stack.py`.
+- [x] `mui-style`, `mui-scene`, `mui-material`, `mui`, and downstream plugin tests pass cleanly alongside `clippy -D warnings`, `rustfmt --check`, `check-spec-proof.py`, and `sync-stack.py`.
 
 ## API / Data / File Contract
 
@@ -82,8 +82,8 @@ evidence_freshness_days: 180
 | `mui-style` doctests | Compile/ABI | linux-x86_64 | `build-slot cargo test --manifest-path frameworks/mui/Cargo.toml -p mui-style --doc` | Exit 0, all doctests pass | PASS (2026-11-24, linux-x86_64) |
 | `mui-style` clippy & rustfmt | Validator/Runtime | linux-x86_64 | `build-slot cargo clippy --manifest-path frameworks/mui/Cargo.toml -p mui-style --all-targets -- -D warnings && cargo fmt --manifest-path frameworks/mui/Cargo.toml -p mui-style --check` | Exit 0, zero warnings or fmt diffs | PASS (2026-11-24, linux-x86_64) |
 | Downstream MUI crates tests (`mui-scene`, `mui-material`, `mui`) | Validator/Runtime | linux-x86_64 | `build-slot cargo nextest run --manifest-path frameworks/mui/Cargo.toml -p mui-scene -p mui-material -p mui --no-tests=pass` | Exit 0, zero failures | PASS (2026-11-24, linux-x86_64) |
-| Downstream plugin tests (`kik`) | Validator/Runtime | linux-x86_64 | `matari fast kik` | Exit 0, zero failures | PASS (2026-11-24, linux-x86_64) |
-| Downstream plugin tests (`kurv`) | Validator/Runtime | linux-x86_64 | `matari fast kurv` | Exit 0, zero failures | PASS (2026-11-24, linux-x86_64) |
+| Downstream plugin tests (first) | Validator/Runtime | linux-x86_64 | `matari fast` on the dependent plugins | Exit 0, zero failures | PASS (2026-11-24, linux-x86_64) |
+| Downstream plugin tests | Validator/Runtime | linux-x86_64 | `matari fast` on the dependent plugins | Exit 0, zero failures | PASS (2026-11-24, linux-x86_64) |
 | Stack sync & mirror hygiene | Validator/Runtime | linux-x86_64 | `python3 tools/sync-stack.py --check --skip-lock-refresh` | Exit 0, all projects & mirrors clean | PASS (2026-11-24, linux-x86_64) |
 
 ## Unverified Boundaries & Promotion Gate
@@ -103,6 +103,6 @@ None — all verification tiers execute on the current host.
 
 ## Rollout & Affected Dependents
 
-- **Affected Projects:** `frameworks/mui` (`mui-style`, plus downstream tests run across `mui-scene`, `mui-material`, `mui`, `plugins/kik`, and `plugins/kurv`). Existing `Role::Ink`, `Role::Dim`, `Palette::on`, and `Palette::dim` callers keep identical AA contrast and visual output.
+- **Affected Projects:** `frameworks/mui` (`mui-style`, plus downstream tests run across `mui-scene`, `mui-material`, `mui`, and the dependent plugins). Existing `Role::Ink`, `Role::Dim`, `Palette::on`, and `Palette::dim` callers keep identical AA contrast and visual output.
 - **Mirror Impact:** Copybara mirror (`frameworks/mui` -> `Matari-Audio/MUI`); spec and implementation contain zero private paths or downstream-specific types.
 - **Versioning & Changelog:** Additive, backward-compatible minor enhancement to `mui-style` (`0.4.2`).
