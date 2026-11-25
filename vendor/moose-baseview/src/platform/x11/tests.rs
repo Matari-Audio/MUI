@@ -528,40 +528,149 @@ fn native_parent_deletion_quiesces_threaded_window() {
     assert_eq!(frames.load(Ordering::Acquire), after);
 }
 
+/// Longer than any deadline open ever had (250 ms; MUI#193's 5 s stopgap):
+/// a handler build on a loaded machine.
+const SLOW_BUILD: Duration = Duration::from_secs(2);
+
+/// Signals its first frame (readiness) and its drop on the owning worker.
+struct SlowHandler {
+    _context: crate::WindowContext,
+    first_frame: Option<std::sync::mpsc::Sender<()>>,
+    frames: Arc<AtomicUsize>,
+    dropped: std::sync::mpsc::Sender<()>,
+}
+impl WindowHandler for SlowHandler {
+    fn frame_demand(&self) -> FrameDemand {
+        FrameDemand::Idle
+    }
+    fn on_frame(&self) -> std::result::Result<(), HandlerError> {
+        if self.frames.fetch_add(1, Ordering::AcqRel) == 0 {
+            if let Some(first) = &self.first_frame {
+                let _ = first.send(());
+            }
+        }
+        Ok(())
+    }
+    fn resized(&self, _: crate::WindowSize) -> std::result::Result<(), HandlerError> {
+        Ok(())
+    }
+    fn on_event(&self, _: crate::Event) -> crate::EventStatus {
+        crate::EventStatus::Ignored
+    }
+}
+impl Drop for SlowHandler {
+    fn drop(&mut self) {
+        let _ = self.dropped.send(());
+    }
+}
+
+struct SlowOpen {
+    window: crate::ThreadedWindow,
+    first_frame: std::sync::mpsc::Receiver<()>,
+    frames: Arc<AtomicUsize>,
+    building: std::sync::mpsc::Receiver<()>,
+    dropped: std::sync::mpsc::Receiver<()>,
+}
+
+fn slow_editor(settings: WindowSettings) -> SlowOpen {
+    let frames = Arc::new(AtomicUsize::new(0));
+    let (first, first_frame) = std::sync::mpsc::channel();
+    let (gone, dropped) = std::sync::mpsc::channel();
+    let (started, building) = std::sync::mpsc::channel();
+    let counted = Arc::clone(&frames);
+    let window = crate::ThreadedWindow::create(settings, move |context| {
+        started.send(()).unwrap();
+        thread::sleep(SLOW_BUILD);
+        Ok(SlowHandler {
+            _context: context,
+            first_frame: Some(first),
+            frames: counted,
+            dropped: gone,
+        })
+    })
+    .unwrap();
+    SlowOpen { window, first_frame, frames, building, dropped }
+}
+
+/// MUI#193's regression (editor blank when the build outran the open
+/// deadline): open, show and resize return at once, the window becomes
+/// ready, and the show and resize queued during the build apply then.
 #[test]
 #[ignore = "requires a live X11 display"]
-fn native_embedded_startup_timeout_waits_for_builder_teardown() {
+fn native_slow_build_opens_at_once_and_applies_queued_requests() {
     let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
     let host = parent(&conn, conn.setup().roots[screen].root);
-    let (entered, enter_rx) = std::sync::mpsc::channel();
-    let (release, release_rx) = std::sync::mpsc::channel();
-    let (dropped, drop_rx) = std::sync::mpsc::channel();
-    let (returned, return_rx) = std::sync::mpsc::channel();
-    let opener = thread::spawn(move || {
-        let result = crate::ThreadedWindow::create(embedded_settings(host), move |context| {
-            entered.send(()).unwrap();
-            release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
-            Ok(OwnedHandler {
-                context,
-                frames: Arc::new(AtomicUsize::new(0)),
-                dropped,
-                block: None,
-            })
-        });
-        returned.send(result.is_err()).unwrap();
-    });
-    enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert_eq!(
-        return_rx.recv_timeout(Duration::from_millis(300)),
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout),
-        "startup failure released the parent's lifetime before its builder finished"
-    );
-    release.send(()).unwrap();
-    assert!(return_rx.recv_timeout(Duration::from_secs(2)).unwrap());
-    drop_rx.try_recv().unwrap();
+    conn.map_window(host).unwrap().check().unwrap();
+    let started = Instant::now();
+    let open = slow_editor(embedded_settings(host));
+    open.window.show().unwrap();
+    open.window.resize(PhysicalSize::new(80u32, 48)).unwrap();
+    let returned = started.elapsed();
+    assert!(returned < Duration::from_millis(100), "open waited {returned:?} for the build");
+    assert!(open.window.is_open());
+    assert_eq!(open.window.size().physical, PhysicalSize::new(96, 64), "size before ready");
+    // Readiness is an event: the first frame. The bound only fails the test.
+    open.first_frame.recv_timeout(SLOW_BUILD * 5).expect("never became ready");
+    assert!(started.elapsed() >= SLOW_BUILD);
+    let child = conn.query_tree(host).unwrap().reply().unwrap().children[0];
+    let attrs = conn.get_window_attributes(child).unwrap().reply().unwrap();
+    assert_eq!(attrs.map_state, MapState::VIEWABLE, "queued show was lost");
+    let geometry = conn.get_geometry(child).unwrap().reply().unwrap();
+    assert_eq!((geometry.width, geometry.height), (80, 48), "queued resize was lost");
+    assert_eq!(open.window.size().physical, PhysicalSize::new(80, 48));
+    open.window.close();
+    open.dropped.try_recv().unwrap();
     assert!(conn.query_tree(host).unwrap().reply().unwrap().children.is_empty());
     conn.destroy_window(host).unwrap().check().unwrap();
-    opener.join().unwrap();
+}
+
+/// Host teardown during a slow open. Embedded: close waits only for the
+/// build in flight (the parent must outlive it), then everything is freed
+/// on the worker and the parent has no child left. Floating: close returns
+/// at once and the worker frees everything when its build ends.
+#[test]
+#[ignore = "requires a live X11 display"]
+fn native_close_during_slow_build_frees_everything() {
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    conn.map_window(host).unwrap().check().unwrap();
+
+    let open = slow_editor(embedded_settings(host));
+    open.window.show().unwrap();
+    open.building.recv_timeout(SLOW_BUILD).expect("build never started");
+    let started = Instant::now();
+    open.window.close_bounded(Duration::ZERO);
+    assert!(started.elapsed() < SLOW_BUILD * 2, "close hung");
+    open.dropped.try_recv().expect("handler not freed by close");
+    assert_eq!(open.frames.load(Ordering::Acquire), 0, "a closed window drew");
+    assert!(conn.query_tree(host).unwrap().reply().unwrap().children.is_empty());
+    conn.destroy_window(host).unwrap().check().unwrap();
+
+    let open = slow_editor(WindowSettings::new());
+    open.building.recv_timeout(SLOW_BUILD).expect("build never started");
+    let wake = open.window.waker();
+    let started = Instant::now();
+    open.window.close_bounded(Duration::ZERO);
+    assert!(started.elapsed() < Duration::from_millis(100), "floating close waited");
+    wake.request_redraw();
+    open.dropped.recv_timeout(SLOW_BUILD * 5).expect("detached worker leaked its handler");
+    assert_eq!(open.frames.load(Ordering::Acquire), 0);
+
+    // Closed at once, typically before the X window exists: the handler is
+    // never built, and close frees the builder with everything it captured.
+    let host = parent(&conn, conn.setup().roots[screen].root);
+    let open = slow_editor(embedded_settings(host));
+    let started = Instant::now();
+    drop(open.window);
+    assert!(started.elapsed() < SLOW_BUILD * 2, "close hung");
+    if open.building.try_recv().is_ok() {
+        open.dropped.try_recv().expect("handler not freed by close");
+    } else {
+        let freed = open.dropped.try_recv();
+        assert_eq!(freed, Err(std::sync::mpsc::TryRecvError::Disconnected), "builder not freed");
+    }
+    assert!(conn.query_tree(host).unwrap().reply().unwrap().children.is_empty());
+    conn.destroy_window(host).unwrap().check().unwrap();
 }
 
 #[test]
@@ -599,6 +708,8 @@ fn native_floating_bounded_close_revokes_work_and_allows_late_teardown() {
     closer.join().unwrap();
 }
 
+/// A show the worker cannot take fails at once, and run_until_closed then
+/// stops the worker instead of running forever.
 #[test]
 #[ignore = "requires a live X11 display"]
 fn native_failed_show_stops_worker_before_joining() {
@@ -620,9 +731,14 @@ fn native_failed_show_stops_worker_before_joining() {
     block.store(true, Ordering::Release);
     window.request_poll().unwrap();
     enter_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    window.visibility_control().set_visible(false);
+    // The worker is blocked: fill its queue so the show cannot be taken.
+    for _ in 0..64 {
+        let _ = window.hide();
+    }
+    assert!(window.hide().unwrap_err().to_string().contains("queue is full"));
     let (done, receive) = std::sync::mpsc::channel();
     let runner = thread::spawn(move || done.send(window.run_until_closed().is_err()).unwrap());
+    // Release only after run_until_closed has tried its show.
     thread::sleep(Duration::from_millis(75));
     release.send(()).unwrap();
     assert!(receive.recv_timeout(Duration::from_secs(2)).unwrap());

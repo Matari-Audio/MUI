@@ -373,16 +373,16 @@ impl EventLoop {
                 // It should already stop this event loop on drop, but we'll take the hint.
                 self.stop_now();
             }
-            calloop::channel::Event::Msg(message) => {
-                let result = if self.window.main_thread_shared.callbacks_revoked()
+            calloop::channel::Event::Msg(request) => {
+                if self.window.main_thread_shared.callbacks_revoked()
                     || self.window.main_thread_shared.is_stop_host_requested()
                 {
-                    Err("X11 window is closing".into())
-                } else {
-                    self.handle_request(message.request).map_err(|e| e.to_string())
-                };
-                // Late replies belong to this RPC alone, never the next one.
-                let _ = message.response.send(result);
+                    return;
+                }
+                // The host does not wait for this: a failure is an event.
+                if let Err(e) = self.handle_request(request) {
+                    warn!("X11 window request failed: {}", e);
+                }
             }
         }
     }
