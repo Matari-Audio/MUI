@@ -48,14 +48,12 @@ fn to_present_mode(m: PresentMode) -> PMode {
     }
 }
 
+/// Maps a DXGI failure and publishes device loss if the device was removed:
+/// `CreateSwapChainFor*` reports removal as a platform error, not `SurfaceLost`.
+/// Call only after releasing `Surface::state` (the loss callback runs inline).
 fn map_present_err(device: &Device, err: PresentError) -> Error {
-    match err {
-        PresentError::SurfaceLost => {
-            let _ = device.check_device_removed();
-            Error::internal(PresentError::SurfaceLost.to_string())
-        }
-        other => Error::internal(other.to_string()),
-    }
+    let _ = device.check_device_removed();
+    Error::internal(err.to_string())
 }
 
 struct SwapState {
@@ -145,6 +143,7 @@ impl Surface {
         let fmt = to_present_format(config.format)?;
         let translucent = d3d11_surface_translucent(config.alpha_mode);
         let pmode = to_present_mode(config.present_mode);
+        let buffer_count = d3d11_buffer_count(config.desired_maximum_frame_latency);
         if device.is_lost() {
             return Err(Error::internal("D3D11 device is lost"));
         }
@@ -196,7 +195,8 @@ impl Surface {
                     }
                     ctx_st.clear_render_targets_and_flush();
                     swap.presenter.set_present_mode(pmode);
-                    swap.presenter.resize((config.width, config.height), fmt)
+                    swap.presenter
+                        .resize((config.width, config.height), fmt, buffer_count)
                 };
                 match resize_res {
                     Ok(()) => {
@@ -228,7 +228,6 @@ impl Surface {
             }
         }
 
-        let buffer_count = d3d11_buffer_count(config.desired_maximum_frame_latency);
         let presenter_res = {
             let ctx_st = lock(&device.0.state);
             if device.is_lost() {
@@ -370,6 +369,9 @@ impl Surface {
             // Clear OM targets + flush AND call `IDXGISwapChain1::Present` under
             // the same context lock so no concurrent `Queue::submit` can race.
             let ctx_st = lock(&swap.device.0.state);
+            if swap.device.is_lost() {
+                return Err(Error::internal("D3D11 device is lost"));
+            }
             ctx_st.clear_render_targets_and_flush();
             swap.presenter.present()
         };

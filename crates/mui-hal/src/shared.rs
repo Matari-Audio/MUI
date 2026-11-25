@@ -444,6 +444,21 @@ pub(crate) fn validate_write_buffer_args(
     Ok(())
 }
 
+/// Makes `next()` the active staging chunk (cursor 0). The old chunk moves to
+/// `used` (its staged writes stay valid) only once the replacement exists, so
+/// a failed allocation keeps the active chunk and its cursor.
+pub(crate) fn replace_staging_chunk<B, E>(
+    current: &mut Option<(B, u64)>,
+    used: &mut Vec<B>,
+    next: impl FnOnce() -> Result<B, E>,
+) -> Result<(), E> {
+    let chunk = next()?;
+    if let Some((old, _)) = current.replace((chunk, 0)) {
+        used.push(old);
+    }
+    Ok(())
+}
+
 pub(crate) fn validate_write_texture_args(
     belongs: bool,
     valid: bool,
@@ -598,6 +613,7 @@ pub(crate) fn validate_texture_to_buffer_layout(
     reason = "mirrors validated TextureToTexture fields"
 )]
 pub(crate) fn validate_texture_to_texture(
+    same_texture: bool,
     src_dims: (u32, u32, u32),
     src_mip: u32,
     src_mip_count: u32,
@@ -642,6 +658,18 @@ pub(crate) fn validate_texture_to_texture(
     if size.width == 0 || size.height == 0 {
         return Ok(());
     }
+    // WebGPU rule, and D3D11 `CopySubresourceRegion` requires distinct
+    // subresources: a copy within one texture must not share a mip+layer.
+    let layers = size.depth_or_array_layers.max(1);
+    if same_texture
+        && src_mip == dst_mip
+        && src_origin.z < dst_origin.z.saturating_add(layers)
+        && dst_origin.z < src_origin.z.saturating_add(layers)
+    {
+        return Err(BackendError::validation(
+            "texture_to_texture source and destination share a subresource",
+        ));
+    }
     validate_texture_region(src_origin, size, src_dims.0, src_dims.1, src_dims.2)?;
     validate_texture_region(dst_origin, size, dst_dims.0, dst_dims.1, dst_dims.2)?;
     if src_samples > 1
@@ -661,17 +689,29 @@ pub(crate) fn validate_texture_to_texture(
     Ok(())
 }
 
-/// Validates and packs texel rows from `Queue::write_texture` into a tightly
-/// packed contiguous byte buffer for Metal / D3D11 upload.
+/// The `Queue::write_texture` destination facts the packer validates first.
+pub(crate) struct TextureWriteTarget {
+    pub belongs: bool,
+    pub valid: bool,
+    pub usage: TextureUsages,
+    pub dims: (u32, u32, u32),
+    pub block_size: u32,
+}
+
+/// Validates the destination, then packs texel rows from `Queue::write_texture`
+/// into a tightly packed contiguous byte buffer for Metal / D3D11 upload. The
+/// destination is checked before any allocation, so a foreign or invalid
+/// texture reports `Validation`, never the packer's `OutOfMemory`.
 pub(crate) fn pack_texture_write_bytes(
+    dst: &TextureWriteTarget,
     mip_level: u32,
     origin: Origin3d,
     size: Extent3d,
-    tex_dims: (u32, u32, u32),
-    block_size: u32,
     layout: TexelCopyBufferLayout,
     data: &[u8],
 ) -> Result<Option<Vec<u8>>, BackendError> {
+    validate_write_texture_args(dst.belongs, dst.valid, dst.usage)?;
+    let (tex_dims, block_size) = (dst.dims, dst.block_size);
     if mip_level != 0 {
         return Err(BackendError::validation(
             "native textures have one mip level",
@@ -858,6 +898,54 @@ pub(crate) fn validate_bind_group_sampler(belongs: bool, valid: bool) -> Result<
 mod tests {
     use super::*;
 
+    fn writable(dims: (u32, u32, u32), block_size: u32) -> TextureWriteTarget {
+        TextureWriteTarget {
+            belongs: true,
+            valid: true,
+            usage: TextureUsages::COPY_DST,
+            dims,
+            block_size,
+        }
+    }
+
+    #[test]
+    fn pack_texture_write_bytes_validates_destination_before_packing() {
+        // A full 8192x8192 RGBA8 source: packing it would copy 256 MiB, so a
+        // foreign, invalid or non-COPY_DST destination must be rejected first.
+        let data = vec![0u8; 8192 * 8192 * 4];
+        let size = Extent3d {
+            width: 8192,
+            height: 8192,
+            depth_or_array_layers: 1,
+        };
+        let cases = [
+            (false, true, TextureUsages::COPY_DST, "another device"),
+            (true, false, TextureUsages::COPY_DST, "invalid texture"),
+            (true, true, TextureUsages::TEXTURE_BINDING, "COPY_DST"),
+        ];
+        for (belongs, valid, usage, needle) in cases {
+            let dst = TextureWriteTarget {
+                belongs,
+                valid,
+                usage,
+                ..writable((8192, 8192, 1), 4)
+            };
+            let err = pack_texture_write_bytes(
+                &dst,
+                0,
+                Origin3d::ZERO,
+                size,
+                TexelCopyBufferLayout::default(),
+                &data,
+            )
+            .unwrap_err();
+            assert!(
+                err.kind == ErrorKind::Validation && err.message.contains(needle),
+                "{needle}: {err:?}"
+            );
+        }
+    }
+
     #[test]
     fn buffer_map_state_machine_enforces_token_and_exclusivity() {
         let m = BufferMapState::new();
@@ -907,6 +995,7 @@ mod tests {
             1, 2, 3, 4, 5, 6, 7, 8, 99, 99, 99, 99, 9, 10, 11, 12, 13, 14, 15, 16, 99, 99, 99, 99,
         ];
         let packed = pack_texture_write_bytes(
+            &writable((2, 2, 1), 4),
             0,
             Origin3d::ZERO,
             Extent3d {
@@ -914,8 +1003,6 @@ mod tests {
                 height: 2,
                 depth_or_array_layers: 1,
             },
-            (2, 2, 1),
-            4,
             TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(12),
@@ -930,6 +1017,7 @@ mod tests {
         // Mip > 0 rejected.
         assert!(
             pack_texture_write_bytes(
+                &writable((2, 2, 1), 4),
                 1,
                 Origin3d::ZERO,
                 Extent3d {
@@ -937,8 +1025,6 @@ mod tests {
                     height: 1,
                     depth_or_array_layers: 1
                 },
-                (2, 2, 1),
-                4,
                 TexelCopyBufferLayout::default(),
                 &src
             )
@@ -947,6 +1033,7 @@ mod tests {
         // Out of bounds rejected.
         assert!(
             pack_texture_write_bytes(
+                &writable((2, 2, 1), 4),
                 0,
                 Origin3d { x: 2, y: 0, z: 0 },
                 Extent3d {
@@ -954,8 +1041,6 @@ mod tests {
                     height: 1,
                     depth_or_array_layers: 1
                 },
-                (2, 2, 1),
-                4,
                 TexelCopyBufferLayout::default(),
                 &src
             )
@@ -984,6 +1069,7 @@ mod tests {
         // 8192x8192 RGBA8 would allocate 256 MiB if bounds were checked after allocation.
         let tiny = [0u8; 4];
         let res = pack_texture_write_bytes(
+            &writable((8192, 8192, 1), 4),
             0,
             Origin3d::ZERO,
             Extent3d {
@@ -991,8 +1077,6 @@ mod tests {
                 height: 8192,
                 depth_or_array_layers: 1,
             },
-            (8192, 8192, 1),
-            4,
             TexelCopyBufferLayout::default(),
             &tiny,
         );
@@ -1037,9 +1121,65 @@ mod tests {
     }
 
     #[test]
+    fn replace_staging_chunk_keeps_active_chunk_when_allocation_fails() {
+        let mut current = Some(("a", 48));
+        let mut used = Vec::new();
+        assert_eq!(
+            replace_staging_chunk(&mut current, &mut used, || Err("oom")),
+            Err("oom")
+        );
+        assert_eq!((current, used.len()), (Some(("a", 48)), 0));
+        replace_staging_chunk::<_, ()>(&mut current, &mut used, || Ok("b")).unwrap();
+        assert_eq!((current, used), (Some(("b", 0)), vec!["a"]));
+    }
+
+    #[test]
+    fn validate_texture_to_texture_rejects_one_shared_subresource() {
+        let copy = |same, src_mip, src_z, dst_mip, dst_z| {
+            validate_texture_to_texture(
+                same,
+                (8, 8, 4),
+                src_mip,
+                2,
+                1,
+                TextureFormat::Rgba8Unorm,
+                TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+                Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: src_z,
+                },
+                (8, 8, 4),
+                dst_mip,
+                2,
+                1,
+                TextureFormat::Rgba8Unorm,
+                TextureUsages::COPY_SRC | TextureUsages::COPY_DST,
+                Origin3d {
+                    x: 4,
+                    y: 4,
+                    z: dst_z,
+                },
+                Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 2,
+                },
+            )
+        };
+        // Same texture, mip and overlapping layers: rejected even without texel overlap.
+        assert!(copy(true, 0, 0, 0, 1).is_err());
+        // Different mip, disjoint layers, or another texture stay valid.
+        assert!(copy(true, 0, 0, 1, 0).is_ok());
+        assert!(copy(true, 0, 0, 0, 2).is_ok());
+        assert!(copy(false, 0, 0, 0, 0).is_ok());
+    }
+
+    #[test]
     fn validate_texture_to_texture_enforces_whole_subresource_for_msaa() {
         let check = |src_dims, dst_dims, samples, src_origin, dst_origin, size| {
             validate_texture_to_texture(
+                false,
                 src_dims,
                 0,
                 1,

@@ -593,7 +593,17 @@ fn submit_patches(
     } else {
         mui_present::PresentationMode::CpuDirect
     };
-    requests.presented_with(size, render_size, mode, backend, api, fallback, reason);
+    // A readback frame is blitted by the CPU path, never alpha-composited.
+    requests.presented_with(
+        size,
+        render_size,
+        mode,
+        backend,
+        api,
+        false,
+        fallback,
+        reason,
+    );
     if first_gpu {
         mui::diagnostics::breadcrumb(
             "mui-baseview",
