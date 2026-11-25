@@ -1,6 +1,6 @@
 import unittest
 
-from changed_packages import select
+from changed_packages import select, whole_scope
 
 PACKAGES = {
     "mui-scene": ("crates/mui-scene", set()),
@@ -29,6 +29,14 @@ class Select(unittest.TestCase):
 
     def test_a_crate_readme_still_tests_its_crate(self):
         self.assertEqual(select(["crates/mui-vello/README.md"], PACKAGES), ["mui-vello"])
+
+
+class WholeScope(unittest.TestCase):
+    def test_standalone_mirror_uses_its_workspace(self):
+        self.assertEqual(whole_scope(True, PACKAGES, ["mui-vello"]), "--workspace --exclude mui-vello")
+
+    def test_inside_the_monorepo_names_only_mui_packages(self):
+        self.assertEqual(whole_scope(False, PACKAGES, ["mui-vello"]), "-p mui -p mui-headless -p mui-scene")
 
 
 if __name__ == "__main__":

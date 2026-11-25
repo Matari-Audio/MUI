@@ -1,9 +1,9 @@
 [package]
 name = "mui-material"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
+version = "0.4.2"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
 description = "Material and surface verbs (union, segmented, cut, keep, join_border, inset surfaces, shells, border ramps) for MUI's element tree."
 
 [dependencies]
@@ -13,5 +13,31 @@ mui-scene.workspace = true
 mui-geometry.workspace = true
 mui-layout.workspace = true
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+dbg_macro = "deny"
+todo = "deny"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+map_unwrap_or = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+unnested_or_patterns = "warn"
+default_trait_access = "warn"
+uninlined_format_args = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+unreadable_literal = "allow"

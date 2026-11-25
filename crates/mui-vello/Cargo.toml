@@ -1,9 +1,9 @@
 [package]
 name = "mui-vello"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
+version = "0.4.2"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
 
 [features]
 default = []
@@ -52,12 +52,12 @@ mui-text.workspace = true
 ttf-inter.workspace = true
 png.workspace = true
 pollster.workspace = true
-mui.workspace = true
+mui = { path = "../mui" }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # A/B runs through the wgpu passthrough (`--features wgpu`, MUI_HAL_BACKEND=wgpu)
 # need a wgpu backend to open.
-wgpu = { workspace = true, features = ["vulkan"] }
+wgpu = { version = "30", default-features = false, features = ["static-dxc", "std", "vulkan"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Pin only: safe nonblocking report cancellation requires keeping this native
@@ -90,14 +90,40 @@ required-features = ["gpu-quad"]
 name = "quad_bench"
 required-features = ["gpu-quad"]
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+dbg_macro = "deny"
+todo = "deny"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+map_unwrap_or = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+unnested_or_patterns = "warn"
+default_trait_access = "warn"
+uninlined_format_args = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+unreadable_literal = "allow"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser wasm is single-threaded: wgpu's handles are Send/Sync there only with
 # this feature. The shared GPU session needs it to compile; spawning its
 # initializer fails on wasm and the caller takes the recorded failure path.
-wgpu = { workspace = true, features = ["fragile-send-sync-non-atomic-wasm"] }
+wgpu = { version = "30", default-features = false, features = ["fragile-send-sync-non-atomic-wasm", "static-dxc", "std"] }
 mui-hal = { workspace = true, features = ["wgpu"] }
 
 [target.'cfg(not(any(target_os = "linux", target_arch = "wasm32")))'.dependencies]
