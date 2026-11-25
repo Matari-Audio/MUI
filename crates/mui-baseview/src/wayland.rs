@@ -152,21 +152,68 @@ pub fn open<V: View + Send + 'static>(
         }
         closed();
     }));
-    let opened = Arc::clone(&requests);
     let settings = settings(title, size)
         .with_wayland(true)
         .with_min_size(LogicalSize::new(f64::from(minimum.0), f64::from(minimum.1)));
-    let window = baseview::ThreadedWindow::create(settings, build(shared, requests, false))
-        .and_then(|window| window.show().map(|()| window))
-        .map_err(|e| e.to_string())?;
-    opened.wayland_open.store(true, Ordering::Release);
+    // Open is queued: connecting and building happen on the window's thread,
+    // and a failure there arrives later as the close signal. Mark open first
+    // so that signal, however early, has the last word.
+    requests.wayland_open.store(true, Ordering::Release);
+    let opened = Arc::clone(&requests);
+    let unbuilt = CloseIfUnbuilt(Arc::clone(&requests));
+    let build = build(shared, requests, false);
+    let window = baseview::ThreadedWindow::create(settings, move |cx| {
+        let _unbuilt = unbuilt;
+        build(cx)
+    })
+    .and_then(|window| window.show().map(|()| window))
+    .map_err(|e| {
+        opened.wayland_open.store(false, Ordering::Release);
+        e.to_string()
+    })?;
     Ok(FloatingWindow(Some(window)))
+}
+
+/// Fires the close signal of a window whose handler never took it: a failed
+/// build, or a compositor error before it. Once the handler exists it owns
+/// the signal and this finds nothing.
+struct CloseIfUnbuilt(Arc<Requests>);
+
+impl Drop for CloseIfUnbuilt {
+    fn drop(&mut self) {
+        let hook = self
+            .0
+            .close
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        drop(NativeClose {
+            hook,
+            fired: Cell::new(false),
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
+
+    /// A window that fails before its handler exists still signals close
+    /// once; one whose handler took the signal is not signalled again here.
+    #[test]
+    fn an_unbuilt_window_signals_close_once() {
+        let fired = Arc::new(AtomicUsize::new(0));
+        let requests = Arc::new(Requests::default());
+        let count = fired.clone();
+        requests.on_close(Arc::new(move || {
+            count.fetch_add(1, Ordering::AcqRel);
+        }));
+        drop(CloseIfUnbuilt(requests.clone()));
+        assert_eq!(fired.load(Ordering::Acquire), 1);
+        drop(CloseIfUnbuilt(requests));
+        assert_eq!(fired.load(Ordering::Acquire), 1);
+    }
     struct Probe;
     impl View for Probe {
         fn build(&mut self, _: &mut mui::Ui, _: &mui::input::Input) -> mui::scene::El {

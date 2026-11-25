@@ -76,8 +76,8 @@ evidence_freshness_days: 180
 
 ## Non-Goals
 
-- The Wayland layer backend (`platform/layer.rs`) still waits up to 3 s for
-  its worker at open; its commands are already one-way. Follow-up.
+- The Wayland layer backend (`platform/layer.rs`): covered by
+  [wayland-event-driven-open.md](wayland-event-driven-open.md).
 - mui-baseview's render worker idle tick (`native_worker.rs`) is not a host
   path.
 
@@ -98,5 +98,5 @@ All commands run in `frameworks/mui/vendor/moose-baseview` unless stated.
 
 - The real-DAW row needs the reporting user's machine; Xvfb with saturated
   cores stands in for it here.
-- Wayland (`platform/layer.rs`) still waits up to 3 s at open: tracked as
-  follow-up, not covered by this spec.
+- Wayland (`platform/layer.rs`) is covered by
+  [wayland-event-driven-open.md](wayland-event-driven-open.md).
