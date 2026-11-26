@@ -644,7 +644,7 @@ they do not measure GPU completion or display latency. Interrupted journals
 retain their last complete stage. CI disables network reporting to keep test
 failures from creating production issues.
 
-The [GPUI comparison](research/gpui-graphics-comparison.md) explains the device
+The [GPUI comparison](https://github.com/Matari-Audio/dsp-research/blob/main/frameworks/mui/research/gpui-graphics-comparison.md) explains the device
 requirements and recovery differences observed in upstream source.
 
 ### Plugin editor CI on GitHub runners
