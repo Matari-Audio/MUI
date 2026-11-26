@@ -15,9 +15,23 @@ case "$section" in
 esac
 on() { [ "$section" = all ] || [ "$section" = "$1" ]; }
 
+# In the Matari monorepo MUI's crates are members of the monorepo's workspace, where
+# --workspace and fmt --all would cover every project: name MUI's packages instead.
+# As the standalone mirror, MUI is its own workspace.
+ws_manifest="$(cargo locate-project --workspace --message-format plain --locked --offline 2>/dev/null || true)"
+if [ -n "$ws_manifest" ] && [ "$ws_manifest" != "$ROOT/Cargo.toml" ]; then
+  read -r -a all <<< "$(python3 tools/ci/changed_packages.py --all)"
+  read -r -a wasm_all <<< "$(python3 tools/ci/changed_packages.py --all --exclude mui-preview --exclude mui-baseview)"
+  fmt_all=("${all[@]}")
+else
+  all=(--workspace)
+  wasm_all=(--workspace --exclude mui-preview --exclude mui-baseview)
+  fmt_all=(--all)
+fi
+
 if [ "$section" = pr ]; then
 base="${VERIFY_BASE:-origin/main}"
-cargo fmt --all -- --check
+cargo fmt "${fmt_all[@]}" -- --check
 read -r -a scope <<< "$(python3 tools/ci/changed_packages.py "$base")"
 if [ "${#scope[@]}" -gt 0 ]; then
 cargo clippy "${scope[@]}" --all-features --all-targets --locked --offline -- -D warnings
@@ -59,12 +73,12 @@ fi
 if on root-lint; then
 python3 tools/test_verify.py
 python3 -m unittest discover -s tools/ci
-cargo fmt --all -- --check
+cargo fmt "${fmt_all[@]}" -- --check
 fi
 # Every workspace feature is additive (mui-vello's cpu/gpu-quad backends and
 # their facade forwards), so one all-features surface covers test, lint and wasm.
 if on root-test; then
-cargo test --workspace --all-features --locked --offline
+cargo test "${all[@]}" --all-features --locked --offline
 # Standalone patched native packages are excluded from the root workspace.
 cargo test --manifest-path vendor/moose-baseview/Cargo.toml --lib --locked --offline
 if [ "$(uname -s)" = Linux ]; then
@@ -72,7 +86,7 @@ cargo test --manifest-path vendor/xim-rs/Cargo.toml -p zed-xim --lib --features 
 fi
 fi
 if on root-lint; then
-cargo clippy --workspace --all-features --all-targets --locked --offline -- -D warnings
+cargo clippy "${all[@]}" --all-features --all-targets --locked --offline -- -D warnings
 cargo clippy --manifest-path vendor/moose-baseview/Cargo.toml --all-features --all-targets --locked --offline -- -D warnings
 # --all-features hides a cfg that only breaks with a feature off: mui-vello's
 # backends each compile alone and with none.
@@ -84,7 +98,7 @@ cargo clippy -p mui-vello --no-default-features --features gpu-quad --all-target
 # about the library crates; drop the --exclude once the preview grows a
 # `spawn_app` entry point and is served from a canvas.
 # mui-baseview is a native window (moose-baseview + a wgpu surface): no wasm either.
-cargo check --workspace --all-features --exclude mui-preview --exclude mui-baseview --target wasm32-unknown-unknown --locked --offline
+cargo check "${wasm_all[@]}" --all-features --target wasm32-unknown-unknown --locked --offline
 fi
 
 # ---------------------------------------------------------------------------

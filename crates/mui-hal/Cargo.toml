@@ -1,9 +1,9 @@
 [package]
 name = "mui-hal"
-version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
+version = "0.4.2"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
 description = "MUI's owned render-only GPU HAL: Vulkan (ash), Metal (objc2-metal), D3D11 (windows), with an opt-in wgpu passthrough"
 
 [features]
@@ -20,7 +20,7 @@ wgpu-only = ["wgpu"]
 bitflags = "2"
 mui-shaders.workspace = true
 raw-window-handle = "0.6"
-wgpu = { workspace = true, optional = true, features = ["wgsl"] }
+wgpu = { version = "30", default-features = false, features = ["static-dxc", "std", "wgsl"], optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash = { version = "0.38", default-features = false, features = ["loaded", "debug"] }
@@ -60,7 +60,7 @@ objc2-quartz-core = { version = "0.3", default-features = false, features = [
     "objc2-core-foundation",
     "objc2-metal",
 ] }
-wgpu = { workspace = true, optional = true, features = ["metal"] }
+wgpu = { version = "30", default-features = false, features = ["metal", "static-dxc", "std"], optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 mui-present.workspace = true
@@ -72,7 +72,7 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
 ] }
-wgpu = { workspace = true, optional = true, features = ["dx12"] }
+wgpu = { version = "30", default-features = false, features = ["dx12", "static-dxc", "std"], optional = true }
 
 [dev-dependencies]
 pollster.workspace = true
@@ -87,7 +87,33 @@ harness = false
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 libc = "0.2"
-wgpu = { workspace = true, features = ["wgsl", "vulkan"] }
+wgpu = { version = "30", default-features = false, features = ["static-dxc", "std", "vulkan", "wgsl"] }
 
-[lints]
-workspace = true
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+allow_attributes_without_reason = "warn"
+allow_attributes = "warn"
+dbg_macro = "deny"
+todo = "deny"
+semicolon_if_nothing_returned = "warn"
+redundant_closure_for_method_calls = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+cloned_instead_of_copied = "warn"
+explicit_iter_loop = "warn"
+map_unwrap_or = "warn"
+inefficient_to_string = "warn"
+implicit_clone = "warn"
+unnested_or_patterns = "warn"
+default_trait_access = "warn"
+uninlined_format_args = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+redundant_else = "warn"
+if_not_else = "warn"
+items_after_statements = "warn"
+unreadable_literal = "allow"
