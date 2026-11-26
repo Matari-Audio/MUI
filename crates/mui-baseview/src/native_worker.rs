@@ -1873,6 +1873,158 @@ mod gpu_recovery_tests {
         let _ = send.send(Command::Stop);
         handle.join().unwrap();
     }
+
+    #[test]
+    fn worker_thread_wakes_from_idle_on_wheel_scrolled_and_animates_to_settlement() {
+        use mui::prelude::{Paints as _, col, row};
+
+        struct ScrollView;
+        impl View for ScrollView {
+            fn build(&mut self, _: &mut mui::Ui, _: &mui::prelude::Input) -> mui::prelude::El {
+                let horiz = row![
+                    mui::prelude::block(400., 60.).fill(mui::prelude::Color::srgb(0.3, 0.5, 0.7))
+                ]
+                .w(120.)
+                .h(60.)
+                .scroll()
+                .id("horiz");
+                col![
+                    horiz,
+                    mui::prelude::block(120., 400.).fill(mui::prelude::Color::srgb(0.2, 0.3, 0.4))
+                ]
+                .w(120.)
+                .h(120.)
+                .scroll()
+                .id("list")
+            }
+            fn changed(&mut self) -> bool {
+                false
+            }
+            fn request_resize(&mut self, _: u32, _: u32) -> bool {
+                false
+            }
+        }
+        let shared = Arc::new(Mutex::new(Shared {
+            ui: mui::Ui::default(),
+            view: ScrollView,
+        }));
+        let requests = Arc::new(Requests::default());
+        let (send, commands) = mpsc::channel();
+        let (publish, output) = mpsc::sync_channel(4);
+        let stopped = Arc::new(AtomicBool::new(false));
+        let tick_pending = Arc::new(AtomicBool::new(false));
+        let worker_shared = Arc::clone(&shared);
+        let worker_requests = Arc::clone(&requests);
+        let worker_stopped = Arc::clone(&stopped);
+        let worker_tick = Arc::clone(&tick_pending);
+        let handle = std::thread::spawn(move || {
+            worker_with_mode(
+                &worker_shared,
+                &worker_requests,
+                WindowSize::from_physical(baseview::dpi::PhysicalSize::new(120, 120), 1.0),
+                None,
+                WorkerChannels {
+                    commands,
+                    output: publish,
+                    stopped: worker_stopped,
+                    tick_pending: worker_tick,
+                },
+                true,
+            );
+        });
+
+        // Paint initial frame and settle to FrameDemand::Idle.
+        send.send(Command::Tick(None)).unwrap();
+        let first = output.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert_eq!(first.demand, baseview::FrameDemand::Idle);
+
+        // Move pointer over the list and deliver a vertical WheelScrolled event
+        // (negative lines = scroll down, matching baseview/X11/Wayland convention).
+        send.send(Command::Event(
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: PhysicalPosition::new(60.0, 90.0),
+                modifiers: Modifiers::empty(),
+            }),
+            1,
+        ))
+        .unwrap();
+        send.send(Command::Event(
+            Event::Mouse(MouseEvent::WheelScrolled {
+                delta: ScrollDelta::Lines { x: 0.0, y: -3.0 },
+                modifiers: Modifiers::empty(),
+            }),
+            2,
+        ))
+        .unwrap();
+        send.send(Command::Tick(None)).unwrap();
+        let after_wheel = output.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(after_wheel.demand, baseview::FrameDemand::At(_)),
+            "wheel event from idle must schedule spring animation frames, got {:?}",
+            after_wheel.demand
+        );
+        assert!(
+            lock(&shared).ui.scroll("list")[1] > 0.0,
+            "vertical WheelScrolled must advance scroll target"
+        );
+
+        // Drive animation ticks until the scroll spring settles back to Idle,
+        // verifying that animation frames emit non-empty damage patches.
+        let mut animated_patches = 0usize;
+        let mut settled = false;
+        for _ in 0..120 {
+            std::thread::sleep(Duration::from_millis(8));
+            send.send(Command::Tick(None)).unwrap();
+            let frame = output.recv_timeout(Duration::from_secs(5)).unwrap();
+            if !frame.patches.is_empty() {
+                animated_patches += 1;
+            }
+            if frame.demand == baseview::FrameDemand::Idle {
+                settled = true;
+                break;
+            }
+        }
+        assert!(
+            animated_patches > 0,
+            "scroll spring animation must paint damage patches"
+        );
+        assert!(
+            settled,
+            "scroll spring must settle back to FrameDemand::Idle"
+        );
+
+        // Now test Shift+Wheel over the horizontal scroller from Idle.
+        send.send(Command::Event(
+            Event::Mouse(MouseEvent::CursorMoved {
+                position: PhysicalPosition::new(40.0, 10.0),
+                modifiers: Modifiers::SHIFT,
+            }),
+            3,
+        ))
+        .unwrap();
+        send.send(Command::Event(
+            Event::Mouse(MouseEvent::WheelScrolled {
+                delta: ScrollDelta::Lines { x: 0.0, y: -3.0 },
+                modifiers: Modifiers::SHIFT,
+            }),
+            4,
+        ))
+        .unwrap();
+        send.send(Command::Tick(None)).unwrap();
+        let after_shift = output.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            matches!(after_shift.demand, baseview::FrameDemand::At(_)),
+            "Shift+Wheel must wake idle worker"
+        );
+        assert!(
+            lock(&shared).ui.scroll("horiz")[0] > 0.0,
+            "Shift+Wheel must scroll horizontal scroller"
+        );
+
+        stopped.store(true, Ordering::Release);
+        let _ = send.send(Command::Stop);
+        handle.join().unwrap();
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]

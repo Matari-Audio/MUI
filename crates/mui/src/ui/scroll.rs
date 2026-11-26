@@ -307,20 +307,20 @@ impl Ui {
         let Some(p) = self.pointer.pos else {
             return false;
         };
+        let shift_x = self.pointer.mods.shift && wheel.x == 0.0 && wheel.y != 0.0;
+        let mut saw_vertical = false;
+        let mut horizontal_fallback: Option<(Id, f64, f64)> = None;
         for s in scene.surfaces().rev() {
             let f = s.frame;
-            if !self.inside_surface(s, p) || !self.owns_wheel(scene, s) {
+            if s.disabled || !self.inside_surface(s, p) || !self.owns_wheel(scene, s) {
                 continue;
             }
-            let wheel = s.local_pose().delta(wheel);
-            // A node that keeps the wheel reads it from `Response::wheel`
-            // or claimed it with `Ui::wheel`; nothing it sits in scrolls
-            // under it.
-            let claimed = || self.wheel_claims.iter().any(|c| c == s.key.as_str());
-            // It reads the delta in the next tree, so that frame is owed
-            // even when nothing else moves: else the notch shows only on
-            // whatever event comes next.
-            if (s.captures_wheel || claimed()) && !s.disabled {
+            let local_wheel = s.local_pose().delta(wheel);
+            // A node that claimed the wheel with `Ui::wheel` reads raw
+            // `self.wheel` (including Shift-fine knob adjustment) in the next
+            // tree; nothing it sits in scrolls under it.
+            let claimed = self.wheel_claims.iter().any(|c| c == s.key.as_str());
+            if claimed {
                 return true;
             }
             // `content` is the frame size for everything but a scroll node,
@@ -329,24 +329,58 @@ impl Ui {
                 (s.content.width - f.size.width).max(0.0),
                 (s.content.height - f.size.height).max(0.0),
             ];
-            if max[0] <= 0.0 && max[1] <= 0.0 {
-                continue;
+            let effective = if shift_x && local_wheel.x == 0.0 && local_wheel.y != 0.0 {
+                Vec2::new(local_wheel.y, 0.0)
+            } else {
+                local_wheel
+            };
+            if max[0] > 0.0 || max[1] > 0.0 {
+                if max[1] > 0.0 {
+                    saw_vertical = true;
+                } else if !shift_x
+                    && local_wheel.x == 0.0
+                    && local_wheel.y != 0.0
+                    && horizontal_fallback.is_none()
+                {
+                    horizontal_fallback = Some((s.key.clone(), max[0], local_wheel.y));
+                }
+                // The handoff reads the target, not the drawn offset, so a flick
+                // still in flight does not pass the next notch to the parent.
+                let at = node(&mut self.nodes, &s.key)
+                    .scroll
+                    .get_or_insert([scroll_spring(); 2]);
+                let next = [
+                    (at[0].target + effective.x).clamp(0.0, max[0]),
+                    (at[1].target + effective.y).clamp(0.0, max[1]),
+                ];
+                if next != at.map(|s| s.target) {
+                    at[0].to(next[0]);
+                    at[1].to(next[1]);
+                    return true;
+                }
             }
-            // The handoff reads the target, not the drawn offset, so a flick
-            // still in flight does not pass the next notch to the parent.
-            let at = node(&mut self.nodes, &s.key)
-                .scroll
-                .get_or_insert([scroll_spring(); 2]);
-            let next = [
-                (at[0].target + wheel.x).clamp(0.0, max[0]),
-                (at[1].target + wheel.y).clamp(0.0, max[1]),
-            ];
-            if next != at.map(|s| s.target) {
-                at[0].to(next[0]);
-                at[1].to(next[1]);
+            // A node with `.captures_wheel()` keeps any remaining wheel delta
+            // from scrolling ancestors underneath it (even when placed directly
+            // on a `.scroll()` node whose own offset is already at an edge).
+            if s.captures_wheel {
                 return true;
             }
             // An exhausted or perpendicular nested scroller yields to its parent.
+        }
+        // Plain vertical mouse wheel over a horizontal-only scroller with no
+        // vertical scroller in its owned ancestor chain scrolls horizontally.
+        if !shift_x
+            && !saw_vertical
+            && let Some((key, max_x, delta_y)) = horizontal_fallback
+        {
+            let at = node(&mut self.nodes, &key)
+                .scroll
+                .get_or_insert([scroll_spring(); 2]);
+            let next_x = (at[0].target + delta_y).clamp(0.0, max_x);
+            if next_x != at[0].target {
+                at[0].to(next_x);
+                return true;
+            }
         }
         false
     }
@@ -356,4 +390,187 @@ impl Ui {
 /// critically damped so it never overshoots the end of the content.
 pub(super) fn scroll_spring() -> Spring {
     Spring::new(0.12, 1.0)
+}
+
+#[cfg(test)]
+mod wheel_routing_tests {
+    use super::*;
+    use mui_input::{Input, Mods, PointerInput};
+    use mui_scene::prelude::*;
+
+    fn wheel_input(x: f64, y: f64, dx: f64, dy: f64, shift: bool) -> Input {
+        Input {
+            pointer: PointerInput {
+                pos: Some(Point::new(x, y)),
+                mods: Mods {
+                    shift,
+                    ..Mods::default()
+                },
+                ..PointerInput::default()
+            },
+            wheel: Vec2::new(dx, dy),
+            ..Input::default()
+        }
+    }
+
+    #[test]
+    fn scroll_with_captures_wheel_scrolls_itself_and_traps_exhausted_wheel() {
+        let mut ui = Ui::default();
+        let build = || {
+            let inner = col![block(80.0, 200.0)]
+                .w(80.0)
+                .h(60.0)
+                .scroll()
+                .captures_wheel()
+                .id("inner");
+            col![inner, block(100.0, 300.0)]
+                .w(100.0)
+                .h(100.0)
+                .scroll()
+                .id("outer")
+        };
+        ui.frame(build(), None, Input::default(), 0.016).unwrap();
+        ui.frame(
+            build(),
+            None,
+            wheel_input(20.0, 20.0, 0.0, 40.0, false),
+            0.016,
+        )
+        .unwrap();
+        assert_eq!(ui.scroll("inner"), [0.0, 40.0]);
+        assert_eq!(ui.scroll("outer"), [0.0, 0.0]);
+
+        // Even once inner is exhausted at the bottom, captures_wheel keeps outer from scrolling.
+        ui.frame(
+            build(),
+            None,
+            wheel_input(20.0, 20.0, 0.0, 500.0, false),
+            0.016,
+        )
+        .unwrap();
+        assert_eq!(ui.scroll("inner"), [0.0, 140.0]);
+        assert_eq!(ui.scroll("outer"), [0.0, 0.0]);
+        ui.frame(
+            build(),
+            None,
+            wheel_input(20.0, 20.0, 0.0, 50.0, false),
+            0.016,
+        )
+        .unwrap();
+        assert_eq!(ui.scroll("outer"), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn disabled_scroller_does_not_scroll_on_wheel() {
+        let mut ui = Ui::default();
+        let build = || {
+            col![block(100.0, 400.0)]
+                .w(100.0)
+                .h(100.0)
+                .scroll()
+                .id("bg")
+                .disabled()
+        };
+        ui.frame(build(), None, Input::default(), 0.016).unwrap();
+        ui.frame(
+            build(),
+            None,
+            wheel_input(20.0, 20.0, 0.0, 60.0, false),
+            0.016,
+        )
+        .unwrap();
+        assert_eq!(ui.scroll("bg"), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn shift_wheel_scrolls_horizontal_without_breaking_claimed_knob_wheel() {
+        let mut ui = Ui::default();
+        let mut knob_saw = None;
+        let step = |ui: &mut Ui, knob_saw: &mut Option<(Vec2, bool)>, input: Input| {
+            let knob = block(30.0, 30.0).id("knob");
+            if let Some(w) = ui.wheel("knob") {
+                *knob_saw = Some((w, ui.pointer().mods.shift));
+            }
+            let horiz = row![knob, block(300.0, 40.0)]
+                .w(100.0)
+                .h(50.0)
+                .scroll()
+                .id("horiz");
+            let root = col![horiz, block(100.0, 300.0)]
+                .w(100.0)
+                .h(100.0)
+                .scroll()
+                .id("outer");
+            ui.frame(root, None, input, 0.016).unwrap();
+        };
+        step(&mut ui, &mut knob_saw, Input::default());
+
+        // Shift+Wheel over the horizontal scroller (away from the knob) scrolls horizontally.
+        step(
+            &mut ui,
+            &mut knob_saw,
+            wheel_input(70.0, 20.0, 0.0, 45.0, true),
+        );
+        assert_eq!(ui.scroll("horiz"), [45.0, 0.0]);
+        assert_eq!(ui.scroll("outer"), [0.0, 0.0]);
+
+        // Shift+Wheel directly over the knob delivers raw vertical delta + shift to ui.wheel("knob").
+        step(
+            &mut ui,
+            &mut knob_saw,
+            wheel_input(15.0, 15.0, 0.0, -24.0, true),
+        );
+        step(&mut ui, &mut knob_saw, Input::default());
+        assert_eq!(knob_saw, Some((Vec2::new(0.0, -24.0), true)));
+        assert_eq!(ui.scroll("horiz"), [45.0, 0.0]);
+    }
+
+    #[test]
+    fn plain_wheel_scrolls_standalone_horizontal_scroller_but_yields_to_vertical_parent() {
+        // Standalone horizontal-only scroller: plain vertical wheel scrolls horizontally.
+        let mut ui = Ui::default();
+        let build_standalone = || {
+            row![block(400.0, 40.0)]
+                .w(100.0)
+                .h(80.0)
+                .scroll()
+                .id("strip")
+        };
+        ui.frame(build_standalone(), None, Input::default(), 0.016)
+            .unwrap();
+        ui.frame(
+            build_standalone(),
+            None,
+            wheel_input(20.0, 20.0, 0.0, 50.0, false),
+            0.016,
+        )
+        .unwrap();
+        assert_eq!(ui.scroll("strip"), [50.0, 0.0]);
+
+        // Nested inside a vertical scroller: plain vertical wheel scrolls the vertical parent.
+        let mut ui = Ui::default();
+        let build_nested = || {
+            let strip = row![block(400.0, 40.0)]
+                .w(100.0)
+                .h(50.0)
+                .scroll()
+                .id("strip");
+            col![strip, block(100.0, 300.0)]
+                .w(100.0)
+                .h(100.0)
+                .scroll()
+                .id("outer")
+        };
+        ui.frame(build_nested(), None, Input::default(), 0.016)
+            .unwrap();
+        ui.frame(
+            build_nested(),
+            None,
+            wheel_input(20.0, 20.0, 0.0, 50.0, false),
+            0.016,
+        )
+        .unwrap();
+        assert_eq!(ui.scroll("strip"), [0.0, 0.0]);
+        assert_eq!(ui.scroll("outer"), [0.0, 50.0]);
+    }
 }
