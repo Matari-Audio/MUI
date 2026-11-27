@@ -3,7 +3,7 @@ status: in-progress
 project: mui
 owner: derpcat
 created: 2026-11-20
-updated: 2026-11-24
+updated: 2026-11-27
 proof_scope: external-api
 ---
 
@@ -249,13 +249,13 @@ through the HAL's opt-in `wgpu` backend until they migrate.
 | Windows GNU shipping cross-compile (native + wgpu) | Compile/ABI | x86_64-pc-windows-gnu | `build-slot cargo check --manifest-path frameworks/mui/Cargo.toml --target x86_64-pc-windows-gnu -p mui-hal -p mui-present -p mui-shaders -p mui-vello -p mui-baseview` (default & `--features mui-hal/wgpu`) | Exit 0, zero errors/warnings | PASS (2026-11-24, linux-x86_64 -> x86_64-pc-windows-gnu) |
 | Stack & lockfile sync check | Compile/ABI | linux-x86_64 | `python3 tools/sync-stack.py --check --skip-lock-refresh` | Exit 0, zero drift | PASS (2026-11-24, linux-x86_64) |
 | Prebuilt shader blobs verified on Linux | Validator/Runtime | linux-x86_64 | `build-slot cargo test --manifest-path frameworks/mui/Cargo.toml -p mui-shaders` | Build verifies every committed DXBC/`.metallib` source hash, blob hash and magic | PASS (2026-11-24, linux-x86_64) |
-| macOS Metal GPU & `CAMetalLayer` runtime parity | Hardware/OS-CI | macos-15 | `MUI_HAL_BACKEND=native MUI_HAL_REQUIRE_NATIVE=1 cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture` (`native-hal.yml`) | Fail-closed native Metal device; offscreen readback exact on `mui-hal` tests and within the quad tests' tolerances vs `vello_cpu`; `native_surface` presents to a live `CAMetalLayer` | PASS (2026-11-24, macos-15, https://github.com/Matari-Audio/MUI/actions/runs/45368310887/job/138355778064) |
-| Windows D3D11 & DXGI/DComp runtime parity | Hardware/OS-CI | windows-latest | `MUI_HAL_BACKEND=native MUI_HAL_REQUIRE_NATIVE=1 cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture` (`native-hal.yml`) | Fail-closed native D3D11 device; offscreen readback exact on `mui-hal` tests and within the quad tests' tolerances vs `vello_cpu`; `native_surface` presents through `HwndFlipSwapChain` and `DirectCompositionPresenter` on a live `HWND` | PASS (2026-11-24, windows-latest, https://github.com/Matari-Audio/MUI/actions/runs/45368310887/job/138355778414) |
+| macOS Metal GPU & `CAMetalLayer` runtime parity | Hardware/OS-CI | macos-15 | `MUI_HAL_BACKEND=native MUI_HAL_REQUIRE_NATIVE=1 cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture` (`native-hal.yml`) | Fail-closed native Metal device; offscreen readback exact on `mui-hal` tests and within the quad tests' tolerances vs `vello_cpu`; `native_surface` presents to a live `CAMetalLayer` | PASS (2026-11-26, macos-15, https://github.com/Matari-Audio/MUI/actions/runs/45910963619/job/140218981119) |
+| Windows D3D11 & DXGI/DComp runtime parity | Hardware/OS-CI | windows-latest | `MUI_HAL_BACKEND=native MUI_HAL_REQUIRE_NATIVE=1 cargo test -p mui-hal -p mui-present -p mui-vello --features mui-vello/gpu-quad --locked -- --nocapture` (`native-hal.yml`) | Fail-closed native D3D11 device; offscreen readback exact on `mui-hal` tests and within the quad tests' tolerances vs `vello_cpu`; `native_surface` presents through `HwndFlipSwapChain` and `DirectCompositionPresenter` on a live `HWND` | PASS (2026-11-26, windows-latest, https://github.com/Matari-Audio/MUI/actions/runs/45910963619/job/140218980731) |
 | Physical multi-vendor GPU & DAW host qualification (Wave 5) | Hardware/OS-CI | macOS + Windows hardware | Real Apple Silicon / Intel / AMD / NVIDIA hardware + embedded DAW hosts (Logic Pro, Ableton Live, Reaper, FL Studio) | Native Metal/D3D11 pass visual & lifecycle parity before flipping default off `wgpu` | PENDING_OS_CI (requires physical hardware + DAW hosts in Wave 5) |
 
 ## Unverified Boundaries & Promotion Gate
 
-`native-hal.yml` on `Matari-Audio/MUI` (PR #251, run `45368310887`) verified both
+`native-hal.yml` on `Matari-Audio/MUI` (run `45910963619`) verified both
 native backends end-to-end on GitHub-hosted `macos-15` (Metal + `CAMetalLayer`)
 and `windows-latest` (D3D11 + WARP + `HwndFlipSwapChain` /
 `DirectCompositionPresenter`) runners. The following boundaries remain outside
