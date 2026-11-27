@@ -699,6 +699,18 @@ impl<P> Node<P> {
     pub fn full(self) -> Self {
         self.size(Len::Pct(100.), Len::Pct(100.))
     }
+    /// Full parent width: `.w(Len::Pct(100.))`.
+    pub fn full_w(self) -> Self {
+        self.w(Len::Pct(100.))
+    }
+    /// Full parent height: `.h(Len::Pct(100.))`.
+    pub fn full_h(self) -> Self {
+        self.h(Len::Pct(100.))
+    }
+    /// Opt out of flex shrinking: `.shrink(0.0)`.
+    pub fn fixed(self) -> Self {
+        self.shrink(0.0)
+    }
     /// Take a share of the surplus, by weight: `.grow(1)`.
     pub fn grow(mut self, weight: impl Px) -> Self {
         self.grow = weight.px();

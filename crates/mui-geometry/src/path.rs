@@ -356,6 +356,18 @@ impl Path {
         }
         if closed { p.close() } else { p }
     }
+    /// A single straight line segment from `from` to `to`.
+    ///
+    /// ```
+    /// use mui_geometry::{Path, Point};
+    /// let seg = Path::line(Point::new(0., 0.), Point::new(10., 0.));
+    /// assert_eq!(seg.commands.len(), 2);
+    /// ```
+    pub fn line(from: Point, to: Point) -> Self {
+        Self {
+            commands: vec![PathCommand::MoveTo(from), PathCommand::LineTo(to)],
+        }
+    }
     /// The axis-aligned rectangle from `(x0, y0)` to `(x1, y1)`, closed: the
     /// shape a meter segment, a bar or a selection is filled with.
     pub fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Self {

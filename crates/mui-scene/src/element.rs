@@ -1458,6 +1458,41 @@ pub trait Styled: Paints {
         self.element_mut().set(Element::FOCUSABLE, true);
         self
     }
+    /// Mark this node as a focusable interactive button with hand cursor,
+    /// accessible name, and tooltip.
+    ///
+    /// ```
+    /// use mui_scene::prelude::*;
+    /// let el = block(40., 24.).button_a11y("Save", "Save changes").id("save");
+    /// assert!(el.payload().has(mui_scene::Element::FOCUSABLE));
+    /// assert!(el.payload().extras().tip.is_some());
+    /// ```
+    fn button_a11y(self, name: impl Into<Arc<str>>, tip: impl Into<Arc<str>>) -> Self {
+        self.cursor(Cursor::Hand)
+            .focusable()
+            .a11y(A11y::Button)
+            .named(name)
+            .tip(tip)
+    }
+    /// Mark this node as a focusable accessible slider with value/bounds,
+    /// accessible name, and tooltip.
+    fn slider_a11y(
+        self,
+        value: f64,
+        min: f64,
+        max: f64,
+        name: impl Into<Arc<str>>,
+        tip: impl Into<Arc<str>>,
+    ) -> Self {
+        self.focusable()
+            .a11y(A11y::Slider { value, min, max })
+            .named(name)
+            .tip(tip)
+    }
+    /// Mark this node as a focusable accessible group with a label.
+    fn group_a11y(self, name: impl Into<Arc<str>>) -> Self {
+        self.focusable().a11y(A11y::Group).named(name)
+    }
     /// Keep the wheel for this node: a timeline that zooms on the wheel
     /// inside a scrolling column reads it from `Response::wheel`, and the
     /// column does not scroll under it. Without this, every node under the
