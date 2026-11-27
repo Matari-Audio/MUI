@@ -20,7 +20,7 @@ Target: a four-core laptop, integrated graphics, 8 GB RAM, 1080p at 60 Hz, with 
 
 The investigation starts from MUI `5942d19` (0.3.2), after the shape/layout integration and first optimization pass. A synth plugin was integrated against that MUI revision. MUI's relevant production path was then Vello Hybrid; old GPUI experiments do not describe the plugin's active renderer. Current plugin work must be audited separately before changing its pin.
 
-A temporary research worktree and its raw logs disappeared during this investigation. This persistent branch restores the root-cause fix and the core benchmark improvements. Earlier retention/atlas/readout measurements are explicitly provisional below: they survive in investigation notes, but their original logs and patches are unavailable. New evidence in `rendering-evidence/` is reproducible from this branch. Do not mix those evidence levels.
+A temporary research worktree and its raw logs disappeared during this investigation. This persistent branch restores the root-cause fix and the core benchmark improvements. Earlier retention/atlas/readout measurements are explicitly provisional below: they survive in investigation notes, but their original logs and patches are unavailable. New evidence in [`rendering-evidence/`](https://github.com/Matari-Audio/dsp-research/tree/main/frameworks/mui/docs/rendering-evidence) is reproducible from this branch. Do not mix those evidence levels.
 
 ## Where the work goes
 
@@ -114,7 +114,7 @@ MUI_BENCH_SCENE=vectors cargo run -p mui-vello --example bench --features cpu,be
 
 ## Implemented follow-up: adaptive tiled redraws
 
-`TiledEffects` now renders once when most tiles are dirty and an extra full-window target fits the existing tile budget. Guarded copies refresh the persistent tiles; local changes retain the old path. This follows the investigation's full-redraw fallback recommendation. See [repeated measurements and validation](rendering-evidence/tile-adaptive-notes.md). It remains opt-in and does not change the plugin host's backend.
+`TiledEffects` now renders once when most tiles are dirty and an extra full-window target fits the existing tile budget. Guarded copies refresh the persistent tiles; local changes retain the old path. This follows the investigation's full-redraw fallback recommendation. See [repeated measurements and validation](https://github.com/Matari-Audio/dsp-research/blob/main/frameworks/mui/docs/rendering-evidence/tile-adaptive-notes.md). It remains opt-in and does not change the plugin host's backend.
 
 ## Uniform border geometry (2026-09-20)
 

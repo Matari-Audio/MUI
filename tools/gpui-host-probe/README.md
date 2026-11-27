@@ -17,7 +17,7 @@ There is no GPUI scene conversion or reduced rectangle-only reconstruction.
 This is a **standalone window**, including native Wayland when available.
 GPUI's public window API cannot create a child under a DAW-supplied
 HWND/NSView/X11/wl_surface. See the
-[contract audit](../../research/gpui-vello-integration.md#native-host-contract-audit-2026-10-08)
+[contract audit](https://github.com/Matari-Audio/dsp-research/blob/main/frameworks/mui/research/gpui-vello-integration.md#native-host-contract-audit-2026-10-08)
 before treating any screenshot as plugin embedding evidence.
 
 Run on each native platform:
